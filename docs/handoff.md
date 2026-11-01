@@ -3,7 +3,7 @@
 > **这份文件是路由，不是规格。** 它只回答三件事：这是什么项目、三条线现在各在哪、
 > 干活要去读哪份权威文件。细节一律不在这里复制；两处说法冲突时以它指的文件为准。
 > 写它的场合：从 Kimi Code 迁到 DeepSeek Harness（dsh）这类**换 harness**、开新会话、
-> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-10-31**。
+> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-01**。
 
 ## 1. 一句话
 
@@ -34,7 +34,7 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 [`docs/pits.md`](pits.md)｜V3/V4 边界 [`docs/v3-v4-boundary.md`](v3-v4-boundary.md)｜
 测试与保密闸地图 [`docs/testing-doctrine.md`](testing-doctrine.md)。
 
-## 3. 三条线的当前状态（核对日期 2026-10-31）
+## 3. 三条线的当前状态（核对日期 2026-11-01）
 
 ### 3.0 0.6.0与派单路由（先看这里）
 
@@ -46,6 +46,12 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 - **V4 / #89 已进入候选**：`e431e94`、`ba4fbae`、`1a7e4a1`、`643cf6d` 覆盖 V4 单 PCB、
   主机 ERC、同网测量与证据边界。V4 多 PCB、部分跨视图语义和实时 PCB 位图缺口仍公开；
   `incomplete/partial` 不解释为板级通过。
+- **038G–038L 已随 `d542f14` 收口**：Short-Symbol 不再造假网；分歧库副本有第四类覆盖计数，
+  纯重编号不误报；旋转 R 矩形按 `(x,y)` pivot 读取（54 父区域/1843 点全过，PGND 30→12）；
+  Rust SYMBOL 与 Python 9-case 差分一致，重复脚号逐字段合并。真机 `test` doctor 9/9、
+  evidence 与焦点恢复正常，`conflicting_library_documents=0`；在线没有这些专项实例，不冒充覆盖。
+- **审查线下一步**：eprj3 在线容器、真实 NC、缺省 `yAxisDirection`、多 PCB 归属映射；
+  旋转圆角/BOARD_OUTLINE 另需样本。语义网表函数层暂缓，等专门排期。
 - **独立派单**：审查读 `tasks/review-line.md`，绘制读 `tasks/draw-line.md`，shared/CLI/bridge/
   parser/model 的集成改动读 `tasks/shared-platform.md`。两线可独立派小批，shared、全量、真机串行；
   算法与迁移不同批。旧档案 worktree 不当可写工作区；新建/删除 worktree 仍逐次问岳。

@@ -562,6 +562,11 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   强制环节缺席不给最高置信度（issue #14））。
   `summary.mayClaimPassed` 是**窄义**字段（只回答「有没有器件缺手册未审」），**别拿它当"通过"
   的完整结论**；`verdictWhy` 直接列出是哪些开放项。
+- **解析覆盖还要读 `coverage.recordsDropped` 与 `source.parseStats`**：除管脚无编号、器件无符号、
+  器件无位号外，038J 新增第四类 `conflicting_library_documents`——同一 UUID 的 SYMBOL/DEVICE
+  副本若模型可见定义不同，first-wins 保留第一份，后续冲突逐份计数；仅元素 id/zIndex 重编号而
+  几何/name/type 不变不算冲突。该计数进入 console/中文摘要与 `coverage.recordsDropped`，非零时
+  本次阅读不能判为 `complete`，因为它可能把另一份引脚或器件定义丢在未经审查的一侧。
 - **对每条链做目的论走查**：这条链是干什么的 → 端到端能闭合吗。骨架里
   `- evidence: 邻接 R4→GND` 这类行就是为这一步准备的（成员两端各接什么，工具照抄，判断是你的）。
 - **不自洽的槽位写进最终结论，并与规则引擎 finding 分开计数**：`summary` 里的 ERROR/WARN 是

@@ -421,6 +421,13 @@ Ordinary polygon (105 of 106 in the PCB document):
   **[inferred]** — the fixture cannot distinguish `(x, y, w, h)` from
   `(x1, y1, x2, y2)` because `x` ≈ 0; the height-along-−y part *is* forced by
   the copper coordinates (§4).
+- `rotation` is applied about the rectangle's **own stored `(x, y)` corner**,
+  counter-clockwise in the y-up frame. **[confirmed — 038K]** Two `rotation=-90`
+  POUR anchors each have all five POURED points exactly 4 mil inside the rotated
+  rectangle; centre-pivot and sign-flipped alternatives leave them outside. All
+  54 parent regions / 1843 filled points across the three fixtures now pass
+  containment. This covers the straight-corner R path only: `cornerRadius` is
+  still ignored, and `_ring_points` still refuses a rotated `BOARD_OUTLINE`.
 
 ### 6.8 `FILL` — filled region, usually a real pour **[confirmed]**
 

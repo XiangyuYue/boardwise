@@ -360,9 +360,13 @@
 | 542 | **原理图绘制 3.0**：drawing-line 集成、反激整页三关、四缝挖洞修复、RC 冻结与 V4 交接；CH343 示例 | **P0 完成并纳入 0.6.0**：P4 三关、岳人眼与重开 `saved_verified` 全过 | tasks/542_schematic_3_0_nov01.md；evidence/542/final-p4.md；evidence/201h/live/ |
 | V4 | **立创 EDA Pro 4.x 适配**：归档与 `.eprj3` 单 PCB 审查、在线容器/page、主机 ERC 与证据边界 | **首批已随 `e431e94` 落入 0.6.0**；多 PCB、部分跨视图语义、实时 PCB 位图与后续真样本仍开放。**边界口径见 `docs/v3-v4-boundary.md`** | tasks/038-eprj3-tierA.md；tasks/038_v4_live_gaps.md；docs/v3-v4-boundary.md |
 | 038R | **V4 审查线差分调研**：容器/在线通道与 P0–P2 顺序、共享模型边界 | 调研完成，首批已实施 | tasks/038_v4_review_line_research.md；outputs/review/v4-review-line-research.md |
-| 038S | **真实 eprj3 样本只读差分**：证实原理图一致与 PCB builder 复用，发现 EOF、覆盖、版本与 POUR/POURED 单位差 | 样本调研完成，首批适配已实施，单位语义未关闭 | tasks/038_v4_sample_research.md；outputs/review/v4-review-line-research.md §6；.tmp_v4_sample_20261031/REPORT.md |
-| 038F | **V3/V4 容器隔离与单 PCB Tier-B**：F1 EOF、F2 版本、F3 覆盖、F4 source、F5 CLI/checkup；共享规则/报告 | **已随 `e431e94` 落入候选**；多 PCB、网差和单位语义未关闭 | tasks/038_v4_isolation_plan.md；outputs/review/v4-eof-frame.md；v4-eprj3-version.md；v4-eprj3-pcb-coverage.md；v4-eprj3-pcb-source.md；v4-eprj3-tierb.md |
+| 038S | **真实 eprj3 样本只读差分**：证实原理图一致与 PCB builder 复用，发现 EOF、覆盖、版本与 POUR/POURED 单位差 | 样本调研完成，首批适配已实施；POURED 1:10 与旋转矩形已由 038K 关闭，多 PCB、真实 NC、缺省 yAxisDirection 与 eprj3 在线容器仍开放 | tasks/038_v4_sample_research.md；outputs/review/v4-review-line-research.md §6；.tmp_v4_sample_20261031/REPORT.md |
+| 038F | **V3/V4 容器隔离与单 PCB Tier-B**：F1 EOF、F2 版本、F3 覆盖、F4 source、F5 CLI/checkup；共享规则/报告 | **已随 `e431e94` 落入候选**；多 PCB、真实 NC 与 eprj3 在线容器未关闭，POURED 单位与旋转矩形不再列为开放项 | tasks/038_v4_isolation_plan.md；outputs/review/v4-eof-frame.md；v4-eprj3-version.md；v4-eprj3-pcb-coverage.md；v4-eprj3-pcb-source.md；v4-eprj3-tierb.md |
 | 038O | **V4.1.93 在线只读验收与 O1–O3 修复**：doctor 9/9、page 采集、PCB render 不适用、逐条 ERC 与证据缺口披露 | **已随 `e431e94`/`643cf6d` 落入候选**；板级仍 incomplete，多 PCB/全格式语义未关闭 | tasks/038_v4_online_acceptance.md；tasks/038_v4_live_gaps.md；outputs/review/v4-online-acceptance.md；outputs/review/v4-live-gaps-acceptance.md |
+| 038G | **Short-Symbol 网表语义**：跳线不再产生假 `Symbol` 网，按页并网；冗余跳线不再翻转普通簇的显式标签/电源旗标优先级 | 已落 `466ca6e`，冗余守卫随 `d542f14` 收口；合成回归含跨页隔离、悬空脚与命名优先级 | tests/test_038g_short_symbol.py；tests/test_040_page_scope.py |
+| 038J | **V4 分歧库副本诊断**：SYMBOL/DEVICE 同 UUID 的模型可见定义不同才计数，纯元素重编号不误报；first-wins 不变，冲突进入 console/md 与 coverage 闸 | 已落 `d542f14`；相同复制 0、真实冲突逐份计数，`coverage.recordsDropped` 含第四项 | tests/test_038_eprj3.py；tests/test_020_parse_drops.py；tests/test_072_coverage_gate.py |
+| 038K | **旋转矩形与 POURED 几何**：R 路径按存储 `(x,y)` pivot、声明角度 CCW 读取；空 POURED supersession 语义不变 | 已落 `d542f14`；54 父区域/1843 点 containment 全过，PGND 铜岛 30→12 有元素与面积证据；旋转圆角和 BOARD_OUTLINE 不扩支持 | tests/test_038k_rotated_rectangles.py；tests/test_135_poured_result.py；tests/test_131f_mcu_crystal_keepout.py |
+| 038L | **Rust SYMBOL 垂直迁移**：V3 zIndex/V4 pin_id、两阶段 ATTR、重复脚号逐字段合并、重编号不参与冲突判断 | 已落 `d542f14`；Python/Rust 9-case 差分一致，工作区 74 passed/4 ignored | rust/crates/boardwise-core/src/symbol.rs；tests/test_038l_symbol_differential.py；docs/rust-platform.md |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）
 
