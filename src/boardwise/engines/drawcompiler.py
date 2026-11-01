@@ -127,7 +127,9 @@ from boardwise.core.layoutplan import (
     LayoutText,
 )
 from boardwise.core import textmetrics
-from boardwise.core.presentationspec import LABEL_LABEL, PresentationSpec, main_path_wire
+from boardwise.core.presentationspec import (
+    LABEL_LABEL, LABEL_STUB_STRAIGHT, PresentationSpec, main_path_wire,
+)
 #: 540B1: the isolation-domain word list now lives in the shared vocabulary
 #: (``core/netdomains.py``), so the drawing chain and the reviewer read one copy
 #: of it without this engine importing the rules layer. Read-only: `domain_of`
@@ -347,6 +349,13 @@ SIBLING_LEAD = 50.0
 #: it, and `tests/test_145a_walls.py` pins the two constants equal so they cannot
 #: drift apart.
 LABEL_LANE_STEPS = 2
+
+#: How far a ``labelPolicy.stub = "straight"`` label's text box is pushed past
+#: the pin tip, beyond the ordinary :data:`TEXT_GAP`. The host prints a pin's
+#: name/number inside the symbol and a label at the pin tip can run back over
+#: that row; reserving the box on the pin's escape ray keeps the two apart
+#: without changing the electrical anchor.
+LABEL_STRAIGHT_STANDOFF = 4.0
 
 #: How far a **local-label carrier's** straight run may reach before the ladder
 #: turns to a bent shape (534 r18). The run is what the host prints the name
@@ -6577,6 +6586,21 @@ def _part_texts(
     return out
 
 
+def _label_standoff(ctx: Any) -> float:
+    """The straight-stub standoff this context asks for, or ``0``.
+
+    Test fixtures hand a deliberately tiny context that has no
+    ``presentation``; production always does. The default is the historical
+    zero, so a missing policy cannot change an existing drawing.
+    """
+    policy = getattr(getattr(ctx, "presentation", None), "label_policy", None)
+    return (
+        LABEL_STRAIGHT_STANDOFF
+        if policy is not None and policy.stub == LABEL_STUB_STRAIGHT
+        else 0.0
+    )
+
+
 def _label_for(
     ctx: _Context,
     net_id: str,
@@ -6601,7 +6625,7 @@ def _label_for(
         direction = ctx.lateral()
     return _label_at(
         net_id, point, direction, occupied, part_id=part_id, segments=segments,
-        avoid=avoid,
+        avoid=avoid, standoff=_label_standoff(ctx),
     )
 
 
@@ -6614,6 +6638,7 @@ def _label_at(
     part_id: str = "",
     segments: Sequence[LayoutSegment] = (),
     avoid: Sequence[Box] = (),
+    standoff: float = 0.0,
 ) -> LayoutLabel:
     """A label whose *anchor* is fixed and whose *box* moves around it.
 
@@ -6640,8 +6665,8 @@ def _label_at(
     """
     box = None
     fallback = None
-    half_x = text_width(net_id) / 2.0 + TEXT_GAP
-    half_y = TEXT_SIZE / 2.0 + TEXT_GAP
+    half_x = text_width(net_id) / 2.0 + TEXT_GAP + standoff
+    half_y = TEXT_SIZE / 2.0 + TEXT_GAP + standoff
     for candidate_direction in _directions(preferred):
         for rung in range(1, TEXT_ESCALATION_STEPS + 1):
             reach = rung - 1
@@ -6781,7 +6806,8 @@ def _tap_stub(
             continue
         segments.append(LayoutSegment(net=expression.net, points=[junction, end]))
         label = _label_at(
-            expression.net, end, direction, occupied, segments=segments
+            expression.net, end, direction, occupied, segments=segments,
+            standoff=_label_standoff(ctx),
         )
         labels.append(label)
         solids.append(label.bbox)
@@ -12235,7 +12261,7 @@ def _reseat_crossed_labels(
                 label.net, (label.x, label.y),
                 _label_pin_direction(ctx, placed, label),
                 list(occupied), part_id=label.part_id, segments=segments,
-                avoid=ink,
+                avoid=ink, standoff=_label_standoff(ctx),
             )
             if _foreign_runs_through(seat.bbox, label.net, segments) or any(
                 _overlaps(seat.bbox, other)

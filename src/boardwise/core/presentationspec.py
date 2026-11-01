@@ -105,6 +105,9 @@ __all__ = [
     "GRAMMARS",
     "LABEL_LABEL",
     "LABEL_MODES",
+    "LABEL_STUB_AUTO",
+    "LABEL_STUB_MODES",
+    "LABEL_STUB_STRAIGHT",
     "LABEL_WIRE",
     "LOCK_SCOPES",
     "LOCK_SCOPE_MODULE",
@@ -154,6 +157,15 @@ LABEL_WIRE = "wire"
 LABEL_LABEL = "label"
 LABEL_MODES: tuple[str, ...] = (LABEL_WIRE, LABEL_LABEL)
 
+#: How a label's name stub leaves its pin. ``auto`` is the historical ladder
+#: (straight, then a one-step-aside bend when every straight rung is blocked).
+#: ``straight`` is the V4/534B policy: the text box is pushed out along the
+#: pin's own escape direction first, and a bent carrier is not a substitute for
+#: a straight one. It is opt-in so existing documents keep their geometry.
+LABEL_STUB_AUTO = "auto"
+LABEL_STUB_STRAIGHT = "straight"
+LABEL_STUB_MODES: tuple[str, ...] = (LABEL_STUB_AUTO, LABEL_STUB_STRAIGHT)
+
 #: The four sides a preference may name. Preferences are defaults; a user lock
 #: wins over them (053 sec.2: "默认可被锁定覆盖").
 SIDES: tuple[str, ...] = ("left", "right", "top", "bottom")
@@ -179,6 +191,8 @@ _TOP_KEYS = (
     "modules",
     "islands",
     "flow",
+    "moduleOrder",
+    "moduleColumns",
     "mainPaths",
     "feedbackPaths",
     "portRoles",
@@ -200,7 +214,7 @@ MODULE_PRESENTATION_KEYS = ("sidePreferences",)
 _PATH_KEYS = ("id", "chain", "note")
 _FLOW_EDGE_KEYS = ("from", "to", "mainPath")
 _OBLIGATION_KEYS = ("nets", "note")
-_LABEL_POLICY_KEYS = ("local", "crossModule", "highFanout")
+_LABEL_POLICY_KEYS = ("local", "crossModule", "highFanout", "stub")
 _LOCK_KEYS = ("partId", "x", "y", "rotation", "scope")
 
 #: What a lock's coordinates are relative to (057 sec.3). ``module`` — the
@@ -352,6 +366,11 @@ class LabelPolicy:
     local: str = LABEL_WIRE
     cross_module: str = LABEL_LABEL
     high_fanout: str = LABEL_LABEL
+    #: ``auto`` keeps 057/099f's straight-then-bent ladder; ``straight`` makes
+    #: the compiler reserve the text box on the pin's own escape ray and refuse
+    #: to fall back to a bent stub. Default ``auto`` preserves every existing
+    #: document byte for byte.
+    stub: str = LABEL_STUB_AUTO
 
 
 @dataclass
@@ -408,6 +427,17 @@ class PresentationSpec:
     #: the page compiler reads it to order the page and to find the edges it may
     #: wire as one whole connection. Empty = read the modules in name order.
     flow: list[FlowEdge] = field(default_factory=list)
+    #: The page's module placement order, left-to-right / top-to-bottom. Empty
+    #: means "derive it from `flow`, then module name" — the historical reading.
+    #: Stating it is a layout statement, not a circuit one: decoupling islands can
+    #: be placed beside the IC they serve without pretending they are a signal
+    #: stage. Must be a permutation of `modules`.
+    module_order: list[str] = field(default_factory=list)
+    #: The number of module columns the page's placement search must use. ``0``
+    #: keeps the historical auto-search (one column through N); a positive value
+    #: states the grid shape, so a row of satellites can sit beside its core on
+    #: the same row instead of being pushed to a second row.
+    module_columns: int = 0
     main_paths: list[PresentationPath] = field(default_factory=list)
     feedback_paths: list[PresentationPath] = field(default_factory=list)
     #: net id -> one of :data:`PORT_DIRECTIONS`. The same vocabulary the
@@ -558,6 +588,16 @@ class PresentationSpec:
                 if self.flow
                 else {}
             ),
+            **(
+                {"moduleOrder": list(self.module_order)}
+                if self.module_order
+                else {}
+            ),
+            **(
+                {"moduleColumns": self.module_columns}
+                if self.module_columns
+                else {}
+            ),
             "mainPaths": [_path_json(path) for path in self.main_paths],
             "feedbackPaths": [_path_json(path) for path in self.feedback_paths],
             "portRoles": dict(self.port_roles),
@@ -582,6 +622,11 @@ class PresentationSpec:
                 "local": self.label_policy.local,
                 "crossModule": self.label_policy.cross_module,
                 "highFanout": self.label_policy.high_fanout,
+                **(
+                    {"stub": self.label_policy.stub}
+                    if self.label_policy.stub != LABEL_STUB_AUTO
+                    else {}
+                ),
             },
             "sidePreferences": dict(self.side_preferences),
             "userLocks": [_lock_json(lock) for lock in self.user_locks],
@@ -606,6 +651,8 @@ class PresentationSpec:
             modules=modules,
             islands=_islands_from(root, modules),
             flow=_flow_from(root),
+            module_order=_module_order_from(root, modules),
+            module_columns=_module_columns(root),
             main_paths=_paths_from(root, "mainPaths"),
             feedback_paths=_paths_from(root, "feedbackPaths"),
             port_roles=_port_roles(root),
@@ -954,6 +1001,45 @@ def _flow_from(root: dict[str, Any]) -> list[FlowEdge]:
     return out
 
 
+def _module_order_from(
+    root: dict[str, Any], modules: Sequence[PresentationModule]
+) -> list[str]:
+    """The stated left-to-right / top-to-bottom module order, or ``[]``.
+
+    A page order is a layout statement, not a circuit one: the decoupling islands
+    of an IC can sit beside it without pretending they are a signal stage. When
+    stated it must be a **permutation** of the modules — a short list would leave
+    a module placed by a fallback the author did not state, and a typo would
+    silently move the wrong group.
+    """
+    value = root.get("moduleOrder")
+    if value is None:
+        return []
+    order = [
+        _text(item, f"moduleOrder[{index}]", required=True)
+        for index, item in enumerate(_list(value, "moduleOrder"))
+    ]
+    names = [module.id for module in modules]
+    if len(order) != len(names) or sorted(order) != sorted(names):
+        raise PresentationSpecError(
+            "$.moduleOrder must list every module id exactly once: the modules "
+            f"are {sorted(names)!r}, the order states {order!r}"
+        )
+    return order
+
+
+def _module_columns(root: dict[str, Any]) -> int:
+    """The stated module-column count, or ``0`` (auto-search)."""
+    value = root.get("moduleColumns")
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise PresentationSpecError(
+            f"$.moduleColumns must be a positive integer, got {value!r}"
+        )
+    return value
+
+
 def _paths_from(root: dict[str, Any], key: str) -> list[PresentationPath]:
     out: list[PresentationPath] = []
     for index, item in enumerate(_list(root.get(key), key)):
@@ -1081,6 +1167,13 @@ def _label_policy(root: dict[str, Any]) -> LabelPolicy:
                 f"{', '.join(LABEL_MODES)}"
             )
         setattr(out, attribute, mode)
+    stub = body.get("stub", LABEL_STUB_AUTO)
+    if stub not in LABEL_STUB_MODES:
+        raise PresentationSpecError(
+            f"labelPolicy.stub is {stub!r}; expected one of "
+            f"{', '.join(LABEL_STUB_MODES)}"
+        )
+    out.stub = stub
     return out
 
 

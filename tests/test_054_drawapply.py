@@ -455,6 +455,62 @@ def test_the_postconditions_hold_for_a_page_that_is_the_plan(plan: ChangePlan) -
     assert drawapply.all_satisfied(state)
 
 
+def test_a_named_label_wire_merged_with_its_unnamed_sibling_still_counts(
+    plan: ChangePlan,
+) -> None:
+    """038D2a: the host merges a label carrier with an unnamed TAP sibling.
+
+    The merged primitive carries `TAP`, so its length is under `TAP`, not under
+    the unnamed bucket.  The page is still the plan (same vertices, same total
+    wire), and the canvas leg must not call the unnamed segment missing.  A
+    genuinely missing segment still fails.
+    """
+    page = _page_matching(plan)
+    tap = [wire for wire in plan.change.draw_wires if wire.net == "TAP"]
+    tap_ids = {
+        f"w-{index}" for index, wire in enumerate(plan.change.draw_wires)
+        if wire.net == "TAP"
+    }
+    points = []
+    for wire in tap:
+        for point in wire.points:
+            pair = (float(point[0]), float(point[1]))
+            if not points or points[-1] != pair:
+                points.append(pair)
+    page["wires"] = [
+        entry for entry in page["wires"]
+        if entry.get("primitiveId") not in tap_ids
+    ]
+    page["wires"].append({
+        "primitiveId": "w-merged-tap",
+        "state": {
+            "Line": [coordinate for point in points for coordinate in point],
+            "Net": "TAP",
+        },
+    })
+    state = drawapply.postcondition_problems(
+        plan,
+        live=_live(("R1", {"1": "VIN", "2": "TAP"}), ("R2", {"1": "TAP", "2": "GND"})),
+        geometry=page,
+        pins=_pins_from_plan(plan),
+    )
+    assert state["canvas"] == []
+
+    # Negative control: remove GND's page wire and the length bucket notices.
+    page["wires"] = [
+        entry for entry in page["wires"]
+        if entry.get("primitiveId") != "w-3"
+    ]
+    state = drawapply.postcondition_problems(
+        plan,
+        live=_live(("R1", {"1": "VIN", "2": "TAP"}), ("R2", {"1": "TAP", "2": "GND"})),
+        geometry=page,
+        pins=_pins_from_plan(plan),
+    )
+    assert any("a segment did not land" in item for item in state["canvas"])
+
+
+
 def test_the_postcondition_shape_is_the_one_036_reads(plan: ChangePlan) -> None:
     """`all_satisfied` reads the same dict `subcircuit`'s does — the flows share it."""
     from boardwise.engines import subcircuit

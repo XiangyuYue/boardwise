@@ -7,6 +7,7 @@
       "symbolRef": "CH343G-C2844153",
       "value": "CH343G",
       "lcsc": "C2844153",
+      "mpn": "CH343G",
       "provenance": "engineer_confirmed"
     },
     {
@@ -14,6 +15,7 @@
       "symbolRef": "TYPE-C-31-M-12-C165948",
       "value": "TYPE-C-31-M-12",
       "lcsc": "C165948",
+      "mpn": "TYPE-C-31-M-12",
       "provenance": "engineer_confirmed"
     },
     {
@@ -21,6 +23,7 @@
       "symbolRef": "2x5P-2.54-C49056209",
       "value": "2x5P-2.54",
       "lcsc": "C49056209",
+      "mpn": "PZ254V-22-10-A60-3000",
       "provenance": "engineer_confirmed"
     },
     {
@@ -28,6 +31,7 @@
       "symbolRef": "LED0603-RED-C2286",
       "value": "RED",
       "lcsc": "C2286",
+      "mpn": "KT-0603R",
       "provenance": "engineer_confirmed"
     },
     {
@@ -35,6 +39,7 @@
       "symbolRef": "R0603-5.1k-C23186",
       "value": "5.1k",
       "lcsc": "C23186",
+      "mpn": "0603WAF5101T5E",
       "provenance": "engineer_confirmed"
     },
     {
@@ -42,6 +47,7 @@
       "symbolRef": "R0603-5.1k-C23186",
       "value": "5.1k",
       "lcsc": "C23186",
+      "mpn": "0603WAF5101T5E",
       "provenance": "engineer_confirmed"
     },
     {
@@ -49,6 +55,7 @@
       "symbolRef": "R0603-1k-C21190",
       "value": "1k",
       "lcsc": "C21190",
+      "mpn": "0603WAF1001T5E",
       "provenance": "engineer_confirmed"
     },
     {
@@ -56,6 +63,7 @@
       "symbolRef": "C0603-100nF-C1590",
       "value": "100nF",
       "lcsc": "C1590",
+      "mpn": "CL10B104KA8NNNC",
       "provenance": "engineer_confirmed"
     },
     {
@@ -63,6 +71,7 @@
       "symbolRef": "C0805-10uF-C15850",
       "value": "10uF",
       "lcsc": "C15850",
+      "mpn": "CL21A106KAYNNNE",
       "provenance": "engineer_confirmed"
     },
     {
@@ -70,6 +79,7 @@
       "symbolRef": "C0603-100nF-C1590",
       "value": "100nF",
       "lcsc": "C1590",
+      "mpn": "CL10B104KA8NNNC",
       "provenance": "engineer_confirmed"
     },
     {
@@ -77,6 +87,7 @@
       "symbolRef": "C0603-100nF-C1590",
       "value": "100nF",
       "lcsc": "C1590",
+      "mpn": "CL10B104KA8NNNC",
       "provenance": "engineer_confirmed"
     }
   ],

@@ -327,6 +327,40 @@ def test_l2_spares_a_designator_and_its_own_value_row():
     assert _by_predicate(_lint(snapshot, svg)).get("L2-text-on-text") is None
 
 
+def test_render_box_end_anchor_grows_left():
+    """V4 Board2 P1: ``RXD`` is end-anchored at the wire's endpoint.
+
+    The host draws a wire's net name with ``text-anchor="end"``; reading it as
+    a start anchor grew the box rightwards into C2's designator and produced the
+    false L2 ``C2``/``RXD`` even though the render shows the two apart.
+    """
+    width = drawlint.text_width("RXD")
+    box = drawlint.render_box(235, -500, "RXD", anchor="end")
+    assert box[0] == pytest.approx(235 - width)
+    assert box[2] == pytest.approx(235)
+    assert box[1] == pytest.approx(500)
+
+
+def test_l2_spares_an_end_anchored_name_beside_a_designator():
+    """The measured V4 Board2 P1 shape: C2 at x=245, RXD ending at x=235."""
+    snapshot = _snapshot()
+    svg = _svg(
+        _text_node(245, -500, "C2", fill=NAVY, part_attr=True),
+        _text_node(235, -500, "RXD", fill=BLUE, anchor="end"),
+    )
+    assert _by_predicate(_lint(snapshot, svg)).get("L2-text-on-text") is None
+
+    # Control: the same node read as start-anchored is the false positive the
+    # old geometry produced — its box runs right, through C2.
+    svg_start = _svg(
+        _text_node(245, -500, "C2", fill=NAVY, part_attr=True),
+        _text_node(235, -500, "RXD", fill=BLUE, anchor="start"),
+    )
+    hits = _by_predicate(_lint(snapshot, svg_start))["L2-text-on-text"]
+    assert len(hits) == 1
+    assert "C2" in hits[0].message and "RXD" in hits[0].message
+
+
 def test_l2_spares_two_texts_a_row_apart():
     """The gap floor: side-by-side text a full row apart is readable."""
     snapshot = _snapshot()
@@ -435,6 +469,28 @@ def test_l5_spares_two_flags_of_one_net():
     """Rail distribution: many flags of one net are the point."""
     snapshot = _snapshot(_flag("GND", 50, 695), _flag("GND", 200, 695))
     svg = _svg(_text_node(50, -720, "GND", fill=BLUE))
+    assert _by_predicate(_lint(snapshot, svg)).get("L5-duplicate-annotation") is None
+
+
+def test_l5_spares_two_mirrored_pin_labels_of_one_connector():
+    """534A: a Type-C pair is one net stated at two pins, on purpose.
+
+    A6/B6 and A7/B7 are the reversible pin pairs; the drawing obligation is one
+    short carrier and one same-name label per pin (never a U-line across both).
+    The two boxes are 11 units apart, inside L5's 20-unit window, so only the
+    same-component pin-pair exemption keeps this from reading as a duplicate.
+    """
+    snapshot = _snapshot(
+        _part("USB1", 300, 300),
+        wires=[
+            _wire("w1", "D-", 280, 300, 250, 300),
+            _wire("w2", "D-", 280, 320, 250, 320),
+        ],
+    )
+    svg = _svg(
+        _text_node(250, -300, "D-", fill=BLUE),
+        _text_node(250, -320, "D-", fill=BLUE),
+    )
     assert _by_predicate(_lint(snapshot, svg)).get("L5-duplicate-annotation") is None
 
 

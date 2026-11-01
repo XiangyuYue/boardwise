@@ -461,6 +461,12 @@ class PlanDrawPart:
     designator: str = ""
     prefix: str = ""
     lcsc: str = ""
+    #: The manufacturer part number, when the CircuitSpec states one.  It is
+    #: carried into the plan because a host library's LCSC index can miss a
+    #: device its own search still finds by MPN (measured 2026-11-01 on V4
+    #: 4.1.93: C2286 / KT-0603R); the apply fallback searches this string only
+    #: after the exact Supplier Part search answered nothing.
+    mpn: str = ""
     value: str = ""
     #: The attribute key ``value`` is written into (``"Value"``, see
     #: :data:`DRAW_VALUE_KEY`), or ``""`` when the plan claims no value write.
@@ -882,6 +888,7 @@ class ChangePlan:
                         "designator": item.designator,
                         "prefix": item.prefix,
                         "lcsc": item.lcsc,
+                        **({"mpn": item.mpn} if item.mpn else {}),
                         "value": item.value,
                         "footprint": item.footprint,
                         "symbolRef": item.symbol_ref,
@@ -1983,6 +1990,7 @@ def _draw_parts_from(value: Any, profile_hashes: list[tuple[str, str]]) -> list[
             designator=designator,
             prefix=str(item.get("prefix") or "").strip(),
             lcsc=lcsc,
+            mpn=str(item.get("mpn") or "").strip(),
             value=value,
             value_key=_draw_value_key(item.get("valueKey"), spot),
             value_visible=value_visible,

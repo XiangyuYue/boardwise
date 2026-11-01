@@ -1093,6 +1093,7 @@ def module_plan(
             designator=designator,
             prefix=prefix,
             lcsc=number,
+            mpn=spec_part.mpn,
             value=value,
             # 055 G2: the design value is what lands in the editor's own `Value`
             # attribute. The CircuitSpec's value *is* the design intent — the MPN
@@ -3762,6 +3763,9 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     """
     vertices: dict[str, set[tuple[float, float]]] = {}
     lengths: dict[str, float] = {}
+    page_segments: list[
+        tuple[str, tuple[float, float], tuple[float, float], float]
+    ] = []
     for x, y, net in addcomponent.wire_vertices(geometry):
         vertices.setdefault(net, set()).add((round(x, 6), round(y, 6)))
     for entry in (geometry or {}).get("wires") or []:
@@ -3779,9 +3783,12 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
             ]
         total = 0.0
         for index in range(1, len(pairs)):
-            total += abs(pairs[index][0] - pairs[index - 1][0]) + abs(
-                pairs[index][1] - pairs[index - 1][1]
+            length = (
+                abs(pairs[index][0] - pairs[index - 1][0])
+                + abs(pairs[index][1] - pairs[index - 1][1])
             )
+            total += length
+            page_segments.append((net, pairs[index - 1], pairs[index], length))
         lengths[net] = lengths.get(net, 0.0) + total
     problems: list[str] = []
     all_vertices = {spot for spots in vertices.values() for spot in spots}
@@ -3812,7 +3819,8 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
         )
     planned_length: dict[str, float] = {}
     unnamed_length = 0.0
-    unnamed_nets_here: set[str] = set()
+    unnamed_nets: set[str] = set()
+    unnamed_wires: list[tuple[list[tuple[float, float]], float]] = []
     for wire in plan.change.draw_wires:
         named = wire_carries_its_name(wire)
         have = vertices.get(wire.net, set()) if wire.net else set()
@@ -3823,6 +3831,17 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
         for end in (wire.points[0], wire.points[-1]):
             spot = (round(end[0], 6), round(end[1], 6))
             if spot in have:
+                continue
+            # 534A: the host merges two collinear wires of one net into a single
+            # primitive (pit 32).  A planned endpoint that was the joint between
+            # them is then **interior** to the merged page segment, not a vertex —
+            # the wire still reaches it and is electrically one conductor.  Only
+            # accept an interior point on a segment that already carries this
+            # wire's net; a missing or foreign segment still fails below.
+            if named and any(
+                seg_net == wire.net and _on_polyline(spot, (start, stop))
+                for seg_net, start, stop, _length in page_segments
+            ):
                 continue
             if attributed:
                 problems.append(
@@ -3846,15 +3865,40 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
         else:
             unnamed_length += length
             if wire.net:
-                unnamed_nets_here.add(wire.net)
+                unnamed_nets.add(wire.net)
+            unnamed_wires.append(
+                ([(float(point[0]), float(point[1])) for point in wire.points], length)
+            )
     # The unnamed wires (069 sec.9) cannot be counted per net — the page holds them
     # under no name — so their lengths are compared as one bucket. They are still
     # counted: a segment that did not land is exactly as visible here.
-    if unnamed_length and lengths.get("", 0.0) + HALF_GRID < unnamed_length:
+    #
+    # 038D2a: the host merges a named label carrier with an unnamed sibling on the
+    # same net (pit 32). The merged primitive carries the net's name, so a
+    # name-keyed length would either miss it or double-count the sibling. Add the
+    # named coverage of a planned unnamed wire **only when no unnamed page
+    # segment lies on that wire**; the pre-038D2a bucket already counts the latter.
+    # This keeps 163b's deliberate permissiveness and still recognises the V4
+    # merge without letting it mask a missing different segment.
+    page_unnamed_length = lengths.get("", 0.0)
+    for line, planned in unnamed_wires:
+        has_unnamed = any(
+            not net and _on_polyline(start, line) and _on_polyline(end, line)
+            for net, start, end, _segment in page_segments
+        )
+        if has_unnamed:
+            continue
+        covered_named = sum(
+            segment
+            for net, start, end, segment in page_segments
+            if net and _on_polyline(start, line) and _on_polyline(end, line)
+        )
+        page_unnamed_length += min(covered_named, planned)
+    if unnamed_length and page_unnamed_length + HALF_GRID < unnamed_length:
         problems.append(
             f"the plan draws {unnamed_length:g} units of unnamed wire (nets "
-            + ", ".join(sorted(unnamed_nets_here))
-            + f") and the page holds {lengths.get('', 0.0):g} — a segment did not land"
+            + ", ".join(sorted(unnamed_nets))
+            + f") and the page holds {page_unnamed_length:g} — a segment did not land"
         )
     for net, wanted in sorted(planned_length.items()):
         have = lengths.get(net, 0.0)

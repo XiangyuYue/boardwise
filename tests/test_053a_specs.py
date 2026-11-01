@@ -368,6 +368,54 @@ def test_the_label_policy_hard_codes_the_local_wire_rule():
         PresentationSpec.from_dict(_presentation(labelPolicy={"highFanout": "netlabel"}))
 
 
+def test_the_straight_stub_policy_is_opt_in_and_round_trips():
+    """534B: ``stub`` defaults to auto and only enters the document when set."""
+    default = PresentationSpec.from_dict(_presentation())
+    assert default.label_policy.stub == "auto"
+    assert "stub" not in default.to_jsonable()["labelPolicy"]
+
+    straight = PresentationSpec.from_dict(_presentation(
+        labelPolicy={
+            "local": "wire",
+            "crossModule": "label",
+            "highFanout": "label",
+            "stub": "straight",
+        },
+    ))
+    assert straight.label_policy.stub == "straight"
+    assert straight.to_jsonable()["labelPolicy"]["stub"] == "straight"
+    assert PresentationSpec.from_dict(straight.to_jsonable()) == straight
+
+    with pytest.raises(PresentationSpecError, match="labelPolicy.stub"):
+        PresentationSpec.from_dict(_presentation(
+            labelPolicy={"stub": "bent"},
+        ))
+
+
+def test_module_order_and_columns_are_optional_layout_statements():
+    """534B: placement order/grid is stated, not inferred from signal flow."""
+    default = PresentationSpec.from_dict(_presentation())
+    assert default.module_order == [] and default.module_columns == 0
+    assert "moduleOrder" not in default.to_jsonable()
+    assert "moduleColumns" not in default.to_jsonable()
+
+    placed = PresentationSpec.from_dict(_presentation(
+        moduleOrder=["m-divider"], moduleColumns=4,
+    ))
+    assert placed.module_order == ["m-divider"]
+    assert placed.module_columns == 4
+    assert placed.to_jsonable()["moduleOrder"] == ["m-divider"]
+    assert placed.to_jsonable()["moduleColumns"] == 4
+    assert PresentationSpec.from_dict(placed.to_jsonable()) == placed
+
+    with pytest.raises(PresentationSpecError, match="moduleOrder"):
+        PresentationSpec.from_dict(_presentation(moduleOrder=["missing"]))
+    with pytest.raises(PresentationSpecError, match="moduleColumns"):
+        PresentationSpec.from_dict(_presentation(moduleColumns=0))
+    with pytest.raises(PresentationSpecError, match="moduleColumns"):
+        PresentationSpec.from_dict(_presentation(moduleColumns=True))
+
+
 def test_an_unknown_grammar_is_refused_rather_than_replaced_by_a_generic_layout():
     for grammar in ("voltage-divider", "rc-lowpass", "ldo", ""):
         assert PresentationSpec.from_dict(_presentation(grammarRef=grammar)).grammar_ref == grammar
