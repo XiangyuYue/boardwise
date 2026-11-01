@@ -98,18 +98,15 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
 - **工作树里还有一笔未 commit 的 535 跟进**：自审抓到自己把 gnd 降级排到了 143 F1 拒绝
   （库无旗标符号的多脚网不许落成标签）**前面**，已把 `flag_downgraded` 拒绝挪回 gnd 分支
   之前。**提交前先跑受影响的测试文件 + 全量**。
-- **534B 已交付（V4 六岛页）**：CH343 落在 `/test V4` Board2 P2
-  （`dc46ef64fc7385ec`，`.eprj3`）：6 岛 `usb_c/v3_cap/ch343/vcc_cap/hdr/led`，
-  11 件 / 54 段计划线 / 16 旗标，lint **0E/1W**，独立逐脚
-  **17 网 / 58 脚 / 55 连通 / 3 NC PASS**，`saved_unverified`。
-  布局 spec 为 `blocklib/specs/ch343_uart_v4.presentation.json` +
-  `ch343_uart_v4.library.json`（新增 `moduleOrder`/`moduleColumns`）。
-  534A 五岛页 `40091c5d26a5db27` 与 V3 `/test` P4 都保留但已被取代，不再作为交付页。
-  证据 `evidence/534b/report.md`；C7/C8 仍是卫星岛 frame 相邻、非同一岛内部贴脚；
-  checkup/PCB 未做，不是板级通过。
+- **534B 实验页已撤回（岳验收 20/100）**：Board2 P2 `dc46ef64fc7385ec` 已删除，
+  Board2 只保留岳的 P1 参考页；Board1 P3 `5d5f8f9f7ac34562` 为空页，等待重做。
+  实验本身记录在 `tasks/534b_v4_layout.md` / `evidence/534b/report.md`（仅证据）。
+  根因：宿主把导线网名以端点向右排，5–10 单位短桩会把文字压回引脚/器件体；
+  统一 40 桩又被 U1 reference 文本占住的右标签走廊挡住，V3 只能退成折线。
+  下一批必须先处理“标签走廊 / reference 文本占位”，再谈 Board1 落图。
 - **合并记录**：worktree `E:/boardwise-wt-layout` 分支 `534b-layout` 已合并 main
   （`b74ee91`）；全量 Python **8829 passed / 25 skipped / 2 failed**（两条环境红：
-  pytest-slots ACL、MSYS `0xC0000022`）。
+  pytest-slots ACL、MSYS `0xC0000022`）。合并的代码能力保留，实验页不作为交付。
 
 ### 3.3 插件线 —— boardwise-dsh（发给 dsh 用户的产品面）
 
