@@ -38,7 +38,7 @@ CC 并入 USB、去耦按服务脚拆成卫星岛贴 U2、LED 独立、H1 独立
 - 页面仍有大片空区，H2/LED 偏下；布局紧凑度不是最优。
 - S-21 标签名称行仍有贴 2 单位下限的软项。
 - native netlabel 仍不可用；`saved_unverified`；未做 checkup/PCB。
-- 未提交、未合并；worktree 内实验交付。
+- 已提交 `1c8cc56` 并经 `b74ee91` 合并入 `main`；worktree 保留为实验证据。
 
 ## 测试
 
