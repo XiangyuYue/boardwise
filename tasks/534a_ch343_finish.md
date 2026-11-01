@@ -3,15 +3,15 @@
 日期：2026-10-31 起 · 接续 `tasks/534_ch343_uart.md` · 授权：岳「把 CH343 的
 UART 转 USB 模块原理图做好」+ 0.6.0 绘制线规划
 
-> **2026-11-01 交付状态（V4 重画后）：以 V4 为准。** 页 `40091c5d26a5db27`
-> （`/test V4`，`.eprj3`，宿主名 **P2**）；11 件 / 54 段计划线 / 15 旗标；
-> `draw lint` **0 ERROR / 2 WARN**；独立逐脚 **17 网 / 58 脚 / 3 NC PASS**；
-> apply exit 0、已保存、`saved_unverified`。详见 `evidence/534a_v4/report.md`。
+> **2026-11-01 状态：534A 五岛页为历史。** 当前交付页是 **534B 六岛页**
+> `dc46ef64fc7385ec`（`/test V4` Board2 P2，详见 `tasks/534b_v4_layout.md` /
+> `evidence/534b/report.md`）。本页 `40091c5d26a5db27`（`/test V4` P2）
+> 11 件 / 54 段计划线 / 15 旗标，lint **0E/2W**，17 网 / 58 脚 / 3 NC PASS，
+> `saved_unverified`；**已被 534B 取代，不再作为交付页**。
 >
-> 历史 V3 落图（`/test` P4，`26e6a63bae878c44`，17 网 / 53 脚）仍在，但**已被
-> V4 P2 取代，不再作为交付页**；两页使用同一份 `ch343_uart_534a.*`，V3 页未删除。
-> 旧 `ch343_uart.*` 保持 0.6.0 四岛示例，不混改。checkup 整工程仍 `incomplete`
-> （11 颗新件不在 PCB2，另有宿主 warning），不是板级通过。
+> 历史 V3 落图（`/test` P4，`26e6a63bae878c44`，17 网 / 53 脚）也保留，但同样
+> 已被取代；旧 `ch343_uart.*` 保持 0.6.0 四岛示例，不混改。checkup 整工程仍
+> `incomplete`（11 颗新件不在 PCB2，另有宿主 warning），不是板级通过。
 >
 > **回归**：全量 pytest **8826 passed / 23 skipped / 2 failed**（两条均为环境：
 > `pytest-slots` ACL、MSYS `0xC0000022`）；connector **542 passed** + typecheck；

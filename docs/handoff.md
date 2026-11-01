@@ -98,13 +98,18 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
 - **工作树里还有一笔未 commit 的 535 跟进**：自审抓到自己把 gnd 降级排到了 143 F1 拒绝
   （库无旗标符号的多脚网不许落成标签）**前面**，已把 `flag_downgraded` 拒绝挪回 gnd 分支
   之前。**提交前先跑受影响的测试文件 + 全量**。
-- **534A 已交付（V4 为准）**：CH343 USB 转 UART 五岛页落在 `/test V4` P2
-  （`40091c5d26a5db27`，`.eprj3`）：11 件 / 54 段 / 15 旗标，lint **0E/2W**，
-  独立逐脚 **17 网 / 58 脚 / 3 NC PASS**，apply exit 0、`saved_unverified`。
-  独立 spec 为 `blocklib/specs/ch343_uart_534a.{circuit,presentation}.json`；
-  旧 `ch343_uart.*` 保持 0.6.0 四岛示例。V3 `/test` P4 的同一份落图仍在，但已被
-  V4 取代，不再作为交付页。V4 证据 `evidence/534a_v4/report.md`；checkup 未做，
-  不是板级通过。
+- **534B 已交付（V4 六岛页）**：CH343 落在 `/test V4` Board2 P2
+  （`dc46ef64fc7385ec`，`.eprj3`）：6 岛 `usb_c/v3_cap/ch343/vcc_cap/hdr/led`，
+  11 件 / 54 段计划线 / 16 旗标，lint **0E/1W**，独立逐脚
+  **17 网 / 58 脚 / 55 连通 / 3 NC PASS**，`saved_unverified`。
+  布局 spec 为 `blocklib/specs/ch343_uart_v4.presentation.json` +
+  `ch343_uart_v4.library.json`（新增 `moduleOrder`/`moduleColumns`）。
+  534A 五岛页 `40091c5d26a5db27` 与 V3 `/test` P4 都保留但已被取代，不再作为交付页。
+  证据 `evidence/534b/report.md`；C7/C8 仍是卫星岛 frame 相邻、非同一岛内部贴脚；
+  checkup/PCB 未做，不是板级通过。
+- **合并记录**：worktree `E:/boardwise-wt-layout` 分支 `534b-layout` 已合并 main
+  （`b74ee91`）；全量 Python **8829 passed / 25 skipped / 2 failed**（两条环境红：
+  pytest-slots ACL、MSYS `0xC0000022`）。
 
 ### 3.3 插件线 —— boardwise-dsh（发给 dsh 用户的产品面）
 
