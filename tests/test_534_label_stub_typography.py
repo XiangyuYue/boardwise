@@ -15,7 +15,9 @@
 所以 :func:`boardwise.engines.drawapply._place_label_stub` 在「导体干净」的候选里，用
 `textmetrics.wire_name_box` 量出宿主**实际**会画的那一行（方向用 `_straight_runs` 独立
 算最长段，不用外框宽高猜），要求它（a）不压自己那个符号（146，保留）、（b）不与本页
-**已经选定的水平行**重叠。重叠（gap<0）不许；相切（gap 0）在 10 节距的表头列上是几何
+**已经选定的水平行**重叠。**534 r25 起这一行以锚点居中**（横排 `y±WIRE_NAME_ROW/2`、
+竖排 `x±WIRE_NAME_ROW/2`，阅读轴不变），本文件的 `_row` 返回的就是这一行；两条标签行
+之间的地板是 `LABEL_ROW_FLOOR = 1`，对其余物体仍按 S-21 的 2。重叠（gap<0）不许；相切（gap 0）在 10 节距的表头列上是几何
 必然（行高 10），保留并记 note；S-21 的 2 单位只作为 note 的数字，**不当通过**——本批
 实测 18 枚桩里仍有 11 对行相切、1 枚竖排，见 `evidence/534/label-stub-typography.md`。
 
@@ -43,6 +45,20 @@ ROOT = Path(__file__).resolve().parents[1]
 SPECS = ROOT / "blocklib" / "specs"
 
 
+def declared(**kwargs) -> LayoutLabel:
+    """A label that **states** 534's policy (053f: both switches are opt-in).
+
+    536 raised the ladder's head to `LABEL_STUB_MIN`, and 534 r25 moved the
+    name row to the anchor's centre. 053f turned both into document statements
+    (`labelPolicy.stubMin` / `labelPolicy.rowModel`) whose defaults are the
+    *old* readings, so a label built with neither would be judged by the
+    pre-534 gates — not what any frozen coordinate in this file measures.
+    """
+    kwargs.setdefault("stub_min", drawapply.LABEL_STUB_MIN)
+    kwargs.setdefault("row_model", "centered")
+    return LayoutLabel(**kwargs)
+
+
 def _built(*wires: PlanDrawWire) -> drawapply._Built:
     built = drawapply._Built()
     built.wires.extend(wires)
@@ -62,7 +78,24 @@ def _run(points) -> drawapply._StubRun:
 
 
 def _row(points, net: str):
-    return textmetrics.wire_name_box([tuple(p) for p in points], net)
+    """The name row the **host** prints, as the stub chooser measures it (534 r25).
+
+    The row is centred on its anchor — ``y ± WIRE_NAME_ROW/2`` for a horizontal
+    run, ``x ± WIRE_NAME_ROW/2`` for a vertical one — the direction it reads in
+    taken from the longest straight run. :func:`textmetrics.wire_name_box` still
+    reports the *measured* box (start-anchored: the row **above** a horizontal
+    anchor, **right of** a vertical one), so the two differ by exactly half a row
+    (5 units). Every frozen coordinate in this file is the centred one, because
+    that is the box ``built.label_stub_rows`` registers and ``_row_cut`` gates on;
+    the measured box is only what a reader outside the chooser would see.
+    """
+    box = textmetrics.wire_name_box([tuple(p) for p in points], net)
+    if box is None:
+        return None
+    half = textmetrics.WIRE_NAME_ROW / 2.0
+    if _horizontal(points):
+        return (box[0], box[1] - half, box[2], box[3] - half)
+    return (box[0] - half, box[1], box[2] - half, box[3])
 
 
 def _gap(a, b) -> float:
@@ -84,32 +117,42 @@ def test_two_names_one_place_bends_the_later_stub_off_the_first():
     """CTS × RXD 的形状：两枚桩的名称行真重叠 5，谁都不属于任何器件。
 
     上桩的标签盒在右，而右侧的直线档被一条外来网导线挡住（099e 的现场：V3 走线占了
-    那一行）——于是它能出去的第一档是 099f 的折线「上 5 再右 10」，最长直段是横的 10，
-    名称行落在 y+5；下面 10 单位处的桩直接右行，名称行落在 y。两行重叠 5 单位，
-    这与 CH340 页 `CTS@(110,195)` × `RXD@(110,205)` 的冻结读数同形。
+    那一行）——于是它能出去的第一档是 099f 的折线「上 5 再右 40」，最长直段是横的 40，
+    名称行以中点 20 起铺、落在 y+5；下面 10 单位处的桩首档「右 40」同样以中点 20 起铺，
+    两行重叠 5 单位，这与 CH340 页 `CTS@(110,195)` × `RXD@(110,205)` 的冻结读数同形。
 
-    534 之后：后一枚桩必须让开**行**，不是让开导体——它退到更长的右行档（行整体右移），
+    **档位换了（536）：第一档从 10 抬到 `LABEL_STUB_MIN = 40`。** 旧读数里首档是
+    「上 5 再右 10」（行从 x=5 起铺）；现在首档长 40（行从 x=20 起铺），重叠仍是 5 ——
+    同一缺陷形状，只是行整体右移了一个桩长。次档「右 10」也只擦到 0.09（<0）、照样不许
+    取，最后落到「右 5」（行 `[2.5, 17.59]`，与上桩的行相隔 2.41）。
+
+    534 之后：后一枚桩必须让开**行**，不是让开导体——它退到别的长度档（行整体平移），
     或者折走；两种都可接受，**不可接受的是重叠**。关掉行避让（见 evidence 的变异 1）
     这一条立刻变红，读数是 gap = -5。
     """
     blocker = PlanDrawWire(net="V3", points=[(5.0, -2.0), (5.0, 3.0)])
-    upper = LayoutLabel(net="CTS", text="CTS", x=0.0, y=0.0,
+    upper = declared(net="CTS", text="CTS", x=0.0, y=0.0,
                         bbox=(10.0, -5.0, 30.0, 5.0))
-    below = LayoutLabel(net="RXD", text="RXD", x=0.0, y=10.0,
+    below = declared(net="RXD", text="RXD", x=0.0, y=10.0,
                         bbox=(10.0, 5.0, 30.0, 15.0))
     built = _built(blocker)
 
     first = _place(upper, built)
     second = _place(below, built)
 
-    # 上桩确实是折线档（上 5 再右 10）：这是本用例的前提，不是结论。
-    assert first == ((0.0, 0.0), (0.0, 5.0), (10.0, 5.0)), first
+    # 上桩确实是折线档（上 5 再右 40）：这是本用例的前提，不是结论。
+    assert first == ((0.0, 0.0), (0.0, 5.0), (40.0, 5.0)), first
     assert _horizontal(first)
     first_row, second_row = _row(first, "CTS"), _row(second, "RXD")
-    # 099d 的一档（右 10：行 [5,10]-[14.6,20]）与上桩的行 [5,5]-[14.5,15] 重叠 5 ——
-    # 若后桩仍选右 10，这里会是 -5。
-    naive = _row(((0.0, 10.0), (10.0, 10.0)), "RXD")
-    assert _gap(first_row, naive) < 0.0, (first_row, naive)
+    # 新首档「右 40」的行与上桩的行重叠 5 —— 若后桩仍选首档，这里会是 -5。
+    naive = _row(((0.0, 10.0), (40.0, 10.0)), "RXD")
+    assert math.isclose(_gap(first_row, naive), -5.0), (first_row, naive)
+    # 旧首档「右 10」（536 之前的第一档）现在只擦到 0.09，也不许取：这条钉住
+    # 「退一档还不够，得退到行真的让开」。
+    old_first = _row(((0.0, 10.0), (10.0, 10.0)), "RXD")
+    assert _gap(first_row, old_first) < 0.0, (first_row, old_first)
+    assert second != ((0.0, 10.0), (40.0, 10.0)), second
+    assert second != ((0.0, 10.0), (10.0, 10.0)), second
     assert _gap(first_row, second_row) >= 0.0, (first_row, second_row, second)
     # 而且它仍是**水平**行：让开的方式不是把名字竖起来。
     assert _horizontal(second), second
@@ -125,7 +168,7 @@ def test_a_label_whose_text_is_above_gets_a_name_that_reads_across():
     「右 5 再上 5」，让路的方式也仍然是横的。关掉水平优先（变异 2）时这里回到
     「上 10」，竖排，测试变红。
     """
-    label = LayoutLabel(net="RI", text="RI", x=0.0, y=0.0,
+    label = declared(net="RI", text="RI", x=0.0, y=0.0,
                         bbox=(-5.0, 5.0, 5.0, 15.0))
     stub = _place(label, _built())
 
@@ -134,19 +177,25 @@ def test_a_label_whose_text_is_above_gets_a_name_that_reads_across():
     row = _row(stub, "RI")
     # 名字行是横的：行从最长段中点起、向右铺、高是一个名称行 —— 与「竖排」的区别
     # 不在宽高比（`RI` 只有 7.15 宽，比 10 高还窄），而在起铺方向。
-    assert row[1] == 0.0 and row[3] == textmetrics.WIRE_NAME_ROW, row
+    # 534 r25：厚度轴改成**以锚点居中**，所以这一行是 y ∈ [-5, 5]。旧断言
+    # `row[1] == 0.0 and row[3] == WIRE_NAME_ROW`（整行在锚点上方）钉的是
+    # `wire_name_box` 的起点锚定盒，那是宿主实际墨迹之上的半行幽灵；等价的新断言是
+    # 「高恰一行、中线恰在锚点上」，宽仍钉量出来的字宽——强度不变，位置换成真位置。
+    half = textmetrics.WIRE_NAME_ROW / 2.0
+    assert row[1] == -half and row[3] == half, row
     assert math.isclose(row[2] - row[0], textmetrics.render_width("RI")), row
 
 
 def test_a_free_preferred_run_is_still_the_first_choice():
-    """既有简单路径优先（099d 的零移动规则）没有被 534 改写。
+    """既有简单路径优先（099d 的零移动规则）没有被 534/536 改写。
 
-    文本盒在右 ⇒ 首选就是「右 10」；没有别的桩、没有外来物体时，桩必须逐字节是
-    (0,0)→(10,0)。这条钉住「只在有冲突时才让路」。
+    文本盒在右 ⇒ 首选就是首档；没有别的桩、没有外来物体时，桩必须逐字节是
+    (0,0)→(40,0)。**档位换了（536）：旧首档 10 → 新首档 `LABEL_STUB_MIN = 40`**，
+    除此之外没有变化。这条钉住「只在有冲突时才让路」。
     """
-    label = LayoutLabel(net="D+", text="D+", x=0.0, y=0.0,
+    label = declared(net="D+", text="D+", x=0.0, y=0.0,
                         bbox=(10.0, -5.0, 30.0, 5.0))
-    assert _place(label, _built()) == ((0.0, 0.0), (10.0, 0.0))
+    assert _place(label, _built()) == ((0.0, 0.0), (40.0, 0.0))
 
 
 # ------------------------------------------------------------------ 真页读数
@@ -271,8 +320,14 @@ def _forced_vertical(built: drawapply._Built):
     blocked by two fake bodies — the same shape as the CH340 page's U1-TXD, where
     every horizontal rung was occupied and the kept run read down the page. The
     bodies are a call argument, not state: the next label is placed without them.
+
+    536: the run kept is the ladder's **first rung at 40** — the old reading was
+    "up 10" (the pre-536 first rung). The shape did not change (both horizontal
+    sides are sealed, so the up run is the first clean candidate); the row the
+    host prints moves with the rung's midpoint: ``(-5, 20)-(5, 122.87)`` instead
+    of the 10-unit rung's ``(-5, 5)-(5, 107.87)``.
     """
-    upper = LayoutLabel(net=_TALL, text=_TALL, x=0.0, y=0.0,
+    upper = declared(net=_TALL, text=_TALL, x=0.0, y=0.0,
                         bbox=(-5.0, 5.0, 5.0, 15.0))
     bodies = {
         "L": (-200.0, -300.0, -2.0, 300.0),
@@ -281,7 +336,7 @@ def _forced_vertical(built: drawapply._Built):
     stub, blockers = drawapply._place_label_stub(upper, built, bodies, [])
     assert stub is not None, blockers
     stub = tuple(tuple(point) for point in stub)
-    assert stub == ((0.0, 0.0), (0.0, 10.0)), stub
+    assert stub == ((0.0, 0.0), (0.0, 40.0)), stub
     assert not _horizontal(stub), stub
     return stub, _row(stub, _TALL)
 
@@ -290,13 +345,19 @@ def test_a_vertical_row_is_registered_so_the_next_label_clears_it():
     """534 F1：竖排的名称行同样是纸上的墨，必须进入 `label_stub_rows`。
 
     审查实测的现场（本用例按字体表复刻）：上一枚只能竖排的桩行是
-    ``(0, 5)-(10, 107.87)``；下一枚标签的首档「右 10」行是 ``(5, 60)-(19.3, 70)``，
-    两行真重叠 **5**，而 ``_row_gap`` 应为 -5。旧代码只登记横排行，所以第二枚的
-    ``_row_clearance`` 拿空表比较，gap 读成 ``inf``，tier 1 把这枚重叠行当「干净」
-    直接收下、一句不留——正是这条测试要钉死的静默。
+    ``(-5, 20)-(5, 122.87)``（536 的 40 桩；10 桩时代是 ``(-5, 5)-(5, 107.87)``）；
+    下一枚标签的首档「右 40」行是 ``(0, 55)-(14.3, 65)``，两行真重叠 **5**，而
+    ``_row_gap`` 应为 -5。旧代码只登记横排行，所以第二枚的 ``_row_clearance`` 拿空表
+    比较，gap 读成 ``inf``，tier 1 把这枚重叠行当「干净」直接收下、一句不留——正是
+    这条测试要钉死的静默。
 
-    修好之后：竖行登记（条目里写明 vertical），第二枚不再吃首档，而是退到不重叠的
-    「右 20」（行 ``(10, 60)-(24.3, 70)``，gap 0，相切留 note），仍然横排——让路的
+    **行坐标与首档一起换（534 r25 居中、536 首档 40）。** 行以最长段中点为中点：
+    旧首档「右 10」从锚点 +5 起铺，锚点 x=-5 时行正是 ``(0, 55)-(14.3, 65)``；新首档
+    「右 40」从锚点 +20 起铺，要铺出**同一行**就得把锚点再左移 20 到 ``x=-20``（r25 时
+    只需挪一格到 -5）。首档行的重叠仍是 5，缺陷形状不变。
+
+    修好之后：竖行登记（条目里写明 vertical），第二枚不再吃首档「右 40」，而是退到
+    不重叠的「右 60」（``(10, 55)-(24.3, 65)``，与竖行 gap 5），仍然横排——让路的
     方式不是把名字竖起来。把 `take()` 的登记退回「只登记横排」，第一条断言与
     ``second != naive`` 立刻变红。
     """
@@ -309,12 +370,13 @@ def test_a_vertical_row_is_registered_so_the_next_label_clears_it():
     assert "vertical" in what, what
     assert box == first_row, (box, first_row)
 
-    below = LayoutLabel(net="TXD", text="TXD", x=0.0, y=60.0,
+    # 锚点 x=-20：见 docstring——新首档「右 40」的行从 x=0 起铺，与竖行在 x 上重叠 5。
+    below = declared(net="TXD", text="TXD", x=-20.0, y=60.0,
                         bbox=(10.0, 55.0, 30.0, 65.0))
     second = _place(below, built)
     second_row = _row(second, "TXD")
-    # 2) 首档「右 10」正是与竖行重叠 5 的那一行——修复前第二枚就选了它。
-    naive = ((0.0, 60.0), (10.0, 60.0))
+    # 2) 首档「右 40」正是与竖行重叠 5 的那一行——修复前第二枚就选了它。
+    naive = ((-20.0, 60.0), (20.0, 60.0))
     assert math.isclose(_gap(first_row, _row(naive, "TXD")), -5.0), (
         first_row, _row(naive, "TXD"))
     assert second != naive, second
@@ -329,11 +391,17 @@ def test_a_vertical_row_is_registered_so_the_next_label_clears_it():
 def test_a_fallback_that_keeps_an_overlap_says_which_row_it_prints_on():
     """534 F1：所有横排档都被堵死时，fallback 必须是**具体的** overlap，不能静默。
 
-    几何与上一条相同，另在第二枚标签两侧一格放两条外来导线，把每一个横排首档
-    （直线右/左，以及先上/下再右的折线第二腿）都堵掉：只剩竖排档，而每一枚竖行都
-    落在上一枚竖行里。修复前，tier 2 会以 gap ``inf`` 收下「上 10」，note 只说
+    同一枚竖排桩（`_forced_vertical`），另在第二枚标签两侧一格放两条外来导线，把每一个
+    横排首档（直线右/左，以及先上/下再右的折线第二腿）都堵掉：只剩竖排档，而每一枚竖行
+    都落在上一枚竖行里。修复前，tier 2 会以 gap ``inf`` 收下「上 10」，note 只说
     「没有横排档」——重叠一个字都不提；修复后 tier 3 保留同一根桩（pre-534 的第一
     个干净档），但 note 必须点名它压在哪一行、重叠框是什么。
+
+    锚点留在这里是 ``x=0``（上一条为重叠挪到了 x=-20）：本用例靠 ``x=±2`` 的两条竖线
+    拦住所有向右的首档，第二枚的干净档是「上 40」（536 首档；旧读数「上 10」），它的
+    竖行是 ``(-5, 80)-(5, 94.3)``（10 桩时代 ``(-5, 65)-(5, 79.3)``：竖行的居中在厚度轴
+    x 上、中点随桩长走到 y=80，整体仍在上一枚的 ``(-5, 20)-(5, 122.87)`` 里），两行
+    真重叠 10。
     """
     built = _built()
     _first, first_row = _forced_vertical(built)
@@ -342,13 +410,14 @@ def test_a_fallback_that_keeps_an_overlap_says_which_row_it_prints_on():
         PlanDrawWire(net="V4", points=[(-2.0, 40.0), (-2.0, 80.0)]),
     ])
 
-    below = LayoutLabel(net="TXD", text="TXD", x=0.0, y=60.0,
+    below = declared(net="TXD", text="TXD", x=0.0, y=60.0,
                         bbox=(10.0, 55.0, 30.0, 65.0))
     stub, blockers = drawapply._place_label_stub(below, built, {}, [])
     assert stub is not None, blockers
     stub = tuple(tuple(point) for point in stub)
-    # 竖直的第一档被保留（pre-534 的 fallback 就是它，146 的「更差的图不是短路」）。
-    assert stub == ((0.0, 60.0), (0.0, 70.0)), stub
+    # 竖直的第一档被保留（pre-534 的 fallback 就是它，146 的「更差的图不是短路」）：
+    # 536 的第一档是「上 40」（旧读数「上 10」），fallback 取的就是同一格阶梯的首档。
+    assert stub == ((0.0, 60.0), (0.0, 100.0)), stub
     row = _row(stub, "TXD")
 
     notes = [note for note in built.notes if note.startswith("net TXD:")]
@@ -398,10 +467,11 @@ def test_the_legacy_three_island_sheet_overflows_the_stated_page_and_is_named():
 
     **这条测试现在钉什么。** 旧三岛 fixture（C1/C3 在 `ch343`、C4 在 `hdr`、D+/D-
     为普通 directWiring、无 localLabelObligations）在当前几何下，三个模块按刚体排出
-    3 列 1176.5 x 240，而图页是 1170 x 825、四周 20 单位边距——最小排列需
-    1216.5 x 280，因此整页被 `presentation-poor` 具名拒绝（行动项就是「把页面放大到
-    至少 1216.5 x 280」）。数字是实测且可重复的：两次编译逐字符相同；本文件不写死
-    别的口径。
+    3 列 1146.5 x 240，而图页是 1170 x 825、四周 20 单位边距——最小排列需
+    1186.5 x 280，因此整页被 `presentation-poor` 具名拒绝（行动项就是「把页面放大到
+    至少 1186.5 x 280」）。数字是实测且可重复的：两次编译逐字符相同；本文件不写死
+    别的口径。**536 换档带出来的数字：10 桩时代是 1176.5 x 240 / 1216.5 x 280，
+    首档抬到 40 后每个模块窄 10，三列总宽少 30，高度与排列数不变。**
 
     **旧的 `VCC` / `pose-variant=0` 期望为什么删掉（不是被吞掉）。**
     534 r23 记录时这一页拒绝于两处模块内原因：`ch343` 的 `VCC` 旗标座位、
@@ -436,6 +506,16 @@ def test_the_legacy_three_island_sheet_overflows_the_stated_page_and_is_named():
     # 测试内由正式 payload 深拷贝改造而来——显式的测试内输入，不读任何本地产物。
     sheet = PresentationSpec.from_dict(_legacy_three_island_payload(json.loads(
         (SPECS / "ch343_uart.presentation.json").read_text(encoding="utf-8"))))
+    # 053f：这两个数字是 536/534r25 量出来的（首档 40、行以锚点居中），而这两条
+    # 现在是**文档的语句**——不写就回到旧行为（10 单位的首档、`wire_name_box` 的
+    # 原样行，也就是本文件注释里 1176.5 x 240 那一组读数）。所以夹具显式声明它们，
+    # 让这条页面级回归仍然测它当初测的那张图。
+    sheet.label_policy.stub_min = drawapply.LABEL_STUB_MIN
+    sheet.label_policy.row_model = "centered"
+    # 页面宽度这一组读数也依赖 535 的分簇（实测：半径 0 → 1176.5，半径 100 →
+    # 1146.5，三个模块各差 10）。053f 之后它同样是文档的语句，所以一并声明，
+    # 夹具才是它当初量出的那张图。
+    sheet.gnd_cluster_radius = 100.0
     book = _legacy_book_with_its_own_pose_freedom(
         load_library(SPECS / "ch343_uart.library.json"))
     result = pagecompiler.compile_page(
@@ -452,13 +532,16 @@ def test_the_legacy_three_island_sheet_overflows_the_stated_page_and_is_named():
     assert failure.category == "presentation-poor", failure.category
     assert failure.subject == "page", failure.subject
     # The exact reading: 3 rigid modules in 3 columns, wider than the sheet allows.
+    # 536: 10-unit stubs gave 1176.5 x 240 / 1216.5 x 280; the first rung at 40 is
+    # 30 units narrower over three columns (each module 10), height and the
+    # arrangement count unchanged.
     assert "the arrangement of 3 module(s) in 3 column(s)" in failure.detail
-    assert "draws 1176.5 x 240 canvas units" in failure.detail
+    assert "draws 1146.5 x 240 canvas units" in failure.detail
     assert "the stated page is 1170 x 825" in failure.detail
     assert "20-unit margin on each side" in failure.detail
     assert "12 arrangement(s) were built and refused inside the stated page" in failure.detail
-    assert "the smallest of them needs 1216.5 x 280 canvas units" in failure.detail
-    assert "1216.5 x 280" in failure.action, failure.action
+    assert "the smallest of them needs 1186.5 x 280 canvas units" in failure.detail
+    assert "1186.5 x 280" in failure.action, failure.action
     # The local pose freedom is what got the modules past their gate: if a posed
     # refusal ever comes back, this test must say so instead of silently re-reading
     # the overflow numbers as a different failure.
@@ -474,7 +557,7 @@ def test_the_end_fallback_no_longer_takes_a_run_the_box_gate_rejected():
     """
     from boardwise.core.layoutplan import LayoutLabel
 
-    label = LayoutLabel(
+    label = declared(
         net="SENSE", text="SENSE", bbox=(20.0, -5.0, 40.0, 5.0), x=0.0, y=0.0,
     )
     built = drawapply._Built()
@@ -503,18 +586,27 @@ def _strict(label, built, boxes=None):
     return drawapply._place_label_stub(label, built, {}, [], boxes)
 
 
-def _row(points, net):
-    return textmetrics.wire_name_box([tuple(point) for point in points], net)
+# `_row` is defined once, at the top: it is the host's centred row (534 r25), and
+# the duplicate that used to sit here returned the pre-r25 measured box instead.
 
 
 def test_strict_a_row_cut_by_a_foreign_wire_leaves_that_rung():
-    """最简横档的行被异网线穿 → 换到后面行不穿的水平档（仍横着念）。"""
-    label = LayoutLabel(net="CTS", text="CTS", x=0.0, y=0.0,
+    """最简横档的行被异网线穿 → 换到后面行不穿的水平档（仍横着念）。
+
+    534 r25：行以锚点居中，``y=0`` 的桩其行是 ``y ∈ [-5, 5]``。旧用例把线放在
+    ``y=5``——那正好是新行的**上边界**（旧模型的中间），只相切、不穿透，首档因此
+    不再被切。线放到 ``y = WIRE_NAME_ROW/4 = 2.5``：在行内、离边界 2.5，真穿透
+    （深度 14.3）。不能放到 ``y=0``：那根线落在锚点本身上，整梯子按「导体落在异网
+    导线上」全灭，就看不出「换一档」了。
+    """
+    label = declared(net="CTS", text="CTS", x=0.0, y=0.0,
                         bbox=(10.0, -5.0, 30.0, 5.0))
     naive = ((0.0, 0.0), (10.0, 0.0))
     row = _row(naive, "CTS")
-    cutter = PlanDrawWire(net="VCC", points=[(row[0] - 20.0, 5.0),
-                                             (row[2] + 20.0, 5.0)])
+    quarter = textmetrics.WIRE_NAME_ROW / 4.0
+    cutter = PlanDrawWire(net="VCC", points=[(row[0] - 20.0, quarter),
+                                             (row[2] + 20.0, quarter)])
+    assert drawapply._row_cut(row, "CTS", [cutter]) is not None, (row, cutter)
     stub, blockers = _strict(label, _built(cutter))
     assert stub is not None, blockers
     assert tuple(stub) != naive, stub
@@ -524,46 +616,76 @@ def test_strict_a_row_cut_by_a_foreign_wire_leaves_that_rung():
 
 
 def test_strict_every_row_cut_is_a_named_refusal():
-    """全梯子都穿线 → None，blockers 点名「is cut … units through by net」。"""
-    label = LayoutLabel(net="CTS", text="CTS", x=0.0, y=0.0,
+    """全梯子都穿线 → None，blockers 点名「is cut … units through by net」。
+
+    534 r25：行以锚点居中（锚点 ``y=0`` ⇒ 行 ``y ∈ [-5, 5]``），旧用例那两根
+    ``y = ±5`` 的线现在正好落在两行的**边界**上，只是相切，一个档都不切；往里收到
+    ``y = ±WIRE_NAME_ROW/4 = ±2.5`` 才是真穿透（深度 14.3），而且这两根线同时把竖的
+    档切在导线上，梯子才真的全灭。一根线不够：「上 5 再右」的行 ``[0, 10]`` 与
+    「下 5 再右」的行 ``[-10, 0]`` 分居锚点两侧，单根 ``y=2.5`` 切不到后者。
+    """
+    label = declared(net="CTS", text="CTS", x=0.0, y=0.0,
                         bbox=(10.0, -5.0, 30.0, 5.0))
-    above = PlanDrawWire(net="VCC", points=[(-60.0, 5.0), (80.0, 5.0)])
-    below = PlanDrawWire(net="VCC", points=[(-60.0, -5.0), (80.0, -5.0)])
+    quarter = textmetrics.WIRE_NAME_ROW / 4.0
+    above = PlanDrawWire(net="VCC", points=[(-60.0, quarter), (80.0, quarter)])
+    below = PlanDrawWire(net="VCC", points=[(-60.0, -quarter), (80.0, -quarter)])
     stub, blockers = _strict(label, _built(above, below))
     assert stub is None, stub
     assert any("is cut" in line and "VCC" in line for line in blockers), blockers
 
 
 def test_strict_a_touching_row_is_legal():
-    """行与线只在边界相切（内部穿透 0）→ 必须接受，不是穿。"""
-    label = LayoutLabel(net="CTS", text="CTS", x=0.0, y=0.0,
+    """行与线只在边界相切（内部穿透 0）→ 必须接受，不是穿。
+
+    ``_row`` 现在是宿主行（以锚点居中），``row[3]`` 就是这行墨的**上边界** y=5：
+    线压在上面仍然合法。旧模型下 ``row[3]`` 是 y=10，那已经离真墨 5 单位远，本用例
+    会退化成「附近有根线」而不是「边界相切」。
+
+    536：首档从 10 抬到 40（``LABEL_STUB_MIN``），naive 跟着换；行仍以锚点居中，
+    上边界还是 y=5，所以「压边界」这一刀的位置与判据都没变，只换了桩长。
+    """
+    label = declared(net="CTS", text="CTS", x=0.0, y=0.0,
                         bbox=(10.0, -5.0, 30.0, 5.0))
-    naive = ((0.0, 0.0), (10.0, 0.0))
+    naive = ((0.0, 0.0), (40.0, 0.0))
     row = _row(naive, "CTS")
     touching = PlanDrawWire(net="VCC", points=[(row[0] - 20.0, row[3]),
                                                (row[2] + 20.0, row[3])])
+    assert drawapply._row_cut(row, "CTS", [touching]) is None, (row, touching)
     stub, blockers = _strict(label, _built(touching))
     assert stub is not None, blockers
     assert tuple(stub) == naive, stub
 
 
 def test_non_strict_keeps_the_pre_534_choice():
-    """label_boxes 为空（099d/099f 的合成调用）→ 旧选择与旧 fallback 不变。"""
-    label = LayoutLabel(net="CTS", text="CTS", x=0.0, y=0.0,
+    """label_boxes 为空（099d/099f 的合成调用）→ 旧选择与旧 fallback 不变。
+
+    用的就是上一条严格用例会换档的那根线（``y = WIRE_NAME_ROW/4``，真穿透首档的行，
+    深度 14.3）：严格路径据此换档，非严格路径不查行×线，仍逐字节给出旧选择。
+    536：首档从 10 抬到 40（``LABEL_STUB_MIN``）——线仍在行内、仍真穿透，naive 换成
+    40；「逐字节给出旧选择」指的是这条路径**当前**的首档，不是 10。
+    """
+    label = declared(net="CTS", text="CTS", x=0.0, y=0.0,
                         bbox=(10.0, -5.0, 30.0, 5.0))
-    naive = ((0.0, 0.0), (10.0, 0.0))
+    naive = ((0.0, 0.0), (40.0, 0.0))
     row = _row(naive, "CTS")
-    cutter = PlanDrawWire(net="VCC", points=[(row[0] - 20.0, 5.0),
-                                             (row[2] + 20.0, 5.0)])
+    quarter = textmetrics.WIRE_NAME_ROW / 4.0
+    cutter = PlanDrawWire(net="VCC", points=[(row[0] - 20.0, quarter),
+                                             (row[2] + 20.0, quarter)])
+    assert drawapply._row_cut(row, "CTS", [cutter]) is not None, (row, cutter)
     stub, blockers = drawapply._place_label_stub(label, _built(cutter), {}, [])
     assert tuple(stub) == naive, (stub, blockers)
 
 
 def test_strict_the_labels_own_box_is_still_an_obstacle():
-    """当前 label 自己的盒仍在严格障碍里（不做归属豁免）。"""
-    label = LayoutLabel(net="CTS", text="CTS", x=0.0, y=0.0,
+    """当前 label 自己的盒仍在严格障碍里（不做归属豁免）。
+
+    536：首档从 10 抬到 40，盒必须改成盖住**新首档**的行（旧用例盖的是旧首档 10 的
+    行——那在 40 阶梯下已经盖不到首档，``stub != naive`` 会退化成恒真）。盒盖住
+    「右 40」的行后，桩退到不碰盒的次档「右 10」。
+    """
+    label = declared(net="CTS", text="CTS", x=0.0, y=0.0,
                         bbox=(10.0, -5.0, 30.0, 5.0))
-    naive = ((0.0, 0.0), (10.0, 0.0))
+    naive = ((0.0, 0.0), (40.0, 0.0))
     row = _row(naive, "CTS")
     own = ("the layout label box of net CTS", (row[0], row[1], row[2], row[3]))
     stub, blockers = _strict(label, _built(), boxes=[own])
@@ -581,12 +703,18 @@ def _owned(label_boxes=True):
 def test_the_survivors_branch_asks_the_row_x_conductor_gate_too():
     """tiers 全被 own-symbol 挡掉后，末尾 survivors 不许把被行×线闸删的档取回来。
 
-    没有这条时：`clear` 里的第一档（right 10，行 y 0..10）会被 y=5 的异网线穿过，
-    仍被 survivors[0] 取走 —— 这是 r21 记过的同一形状（box 闸挡住了上面、末尾又放回来）。
+    没有这条时：`clear` 里的第一档（right 10）会被异网线穿过，仍被 survivors[0]
+    取走 —— 这是 r21 记过的同一形状（box 闸挡住了上面、末尾又放回来）。
+
+    534 r25：right 10 的行以锚点居中，是 ``y ∈ [-5, 5]``（旧模型 ``y ∈ [0, 10]``）。
+    旧用例的 ``y=5`` 现在是这行的**上边界**，只相切、不再穿，首档会被原样取回；线收到
+    ``y = WIRE_NAME_ROW/4 = 2.5`` 才是真穿透（深度 14.3）。这根线也把竖档切在导体上，
+    所以 survivors 剩下的第一枚是「下 5 再右 10」（行 ``y ∈ [-10, 0]``，不穿线、水平）。
     """
-    label = LayoutLabel(net="CTS", text="CTS", x=0.0, y=0.0,
+    label = declared(net="CTS", text="CTS", x=0.0, y=0.0,
                         bbox=(10.0, -5.0, 30.0, 5.0), part_id="U1")
-    cutter = PlanDrawWire(net="VCC", points=[(-60.0, 5.0), (80.0, 5.0)])
+    quarter = textmetrics.WIRE_NAME_ROW / 4.0
+    cutter = PlanDrawWire(net="VCC", points=[(-60.0, quarter), (80.0, quarter)])
     built = _owned()
     built.wires.append(cutter)
     naive = ((0.0, 0.0), (10.0, 0.0))
@@ -600,11 +728,17 @@ def test_the_survivors_branch_asks_the_row_x_conductor_gate_too():
 
 
 def test_the_survivors_branch_refuses_when_every_run_is_cut():
-    """survivors 里全档穿线 → None，且 blockers 具名。"""
-    label = LayoutLabel(net="CTS", text="CTS", x=0.0, y=0.0,
+    """survivors 里全档穿线 → None，且 blockers 具名。
+
+    两根线同样从旧的 ``y = ±5``（新行边界）收到 ``y = ±WIRE_NAME_ROW/4 = ±2.5``：
+    一上一下各切掉一条横档的行（``[0, 10]`` 与 ``[-10, 0]``），横的档全灭、竖的档被
+    切在导体上，survivors 才真的空。
+    """
+    label = declared(net="CTS", text="CTS", x=0.0, y=0.0,
                         bbox=(10.0, -5.0, 30.0, 5.0), part_id="U1")
-    above = PlanDrawWire(net="VCC", points=[(-60.0, 5.0), (80.0, 5.0)])
-    below = PlanDrawWire(net="VCC", points=[(-60.0, -5.0), (80.0, -5.0)])
+    quarter = textmetrics.WIRE_NAME_ROW / 4.0
+    above = PlanDrawWire(net="VCC", points=[(-60.0, quarter), (80.0, quarter)])
+    below = PlanDrawWire(net="VCC", points=[(-60.0, -quarter), (80.0, -quarter)])
     built = _owned()
     built.wires.extend([above, below])
     stub, blockers = _strict(label, built)

@@ -137,7 +137,10 @@ _PART_KEYS = (
 )
 _SEGMENT_KEYS = ("net", "points")
 _JUNCTION_KEYS = ("net", "x", "y")
-_LABEL_KEYS = ("net", "text", "partId", "x", "y", "rotation", "bbox")
+_LABEL_KEYS = (
+    "net", "text", "partId", "x", "y", "rotation", "bbox", "stub",
+    "stubMin", "rowModel",
+)
 _POWER_KEYS = ("symbolRef", "symbolHash", "net", "x", "y", "rotation")
 _TEXT_KEYS = ("kind", "text", "partId", "x", "y", "rotation", "bbox")
 _EVIDENCE_KEYS = (
@@ -269,6 +272,17 @@ class LayoutLabel:
     y: float = 0.0
     rotation: float = 0.0
     part_id: str = ""
+    stub: str = "auto"
+    #: 053f: the document's `labelPolicy.stubMin`, carried onto the label so the
+    #: stub chooser (`drawapply._label_stub_candidates`) can read it without a
+    #: second trip back to the spec. ``0`` is the historical ladder and is
+    #: **not written**, so a plan drawn with no policy serialises as it always
+    #: did — and, because the geometry digest is built from the same payload,
+    #: hashes as it always did.
+    stub_min: float = 0.0
+    #: 053f: ``anchored`` (historical: the measured row above the anchor) or
+    #: ``centered`` (534 r25). Only the non-default is written.
+    row_model: str = "anchored"
 
 
 @dataclass
@@ -560,6 +574,15 @@ class LayoutPlan:
         }
         if ownership and item.part_id:
             body["partId"] = item.part_id
+        if item.stub != "auto":
+            body["stub"] = item.stub
+        # 053f: the two label switches are written only when the document stated
+        # them. A plan compiled from a spec that says nothing keeps the payload —
+        # and therefore `geometry_sha256` — it had before these keys existed.
+        if item.stub_min:
+            body["stubMin"] = item.stub_min
+        if item.row_model != "anchored":
+            body["rowModel"] = item.row_model
         return body
 
     def geometry_json(self) -> str:
@@ -812,6 +835,15 @@ def _labels_from(value: Any) -> list[LayoutLabel]:
             rotation=_pose(body.get("rotation", 0), f"{spot}.rotation"),
             bbox=_required_box(body.get("bbox"), f"{spot}.bbox"),
             part_id=_text(body.get("partId"), f"{spot}.partId"),
+            stub=_text(body.get("stub"), f"{spot}.stub") or "auto",
+            stub_min=(
+                _number(body["stubMin"], f"{spot}.stubMin")
+                if body.get("stubMin") is not None
+                else 0.0
+            ),
+            row_model=(
+                _text(body.get("rowModel"), f"{spot}.rowModel") or "anchored"
+            ),
         ))
     return out
 

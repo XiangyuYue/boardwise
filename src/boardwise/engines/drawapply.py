@@ -88,6 +88,31 @@ from . import addcomponent
 #: `readability` imports `core` only, and `drawcompiler` already imports it.
 from .readability import SOFT_FLOOR_TEXT_GAP
 
+#: 534 r25 — the least clear space between a label's name row and **another
+#: label's** row, as opposed to :data:`SOFT_FLOOR_TEXT_GAP` next to it.
+#:
+#: S-21's two units are measured between two **statements**: different notes on
+#: the paper, which must not run together. Two net names stacked in one column
+#: are not two statements — they are adjacent **rows of one table**, read row by
+#: row, and the host leaves exactly one unit there itself: a 10-unit anchor pitch
+#: with the measured 9-unit name row it draws (`net RXD (591,735.5)-(615,744.5)`
+#: about its anchor at `y = 740`). One unit is the floor that reads; treating the
+#: host's own table spacing as a violation would say the page failed to draw
+#: something it draws everywhere. Everything else (a conductor, a part's own
+#: text row, a flag's name) keeps S-21's number.
+LABEL_ROW_FLOOR = 1.0
+
+#: The two spellings :func:`_row_clearance`'s ``taken`` entries use for *another
+#: label's* row — the plan's netlabel reservation (:func:`_hard_ink_boxes`) and
+#: the row a stub already printed (``built.label_stub_rows``). Kept together, and
+#: matched by prefix, because these are the only paths that write them and a
+#: floor that applies to "a label row" must not fire on "a wire's name row".
+_LABEL_ROW_PREFIXES: tuple[str, ...] = (
+    "the layout label box of net ",
+    "the horizontal name row of the ",
+    "the vertical name row of the ",
+)
+
 __all__ = [
     "CENSUS_CLEARANCE",
     "CENSUS_FALLBACK_HALF",
@@ -150,6 +175,24 @@ FLAG_SYMBOL_POWER_PREFIX = "PWR-"
 #: on a single-module plan for a net that has a name and no conductor at all (145d:
 #: GATE/VFB_NF's shape). See :func:`module_plan`'s ``label_stubs``.
 LABEL_STUB_LENGTH = 2 * DRAW_GRID
+
+#: 534C: a ``stub="straight"`` label leaves its pin by the uniform minimum.
+#: 536: raised from 40 to 60 on the measured shape 岳 sent on 2026-11-01 — the
+#: host prints a net label's row **centred on the stub**, so a 40-unit stub
+#: leaves only 4 units between the row's end and the pin's own number in the
+#: tip-to-body band, and the page reads as `RI14`. At 60 the row ends 14 units
+#: short of the number, which is the reference board's own spacing.
+#: 537: it is a *default* again (40) — the 60-unit spacing is the drawing's
+#: statement, not the compiler's, so the next batch carries it as
+#: `labelPolicy.stubMin`.  The landed page that measured the improvement
+#: (`evidence/534g/`) was drawn with 60; the tests that pin the ladder's first
+#: rung stay at 40 until the key exists.
+LABEL_STUB_MIN = 8 * DRAW_GRID
+LABEL_STUB_LENGTHS_STRAIGHT: tuple[float, ...] = (
+    8 * DRAW_GRID, 10 * DRAW_GRID, 12 * DRAW_GRID,
+    16 * DRAW_GRID, 20 * DRAW_GRID, 24 * DRAW_GRID,
+    32 * DRAW_GRID, 40 * DRAW_GRID, 48 * DRAW_GRID,
+)
 
 #: The lengths a stub's far end is tried at, in order (099d): the preferred one
 #: first (:data:`LABEL_STUB_LENGTH`, or the text box's own reach when that is
@@ -1579,16 +1622,42 @@ def _label_stub_candidates(
         reach = (box[3] - y) if dy > 0 else (y - box[1])
     else:
         preferred, reach = (0.0, 1.0), LABEL_STUB_LENGTH
-    shortest = max(DRAW_GRID, (min(LABEL_STUB_LENGTH, max(DRAW_GRID, reach))
-                               // DRAW_GRID) * DRAW_GRID)
-    lengths: list[float] = []
-    # 534 r21: two further rungs, so a row can leave a band of 10-unit-high boxes that
-    # sits on every shorter one. This is a finite ladder keyed to the drawing's own
-    # grid, not a search: 12 and 16 lattice steps.
-    for rung in (shortest, *LABEL_STUB_LENGTHS,
-                 DRAW_GRID * 12, DRAW_GRID * 16):
-        if rung not in lengths:
-            lengths.append(rung)
+    straight = getattr(label, "stub", "auto") == "straight"
+    if straight:
+        lengths = list(LABEL_STUB_LENGTHS_STRAIGHT)
+    else:
+        # 536: a name must stand off the pin it names. The pin's own number is
+        # printed in the 9.5-unit band between the tip and the drawn body
+        # (`profile.pins[*].length`), so a stub under `LABEL_STUB_MIN` leaves the
+        # row four units from that number and the page reads as `RI14` — the
+        # measured shape 岳 sent on 2026-11-01. The box's own reach is honoured
+        # when it is longer than the minimum; when it is shorter the minimum
+        # wins, and a label that cannot leave its pin at the minimum is refused
+        # rather than stamped onto the pin.
+        # 053f: the floor is the **document's** statement, not the compiler's.
+        # ``stub_min == 0`` is the reading every spec written before the key had,
+        # and it is restored here exactly — `max(DRAW_GRID, ...)`, whose answer
+        # for a short text box is DRAW_GRID (10), which is what 057 measured and
+        # what 534's page was drawn with. A stated minimum raises the head of the
+        # ladder (536's shape) without touching the rungs below it: the short
+        # rungs stay as the fallback a crowded column needs.
+        stub_min = float(getattr(label, "stub_min", 0.0) or 0.0)
+        shortest = max(
+            stub_min if stub_min > 0.0 else DRAW_GRID,
+            (min(LABEL_STUB_LENGTH, max(DRAW_GRID, reach)) // DRAW_GRID) * DRAW_GRID,
+        )
+        lengths = []
+        # 536 fix r1: the floor is the ladder's **head**, not a filter over every
+        # rung — the short rungs stay as the fallback a crowded column needs
+        # (the CH343's right side has no legal 40 for TXD in any direction: the
+        # body, GND's lead and +5V's lead close the four sides at 40, and only
+        # the short rung fits). Enforcing the floor over the whole ladder was
+        # measured to refuse the page outright (2026-11-01), so a drawn short
+        # stub is a page that could not be drawn otherwise, not a preference.
+        for rung in (shortest, *LABEL_STUB_LENGTHS,
+                     DRAW_GRID * 12, DRAW_GRID * 16):
+            if rung not in lengths:
+                lengths.append(rung)
     directions = [preferred] + [
         item for item in _LABEL_STUB_DIRECTIONS if item != preferred
     ]
@@ -1604,6 +1673,17 @@ def _label_stub_candidates(
             shape=f"{_direction_text(preferred)} {length:g}",
             family=f"straight {_direction_text(preferred)}",
         ))
+    if straight:
+        # 534C: every straight direction at the uniform minimum before a bend.
+        for direction in directions[1:]:
+            for length in lengths:
+                far = (round(x + direction[0] * length, 6),
+                       round(y + direction[1] * length, 6))
+                out.append(_StubRun(
+                    points=(anchor, far), side=direction,
+                    shape=f"{_direction_text(direction)} {length:g}",
+                    family=f"straight {_direction_text(direction)}",
+                ))
     # Then the bent runs, before any straight run that would carry the name to
     # another side of the pin (099f): "aside one step, then out to the label" is
     # where the label's box is, and 099e measured what the alternative looks
@@ -1822,18 +1902,64 @@ def _box_text(box: tuple[float, float, float, float]) -> str:
     return f"({box[0]:g}, {box[1]:g})-({box[2]:g}, {box[3]:g})"
 
 
+def _label_row_model(label: Any) -> str:
+    """The row model a label states (053f) — ``anchored`` unless it says otherwise.
+
+    ``anchored`` is the historical reading and the default on
+    :class:`~boardwise.core.layoutplan.LayoutLabel`, so a label built before this
+    key existed — including every ``SimpleNamespace`` a test hands this module —
+    reads as the drawing it was.
+    """
+    model = getattr(label, "row_model", "anchored")
+    return model if model == "centered" else "anchored"
+
+
 def _stub_name_row(
-    run: "_StubRun", text: str
+    run: "_StubRun", text: str, row_model: str = "anchored"
 ) -> tuple[float, float, float, float] | None:
-    """The row the host will print for this stub — ``textmetrics.wire_name_box``.
+    """The row the host will print for this stub — **centred on its anchor**.
 
     534: the stub's name is not the layout's `label.bbox` and not the stub's own
     box; it is the host's: the **midpoint of the longest straight run**, the row
     :data:`WIRE_NAME_ROW` tall and the name's measured width long, start-anchored
     along the run. That is why a 5-unit stub can print a 15-unit name past its
     own far end, and why the row must be measured rather than assumed.
+
+    534 r25 — *centred*, and this is the one thing 534 got wrong. Re-measured on
+    the CH343 sheet's own column, the text the host draws for a name sits
+    **centred on the anchor** (its netlabel row is `(591,735.5)-(615,744.5)`
+    about an anchor at `y = 740`), while :func:`textmetrics.wire_name_box` places
+    its row **above** the midpoint (`y .. y + WIRE_NAME_ROW`). Half a row of
+    phantom ink is what made a `10`-unit-pitch column read as a 4.5-unit overlap
+    in the plan (`net V3` over `net RXD`'s box) while the host drew the two rows
+    a unit apart — the plan refused a page the host can draw. So the row here is
+    ``y - WIRE_NAME_ROW/2 .. y + WIRE_NAME_ROW/2``: no new number, the same
+    constant, centred where the glyphs are.
+
+    **Only this caller.** ``textmetrics.wire_name_box`` / ``wire_name_row`` keep
+    their measured rule for every other reader (a conductor's own name is still
+    read as start-anchored from the midpoint), and the plan's
+    ``LayoutLabel.bbox`` is not touched: that box is the host's own netlabel
+    reservation and already sits centred on its anchor. The reading axis is not
+    recentred either — a name still *starts* at the midpoint and runs right
+    (horizontal run) or down (vertical run) — the centring is on the row's
+    **thickness** axis, `y` for a horizontal run and `x` for a vertical one, the
+    axis the anchor is in the middle of.
     """
-    return textmetrics.wire_name_box([tuple(point) for point in run.points], text)
+    row = textmetrics.wire_name_row([tuple(point) for point in run.points], text)
+    if row is None:
+        return None
+    if row_model != "centered":
+        # 053f: the pre-534r25 row, byte for byte — `wire_name_box`'s own measured
+        # answer (`y .. y + WIRE_NAME_ROW` for a horizontal run). This is what
+        # every label with no stated `rowModel` is judged by, so a plan that
+        # states none reads exactly as it did before the key existed.
+        return tuple(row.box)
+    left, bottom, right, top = row.box
+    half = textmetrics.WIRE_NAME_ROW / 2.0
+    if row.horizontal:
+        return (left, bottom - half, right, bottom + half)
+    return (left - half, bottom, right - half, top)
 
 
 def _stub_row_is_horizontal(run: "_StubRun") -> bool:
@@ -1953,31 +2079,75 @@ def _row_cut(
     return best
 
 
+def _row_floor(what: str, row_model: str = "anchored") -> float:
+    """The floor the taken row ``what`` demands of the candidate measured on it.
+
+    A label's row is judged by :data:`LABEL_ROW_FLOOR`, everything else by
+    :data:`SOFT_FLOOR_TEXT_GAP` (see the constant for why the two differ).
+
+    053f: :data:`LABEL_ROW_FLOOR` is a property of the **centred** row model. It
+    was measured on the host's own netlabel row, which sits centred on its anchor
+    — that is why two adjacent rows of one column read exactly one unit apart. A
+    label drawn with the ``anchored`` model has no such measurement behind it
+    (its ink is half a row higher), so every object keeps S-21's two units and
+    the historical gate is restored untouched.
+    """
+    return (
+        LABEL_ROW_FLOOR
+        if row_model == "centered" and what.startswith(_LABEL_ROW_PREFIXES)
+        else SOFT_FLOOR_TEXT_GAP
+    )
+
+
 def _row_clearance(
     box: tuple[float, float, float, float],
     taken: Sequence[tuple[str, tuple[float, float, float, float]]],
+    row_model: str = "anchored",
 ) -> tuple[float, str | None]:
     """The least separation from ``box`` to an already-taken row, and why it fails.
 
     ``inf`` when no row has been taken yet (so "nothing to avoid" reads as the
     best possible clearance rather than as a special case at each call site), and
-    a sentence only when the least separation is under :data:`SOFT_FLOOR_TEXT_GAP`
-    — a row that is *enough* clear of every other row has nothing to say.
+    a sentence only when some row is closer than **its own** floor — a row that
+    is *enough* clear of every other row has nothing to say.
+
+    534 r25: the floor is a property of the **row being avoided**, not of this
+    pass, so :func:`_row_floor` asks each entry for it — :data:`LABEL_ROW_FLOOR`
+    against another label's row, :data:`SOFT_FLOOR_TEXT_GAP` against a conductor,
+    a part's text row or a flag's name. The returned ``gap`` stays the **least**
+    separation of all (the callers read its sign to refuse a real overlap), while
+    the sentence names the row with the worst shortfall against its own floor and
+    says which floor that is, so "0.5 units" never arrives attached to a rule that
+    says 2.
     """
-    best_gap, best_what, best_box = math.inf, "", None
+    best_gap = math.inf
+    failing: (
+        tuple[float, float, str, tuple[float, float, float, float], float] | None
+    ) = None
     for what, other in taken:
         gap = _row_gap(box, other)
         if gap < best_gap:
-            best_gap, best_what, best_box = gap, what, other
-    if best_box is None or best_gap >= SOFT_FLOOR_TEXT_GAP:
+            best_gap = gap
+        floor = _row_floor(what, row_model)
+        if gap < floor:
+            shortfall = floor - gap
+            if failing is None or shortfall > failing[0]:
+                failing = (shortfall, gap, what, other, floor)
+    if failing is None:
         return best_gap, None
+    _shortfall, gap, what, other, floor = failing
+    ruler = (
+        f"two net names are adjacent rows of one table, so {floor:g} unit is the "
+        "floor between them"
+        if floor == LABEL_ROW_FLOOR
+        else f"S-21 keeps two statements at least {floor:g} units apart"
+    )
     return best_gap, (
         f"its name row {_box_text(box)} "
-        + ("overlaps " if best_gap < 0.0
-           else "touches " if best_gap <= 0.0
-           else f"is {best_gap:g} units from ")
-        + f"{best_what} {_box_text(best_box)} — S-21 keeps two statements at least "
-        f"{SOFT_FLOOR_TEXT_GAP:g} units apart"
+        + ("overlaps " if gap < 0.0
+           else "touches " if gap <= 0.0
+           else f"is {gap:g} units from ")
+        + f"{what} {_box_text(other)} — {ruler}"
     )
 
 
@@ -2228,9 +2398,11 @@ def _place_label_stub(
         ]
     ] = []
     for run in clear:
-        box = _stub_name_row(run, str(label.net))
+        box = _stub_name_row(run, str(label.net), _label_row_model(label))
         gap, row_clash = (
-            (math.inf, None) if box is None else _row_clearance(box, taken)
+            (math.inf, None) if box is None else _row_clearance(
+                box, taken, _label_row_model(label)
+            )
         )
         checked.append((
             run, box, _stub_row_is_horizontal(run),
@@ -2243,7 +2415,9 @@ def _place_label_stub(
     for item in checked:
         run, box, _horizontal, _owner, _gap, _row = item
         hard_gap, hard_what = (
-            (math.inf, None) if box is None else _row_clearance(box, label_boxes)
+            (math.inf, None) if box is None else _row_clearance(
+                box, label_boxes, _label_row_model(label)
+            )
         )
         if hard_gap < 0.0:
             blockers.append(
@@ -2294,14 +2468,21 @@ def _place_label_stub(
         return run.points, blockers
 
     def record_touch(run: "_StubRun", gap: float, row: str | None) -> None:
-        """Say out loud that the kept row is under S-21's floor (0 gap = touching)."""
-        if gap < SOFT_FLOOR_TEXT_GAP:
+        """Say out loud that the kept row is under the floor that applies to it.
+
+        534 r25: the trigger is the sentence, not a number — ``_row_clearance``
+        returns one only when some row is closer than **its own** floor, and the
+        sentence names that floor (:data:`LABEL_ROW_FLOOR` for another label's
+        row, S-21's number for everything else). A row 1.5 units from a label row
+        is clear under the 1-unit floor and must not be noted as a short.
+        """
+        if row is not None:
             built.notes.append(
                 f"net {label.net}: the label at ({label.x:g}, {label.y:g}) keeps a "
-                f"horizontal run ({run.shape}) whose name row is under S-21's "
-                f"{SOFT_FLOOR_TEXT_GAP:g}-unit floor — " + (row or "")
+                f"horizontal run ({run.shape}) whose name row is under the floor "
+                "that applies to it — " + row
                 + " (534: no overlap; this label's ladder and selection order did "
-                "not yield a horizontal row at least 2 units clear)"
+                "not yield a horizontal row clear of that floor)"
             )
 
     # 534 fix r1: a conductor is ink too, and this is the only pass that can see
@@ -2450,8 +2631,7 @@ def _place_label_stub(
                 )
             elif row is not None:
                 detail = (
-                    f"its row is under S-21's {SOFT_FLOOR_TEXT_GAP:g}-unit floor: "
-                    + row
+                    "its row is under the floor that applies to it: " + row
                 )
             elif box is None:
                 detail = "its name row could not be measured (the run has no straight piece)"
@@ -2477,10 +2657,12 @@ def _place_label_stub(
         # printing over a box (the caller's DrawPlanError, 057 sec.4).
         survivors = []
         for run in clear:
-            _box = _stub_name_row(run, str(label.net))
+            _box = _stub_name_row(run, str(label.net), _label_row_model(label))
             if _box is None:
                 continue
-            _hard_gap, _hard_what = _row_clearance(_box, label_boxes)
+            _hard_gap, _hard_what = _row_clearance(
+                _box, label_boxes, _label_row_model(label)
+            )
             if _hard_gap < 0.0:
                 blockers.append(
                     f"{run.shape} ({_point_pair(run.points[-1], run.points[-1])}): "
@@ -2536,7 +2718,10 @@ def _place_label_stub(
             f"own symbol or on another name row — the pre-534 fallback "
             f"({first.shape}) is kept, and this page's stub is not a 534 pass"
         )
-        return take(first, _stub_name_row(first, str(label.net)))
+        return take(
+            first,
+            _stub_name_row(first, str(label.net), _label_row_model(label)),
+        )
     return None, blockers
 
 

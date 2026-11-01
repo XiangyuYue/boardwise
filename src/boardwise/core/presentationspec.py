@@ -105,6 +105,9 @@ __all__ = [
     "GRAMMARS",
     "LABEL_LABEL",
     "LABEL_MODES",
+    "LABEL_ROW_MODELS",
+    "LABEL_ROW_MODEL_ANCHORED",
+    "LABEL_ROW_MODEL_CENTERED",
     "LABEL_STUB_AUTO",
     "LABEL_STUB_MODES",
     "LABEL_STUB_STRAIGHT",
@@ -166,9 +169,35 @@ LABEL_STUB_AUTO = "auto"
 LABEL_STUB_STRAIGHT = "straight"
 LABEL_STUB_MODES: tuple[str, ...] = (LABEL_STUB_AUTO, LABEL_STUB_STRAIGHT)
 
+#: Where the host prints a label's **name row** relative to the stub's anchor
+#: (534 r25, 053f). ``anchored`` is the historical reading — the row buys its ink
+#: above the anchor (``textmetrics.wire_name_box``: ``y .. y + WIRE_NAME_ROW``
+#: for a horizontal run) — and it is the default precisely because it is what
+#: every document written before this key was drawn with. ``centered`` is the
+#: 534 r25 measurement (the host's own netlabel row sits centred on the anchor,
+#: `(591,735.5)-(615,744.5)` about `y = 740`), opt-in so that a page which wants
+#: the measured row states it instead of inheriting it.
+LABEL_ROW_MODEL_ANCHORED = "anchored"
+LABEL_ROW_MODEL_CENTERED = "centered"
+LABEL_ROW_MODELS: tuple[str, ...] = (
+    LABEL_ROW_MODEL_ANCHORED, LABEL_ROW_MODEL_CENTERED,
+)
+
+#: The one key `gndClustering` carries (053f): the neighbourhood radius a
+#: ground's pads are grouped by. The object is closed for the same reason every
+#: other schema here is — a key nobody reads is an intent nobody honours.
+GND_CLUSTERING_KEYS: tuple[str, ...] = ("radius",)
+
 #: The four sides a preference may name. Preferences are defaults; a user lock
 #: wins over them (053 sec.2: "默认可被锁定覆盖").
 SIDES: tuple[str, ...] = ("left", "right", "top", "bottom")
+
+#: The four sides a part's own reference/value rows may be declared on (053d).
+#: The vocabulary is the compiler's, not :data:`SIDES`': it is handed straight to
+#: `drawcompiler._line_boxes`, which names its sides ``above``/``below`` too. A
+#: part's text is one **block** — the reference and the value move *together* —
+#: so this names a side, never a place per line.
+PART_TEXT_SIDES: tuple[str, ...] = ("above", "below", "left", "right")
 
 #: The book's defaults: an input enters from the left, an output leaves to the
 #: right, a rail is above and ground below. Defaults, not rules — 052 sec.6 says
@@ -193,6 +222,8 @@ _TOP_KEYS = (
     "flow",
     "moduleOrder",
     "moduleColumns",
+    "flagLeadLimit",
+    "gndClustering",
     "mainPaths",
     "feedbackPaths",
     "portRoles",
@@ -202,10 +233,21 @@ _TOP_KEYS = (
     "labelPolicy",
     "sidePreferences",
     "userLocks",
+    "partTexts",
 )
 _MODULE_KEYS = (
     "id", "parts", "role", "grammarRef", "presentation", "branchOrder", "core",
+    "attach",
 )
+#: The sides a module may be attached to its host on (053c), and the two nested
+#: defaults. `bottom` is the decoupling row's side — a block of capacitors under
+#: the IC is what a reader expects — and 10 units is a visible but close gap
+#: (the page's own module-gap floor still applies when it is larger; see
+#: `pagecompiler._attach_shift`).
+ATTACH_SIDES: tuple[str, ...] = ("bottom", "top", "left", "right")
+ATTACH_SIDE_DEFAULT = "bottom"
+ATTACH_GAP_DEFAULT = 10.0
+_ATTACH_KEYS = ("to", "side", "gap")
 #: What a module's own `presentation` object may override. Closed for the same
 #: reason every schema here is closed: a key this build does not read would be
 #: an intent nobody honours. The side preferences are the ones a *group's
@@ -214,7 +256,7 @@ MODULE_PRESENTATION_KEYS = ("sidePreferences",)
 _PATH_KEYS = ("id", "chain", "note")
 _FLOW_EDGE_KEYS = ("from", "to", "mainPath")
 _OBLIGATION_KEYS = ("nets", "note")
-_LABEL_POLICY_KEYS = ("local", "crossModule", "highFanout", "stub")
+_LABEL_POLICY_KEYS = ("local", "crossModule", "highFanout", "stub", "stubMin", "rowModel")
 _LOCK_KEYS = ("partId", "x", "y", "rotation", "scope")
 
 #: What a lock's coordinates are relative to (057 sec.3). ``module`` — the
@@ -284,6 +326,33 @@ class PresentationModule:
     side_preferences: dict[str, str] = field(default_factory=dict)
     branch_order: list[str] = field(default_factory=list)
     core: str = ""
+    attach: "ModuleAttach | None" = None
+
+
+@dataclass(frozen=True)
+class ModuleAttach:
+    """Place this module **beside** its host on the page instead of on its own (053c).
+
+    The page compiler places every module it is given on its own grid slot, which
+    is right for a USB inlet and wrong for a decoupling block: the block belongs
+    to the IC's island, and a grid slot far from the IC is exactly what makes the
+    page read as two drawings. ``attach`` says so in the document: the page lays
+    the host out first and puts this module against the named side of the host's
+    *placed* frame, keeping ``gap`` canvas units between the two frames. It is a
+    placement statement and nothing else — the two modules stay two modules
+    (their own drawings, their own frames, their own entry in `page.modules`),
+    and every net between them is still stated the way any cross-module net is
+    (a flag or a label at each end), never as a page-drawn wire.
+
+    ``to`` is required and must name another module of the same document; a
+    module may not attach to itself, one host may carry at most one attached
+    module, and an attached module may not itself be a host — the relation is one
+    level deep, refused at parse time rather than drawn half-way.
+    """
+
+    to: str
+    side: str = ATTACH_SIDE_DEFAULT
+    gap: float = ATTACH_GAP_DEFAULT
 
 
 @dataclass(frozen=True)
@@ -371,6 +440,17 @@ class LabelPolicy:
     #: to fall back to a bent stub. Default ``auto`` preserves every existing
     #: document byte for byte.
     stub: str = LABEL_STUB_AUTO
+    #: The shortest name stub a label may leave its pin on (053f). ``0`` is the
+    #: historical ladder, whose first rung is 057's two-lattice-step run; a
+    #: positive value raises that rung (536 measured 60 as the spacing the
+    #: reference board reads at). It travels to
+    #: :attr:`~boardwise.core.layoutplan.LayoutLabel.stub_min`, where
+    #: `drawapply._label_stub_candidates` reads it.
+    stub_min: float = 0.0
+    #: ``anchored`` (default, the historical row above the anchor) or
+    #: ``centered`` (534 r25's measured row). Travels to
+    #: :attr:`~boardwise.core.layoutplan.LayoutLabel.row_model`.
+    row_model: str = LABEL_ROW_MODEL_ANCHORED
 
 
 @dataclass
@@ -438,6 +518,16 @@ class PresentationSpec:
     #: states the grid shape, so a row of satellites can sit beside its core on
     #: the same row instead of being pushed to a second row.
     module_columns: int = 0
+    #: The farthest a power/ground flag lead may reach from its pad. ``0`` keeps
+    #: the compiler's 60-unit default; a crowded core states a longer lead so its
+    #: flag can leave the label lane without crossing a conductor.
+    flag_lead_limit: float = 0.0
+    #: The radius a **ground's** pads are grouped by, in canvas units (053f).
+    #: ``0`` means the document states no clustering, and the compiler then draws
+    #: every ground exactly as it did before 535 existed — one rail, one flag.
+    #: A positive value switches `drawcompiler`'s neighbourhood split on and is
+    #: what `gndClustering` writes.
+    gnd_cluster_radius: float = 0.0
     main_paths: list[PresentationPath] = field(default_factory=list)
     feedback_paths: list[PresentationPath] = field(default_factory=list)
     #: net id -> one of :data:`PORT_DIRECTIONS`. The same vocabulary the
@@ -456,6 +546,13 @@ class PresentationSpec:
         default_factory=lambda: dict(DEFAULT_SIDE_PREFERENCES)
     )
     user_locks: list[UserLock] = field(default_factory=list)
+    #: part id -> the side its reference/value rows are declared on (053d). The
+    #: two rows are one block and move together; declaring a side only says
+    #: *where to try first* — when every rung there is blocked the compiler
+    #: falls back to its own ladder, so a stated side can never make a drawing
+    #: worse than the one this key did not exist for. Empty = the historical
+    #: reading, and the key is then not written at all.
+    part_texts: dict[str, str] = field(default_factory=dict)
     spec_version: int = PRESENTATION_SPEC_VERSION
 
     # ------------------------------------------------------------ derived
@@ -598,6 +695,16 @@ class PresentationSpec:
                 if self.module_columns
                 else {}
             ),
+            **(
+                {"flagLeadLimit": self.flag_lead_limit}
+                if self.flag_lead_limit
+                else {}
+            ),
+            **(
+                {"gndClustering": {"radius": self.gnd_cluster_radius}}
+                if self.gnd_cluster_radius
+                else {}
+            ),
             "mainPaths": [_path_json(path) for path in self.main_paths],
             "feedbackPaths": [_path_json(path) for path in self.feedback_paths],
             "portRoles": dict(self.port_roles),
@@ -627,9 +734,30 @@ class PresentationSpec:
                     if self.label_policy.stub != LABEL_STUB_AUTO
                     else {}
                 ),
+                # 053f: the two label switches are written only when stated —
+                # a document that names no stub minimum and no row model has to
+                # serialise exactly as it did before these keys existed.
+                **(
+                    {"stubMin": self.label_policy.stub_min}
+                    if self.label_policy.stub_min
+                    else {}
+                ),
+                **(
+                    {"rowModel": self.label_policy.row_model}
+                    if self.label_policy.row_model != LABEL_ROW_MODEL_ANCHORED
+                    else {}
+                ),
             },
             "sidePreferences": dict(self.side_preferences),
             "userLocks": [_lock_json(lock) for lock in self.user_locks],
+            # Written only when stated (053d): a document that names no part text
+            # side has to serialise exactly as it did before this key existed, or
+            # the digest a plan pins would move under every existing document.
+            **(
+                {"partTexts": dict(self.part_texts)}
+                if self.part_texts
+                else {}
+            ),
         }
 
     @classmethod
@@ -653,6 +781,8 @@ class PresentationSpec:
             flow=_flow_from(root),
             module_order=_module_order_from(root, modules),
             module_columns=_module_columns(root),
+            flag_lead_limit=_flag_lead_limit(root),
+            gnd_cluster_radius=_gnd_clustering(root),
             main_paths=_paths_from(root, "mainPaths"),
             feedback_paths=_paths_from(root, "feedbackPaths"),
             port_roles=_port_roles(root),
@@ -662,6 +792,7 @@ class PresentationSpec:
             label_policy=_label_policy(root),
             side_preferences=_side_preferences(root),
             user_locks=_locks_from(root),
+            part_texts=_part_texts_from(root, modules),
         )
 
     def dump(self, path: str | Path) -> None:
@@ -777,6 +908,24 @@ def _module_json(module: PresentationModule) -> dict[str, Any]:
         out["branchOrder"] = list(module.branch_order)
     if module.core:
         out["core"] = module.core
+    if module.attach is not None:
+        out["attach"] = _attach_json(module.attach)
+    return out
+
+
+def _attach_json(attach: ModuleAttach) -> dict[str, Any]:
+    """One attach, with its two defaults written only when they are stated.
+
+    Same rule every optional key here follows: a document that says `{"to":
+    "ch343"}` asked for the default side and gap, and writing them back would be
+    a statement it never made — while a document that states neither the whole
+    `attach` key nor its defaults keeps every byte it had before 053c.
+    """
+    out: dict[str, Any] = {"to": attach.to}
+    if attach.side != ATTACH_SIDE_DEFAULT:
+        out["side"] = attach.side
+    if attach.gap != ATTACH_GAP_DEFAULT:
+        out["gap"] = attach.gap
     return out
 
 
@@ -857,8 +1006,89 @@ def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
             side_preferences=_module_presentation(body.get("presentation"), spot),
             branch_order=_module_branch_order(body.get("branchOrder"), spot, parts),
             core=_module_core(body.get("core"), f"{spot}.core"),
+            attach=_module_attach(body.get("attach"), spot, module_id),
         ))
+    _check_attachments(out)
     return out
+
+
+def _module_attach(
+    value: Any, where: str, module_id: str
+) -> ModuleAttach | None:
+    """One module's `attach`, or ``None`` for "the page places it on its own".
+
+    Only what this document can decide is decided here: that `to` names a
+    string, that `side` is one of the four sides and `gap` a positive finite
+    number. Whether `to` names *another module of this document*, and whether the
+    relation is one level deep, needs the whole module list — that half is
+    :func:`_check_attachments`. Every refusal names the module and the key, so a
+    caller does not have to guess which entry of a five-module list is wrong.
+    """
+    if value is None:
+        return None
+    body = _object(value, f"{where}.attach")
+    _check_keys(body, _ATTACH_KEYS, f"{where}.attach")
+    to = _text(body.get("to"), f"{where}.attach.to", required=True)
+    side = ATTACH_SIDE_DEFAULT
+    if "side" in body:
+        side = _text(body.get("side"), f"{where}.attach.side", required=True)
+        if side not in ATTACH_SIDES:
+            raise PresentationSpecError(
+                f"module {module_id!r}: attach.side is {side!r}; the sides are "
+                + ", ".join(repr(item) for item in ATTACH_SIDES)
+                + " — a side is one of the host's four edges, not a place"
+            )
+    gap = ATTACH_GAP_DEFAULT
+    if "gap" in body:
+        gap = _number(body.get("gap"), f"{where}.attach.gap")
+        if gap <= 0:
+            raise PresentationSpecError(
+                f"module {module_id!r}: attach.gap is {gap:g}; the gap is the clear "
+                "space between the host's frame and this module's, so it is a "
+                "positive number of canvas units"
+            )
+    return ModuleAttach(to=to, side=side, gap=gap)
+
+
+def _check_attachments(modules: Sequence[PresentationModule]) -> None:
+    """The cross-module half of `attach`: one host, one level, no self, and real.
+
+    Read after the whole list, because every rule here is a fact about the other
+    entries. All four are refusals rather than repairs: a page compiler that
+    silently dropped an attach (or silently re-pointed one) would draw a page the
+    document does not describe.
+    """
+    known = {module.id for module in modules}
+    attached = {module.id: module.attach for module in modules
+                if module.attach is not None}
+    hosts: dict[str, str] = {}
+    for module in modules:
+        attach = module.attach
+        if attach is None:
+            continue
+        if attach.to not in known:
+            raise PresentationSpecError(
+                f"module {module.id!r}: attach.to is {attach.to!r}, and no module "
+                "has that id — `to` names the host module of this same document"
+            )
+        if attach.to == module.id:
+            raise PresentationSpecError(
+                f"module {module.id!r}: attach.to is {module.id!r} — a module "
+                "cannot be attached to itself"
+            )
+        if attach.to in attached:
+            raise PresentationSpecError(
+                f"module {module.id!r}: attach.to is {attach.to!r}, which is itself "
+                f"attached (to {attached[attach.to].to!r}) — attach is one level "
+                "deep: an attached module cannot be a host"
+            )
+        if attach.to in hosts:
+            raise PresentationSpecError(
+                f"module {module.id!r}: attach.to is {attach.to!r}, already the host "
+                f"of module {hosts[attach.to]!r} — one host carries at most one "
+                "attached module"
+            )
+        hosts[attach.to] = module.id
 
 
 def _module_core(value: Any, where: str) -> str:
@@ -1028,6 +1258,41 @@ def _module_order_from(
     return order
 
 
+def _part_texts_from(
+    root: dict[str, Any], modules: Sequence[PresentationModule]
+) -> dict[str, str]:
+    """The stated side for each part's own text rows, or ``{}`` (053d).
+
+    The set of parts a document may speak about is the set its **modules**
+    declare — the same reference set `moduleOrder` and the islands are checked
+    against — so a typo is a refusal that names the id rather than a side nobody
+    reads. The sides are a closed vocabulary because the value travels straight
+    into the compiler's line placer.
+    """
+    value = root.get("partTexts")
+    if value is None:
+        return {}
+    body = _object(value, "partTexts")
+    known = declared_part_ids(module.parts for module in modules)
+    out: dict[str, str] = {}
+    for part_id, side in body.items():
+        spot = f"$.partTexts[{part_id!r}]"
+        if part_id not in known:
+            raise PresentationSpecError(
+                f"{spot} names a part this document does not declare; the "
+                f"modules declare {sorted(known)!r} — partTexts is checked "
+                "against them, so a typo cannot silently move no text"
+            )
+        if side not in PART_TEXT_SIDES:
+            raise PresentationSpecError(
+                f"{spot} is {side!r}; expected one of "
+                f"{', '.join(PART_TEXT_SIDES)} — a part's text side is a closed "
+                "vocabulary and the two rows move together"
+            )
+        out[str(part_id)] = side
+    return out
+
+
 def _module_columns(root: dict[str, Any]) -> int:
     """The stated module-column count, or ``0`` (auto-search)."""
     value = root.get("moduleColumns")
@@ -1038,6 +1303,60 @@ def _module_columns(root: dict[str, Any]) -> int:
             f"$.moduleColumns must be a positive integer, got {value!r}"
         )
     return value
+
+
+def _flag_lead_limit(root: dict[str, Any]) -> float:
+    """The stated flag-lead limit, or ``0`` (compiler default).
+
+    053d fix r1: the value must be **finite** as well as positive. `NaN` and
+    `Infinity` pass `value <= 0` (both comparisons are False) and would travel
+    into `CompileBudget.flag_lead_limit`, where `_flag_anchor`'s
+    `if length > limit` filter stops filtering — a document that says `NaN`
+    would silently remove the 60-unit cap, while `to_jsonable`/`dump` wrote the
+    bare literal back and the digest covered text that is not JSON.
+    """
+    value = root.get("flagLeadLimit")
+    if value is None:
+        return 0.0
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise PresentationSpecError(
+            "$.flagLeadLimit must be a positive, finite number of canvas units, "
+            f"got {value!r}"
+        )
+    return float(value)
+
+
+def _gnd_clustering(root: dict[str, Any]) -> float:
+    """The stated ground-clustering radius, or ``0`` (no clustering, 053f).
+
+    Closed and strictly validated for the reason `_flag_lead_limit` is: the value
+    travels into `CompileBudget.gnd_cluster_radius`, where a `NaN`/`Infinity`
+    would make every pad-to-pad comparison false and silently put every ground
+    in its own cluster. A document that states nothing gets ``0``, which is the
+    reading every document written before this key had.
+    """
+    value = root.get("gndClustering")
+    if value is None:
+        return 0.0
+    body = _object(value, "gndClustering")
+    _check_keys(body, GND_CLUSTERING_KEYS, "gndClustering")
+    radius = body.get("radius")
+    if (
+        isinstance(radius, bool)
+        or not isinstance(radius, (int, float))
+        or not math.isfinite(radius)
+        or radius <= 0
+    ):
+        raise PresentationSpecError(
+            "$.gndClustering.radius must be a positive, finite number of canvas "
+            f"units, got {radius!r}"
+        )
+    return float(radius)
 
 
 def _paths_from(root: dict[str, Any], key: str) -> list[PresentationPath]:
@@ -1174,6 +1493,26 @@ def _label_policy(root: dict[str, Any]) -> LabelPolicy:
             f"{', '.join(LABEL_STUB_MODES)}"
         )
     out.stub = stub
+    stub_min = body.get("stubMin")
+    if stub_min is not None:
+        if (
+            isinstance(stub_min, bool)
+            or not isinstance(stub_min, (int, float))
+            or not math.isfinite(stub_min)
+            or stub_min <= 0
+        ):
+            raise PresentationSpecError(
+                "labelPolicy.stubMin must be a positive, finite number of canvas "
+                f"units, got {stub_min!r}"
+            )
+        out.stub_min = float(stub_min)
+    row_model = body.get("rowModel", LABEL_ROW_MODEL_ANCHORED)
+    if row_model not in LABEL_ROW_MODELS:
+        raise PresentationSpecError(
+            f"labelPolicy.rowModel is {row_model!r}; expected one of "
+            f"{', '.join(LABEL_ROW_MODELS)}"
+        )
+    out.row_model = row_model
     return out
 
 

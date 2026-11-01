@@ -97,7 +97,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from boardwise.core.circuitspec import (
@@ -558,6 +558,24 @@ def compile_page(
 
     budget = budget or PageCompileBudget()
     _check_budget(budget)
+    if presentation_spec.flag_lead_limit:
+        budget = replace(
+            budget,
+            module_budget=replace(
+                budget.module_budget,
+                flag_lead_limit=presentation_spec.flag_lead_limit,
+            ),
+        )
+    # 053f: the same one-line promise for `gndClustering.radius` — stated on the
+    # document, carried into every module's budget, never defaulted on.
+    if presentation_spec.gnd_cluster_radius:
+        budget = replace(
+            budget,
+            module_budget=replace(
+                budget.module_budget,
+                gnd_cluster_radius=presentation_spec.gnd_cluster_radius,
+            ),
+        )
     book = drawcompiler.profile_book(profiles)
 
     result = PageCompileResult()
@@ -1124,6 +1142,14 @@ def _module_view(
             for item in presentation_spec.local_label_obligations
             if any(net_id in net_ids for net_id in item.nets)
         ],
+        # 053d: a stated text side travels the way every other per-part statement
+        # does — only for the parts this module holds. Dropping it here left the
+        # page drawing exactly as it drew before the key existed, which made the
+        # key a promise only the standalone compile kept.
+        part_texts={
+            pid: side for pid, side in presentation_spec.part_texts.items()
+            if pid in part_ids
+        },
         label_policy=presentation_spec.label_policy,
         side_preferences=presentation_spec.sides_for_module(module),
         # Module locks only: a page lock is measured on a page the module
@@ -1245,6 +1271,16 @@ def _module_budget_for(
         near_limit=module_budget.near_limit,
         gnd_flag=module_budget.gnd_flag,
         power_flag_prefix=module_budget.power_flag_prefix,
+        # 053d fix r1: `compile_page` states the document's flag lead limit on
+        # `module_budget`, and this builder rebuilds the budget field by field.
+        # Leaving this one out made `flagLeadLimit` a promise kept only on paper:
+        # every module still searched inside the 60-unit default while the
+        # plan's digest named the larger value.
+        flag_lead_limit=module_budget.flag_lead_limit,
+        # 053f: the ground-clustering radius travels with the other switches —
+        # a page that states it must not lose it when a module's budget is
+        # rebuilt field by field.
+        gnd_cluster_radius=module_budget.gnd_cluster_radius,
     )
 
 
@@ -1367,6 +1403,234 @@ class _Assembled:
     frame: Box
 
 
+@dataclass(frozen=True)
+class _Attachment:
+    """One module the page must place beside its host instead of on its own (053c).
+
+    ``gap`` is the document's requested clear space; the page's own module gap is
+    a floor the checker enforces on every pair of frames, so the placement keeps
+    ``max(gap, module_gap)`` and says so in the page notes.
+    """
+
+    module: str
+    host: str
+    side: str
+    gap: float
+
+
+def _attachments(presentation: PresentationSpec) -> list[_Attachment]:
+    """The document's attach statements, in module order (empty for most pages)."""
+    out: list[_Attachment] = []
+    for module in presentation.modules:
+        attach = module.attach
+        if attach is None:
+            continue
+        out.append(_Attachment(
+            module=module.id, host=attach.to, side=attach.side, gap=attach.gap,
+        ))
+    return out
+
+
+def _shift_box(box: Box, dx: float, dy: float) -> Box:
+    return (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
+
+
+def _frame_gap(left: Box, right: Box) -> float:
+    """Edge-to-edge distance, the number :mod:`readability` compares to the gap.
+
+    The same measure as `readability._box_gap` (hypot of the two axis gaps, 0
+    when they overlap), because the arithmetic is not the point — the threshold
+    it is compared to is the checker's, and this compiler has to keep the frame
+    it places *above* that threshold rather than trust the rounding.
+    """
+    dx = max(left[0] - right[2], right[0] - left[2], 0.0)
+    dy = max(left[1] - right[3], right[1] - left[3], 0.0)
+    return math.hypot(dx, dy)
+
+
+def _attach_shift(
+    host: Box, module: Box, side: str, gap: float, grid: float, floor: float
+) -> tuple[float, float]:
+    """Module-local translation putting ``module``'s frame on ``side`` of ``host``.
+
+    y grows upwards, so "below" is the host's ``y0`` and the attached frame's top
+    edge (``y2``) lands ``separation`` under it. ``separation`` is the document's
+    ``gap`` raised to the page's module-gap floor: two *frames* are what
+    `readability.check_page` measures, and a page may not place them closer than
+    its own module gap — a document asking for 10 on a 40-unit-gap page gets the
+    40 it is allowed, not a page the checker refuses twice (once for the gap, once
+    for the flags the narrower gap would overlap).
+
+    The coordinates are snapped to the compilation lattice, then the axis that
+    carries the separation is re-checked: rounding a frame coordinate can move
+    the two frames a step *closer*, and the fix is one lattice step further away,
+    never a narrower gap.
+    """
+    separation = max(float(gap), float(floor))
+    if side == "bottom":
+        dx = (host[0] + host[2]) / 2 - (module[0] + module[2]) / 2
+        dy = host[1] - separation - module[3]
+        dx, dy = _snap(dx, grid), _snap(dy, grid)
+        while host[1] - (module[3] + dy) < separation - 1e-9:
+            dy -= grid
+    elif side == "top":
+        dx = (host[0] + host[2]) / 2 - (module[0] + module[2]) / 2
+        dy = host[3] + separation - module[1]
+        dx, dy = _snap(dx, grid), _snap(dy, grid)
+        while (module[1] + dy) - host[3] < separation - 1e-9:
+            dy += grid
+    elif side == "left":
+        dy = (host[1] + host[3]) / 2 - (module[1] + module[3]) / 2
+        dx = host[0] - separation - module[2]
+        dx, dy = _snap(dx, grid), _snap(dy, grid)
+        while host[0] - (module[2] + dx) < separation - 1e-9:
+            dx -= grid
+    else:  # "right" — the parser has already refused every other side
+        dy = (host[1] + host[3]) / 2 - (module[1] + module[3]) / 2
+        dx = host[2] + separation - module[0]
+        dx, dy = _snap(dx, grid), _snap(dy, grid)
+        while (module[0] + dx) - host[2] < separation - 1e-9:
+            dx += grid
+    return dx, dy
+
+
+def _attached_placement(
+    ctx: _Context,
+    assembled: Sequence[_Assembled],
+    variant: _Variant,
+    attachments: Sequence[_Attachment],
+) -> tuple[
+    list[_Assembled], _Variant, dict[str, tuple[float, float]], dict[str, str]
+]:
+    """Which modules the grid arranges, and how the attached ones sit beside them.
+
+    The host is arranged with a frame that already **covers** its attached
+    module (the union of the two local frames at their attached offset): the grid
+    reserves the space once, for both, so the attached module cannot land on a
+    neighbour or off the sheet because the grid was computed without it. The
+    frames that end up in the page document are still the two real ones — see
+    :func:`_settle_attached`, which derives the attached origin from the host's
+    placed origin with the same offset and stores each module's own frame.
+    """
+    by_id = {item.module.id: item for item in assembled}
+    shifts: dict[str, tuple[float, float]] = {}
+    hosts: dict[str, str] = {}
+    widened: dict[str, Box] = {}
+    for attach in attachments:
+        host = by_id[attach.host]
+        module = by_id[attach.module]
+        shift = _attach_shift(
+            host.frame, module.frame, attach.side, attach.gap,
+            ctx.budget.grid, ctx.budget.module_gap,
+        )
+        shifts[attach.module] = shift
+        hosts[attach.module] = attach.host
+        widened[attach.host] = _union([
+            host.frame, _shift_box(module.frame, shift[0], shift[1]),
+        ])
+    placement = [
+        _Assembled(
+            module=item.module, plan=item.plan, internal_sha256=item.internal_sha256,
+            ports=item.ports, frame=widened.get(item.module.id, item.frame),
+        )
+        for item in assembled
+        if item.module.id not in shifts
+    ]
+    order = tuple(name for name in variant.order if name not in shifts)
+    return placement, replace(
+        variant, order=order, columns=max(1, min(variant.columns, len(order))),
+    ), shifts, hosts
+
+
+def _settle_attached(
+    ctx: _Context,
+    by_id: Mapping[str, _Assembled],
+    attachments: Sequence[_Attachment],
+    shifts: Mapping[str, tuple[float, float]],
+    hosts: Mapping[str, str],
+    offsets: dict[str, tuple[float, float]],
+    placed_frames: dict[str, Box],
+) -> GrammarFailure | None:
+    """Give every attached module its page origin, then verify the pair fits.
+
+    The origin is the host's placed origin plus the module-local offset the
+    attach computed — one translation, the same one that widened the host's
+    arrangement frame — so the gap the placement promises is the gap the checker
+    measures. Two things are then *reported*, never repaired by a silent move: a
+    frame off the page (the attach asks for room the sheet does not have) and a
+    frame closer than the page's module gap to a module the grid placed (the
+    neighbour has to move, not the attached module's stated side). Both name the
+    attached module, its host and the module it collides with.
+    """
+    page = ctx.budget.page_box
+    assert page is not None  # `_check_budget` refuses a page without one
+    inner = _page_inner(page, ctx.budget)
+    sides = {item.module: item.side for item in attachments}
+    for name in sorted(shifts):
+        origin = (
+            offsets[hosts[name]][0] + shifts[name][0],
+            offsets[hosts[name]][1] + shifts[name][1],
+        )
+        offsets[name] = origin
+        placed_frames[name] = _shift_box(by_id[name].frame, origin[0], origin[1])
+    # The grid arranged the host with the *widened* frame (host plus the side the
+    # attached module occupies), so the frame it hands back is that reservation
+    # box, not the host's own. The page document states each module's real frame —
+    # the two frames the checker then measures against each other — so the host is
+    # restored to its own drawing here, at the origin the grid gave it.
+    for name in sorted(set(hosts.values())):
+        host_frame = by_id[name].frame
+        placed_frames[name] = _shift_box(
+            host_frame, offsets[name][0], offsets[name][1],
+        )
+    for name in sorted(shifts):
+        host = hosts[name]
+        frame = placed_frames[name]
+        if (
+            frame[0] < inner[0] - 1e-6 or frame[1] < inner[1] - 1e-6
+            or frame[2] > inner[2] + 1e-6 or frame[3] > inner[3] + 1e-6
+        ):
+            return GrammarFailure(
+                category=FAILURE_LAYOUT_UNSAT,
+                subject=f"modules[{name}] + modules[{host}]",
+                detail=(
+                    f"module {name!r} is attached to {host!r} on its "
+                    f"{sides[name]!r} side, and the frame that placement gives it "
+                    f"{_box_text(frame)} leaves the page's drawing area "
+                    f"{_box_text(inner)} — the attached module is placed beside "
+                    "its host, so the host has to leave room for it on that side"
+                ),
+                action=(
+                    "move the host (a page lock or a larger page), attach on the "
+                    "other side, or state a gap the page can keep — the module is "
+                    "not moved onto the page silently"
+                ),
+            )
+        for other in sorted(placed_frames):
+            if other == name:
+                continue
+            gap = _frame_gap(frame, placed_frames[other])
+            if gap <= ctx.budget.module_gap - 1e-6:
+                return GrammarFailure(
+                    category=FAILURE_LAYOUT_UNSAT,
+                    subject=f"modules[{name}] + modules[{other}]",
+                    detail=(
+                        f"module {name!r} is attached to {host!r} on its "
+                        f"{sides[name]!r} side, and that placement puts its frame "
+                        f"{_box_text(frame)} {gap:g} canvas units from module "
+                        f"{other!r}'s {_box_text(placed_frames[other])}; the page's "
+                        f"module gap is {ctx.budget.module_gap:g}, and two modules' "
+                        "annotations need that clear space"
+                    ),
+                    action=(
+                        "attach the module on another side, state a larger page, "
+                        "or move the module it collides with — the attached frame "
+                        "is not nudged off the side the document asked for"
+                    ),
+                )
+    return None
+
+
 def _assemble(
     ctx: _Context, variant: _Variant
 ) -> tuple[
@@ -1394,15 +1658,42 @@ def _assemble(
         ))
     by_id = {item.module.id: item for item in assembled}
 
+    # 053c: an `attach` module is placed by its host, not by the grid. The grid
+    # arranges the host with a frame that already reserves the attached module's
+    # side (so nothing lands on it), and the attached origin is derived from the
+    # host's placed origin afterwards.
+    attachments = _attachments(ctx.presentation)
+    shifts: dict[str, tuple[float, float]] = {}
+    hosts: dict[str, str] = {}
+    placement: list[_Assembled] = list(assembled)
+    place_variant = variant
+    if attachments:
+        placement, place_variant, shifts, hosts = _attached_placement(
+            ctx, assembled, variant, attachments
+        )
+
     locked, failure = _lock_origins(ctx, variant, sources)
     if failure is not None:
         return None, failure, [], None, KIND_PAGE_LOCK_CONTRADICTION
+    if shifts:
+        # An attached module's place is its host's side, so a page lock on the
+        # module itself cannot also derive its origin. It is not dropped from the
+        # page's checks: `_page_presentation_view` still translates it with the
+        # offset this placement gives the module, and the nine report a lock the
+        # attach does not honour.
+        locked = {name: value for name, value in locked.items() if name not in shifts}
 
     offsets, placed_frames, failure, need, kind = _place(
-        assembled, variant, ctx.budget, locked
+        placement, place_variant, ctx.budget, locked
     )
     if failure is not None:
         return None, failure, [], need, kind
+    if shifts:
+        failure = _settle_attached(
+            ctx, by_id, attachments, shifts, hosts, offsets, placed_frames,
+        )
+        if failure is not None:
+            return None, failure, [], need, ""
 
     drawn = _merge(by_id, variant.order, offsets)
     wired = _wire_shared_nets(ctx, variant, index, by_id, drawn, placed_frames)
@@ -1455,6 +1746,14 @@ def _assemble(
             "one port per shared net per module; ports are the points at which a "
             "module states a net to the page (a label's anchor, a flag's anchor, "
             "or a whole cross-module wire's end)",
+            *[
+                f"module {attach.module} is attached to {attach.host} on its "
+                f"{attach.side} side: the page places it beside the host's placed "
+                f"frame, keeping {max(attach.gap, ctx.budget.module_gap):g} canvas "
+                f"units of clear space (attach.gap {attach.gap:g}, page module gap "
+                f"{ctx.budget.module_gap:g})"
+                for attach in attachments
+            ],
         ],
     )
     return _gate(ctx, variant, page, assembled, offsets)
@@ -1494,7 +1793,8 @@ def _copy_plan(plan: LayoutPlan) -> LayoutPlan:
         labels=[
             LayoutLabel(
                 net=item.net, text=item.text, bbox=item.bbox, x=item.x, y=item.y,
-                rotation=item.rotation, part_id=item.part_id,
+                rotation=item.rotation, part_id=item.part_id, stub=item.stub,
+                stub_min=item.stub_min, row_model=item.row_model,
             )
             for item in plan.labels
         ],
@@ -2639,7 +2939,8 @@ def _merge(
                 bbox=(label.bbox[0] + dx, label.bbox[1] + dy,
                       label.bbox[2] + dx, label.bbox[3] + dy),
                 x=label.x + dx, y=label.y + dy, rotation=label.rotation,
-                part_id=label.part_id,
+                part_id=label.part_id, stub=label.stub,
+                stub_min=label.stub_min, row_model=label.row_model,
             ))
         for symbol in item.plan.power_symbols:
             drawn.symbols.append(LayoutPowerSymbol(

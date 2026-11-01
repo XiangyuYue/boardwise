@@ -27,6 +27,7 @@ import ast
 import inspect
 import math
 import re
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree
@@ -516,7 +517,13 @@ def scenes() -> dict[int, Scene]:
 
 
 def compile_scene(scene: Scene) -> dc.CompileResult:
-    return dc.compile(scene.circuit, scene.presentation, library(), scene.budget)
+    budget = scene.budget
+    # 053f: 535 的分簇是**文档的语句**（`gndClustering.radius`，默认 0 = 不分簇）。
+    # 场景 8 是它的证据场景（LDO 的三个 GND 焊盘互距 ≥120），所以这里显式声明；
+    # 其余场景的预算一个字段都不动。
+    if scene.number == 8:
+        budget = dataclasses.replace(budget, gnd_cluster_radius=dc.GND_LOCAL_RADIUS)
+    return dc.compile(scene.circuit, scene.presentation, library(), budget)
 
 
 def recheck(plan: LayoutPlan, scene: Scene) -> readability.CheckResult:
@@ -894,11 +901,25 @@ def test_scene_08_ldo_puts_each_capacitor_on_its_own_side_and_one_ground_style()
                            ("C2.1", "3V3")):
         assert on_a_wire(plan, pin_point(plan, member)), member
 
-    # 地表达统一：one style, one symbol for every ground pin — and since 201A one
-    # symbol *in all* for the net: the pads are joined by their own rail, and the
-    # single ground symbol states where that rail meets reference ground.
+    # 地表达统一：one style for every ground symbol — but since 535 **one symbol
+    # per cluster**, not one for the whole net. 201A's `one symbol in all` was
+    # written for the coil this batch removes: the LDO's three GND pads sit at
+    # (-120, -80), (0, 60) and (120, -80), i.e. 120+ apart, so each is its own
+    # neighbourhood (`_gnd_clusters`: no two pads of a cluster further apart than
+    # `GND_LOCAL_RADIUS`), each carries its own PWR-GND, and no wire joins them.
+    pads = [
+        (member, pin_point(plan, member))
+        for member in ("C1.2", "U1.1", "C2.2")
+    ]
+    assert all(point is not None for _member, point in pads)
+    groups = dc._gnd_clusters(pads)
     ground_flags = [s for s in plan.power_symbols if s.net == "GND"]
-    assert len(ground_flags) == 1
+    assert len(pads) == len(groups) == 3, (
+        f"the LDO's GND pads are one per neighbourhood: {groups}"
+    )
+    assert len(ground_flags) == len(groups) == 3, (
+        f"one symbol per cluster (535): {len(ground_flags)} for {len(groups)}"
+    )
     assert len({s.symbol_ref for s in ground_flags}) == 1
     assert not [label for label in plan.labels if label.net == "GND"]
 
@@ -4250,12 +4271,20 @@ def test_a_later_carrier_move_sees_the_carriers_laid_before_it(monkeypatch):
 def test_a_name_box_that_would_sit_across_another_nets_run_is_not_reused():
     """**旧盒压异网导线时不得复用**：载体盒必须为新的 far 重新测量（534 r4）。
 
-    这个场景里 C3.1 西侧（脚自己的逃逸边，裸标签会取的那一侧）正好压着 GND 的
-    竖直 run；把旧盒原样搬到新 anchor 上、或者要求 far 必须落在旧盒里，都会把
-    这条冲突留在图上（r5 的实测形状）。所以：新 anchor 不在脚上、载体盒不再是
-    那个旧盒、且没有任何名字盒压在异网导体上。
+    这个场景里 C3.1 西侧（脚自己的逃逸边，裸标签会取的那一侧）**曾经**压着 GND 的
+    竖直 run；535 之后那条 run 不存在了——分簇的地网不再拉一条穿过全岛的母线，所以
+    C3.1 西侧现在是空的（下面第二条断言就是这个事实）。要守的险情却没消失：把旧盒
+    原样搬到新 anchor 上、或者要求 far 必须落在旧盒里，仍会把冲突留在图上。
+    所以这里把冲突 run **显式构造**出来，用它问同一个判定，再对真实图断言：
+    新 anchor 不在脚上、载体盒不再是那个旧盒、且没有任何名字盒压在异网导体上。
     """
-    result = dc.compile(sense_circuit(), sense_presentation(), library())
+    result = dc.compile(
+        sense_circuit(), sense_presentation(), library(),
+        # 053f: 这一条断言的是 535 的分簇结果（GND 母线不再穿过 C3.1 的西侧），
+        # 而分簇现在是文档的语句，所以显式声明半径 100。
+        dataclasses.replace(dc.CompileBudget(),
+                            gnd_cluster_radius=dc.GND_LOCAL_RADIUS),
+    )
     assert result.ok, [failure.detail for failure in result.failures]
     plan = result.best()
     pin = pin_point(plan, "C3.1")
@@ -4263,9 +4292,20 @@ def test_a_name_box_that_would_sit_across_another_nets_run_is_not_reused():
     naive = dc.font_text_box(
         "SENSE", x=pin[0] - dc.TEXT_GAP - dc.text_width("SENSE") / 2.0, y=pin[1]
     )
-    assert _box_across_foreign_run(naive, plan.segments, "SENSE"), (
-        "this scene must keep a foreign run under the bare box, or the "
-        "regression shape it guards has been lost"
+
+    class _Run:
+        """The one shape `_box_across_foreign_run` reads: a net and its points."""
+
+        def __init__(self, net: str, points) -> None:
+            self.net, self.points = net, list(points)
+
+    conflicting = _Run("GND", [(pin[0] - 45.0, pin[1]), (pin[0] + 2.0, pin[1])])
+    assert _box_across_foreign_run(naive, [*plan.segments, conflicting], "SENSE"), (
+        "the bare box must be recognised as colliding with a run under it; "
+        "the predicate this test turns on is what is being kept alive"
+    )
+    assert not _box_across_foreign_run(naive, plan.segments, "SENSE"), (
+        "535: the split ground draws no bus past C3.1's escape side any more"
     )
     moved = [item for item in _labels(plan, "SENSE") if (item.x, item.y) != pin]
     assert moved, "the pin's name must move onto a carrier, not stay on the pin"

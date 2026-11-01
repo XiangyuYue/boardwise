@@ -74,10 +74,13 @@ def _seat_on_the_pin_if_it_will_not_hang(dc, real):
     two tests were written against. Nothing outside the probe is affected.
     """
     def rail(ctx, placed, net_id, expression, pin, profile, ref, router, segments,
-             symbols, occupied, solids, blocked, bodies=None):
+             symbols, occupied, solids, blocked, bodies=None, cluster=None):
+        # 535: `_rail_flag` gained a `cluster` argument when a ground net may be
+        # split into local clusters. The probe keeps its own seating rule, so it
+        # forwards the new argument verbatim instead of dropping it.
         out, failure = real(
             ctx, placed, net_id, expression, pin, profile, ref, router, segments,
-            symbols, occupied, solids, blocked, bodies,
+            symbols, occupied, solids, blocked, bodies, cluster=cluster,
         )
         if out is None:
             dc._place_flag(

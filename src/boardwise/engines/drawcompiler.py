@@ -301,6 +301,22 @@ FLAG_JOG = 25.0
 #: shape the same diagnosis judged "readable but pointed at the wrong place".
 FLAG_LEAD_LIMIT = 2.0 * FLAG_LEAD
 
+#: 535: how far apart two pads of one ground may be and still share **one** flag —
+#: "一支旗标够得着的范围" (岳's ruling: 一个旗标可汇聚多个就近引脚，但不拉全板母线).
+#:
+#: Read off the CH343 island's usb_c: its five GND pads are 57–90 units from their
+#: nearest neighbour but the pair that ends the row is further than any one flag
+#: reaches, and single linkage put all five in one cluster — the 500-unit coil
+#: this batch removes. With the bound applied to **every pair in a cluster**
+#: (:func:`_gnd_clusters`), 100 splits that island into the decoupling pair plus
+#: the two ground pins at the connector, so the capacitor nearest the flag has
+#: one of its own and the pair 93 apart still shares one.
+#:
+#: It is a starting value, not a derived one: a later 实测 may move it, and every
+#: drawing whose grounds land in one cluster is unaffected by the value (that path
+#: is the pre-535 one, untouched).
+GND_LOCAL_RADIUS = 100.0
+
 #: The margin a flag keeps between its whole box — glyph **and** the name row the
 #: host prints — and anything else. 069 sec.8 (岳: 「3V3的旗标标识和5V的导线重合了」)
 #: is about *touching*, so the box the placement keeps free is the glyph, that row
@@ -581,6 +597,17 @@ class CompileBudget:
     stub: float = STUB
     high_fanout: int = HIGH_FANOUT
     near_limit: float = NEAR_LIMIT
+    #: The farthest a flag lead may reach from its pad. 069's 60-unit band is the
+    #: default; a crowded core can need a longer lead to get its flag out of the
+    #: label lane without crossing a conductor. A page may widen it explicitly.
+    flag_lead_limit: float = FLAG_LEAD_LIMIT
+    #: 053f: the radius a ground's pads are grouped by. ``0`` — the default, and
+    #: what every document that states no `gndClustering` gets — keeps 535's
+    #: machinery **off**: :func:`_expressions` never calls :func:`_gnd_clusters`,
+    #: `_Expression.clusters` stays empty, and the single-cluster drawing code is
+    #: the one that was there before 535 existed (byte for byte). A positive value
+    #: is the document's own statement and is what the split reads.
+    gnd_cluster_radius: float = 0.0
     #: Symbol refs for rail flags: the ground flag, and the prefix a rail's flag
     #: is looked up under (net ``VIN`` -> symbol ``PWR-VIN``). A flag the library
     #: does not carry is written as a net label instead — the same kind of name
@@ -5933,6 +5960,16 @@ class _Expression:
     reason: str
     detached: tuple[str, ...] = ()
     pivot: str = ""
+    #: 535: a **ground**'s pads, grouped by 就近距离 (:data:`GND_LOCAL_RADIUS`),
+    #: when the net has more than one neighbourhood. Empty — the case for every
+    #: net that is not a split ground — means "this expression *is* the cluster":
+    #: ``points`` is the whole net and the drawing code below runs exactly as it
+    #: did before this field existed. A ground whose pads all land in one cluster
+    #: keeps this empty **on purpose**, so a page with no split is byte-identical;
+    #: only a net with ≥2 clusters is drawn cluster by cluster, each one on its
+    #: own rail with its own single flag and no wire between them (岳: 小岛小簇就近
+    #: 各自挂 GND 旗标，不拉跨簇母线).
+    clusters: tuple[tuple[tuple[str, tuple[float, float]], ...], ...] = ()
 
 
 def _obligation_nets(ctx: _Context) -> set[str]:
@@ -5985,11 +6022,120 @@ def _expressions(ctx: _Context, placed: _Placement) -> dict[str, _Expression]:
         pivot = ""
         if style == "wire" and _sibling_name_form(ctx, net.id, net.cls):
             detached, pivot = _detached_pins(ctx, net.id, points)
+        # 535: a ground with pads in more than one neighbourhood is drawn as one
+        # rail **per neighbourhood**, each with its own flag, and no wire between
+        # them. One neighbourhood (the ordinary case, and the only case a page
+        # with no split has) leaves this empty so the expression is untouched.
+        clusters: tuple[tuple[tuple[str, tuple[float, float]], ...], ...] = ()
+        if (
+            style == "wire"
+            and net.cls == "gnd"
+            and ctx.budget.gnd_cluster_radius > 0.0
+        ):
+            grouped = _gnd_clusters(points, ctx.budget.gnd_cluster_radius)
+            if len(grouped) > 1:
+                clusters = grouped
         out[net.id] = _Expression(
             net=net.id, style=style, points=tuple(points), reason=reason,
-            detached=detached, pivot=pivot,
+            detached=detached, pivot=pivot, clusters=clusters,
         )
     return out
+
+
+def _gnd_clusters(
+    points: Sequence[tuple[str, tuple[float, float]]],
+    radius: float = GND_LOCAL_RADIUS,
+) -> tuple[tuple[tuple[str, tuple[float, float]], ...], ...]:
+    """Group a ground's pads into the neighbourhoods one flag can serve (535).
+
+    A cluster is a set of pads **no two of which are further apart than
+    ``radius``** — the club rule, not single linkage. 岳's complaint is about a
+    500-unit bus: single linkage chains a row of short hops into one cluster even
+    when its ends are far enough apart that the bus is exactly the thing being
+    drawn (measured on the CH343 island: C1–C2 60, C2–R1 57, C1–R2 85, R2–USB1
+    93, so "every hop ≤ 100" joined all five into one cluster and the coil
+    stayed). A diameter bound refuses that last, longest link: the pair that
+    would make the cluster wider than one flag's reach is not added, and a new
+    cluster is started instead.
+
+    The grouping is **greedy in the order the pads are given** (member id, from
+    :func:`_expressions`): a pad joins the first existing cluster that stays
+    within the bound after adding it — 能并就并 — and starts a new cluster when
+    none does. The order is the stable tie-break the rest of this package uses,
+    so the same input always draws the same picture. Clusters are returned in a
+    stable order (by the smallest member id they contain), and each keeps the
+    ``points`` order it was given, so a refusal can name "cluster 2/3" without
+    ambiguity.
+
+    The single-cluster answer is returned as one tuple; the caller leaves
+    :attr:`_Expression.clusters` empty in that case.
+    """
+    if not points:
+        return ()
+    limit = radius * radius
+    groups: list[list[tuple[float, float]]] = []
+    members: list[list[tuple[str, tuple[float, float]]]] = []
+    for item in points:
+        point = item[1]
+        for index, group in enumerate(groups):
+            if all(
+                (point[0] - other[0]) ** 2 + (point[1] - other[1]) ** 2 <= limit
+                for other in group
+            ):
+                group.append(point)
+                members[index].append(item)
+                break
+        else:
+            groups.append([point])
+            members.append([item])
+    order = sorted(
+        range(len(members)),
+        key=lambda index: min(member for member, _point in members[index]),
+    )
+    return tuple(tuple(members[index]) for index in order)
+
+
+def _gnd_cluster_expressions(
+    expression: _Expression,
+) -> tuple[tuple[_Expression, str], ...]:
+    """Each cluster of a split ground as its own expression, with its ``i/n`` label.
+
+    ``()`` for every net that is not a split ground, which is every net on every
+    page whose grounds each land in one neighbourhood (:attr:`_Expression.clusters`
+    empty): the caller then uses ``expression`` itself, and the single-cluster
+    drawing code is not touched at all.
+
+    A cluster expression is an ordinary :class:`_Expression` of the same net with
+    ``points`` narrowed to the cluster and no ``detached``/``pivot`` — a ground's
+    pads are never 069 sec.2's detached shape (:func:`_sibling_name_form` answers
+    ``""`` for a ground). The flag seat, the rail route and the collision checks
+    all read it unchanged, which is the point: 535 adds a partition, not a second
+    router.
+    """
+    clusters = expression.clusters
+    total = len(clusters)
+    return tuple(
+        (
+            _Expression(
+                net=expression.net, style=expression.style, points=cluster,
+                reason=expression.reason,
+            ),
+            f"{index}/{total}",
+        )
+        for index, cluster in enumerate(clusters, start=1)
+    )
+
+
+def _gnd_cluster_phrase(
+    label: str, point: tuple[float, float],
+) -> str:
+    """How a split ground's messages name one neighbourhood (535).
+
+    ``"cluster 2/3 near (300, 645)"`` — which of the clusters, and a point inside
+    it, so a refusal can be found on the page. Only a split ground takes this
+    path, so there is no empty form to fall back to.
+    """
+    return f"cluster {label} near {_point_text(point)}"
 
 
 def _net_needs_flag(
@@ -6497,6 +6643,20 @@ def _declared_rows(
     ]
 
 
+def _stated_part_text_side(ctx: Any, part_id: str) -> str:
+    """The side the presentation declares for this part's rows, or ``""`` (053d).
+
+    A fixture context may have no ``presentation``, or a stand-in that predates
+    the field (:func:`_label_standoff` guards the same way); the default is
+    "nothing stated", so a missing key can never move an existing drawing's text.
+    """
+    stated = getattr(getattr(ctx, "presentation", None), "part_texts", None)
+    if not isinstance(stated, dict):
+        return ""
+    side = stated.get(part_id, "")
+    return side if isinstance(side, str) else ""
+
+
 def _part_texts(
     ctx: _Context, placed: _Placement, occupied: list[Box], walls: list[Box]
 ) -> list[LayoutText]:
@@ -6553,23 +6713,45 @@ def _part_texts(
         lines = list(_part_lines(ctx, part_id))
         blocked = [*walls, box]
         chosen = None
-        # Each side is tried at :data:`TEXT_ESCALATION_STEPS` distances, not one
-        # (117②). A single rung is often occupied while the second is free — the
-        # flyback's 385-unit `EE16_3+3_V02 (…)` value is the measured case, its
-        # own designator sitting on it. Falling back to `TEXT_SIDES[0]` is still
-        # the honest last resort: the gate refuses the candidate rather than the
-        # text being squeezed (053 sec.5 scenario 10).
-        for rung in range(1, TEXT_ESCALATION_STEPS + 1):
-            for side in TEXT_SIDES:
-                boxes = _line_boxes(box, [text for _, text in lines], side, rung)
+        # 053d: a side the document states for this part is tried **first**, at
+        # every rung, with the same collision test as the ladder below — on a
+        # crowded IC it is where the two rows must go to leave the pin-side
+        # lanes to the net labels (the `partTexts` statement, the reference
+        # page's own reading). It is a preference, not a constraint: when every
+        # rung there is blocked the historical ladder runs unchanged, so a
+        # stated side can never draw worse than no statement at all — and a
+        # document that states none takes exactly the path it always took.
+        stated_side = _stated_part_text_side(ctx, part_id)
+        if stated_side:
+            for rung in range(1, TEXT_ESCALATION_STEPS + 1):
+                boxes = _line_boxes(
+                    box, [text for _, text in lines], stated_side, rung
+                )
                 if all(
                     not _overlaps(candidate, other)
                     for candidate in boxes for other in blocked
                 ):
                     chosen = boxes
                     break
-            if chosen is not None:
-                break
+        # Each side is tried at :data:`TEXT_ESCALATION_STEPS` distances, not one
+        # (117②). A single rung is often occupied while the second is free — the
+        # flyback's 385-unit `EE16_3+3_V02 (…)` value is the measured case, its
+        # own designator sitting on it. Falling back to `TEXT_SIDES[0]` is still
+        # the honest last resort: the gate refuses the candidate rather than the
+        # text being squeezed (053 sec.5 scenario 10). It runs only when the
+        # stated side did not land on any rung above.
+        if chosen is None:
+            for rung in range(1, TEXT_ESCALATION_STEPS + 1):
+                for side in TEXT_SIDES:
+                    boxes = _line_boxes(box, [text for _, text in lines], side, rung)
+                    if all(
+                        not _overlaps(candidate, other)
+                        for candidate in boxes for other in blocked
+                    ):
+                        chosen = boxes
+                        break
+                if chosen is not None:
+                    break
         if chosen is None:
             chosen = _line_boxes(box, [text for _, text in lines], TEXT_SIDES[0])
         for (kind, text), item in zip(lines, chosen):
@@ -6601,6 +6783,12 @@ def _label_standoff(ctx: Any) -> float:
     )
 
 
+def _label_stub_policy(ctx: Any) -> str:
+    """The stub shape this label carries into the plan: ``auto`` or ``straight``."""
+    policy = getattr(getattr(ctx, "presentation", None), "label_policy", None)
+    return policy.stub if policy is not None else "auto"
+
+
 def _label_for(
     ctx: _Context,
     net_id: str,
@@ -6626,6 +6814,11 @@ def _label_for(
     return _label_at(
         net_id, point, direction, occupied, part_id=part_id, segments=segments,
         avoid=avoid, standoff=_label_standoff(ctx),
+        stub=_label_stub_policy(ctx),
+        # 053f: `_label_for` is the one site with the presentation in hand, so the
+        # document's label policy enters the plan here.
+        stub_min=ctx.presentation.label_policy.stub_min,
+        row_model=ctx.presentation.label_policy.row_model,
     )
 
 
@@ -6639,6 +6832,12 @@ def _label_at(
     segments: Sequence[LayoutSegment] = (),
     avoid: Sequence[Box] = (),
     standoff: float = 0.0,
+    stub: str = "auto",
+    #: 053f: the two label switches, stated by the document and carried onto the
+    #: label. Their defaults are the pre-534/536 readings, so a spec that states
+    #: neither produces the label this function produced before the keys existed.
+    stub_min: float = 0.0,
+    row_model: str = "anchored",
 ) -> LayoutLabel:
     """A label whose *anchor* is fixed and whose *box* moves around it.
 
@@ -6694,7 +6893,9 @@ def _label_at(
         )
     occupied.append(box)
     return LayoutLabel(
-        net=net_id, text=net_id, bbox=box, x=point[0], y=point[1], part_id=part_id,
+        net=net_id, text=net_id, bbox=box, x=point[0], y=point[1],
+        part_id=part_id, stub=stub,
+        stub_min=stub_min, row_model=row_model,
     )
 
 
@@ -6807,7 +7008,7 @@ def _tap_stub(
         segments.append(LayoutSegment(net=expression.net, points=[junction, end]))
         label = _label_at(
             expression.net, end, direction, occupied, segments=segments,
-            standoff=_label_standoff(ctx),
+            standoff=_label_standoff(ctx), stub=_label_stub_policy(ctx),
         )
         labels.append(label)
         solids.append(label.bbox)
@@ -9176,10 +9377,52 @@ def _build_one_variant(
             )
             notes.append(f"net {net_id}: {note}")
         if expression.style == "wire":
-            drawn = _connect_net(
-                ctx, router, expression, blocked,
-                [item for item in segments if item.net == net_id],
-            )
+            # 535: a ground whose pads fall into >1 neighbourhood is drawn one
+            # neighbourhood at a time — each cluster is an ordinary expression
+            # handed to the same `_connect_net`, so the trunk/attachment ladder,
+            # the corridor and the collision walls are the ones this file already
+            # routes with. Nothing joins two clusters: 岳's 不拉跨簇母线 is the
+            # absence of a segment between them, and no pass here adds one.
+            split = _gnd_cluster_expressions(expression)
+            existing = [item for item in segments if item.net == net_id]
+            drawn: Any = None
+            if split:
+                merged_segments: list[LayoutSegment] = []
+                for cluster_expression, cluster_label in split:
+                    own = {
+                        _key(point) for _member, point in cluster_expression.points
+                    }
+                    # A stub already on the page (069 sec.4's tap) belongs to the
+                    # cluster its own pads are in; the other clusters start bare.
+                    mine = [
+                        item for item in existing
+                        if any(_key(point) in own for point in item.points)
+                    ]
+                    drawn = _connect_net(
+                        ctx, router, cluster_expression, blocked, mine,
+                    )
+                    if isinstance(drawn, _Unrouted) or drawn is None:
+                        # Name the neighbourhood the router gave up in, so the
+                        # refusal is about one cluster and not the whole net.
+                        if isinstance(drawn, _Unrouted):
+                            drawn = _Unrouted(
+                                stage=drawn.stage,
+                                reason=(
+                                    f"cluster {cluster_label}: {drawn.reason}"
+                                ),
+                            )
+                        break
+                    merged_segments.extend(drawn[0])
+                if not (isinstance(drawn, _Unrouted) or drawn is None):
+                    drawn = (
+                        merged_segments,
+                        f"the ground's {len(split)} clusters are each wired on "
+                        "their own, with no run between them (535)",
+                    )
+            else:
+                drawn = _connect_net(
+                    ctx, router, expression, blocked, existing,
+                )
             obligated = net_id in _obligation_nets(ctx)
             if isinstance(drawn, _Unrouted) or drawn is None:
                 # `_connect_net` answers with its own reason; a test stub that
@@ -9430,64 +9673,84 @@ def _build_one_variant(
         net = ctx.circuit.net(net_id)
         cls = net.cls if net is not None else "power"
         profile, ref = _flag_plan(ctx, net_id, cls)
-        pin = (
-            _gnd_outlet_pin(ctx, expression) if cls == "gnd"
-            else _power_flag_pin(ctx, expression)
-        )
-        if profile is None or pin is None:
-            if profile is None:
-                # 143 F1's disclosure, in the shape 201A leaves it: this net is
-                # already drawn as a rail, so the *fallback* is not the
-                # expression — it is this net having **no symbol at all** on the
-                # page. The host prints the net's name along the wire (029-c),
-                # and a reader authorising the plan has to be told that is all
-                # they get.
-                notes.append(
-                    DOWNGRADE_NOTE_PREFIX
-                    + f"net {net_id}: its class ({cls}) says it is stated by a "
-                    f"flag, and the library carries no flag symbol {ref!r} — its "
-                    "rail is drawn with the net's name on the wire itself and "
-                    "**no symbol of its own**. The drawing you are authorising "
-                    "has no flag for this net"
-                )
-            continue
-        router.reserved_exempt = net_id
-        _set_foreign_edges(router, segments, net_id)
-        blocked = _blocked_points(ctx, placed, net_id, labels, symbols, segments)
-        router.blocked = blocked
-        anchor, failure = _rail_flag(
-            ctx, placed, net_id, expression, pin, profile, ref, router, segments,
-            symbols, occupied, solids, blocked, bodies,
-        )
-        if failure is not None:
-            return None, failure, []
-        # 515A hole 4: "the pads are joined by the rail" is a claim about the
-        # drawing, so it is read off the drawing — the segments this net
-        # actually carries. A net the wiring could not route (downgraded to a
-        # label by the loop above, now written back into `expressions`) never
-        # reaches this branch: `expression.style != "wire"` skips it, and a
-        # net reached here with **no** segments on it gets the honest sentence
-        # instead of the joined-by-the-rail one.
-        joined = any(item.net == net_id for item in segments)
-        notes.append(
-            f"net {net_id}: " + (
-                "a ground rail is stated by one symbol of its own — hung at "
-                f"{_point_text(anchor)} by a {FLAG_JOG:g}-unit vertical run off the "
-                f"rail at its far end beside {pin[0]} (201A sec.1, 088b sec.1); the "
-                + (
-                    "pads are joined by the rail, so no pad needs a mark of its own"
-                    if joined else
-                    "the pads are named by labels of their own — the wiring could "
-                    "not be routed, so no pad is joined by a rail here"
-                )
-                if cls == "gnd" else
-                "a power net carries its own flag — hung at "
-                f"{_point_text(anchor)} by a {FLAG_JOG:g}-unit vertical run off the "
-                f"rail its pin {pin[0]} supplies (069 sec.7); a rail named by text "
-                "alone would be found by chasing names"
+        if profile is None:
+            # 143 F1's disclosure, in the shape 201A leaves it: this net is
+            # already drawn as a rail, so the *fallback* is not the
+            # expression — it is this net having **no symbol at all** on the
+            # page. The host prints the net's name along the wire (029-c),
+            # and a reader authorising the plan has to be told that is all
+            # they get.
+            notes.append(
+                DOWNGRADE_NOTE_PREFIX
+                + f"net {net_id}: its class ({cls}) says it is stated by a "
+                f"flag, and the library carries no flag symbol {ref!r} — its "
+                "rail is drawn with the net's name on the wire itself and "
+                "**no symbol of its own**. The drawing you are authorising "
+                "has no flag for this net"
             )
-        )
-        router.boxes = [*solids, *router.flag_walls]
+            continue
+        # 535: a ground whose pads fall into more than one neighbourhood gets
+        # **one symbol in each**, chosen and placed by the same ladder inside its
+        # own cluster — so a symbol cannot be hung in a neighbourhood that
+        # already has one, and a cluster with no legal seat is refused naming
+        # that cluster (:func:`_rail_flag`'s ``cluster`` argument). Every net
+        # whose ground is one neighbourhood runs this loop once, on the
+        # whole-net expression, exactly as before.
+        splits = _gnd_cluster_expressions(expression) if cls == "gnd" else ()
+        grouped = splits if splits else ((expression, ""),)
+        for rail_expression, cluster_label in grouped:
+            pin = (
+                _gnd_outlet_pin(ctx, rail_expression) if cls == "gnd"
+                else _power_flag_pin(ctx, rail_expression)
+            )
+            if pin is None:
+                continue
+            router.reserved_exempt = net_id
+            _set_foreign_edges(router, segments, net_id)
+            blocked = _blocked_points(ctx, placed, net_id, labels, symbols, segments)
+            router.blocked = blocked
+            anchor, failure = _rail_flag(
+                ctx, placed, net_id, rail_expression, pin, profile, ref, router,
+                segments, symbols, occupied, solids, blocked, bodies,
+                cluster=(_gnd_cluster_phrase(cluster_label, pin[1])
+                         if splits else ""),
+            )
+            if failure is not None:
+                return None, failure, []
+            # 515A hole 4: "the pads are joined by the rail" is a claim about the
+            # drawing, so it is read off the drawing — the segments this net
+            # actually carries. A net the wiring could not route (downgraded to a
+            # label by the loop above, now written back into `expressions`) never
+            # reaches this branch: `expression.style != "wire"` skips it, and a
+            # net reached here with **no** segments on it gets the honest sentence
+            # instead of the joined-by-the-rail one.
+            joined = any(item.net == net_id for item in segments)
+            notes.append(
+                f"net {net_id}: " + (
+                    "a ground rail is stated by one symbol of its own — hung at "
+                    f"{_point_text(anchor)} by a {FLAG_JOG:g}-unit vertical run off "
+                    f"the rail at its far end beside {pin[0]} (201A sec.1, 088b "
+                    "sec.1); the "
+                    + (
+                        "pads are joined by the rail, so no pad needs a mark of "
+                        "its own"
+                        if joined else
+                        "pads are named by labels of their own — the wiring could "
+                        "not be routed, so no pad is joined by a rail here"
+                    )
+                    if cls == "gnd" else
+                    "a power net carries its own flag — hung at "
+                    f"{_point_text(anchor)} by a {FLAG_JOG:g}-unit vertical run off "
+                    f"the rail its pin {pin[0]} supplies (069 sec.7); a rail named "
+                    "by text alone would be found by chasing names"
+                )
+                + (
+                    f" [535: cluster {cluster_label} of a split ground, with no "
+                    "run to the other clusters]"
+                    if splits else ""
+                )
+            )
+            router.boxes = [*solids, *router.flag_walls]
 
     # 088b sec.1: a declared group's ground rail is *stated* by exactly one
     # outlet symbol of its own, hung at the rail's far end (背向入口那端). The
@@ -9504,33 +9767,60 @@ def _build_one_variant(
         expression = expressions[net_id]
         net = ctx.circuit.net(net_id)
         cls = net.cls if net is not None else "gnd"
-        if expression.style != "wire" or any(
-            symbol.net == net_id for symbol in symbols
-        ):
+        if expression.style != "wire":
+            continue
+        # 535: a split ground's every neighbourhood needs the symbol the group
+        # promised, so an outlet net with clusters is walked cluster by cluster
+        # and the "already stated" guard is about one cluster, not the net.
+        splits = _gnd_cluster_expressions(expression)
+        if not splits and any(symbol.net == net_id for symbol in symbols):
             continue
         profile, ref = _flag_plan(ctx, net_id, cls)
-        pin = _gnd_outlet_pin(ctx, expression)
-        if profile is None or pin is None:
+        if profile is None:
             continue
-        router.reserved_exempt = net_id
-        _set_foreign_edges(router, segments, net_id)
-        blocked = _blocked_points(ctx, placed, net_id, labels, symbols, segments)
-        router.blocked = blocked
-        failure = _flag_pins(
-            ctx, placed, net_id, profile, ref, [pin], router, segments,
-            symbols, occupied, solids, blocked, bodies, notes=notes,
-            ordinary_seats=ordinary_flag_seats,
-        )
-        if failure is not None:
-            return None, failure, []
-        notes.append(
-            f"net {net_id}: the group states its return with one outlet symbol — "
-            f"hung at the rail's far end off the pin {pin[0]} "
-            f"(sidePreferences.input={ctx.presentation.side_for('input') or 'left'}"
-            " puts that end away from the inlet, 088b sec.1); the rail stays one "
-            "conductor, and the symbol says where the return leaves the group"
-        )
-        router.boxes = [*solids, *router.flag_walls]
+        grouped = splits if splits else ((expression, ""),)
+        for outlet_expression, cluster_label in grouped:
+            pin = _gnd_outlet_pin(ctx, outlet_expression)
+            if pin is None:
+                continue
+            router.reserved_exempt = net_id
+            _set_foreign_edges(router, segments, net_id)
+            blocked = _blocked_points(ctx, placed, net_id, labels, symbols, segments)
+            router.blocked = blocked
+            failure = _flag_pins(
+                ctx, placed, net_id, profile, ref, [pin], router, segments,
+                symbols, occupied, solids, blocked, bodies, notes=notes,
+                ordinary_seats=ordinary_flag_seats,
+            )
+            if failure is not None:
+                # 535: the refusal belongs to one neighbourhood of a split
+                # ground, and says so before the shared ladder's own words.
+                if splits:
+                    failure = GrammarFailure(
+                        category=failure.category,
+                        subject=failure.subject,
+                        detail=(
+                            f"net {net_id!r} cluster {cluster_label} near "
+                            f"{_point_text(pin[1])}: " + failure.detail
+                        ),
+                        action=failure.action,
+                    )
+                return None, failure, []
+            notes.append(
+                f"net {net_id}: the group states its return with one outlet "
+                f"symbol — hung at the rail's far end off the pin {pin[0]} "
+                f"(sidePreferences.input="
+                f"{ctx.presentation.side_for('input') or 'left'}"
+                " puts that end away from the inlet, 088b sec.1); the rail stays "
+                "one conductor, and the symbol says where the return leaves the "
+                "group"
+                + (
+                    f" [535: cluster {cluster_label} of a split ground, with no "
+                    "run to the other clusters]"
+                    if splits else ""
+                )
+            )
+            router.boxes = [*solids, *router.flag_walls]
 
     # 534: `localLabelObligations` says a net is named *at each of its pins*, and
     # a name with no conductor under it names nothing (`layoutplan.py`: "A label
@@ -10259,6 +10549,7 @@ def _flag_anchor(
     boxes: Sequence[Box] | None = None,
     crossings: list[str] | None = None,
     near: Callable[[Sequence[tuple[float, float]]], str | None] | None = None,
+    limit: float = FLAG_LEAD_LIMIT,
 ) -> tuple[tuple[float, float], tuple[tuple[float, float], ...] | None, float]:
     """Where a flag's anchor goes, the lead that reaches it, and which way it hangs.
 
@@ -10325,7 +10616,7 @@ def _flag_anchor(
         # 520B2: no rung past `FLAG_LEAD_LIMIT` is a candidate — see the constant.
         # The ``0.0`` rung (069 sec.8's flag on its own pin) is *not* a reach and is
         # never dropped: it is the ladder's last word, not a distance.
-        if length > FLAG_LEAD_LIMIT:
+        if length > limit:
             continue
         if length not in lengths:
             lengths.append(length)
@@ -10679,6 +10970,7 @@ def _rail_flag(
     solids: list[Box],
     blocked: set[tuple[float, float]],
     bodies: Sequence[Box] | None = None,
+    cluster: str = "",
 ) -> tuple[tuple[float, float] | None, GrammarFailure | None]:
     """Hang a rail's own flag from the rail, by a short **vertical** run.
 
@@ -10704,6 +10996,11 @@ def _rail_flag(
     its own pin: ``lead is None`` is returned as a refusal that names the pin
     (:func:`_rail_flag_room_failure`), because that shape is the one 岳 read as a
     short.
+
+    535: ``expression`` may be **one cluster of a split ground**, in which case
+    the replay, the ladder and the seat are all scoped to that cluster — a symbol
+    can never be replayed onto a pad of a neighbourhood that already has one —
+    and ``cluster`` (``"2/3"``) names it in the refusal.
     """
     net = ctx.circuit.net(net_id)
     cls = net.cls if net is not None else "power"
@@ -10726,7 +11023,7 @@ def _rail_flag(
     if seat is None:
         anchor, rotation, lead, failure = _rail_flag_seat(
             ctx, placed, net_id, pin[0], pin[1], profile, router, blocked,
-            solids, bodies,
+            solids, bodies, cluster=cluster,
         )
         if lead is None:
             return None, failure
@@ -10762,7 +11059,8 @@ def _wire_flag_seats(
     the reservation pass and the placement loop agree about *which* flags are
     coming without either of them having to guess.
     """
-    out: list[tuple[str, str, tuple[float, float], SymbolProfile, str, str, bool]] = []
+    out: list[tuple[str, str, tuple[float, float], SymbolProfile, str, str,
+                     bool, str]] = []
     outlets = _gnd_outlet_nets(ctx)
     for net_id in net_order:
         expression = expressions[net_id]
@@ -10776,29 +11074,45 @@ def _wire_flag_seats(
         # carries a symbol by the time the rail flag would be asked for.
         if expression.detached:
             continue
-        wanted: list[tuple[str, tuple[float, float], str, bool]] = []
-        if _net_needs_flag(ctx, net_id, ()):
-            # 069 sec.7's rail flag / 201A's one ground symbol: both are a
-            # vertical run off the rail (:func:`_rail_flag_seat`), and both walk
-            # the whole of :func:`_flag_seat_pins` — a rail from the pin it
-            # supplies (069 sec.7) and a **ground** from the rail's far end
-            # (088b), each then over the net's other pads, nearest first: 201A
-            # sec.3's 「就近挪旗位」. The ladder exists because 岳's own bottom rail
-            # carries its mark wherever there is room, not at a pad the circuit
-            # picked — and 520B2 measured a rail needing it for the same reason.
-            candidates = _flag_seat_pins(ctx, expression, cls)
-            for member, point in candidates:
-                wanted.append((member, point, cls, True))
-        if net_id in outlets:
-            pin = _gnd_outlet_pin(ctx, expression)
-            if pin is not None:
-                # 088b sec.1's outlet: an ordinary flag lead (:func:`_flag_pin_lead`).
-                wanted.append((pin[0], pin[1], cls, False))
-        for member, point, want_cls, vertical in wanted:
-            profile, ref = _flag_plan(ctx, net_id, want_cls)
-            if profile is None:
-                continue
-            out.append((net_id, member, point, profile, ref, want_cls, vertical))
+        # 535: a ground whose pads fall into more than one neighbourhood carries
+        # **one symbol per neighbourhood**, so the same ladder runs once per
+        # cluster and the seat key says which cluster a seat belongs to —
+        # `_seat_wire_flags`'s one-symbol-per-net rule is one-symbol-per-cluster
+        # there, and every other net keeps the whole-net expression unchanged.
+        splits = _gnd_cluster_expressions(expression)
+        grouped = splits if splits else ((expression, ""),)
+        for seat_expression, label in grouped:
+            seat_key = f"{net_id}#{label}" if splits else net_id
+            wanted: list[tuple[str, tuple[float, float], str, bool]] = []
+            if _net_needs_flag(ctx, net_id, ()):
+                # 069 sec.7's rail flag / 201A's one ground symbol: both are a
+                # vertical run off the rail (:func:`_rail_flag_seat`), and both walk
+                # the whole of :func:`_flag_seat_pins` — a rail from the pin it
+                # supplies (069 sec.7) and a **ground** from the rail's far end
+                # (088b), each then over the net's other pads, nearest first: 201A
+                # sec.3's 「就近挪旗位」. The ladder exists because 岳's own bottom rail
+                # carries its mark wherever there is room, not at a pad the circuit
+                # picked — and 520B2 measured a rail needing it for the same reason.
+                # A split ground walks the ladder **inside one cluster** (535), so
+                # a symbol cannot be reserved in a neighbourhood that already has
+                # its own.
+                candidates = _flag_seat_pins(ctx, seat_expression, cls)
+                for member, point in candidates:
+                    wanted.append((member, point, cls, True))
+            if net_id in outlets:
+                pin = _gnd_outlet_pin(ctx, seat_expression)
+                if pin is not None:
+                    # 088b sec.1's outlet: an ordinary flag lead
+                    # (:func:`_flag_pin_lead`).
+                    wanted.append((pin[0], pin[1], cls, False))
+            for member, point, want_cls, vertical in wanted:
+                profile, ref = _flag_plan(ctx, net_id, want_cls)
+                if profile is None:
+                    continue
+                out.append((
+                    net_id, member, point, profile, ref, want_cls, vertical,
+                    seat_key,
+                ))
     return out
 
 
@@ -10858,6 +11172,7 @@ def _rail_flag_room_failure(
     member: str,
     point: tuple[float, float],
     blocked_by: str,
+    cluster: str = "",
 ) -> GrammarFailure:
     """074/148: the refusal when a rail's own flag has nowhere legal to stand.
 
@@ -10867,14 +11182,21 @@ def _rail_flag_room_failure(
     wire (`outputs/147/FINDINGS.md` sec.0.3, the HVDC flag on `T1.1`). 148 does
     not draw it: the drawing is refused, the pin and the obstacle are named, and
     the action says which two things can be moved.
+
+    ``cluster`` (535) names the neighbourhood when the refused rail is one of a
+    split ground's — ``"cluster 2/3 near (x, y)"`` — so the message says *which*
+    group of pads went unstated instead of blaming the whole net; empty for
+    every other rail, whose wording is unchanged.
     """
+    scope = f"{cluster} " if cluster else ""
+    of = "that cluster" if cluster else "that rail"
     return GrammarFailure(
         category=FAILURE_LAYOUT_UNSAT,
         subject=net_id,
         detail=(
-            f"net {net_id!r} is a rail drawn as a wire and every power flag on "
-            f"it must be stated (069 sec.7), but no legal place to hang one was "
-            f"found on any pad of that rail: 069 sec.7 asks for it at the pin "
+            f"net {net_id!r} {scope}is a rail drawn as a wire and every power "
+            f"flag on it must be stated (069 sec.7), but no legal place to hang "
+            f"one was found on any pad of {of}: 069 sec.7 asks for it at the pin "
             f"which supplies the net, {member} at {_point_text(point)}, and from "
             f"there the ladder walks the net's other pads. {blocked_by}. The flag "
             "is not drawn on the pin instead — a flag standing on its own pin "
@@ -10939,6 +11261,7 @@ def _rail_flag_seat(
     blocked: set[tuple[float, float]],
     solids: Sequence[Box],
     bodies: Sequence[Box] | None = None,
+    cluster: str = "",
 ) -> tuple[tuple[float, float], float, tuple[tuple[float, float], ...] | None,
            GrammarFailure | None]:
     """Where a rail's own flag stands: ``(anchor, rotation, lead, failure)``.
@@ -10985,7 +11308,7 @@ def _rail_flag_seat(
         anchor, lead, placed_hang = _flag_anchor(
             router, point, (0.0, hang), blocked,
             leads=(FLAG_JOG,), fits=fits, up=natural > 0.0, boxes=bodies,
-            crossings=crossings,
+            crossings=crossings, limit=ctx.budget.flag_lead_limit,
         )
         if lead is not None:
             return (
@@ -11014,6 +11337,7 @@ def _rail_flag_seat(
             "along the pin's own side with a turn, and then the other three "
             "directions — lands the glyph, its name row and their clearance on a "
             "part, a text row, another net's wire or the page's edge",
+            cluster=cluster,
         ),
     )
 
@@ -11061,11 +11385,15 @@ def _seat_wire_flags(
     #: pad of the net that can hold one and 069 sec.7's single flag would become
     #: one symbol per pad. 088b's outlet is its own shape and is not suppressed
     #: (its ``vertical`` flag is ``False``).
+    #:
+    #: 535: the key is the **seat group**, which is the net for every net whose
+    #: grounds land in one neighbourhood and a per-cluster key for a split ground
+    #: (`_wire_flag_seats`). One symbol per neighbourhood, not one per net.
     seated_nets: set[str] = set()
-    for net_id, member, point, profile, _ref, cls, vertical in _wire_flag_seats(
-        ctx, expressions, net_order
+    for net_id, member, point, profile, _ref, cls, vertical, seat_key in (
+        _wire_flag_seats(ctx, expressions, net_order)
     ):
-        if vertical and net_id in seated_nets:
+        if vertical and seat_key in seated_nets:
             continue
         # A rail flag reaches for 069 sec.7's straight vertical run first and only
         # then for the bent lead (:func:`_rail_flag_seat`); an outlet is placed by
@@ -11097,7 +11425,7 @@ def _seat_wire_flags(
         router.flag_seats[(net_id, member)] = (anchor, rotation, lead)
         walls.append(box)
         if vertical:
-            seated_nets.add(net_id)
+            seated_nets.add(seat_key)
     return walls
 
 
@@ -11749,6 +12077,7 @@ def _flag_pin_lead(
             near=lambda lead, _net=net_id, _kind=flag_glyph_kind(profile): (
                 _lead_too_close(router, _net, _kind, lead)
             ),
+            limit=ctx.budget.flag_lead_limit,
         )
         if lead is not None:
             return anchor, lead, hang, crossings
@@ -11815,7 +12144,7 @@ def _stub_label(
             router, point, direction, blocked,
             leads=(SIBLING_LEAD,),
             fits=lambda here, _hang: _label_fits(ctx, net_id, here),
-            crossings=crossings,
+            crossings=crossings, limit=ctx.budget.flag_lead_limit,
         )
         if lead is None:
             # The flag form may sit *on* the point; a label may not (069 sec.1: on
@@ -12077,6 +12406,7 @@ def _local_label_carriers(
             return _local_label_failure(
                 nets[index], members[index], points[index], measured[index],
             )
+        trial.stub = _label_stub_policy(ctx)
         placed.append(trial)
 
     for index in range(len(nets)):
@@ -12262,6 +12592,7 @@ def _reseat_crossed_labels(
                 _label_pin_direction(ctx, placed, label),
                 list(occupied), part_id=label.part_id, segments=segments,
                 avoid=ink, standoff=_label_standoff(ctx),
+                stub=_label_stub_policy(ctx),
             )
             if _foreign_runs_through(seat.bbox, label.net, segments) or any(
                 _overlaps(seat.bbox, other)

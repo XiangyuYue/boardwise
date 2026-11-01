@@ -2296,6 +2296,7 @@ class IslandBlock:
                     ),
                     x=item.x + dx, y=item.y + dy, rotation=item.rotation,
                     part_id=item.part_id,
+                    stub_min=item.stub_min, row_model=item.row_model,
                 )
                 for item in self.labels
             ],
