@@ -48,14 +48,31 @@ RUN_ROOT: Path | None = None
 
 INPUTS_RELATIVE = "contracts/differential/inputs"
 CASES_RELATIVE = "contracts/differential/cases.json"
-# One public name per case kind; `_render` publishes in the order `_produce` returns.
+# One public input name per **case id**; `_render` publishes in the order
+# `_produce` returns. The five producer cases are named after their kind, so their
+# ids read as kinds; the two declared `.epru` samples share one kind, which is what
+# `CASE_KINDS` says out loud.
 INPUT_NAMES = {
     "review-report-projection": "review-report.json",
     "layout-plan-geometry": "divider-cand1.layout.json",
     "compile-result-projection": "divider-compile-result.json",
     "compile-page-result-projection": "page-compile-result.json",
     "lint-result-projection": "empty-page-lint-result.json",
+    "epru-stream-v3-eof": "epru-stream-v3-eof.json",
+    "epru-stream-v4-eof-truncated": "epru-stream-v4-eof-truncated.json",
 }
+#: The case ids whose kind is *not* the id itself. A case book is keyed by id, so
+#: two cases of one kind need two ids; the kind decides the schema and projection,
+#: the id decides the input name and the row it publishes under.
+CASE_KINDS = {
+    "epru-stream-v3-eof": "epru-stream-sample",
+    "epru-stream-v4-eof-truncated": "epru-stream-sample",
+}
+#: The contract tag of a declared sample document (see `contracts/json/
+#: epru-stream-sample-v1.schema.json`).
+EPRU_SAMPLE_SCHEMA = "boardwise.epru-stream-sample/1"
+#: Declared `.epru` sample text — synthetic record streams, not a producer's output.
+SAMPLE_SOURCES = SOURCES / "epru-stream-samples.json"
 
 # An absolute path that survived sanitization, whatever machine it came from: a
 # Windows drive (D:/..., E:\... as it appears inside JSON) or a POSIX home/temp
@@ -132,13 +149,55 @@ def _produce() -> dict[str, Path]:
         "--render", str(RUN_ROOT / "lint-render.svg"),
         "--json", str(RUN_ROOT / "lint-result.json"),
     ], {0})
-    return {
+    produced = {
         "review-report-projection": RUN_ROOT / "checkup" / "report.json",
         "layout-plan-geometry": RUN_ROOT / "compile" / "cand1.layout.json",
         "compile-result-projection": RUN_ROOT / "compile-result.json",
         "compile-page-result-projection": RUN_ROOT / "page-compile-result.json",
         "lint-result-projection": RUN_ROOT / "lint-result.json",
     }
+    # Declared samples last: they are not produced by a command, they are written
+    # out of `SAMPLE_SOURCES`, and they publish after the five producer cases.
+    for case_id, path in _declared_samples().items():
+        produced[case_id] = path
+    return produced
+
+
+def _declared_samples() -> dict[str, Path]:
+    """Write each declared `.epru` sample into this run's fresh directory.
+
+    A declared sample is text, so no command runs to obtain it — the manifest says
+    so in its ``producers`` list, and names ``SAMPLE_SOURCES`` in ``sources`` so the
+    published input can always be traced back to the declaration it came from.
+
+    Sanitization is checked here rather than assumed: a sample whose text contains a
+    backslash or a machine path would be rewritten on its way to the golden, and a
+    published input that no longer says what the declaration says is not a sample.
+    """
+    declared = load_path(SAMPLE_SOURCES)
+    entries = declared["samples"]
+    if sorted(entry["caseId"] for entry in entries) != sorted(CASE_KINDS):
+        raise RuntimeError(
+            f"{SAMPLE_SOURCES.name} declares "
+            f"{sorted(entry['caseId'] for entry in entries)}, "
+            f"not the case ids {sorted(CASE_KINDS)}"
+        )
+    produced: dict[str, Path] = {}
+    for entry in entries:
+        payload = {
+            "schema": EPRU_SAMPLE_SCHEMA,
+            "name": entry["name"],
+            "text": entry["text"],
+        }
+        if _sanitize(payload) != payload:
+            raise RuntimeError(
+                f"declared sample {entry['caseId']!r} does not survive sanitization; "
+                "a declared sample must publish exactly the text it declares"
+            )
+        path = RUN_ROOT / entry["input"]
+        write_text_lf(path, _dump(payload))
+        produced[entry["caseId"]] = path
+    return produced
 
 
 def _clean_text(value: str) -> str:
@@ -229,13 +288,17 @@ def _render(produced: Mapping[str, Path]) -> dict[Path, str]:
     case_rows: list[dict[str, Any]] = []
     producer_versions: dict[str, Any] | None = None
     schema_hashes: dict[str, str] = {}
-    for kind, source in produced.items():
+    for case_id, source in produced.items():
+        # The id names the case; the kind decides the schema and the projection.
+        # For the five producer cases they are the same string, so their rows and
+        # expected values cannot move.
+        kind = CASE_KINDS.get(case_id, case_id)
         # Strict loader: a producer that emitted NaN/Infinity/1e999 has produced a
         # file the Rust side cannot even read, so it must never reach the golden.
         raw = load_path(source)
         payload = _sanitize(raw)
         text = _dump(payload)
-        _assert_clean(kind, text)
+        _assert_clean(case_id, text)
         # The schema the Python runner gates this very input with (`SCHEMAS` lives
         # in tools.differential, the module that reads the case book), read through
         # the same strict loader and enforced *before* anything is projected or
@@ -244,7 +307,7 @@ def _render(produced: Mapping[str, Path]) -> dict[Path, str]:
         schema_path = ROOT / "contracts" / "json" / SCHEMAS[kind]
         assert_valid(payload, load_path(schema_path))
         schema_hashes[schema_path.relative_to(ROOT).as_posix()] = _sha(schema_path)
-        name = INPUT_NAMES[kind]
+        name = INPUT_NAMES[case_id]
         # Projected from the sanitized payload itself, not from a file on disk: the
         # expected value can only describe the object about to be published.
         expected = project_payload(kind, payload)
@@ -252,7 +315,7 @@ def _render(produced: Mapping[str, Path]) -> dict[Path, str]:
         input_texts[INPUTS / name] = text
         input_hashes[relative] = _sha_text(text)
         case_rows.append({
-            "id": kind,
+            "id": case_id,
             "kind": kind,
             "input": relative,
             "expected": expected,
@@ -290,6 +353,7 @@ def _render(produced: Mapping[str, Path]) -> dict[Path, str]:
         DRAW / "library.json",
         SOURCES / "page.circuit.json",
         SOURCES / "page.presentation.json",
+        SAMPLE_SOURCES,
     ]
     manifest = {
         "schema": "boardwise.differential-manifest/1",
@@ -299,13 +363,14 @@ def _render(produced: Mapping[str, Path]) -> dict[Path, str]:
         # The rule-set/rule-body digests the published review report states, copied
         # from its `completion.sourceVersions` (see `_render`).
         "producerVersions": producer_versions,
-        # The four schemas this case book's inputs are validated against, hashed.
+        # The schemas this case book's inputs are validated against, hashed.
         "schemas": schema_hashes,
         "producers": [
             "python -m boardwise.cli checkup --file tests/fixtures/ch340_golden.epro2 --out <OUT>/checkup (accept 0 or 3)",
             "python -m boardwise.cli draw compile --circuit <FIXTURES>/divider.circuit.json --presentation <FIXTURES>/divider.presentation.json --profiles <FIXTURES>/library.json --page-box 0,-1000,1200,0 --out <OUT>/compile --json <OUT>/compile-result.json",
             "python -m boardwise.cli draw compile --circuit contracts/differential/sources/page.circuit.json --presentation contracts/differential/sources/page.presentation.json --profiles <FIXTURES>/library.json --page-box 0,0,1169,826 --out <OUT>/compile-page --json <OUT>/page-compile-result.json",
             "python -m boardwise.cli draw lint --snapshot <OUT>/lint-snapshot.json --render <OUT>/lint-render.svg --json <OUT>/lint-result.json",
+            "declared samples contracts/differential/sources/epru-stream-samples.json -> <OUT>/epru-stream-v3-eof.json <OUT>/epru-stream-v4-eof-truncated.json (written from the declaration file, not from the editor, a container or a fixture)",
         ],
         "regenerate": ".venv/Scripts/python.exe -m tools.build_differential_fixtures",
         "sanitization": [

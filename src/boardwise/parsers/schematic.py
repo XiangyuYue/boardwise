@@ -1769,6 +1769,90 @@ def _fill_board_model(
             if touching:
                 uf.union(node, touching[0])
 
+    # --- 038g: a ``Short-Symbol`` placement joins the two halves it bridges
+    #
+    # A solder jumper is placed with one pin on each half of one net and nothing
+    # in between, so the halves arrived as two nets. Measured on the 038g
+    # sample's second sheet: ten designator-less ``Short-Symbol`` placements,
+    # each with one pin on a labelled stub that carries no part and the other on
+    # the wired side that does — ten nets the drawing means as one.
+    #
+    # The join is page-scoped like every other edge here (040 §WI-1), and a
+    # short with a pin on bare canvas joins nothing at all: the missing half has
+    # no node to reach, and naming it would invent a connection.
+    SHORT_SYMBOL_TITLE = "Short-Symbol"
+
+    def _device_title(inst: Any) -> str:
+        return device_meta.get(
+            (inst.attrs.get("Device") or "").strip(), {}
+        ).get("title", "")
+
+    shorts = [inst for inst in instances if _device_title(inst) == SHORT_SYMBOL_TITLE]
+    # cluster root (after the join) -> labels seen on the side of a bridged net
+    # that carries real part pins. Membership in this dict *is* "this cluster
+    # is held together by a jumper", which is what picks the naming order below.
+    short_pin_labels: dict[Any, list[str]] = {}
+    if shorts:
+        pre_clusters = uf.clusters()
+        # Each short's sides, as the cluster each side was on *before* the join.
+        # Two shorts touching the same wire therefore resolve to one side, and a
+        # chain of them carries the pin-side label across the whole chain.
+        short_sides: list[list[Any]] = []
+        for inst in shorts:
+            symbol_def = symbols.get(_symbol_uuid_of(inst, device_meta))
+            if symbol_def is None:
+                if not (inst.attrs.get("Designator") or "").strip():
+                    # The flag pass below no longer sees a jumper (038g), so
+                    # this is the only place left that can count a *nameless*
+                    # placement with no symbol behind it; a named one was
+                    # already counted by the parts pass above.
+                    stats.components_without_symbol += 1
+                continue
+            sides: list[Any] = []
+            for _number, (point, _ez) in sorted(symbol_def.pins.items()):
+                page_point = _transform_point(
+                    point[0], point[1], rotation=inst.rotation,
+                    mirror=inst.is_mirror, ox=inst.x, oy=inst.y,
+                )
+                nodes = point_index.get((inst.page, page_point))
+                if not nodes:
+                    sides = []  # dangling pin: this short joins nothing
+                    break
+                sides.append(nodes[0])
+            if len(sides) < 2:
+                continue
+            roots = [uf.find(side) for side in sides]
+            if len(set(roots)) < 2:
+                # Every pin was already on one cluster before the join: this
+                # jumper adds no edge (a redundant short across a net that is
+                # already one net). Recording it would put that cluster on the
+                # jumper naming path below and flip a plain cluster from
+                # label-first to flag-first, which no copper change justifies.
+                continue
+            short_sides.append(roots)
+
+        # A part's pin is "real"; a jumper's own pins are not, so a side is
+        # pin-bearing only when a part is what the copper actually serves.
+        real_pin_nodes = {
+            (inst.page, component.designator, number, placement)
+            for placement, (inst, component, pins) in enumerate(placed)
+            if _device_title(inst) != SHORT_SYMBOL_TITLE
+            for number, _point, _ez, _name in pins
+        }
+        for roots in short_sides:
+            for other in roots[1:]:
+                uf.union(roots[0], other)
+        for roots in short_sides:
+            bucket = short_pin_labels.setdefault(uf.find(roots[0]), [])
+            for root in dict.fromkeys(roots):
+                members = pre_clusters.get(root) or []
+                if not any(node in real_pin_nodes for node in members):
+                    continue
+                bucket.extend(sorted(
+                    {net_labels_of(segments, loose, node[2])
+                     for node in members if node[0] == "w"} - {""},
+                ))
+
     # --- power pins and standalone power flags inject net names
     #
     # A flag's net name resolution order (measured against the editor's own
@@ -1787,13 +1871,18 @@ def _fill_board_model(
         designator = (inst.attrs.get("Designator") or "").strip()
         if designator and not designator.endswith("?"):
             return ""
+        title = _device_title(inst)
+        if title == SHORT_SYMBOL_TITLE:
+            # 038g: a jumper is not a flag. Without this gate its title's tail,
+            # ``Symbol``, became a net name on all ten placements — and the
+            # halves it bridges were then named by it instead of by the copper.
+            return ""
         gnn = (inst.attrs.get("Global Net Name") or "").strip()
         if gnn:
             return gnn
         name = (inst.attrs.get("Name") or "").strip()
         if name:
             return name
-        title = device_meta.get((inst.attrs.get("Device") or "").strip(), {}).get("title", "")
         return title.split("-", 1)[1].strip() if "-" in title else ""
 
     forced: dict[Any, str] = {}
@@ -1844,7 +1933,20 @@ def _fill_board_model(
             {net_labels_of(segments, loose, g) for g in (n[2] for n in nodes if n[0] == "w")}
             - {""},
         )
-        if group_labels:
+        pin_labels = short_pin_labels.get(root)
+        if pin_labels is not None:
+            # 038g: a net a jumper holds together is named by the side that
+            # carries the parts — the power flag first (it is the rail name the
+            # drawing itself gave the net), then that side's explicit label,
+            # then the alphabetical order below. A plain cluster keeps the old
+            # order, label first (the V3 calibration behaviour).
+            if root in forced:
+                explicit[root] = forced[root]
+            elif pin_labels:
+                explicit[root] = sorted(set(pin_labels))[0]
+            elif group_labels:
+                explicit[root] = group_labels[0]
+        elif group_labels:
             explicit[root] = group_labels[0]
         elif root in forced:
             explicit[root] = forced[root]

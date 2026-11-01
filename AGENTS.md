@@ -30,8 +30,9 @@
   [`tasks/draw-line.md`](tasks/draw-line.md) 派单。两者共享一个模块化单体，不复制业务逻辑。
 - shared parser/model/bridge/core/CLI 的改动一律走
   [`tasks/shared-platform.md`](tasks/shared-platform.md) 的**集成锁**，不得夹在规则或算法批里。
-- shared、全量测试与真机串行；算法与迁移不得同批。当前没有为三条线创建专用 worktree，
-  任何 `git worktree add/remove/prune` 仍逐次问岳。
+- shared、全量测试与真机串行；算法与迁移不得同批。审查线工作区 `E:\boardwise\.tmp_review_line`
+  （分支 `review-v4`，owner=审查线）；绘制线独立开发、互不改文件；主仓及绘制线的未提交改动
+  不碰。`git worktree add/remove/prune` 仍逐次经岳批准。
 
 ## 工作区落点
 

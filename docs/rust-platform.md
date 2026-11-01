@@ -5,12 +5,16 @@
 `rust/` 是一个最小 Cargo workspace，只有两个 crate：
 
 - `boardwise-core`：语言中立 JSON 投影、LayoutPlan 几何哈希、`contracts/json`
-  输入 schema 校验（`src/schema.rs`，`tools/contract_validate.py` 的移植）与结构化
-  CLI envelope；
+  输入 schema 校验（`src/schema.rs`，`tools/contract_validate.py` 的移植）、
+  结构化 CLI envelope，以及 **business-free 的 `.epru` 行框与文档切分**
+  （`src/epru.rs`，`boardwise/parsers/epru_stream.py` 的行框/切分移植——只认
+  `{envelope}||{body}` 行形与 `DOCHEAD` 文档边界，不知道 pad、track、netlist 为何物）；
 - `boardwise-cli`：`differential` 与无业务 `smoke` 的进程边界。
 
-它不是现有 `boardwise` Python CLI 的替代品，也不连接编辑器或 daemon。审查规则、
-parser/model、布局/布线算法都不在这批翻译；不引入 PyO3、WASM 或 Node native addon。
+它不是现有 `boardwise` Python CLI 的替代品，也不连接编辑器或 daemon。翻译边界的准确
+口径是：只放行 EPRU stream 的行框与文档切分这类无业务读出，**审查规则、业务 model、
+布局/布线算法仍不翻译**；也不接管容器读取（`load_epru_text` / `.epro2` / `.eprj3`
+解包、`project2.json`）与 Python CLI 的任何命令面。不引入 PyO3、WASM 或 Node native addon。
 
 ## 2. 工具链与构建
 
@@ -38,8 +42,9 @@ cargo test
 机器路径；来源、输入与 case book 的 SHA-256 记录在 `manifest.json`。不要在变更无关
 业务输出时顺手再生成 golden。
 
-仓库 case book 当前有 **5 个 case**：review 投影、layout 几何、module compile 投影、
-page compile 投影、lint 投影。两份 compile 结果是**彼此独立的合同**：module 文档用
+仓库 case book 当前有 **7 个 case**：review 投影、layout 几何、module compile 投影、
+page compile 投影、lint 投影，以及两个 `epru-stream-sample` 的 `.epru` 记录流投影。
+两份 compile 结果是**彼此独立的合同**：module 文档用
 `draw-compile-result-v1.schema.json` 的 `candidates`，page 文档用
 `draw-page-compile-result-v1.schema.json` 的 `pages`，投影字段也各说各的名字
 （`candidateCount` 对 `pageCount`），不得把一份改名成另一份。两种形状共有的
@@ -101,11 +106,13 @@ schema 文件按 Python 口径从“代码旁”的仓库读（不受 `--root` �
 作用于 `prefixItems` 之后、`enum/const` 递归且 `true ≠ 1`、`1.0` 算 integer、非有限数
 拒绝（`NaN` token 与 `1e999`）。
 
-`contracts/json` 现有 **6 份 schema**（`bridge-error-v1`、`draw-compile-result-v1`、
-`draw-lint-result-v1`、`draw-page-compile-result-v1`、`layout-plan-v1`、
-`review-report-v1`）。每一份都由 `schema.rs` 的单元测试整树预检（可读且落在支持的
+`contracts/json` 现有 **7 份 schema**（`bridge-error-v1`、`draw-compile-result-v1`、
+`draw-lint-result-v1`、`draw-page-compile-result-v1`、`epru-stream-sample-v1`、
+`layout-plan-v1`、`review-report-v1`）。每一份都由 `schema.rs` 的单元测试整树预检（可读且落在支持的
 子集内），仓库里的公开差分输入则作为正例逐个跑一遍；page 与 module 两份 compile
 合同还各有负例，证明任一输入都过不了对方的 schema、也进不了对方的 kind。
+`epru-stream-sample-v1` 的输入就是两个声明样本（`contracts/differential/sources/
+epru-stream-samples.json` 的合成文本，无真实工程），两侧都用它做正例。
 
 `regex` 依赖**只**服务于 schema 的 `pattern` 关键字（`tests/test_540c_workspace.py`
 钉住：它只能出现在 `schema.rs`，CLI 依赖里不许有）。Rust `regex` 没有反向引用/环视，

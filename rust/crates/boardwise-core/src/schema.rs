@@ -65,7 +65,12 @@ const TYPE_NAMES: [&str; 7] = [
 ];
 
 /// `kind` → schema file, the same table as `tools/differential.py:SCHEMAS`.
-const SCHEMAS: [(&str, &str); 5] = [
+///
+/// `epru-stream-sample` is the sixth kind and states the same thing on both sides:
+/// the two declared `.epru` samples in the case book are gated by their own file,
+/// and the projection each runner derives from `text` is compared as golden. The
+/// id/kind split (two cases, one kind) lives in `tools/build_differential_fixtures.py`.
+const SCHEMAS: [(&str, &str); 6] = [
     ("review-report-projection", "review-report-v1.schema.json"),
     ("layout-plan-geometry", "layout-plan-v1.schema.json"),
     (
@@ -79,6 +84,7 @@ const SCHEMAS: [(&str, &str); 5] = [
         "draw-page-compile-result-v1.schema.json",
     ),
     ("lint-result-projection", "draw-lint-result-v1.schema.json"),
+    ("epru-stream-sample", "epru-stream-sample-v1.schema.json"),
 ];
 
 fn validation_error(message: impl Into<String>) -> ContractError {
@@ -880,6 +886,7 @@ mod tests {
             "draw-compile-result-v1.schema.json",
             "draw-lint-result-v1.schema.json",
             "draw-page-compile-result-v1.schema.json",
+            "epru-stream-sample-v1.schema.json",
             "layout-plan-v1.schema.json",
             "review-report-v1.schema.json",
         ] {
@@ -905,6 +912,14 @@ mod tests {
                 "empty-page-lint-result.json",
                 "draw-lint-result-v1.schema.json",
             ),
+            (
+                "epru-stream-v3-eof.json",
+                "epru-stream-sample-v1.schema.json",
+            ),
+            (
+                "epru-stream-v4-eof-truncated.json",
+                "epru-stream-sample-v1.schema.json",
+            ),
         ];
         for (input_name, schema_name) in pairs {
             let schema = contract_file("contracts/json", schema_name);
@@ -918,6 +933,8 @@ mod tests {
             ("divider-compile-result.json", "compile-result-projection"),
             ("page-compile-result.json", "compile-page-result-projection"),
             ("empty-page-lint-result.json", "lint-result-projection"),
+            ("epru-stream-v3-eof.json", "epru-stream-sample"),
+            ("epru-stream-v4-eof-truncated.json", "epru-stream-sample"),
         ] {
             validate_for_kind(&input(input_name), kind)
                 .unwrap_or_else(|error| panic!("{input_name} as {kind}: {error}"));
@@ -928,6 +945,32 @@ mod tests {
                 .to_string()
                 .contains("unknown differential case kind")
         );
+    }
+
+    /// The sample kind is gated by its own file, and the gate is the contract:
+    /// a tag, a non-empty name, and the text — nothing else.
+    #[test]
+    fn epru_stream_sample_kind_is_gated_by_its_own_schema() {
+        let sample = json!({
+            "schema": "boardwise.epru-stream-sample/1",
+            "name": "synthetic",
+            "text": "{\"type\":\"PAD\"}||",
+        });
+        validate_for_kind(&sample, "epru-stream-sample").expect("a declared sample validates");
+
+        let mut nameless = sample.clone();
+        nameless
+            .as_object_mut()
+            .expect("sample is an object")
+            .remove("name");
+        validate_for_kind(&nameless, "epru-stream-sample").expect_err("a sample needs a name");
+
+        let mut extra = sample;
+        extra
+            .as_object_mut()
+            .expect("sample is an object")
+            .insert("body".to_owned(), json!("no"));
+        validate_for_kind(&extra, "epru-stream-sample").expect_err("no extra field is accepted");
     }
 
     /// `pages` and `candidates` are two documents, not one renamed field: each

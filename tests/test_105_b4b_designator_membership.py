@@ -437,10 +437,10 @@ UNTOUCHED_BOARDS = {
     },
     "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2": {
         "Board2": "ed500df68cc3da383ebfb019076ac0484c1b00b3b7a154f51e01471240a25639",
-        "Board3": "f15635e05341f3a5e36eb4449f7754e4214db85fc37c7a265f66ec4737dbf807",
+        "Board3": "6916d714066ec5ddc301b4420e6995398acfc836ee5f22caa9501c9fbdcf1547",
     },
     "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2": {
-        "驱动板": "33396cb2110c2af1feb2d5c2e2d782464243771119a488da4e5d95e1cb623f7b",
+        "驱动板": "5ce9cfdc9775cdb9fadcfa624b8c4ce771cef54d997206af8e81407820e643db",
     },
     "tests/fixtures/board24v.enet": {
         "<no board>": "99dfd33f15832d729295e0986f9816ca759dc6307c0148b12648642f65e6c392",

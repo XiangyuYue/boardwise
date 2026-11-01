@@ -1,0 +1,5 @@
+{
+  "schema": "boardwise.epru-stream-sample/1",
+  "name": "v3-eof",
+  "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"SCH\"}|\n{\"type\":\"WIRE\",\"ticket\":2}||{\"id\":1}|\n{\"type\":\"DOCHEAD\",\"ticket\":3}||{\"docType\":\"PCB\"}|\n{\"type\":\"ARC\",\"ticket\":4}||{\"id\":\"a1\"}|\n{\"type\":\"TEXT\",\"ticket\":5}||{\"x\":1}"
+}

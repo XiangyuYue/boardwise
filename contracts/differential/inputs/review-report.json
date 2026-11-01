@@ -1,7 +1,7 @@
 {
   "schema": "boardwise.checkup/7",
   "generatedAt": "<GENERATED_AT>",
-  "toolVersion": "0.5.22",
+  "toolVersion": "0.6.0",
   "source": {
     "tier": "file",
     "tierLabel": "离线文件（--file）：不连编辑器",
@@ -1138,7 +1138,7 @@
   "shelfPath": "blocklib/parts.json",
   "environment": {
     "tier": "file",
-    "expectedConnectorVersion": "0.5.22",
+    "expectedConnectorVersion": "0.6.0",
     "runningConnectorVersion": null,
     "connectorVersionStatus": "not-applicable",
     "writeAllowed": false,

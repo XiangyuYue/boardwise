@@ -1,0 +1,5 @@
+{
+  "schema": "boardwise.epru-stream-sample/1",
+  "name": "v4-eof-truncated",
+  "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"FOOTPRINT\"}|\n{\"type\":\"PAD\",\"ticket\":2}|||\n{\"type\":\"PAD\",\"ticket\":3}\n{\"type\":\"PAD\",\"ticket\":4}||"
+}

@@ -27,6 +27,7 @@ EXPECTED_KINDS = {
     "compile-result-projection",
     "compile-page-result-projection",
     "lint-result-projection",
+    "epru-stream-sample",
 }
 
 
@@ -43,7 +44,7 @@ def test_python_runner_executes_every_repository_golden_case() -> None:
     assert report["schema"] == "boardwise.differential-report/1"
     assert report["runner"] == "python"
     assert report["ok"] is True
-    assert len(report["cases"]) == 5
+    assert len(report["cases"]) == 7
     assert {case["kind"] for case in _json(CASES)["cases"]} == EXPECTED_KINDS
     assert all(case["ok"] and case["actual"] == case["expected"] for case in report["cases"])
 
@@ -62,7 +63,7 @@ def test_manifest_pins_sources_sanitized_inputs_and_case_book() -> None:
 def test_differential_inputs_are_unique_and_machine_path_sanitized() -> None:
     book = _json(CASES)
     ids = [case["id"] for case in book["cases"]]
-    assert len(ids) == len(set(ids)) == 5
+    assert len(ids) == len(set(ids)) == 7
     forbidden = [
         ".tmp_540", str(ROOT), str(ROOT).replace("\\", "/"),
         str(Path.home()), str(Path.home()).replace("\\", "/"),
@@ -98,7 +99,7 @@ def test_a_changed_golden_is_a_failure_not_a_pass(tmp_path, monkeypatch, capsys)
     assert captured.err == ""
     report = json.loads(captured.out)
     assert report["ok"] is False
-    assert [case["ok"] for case in report["cases"]] == [False, True, True, True, True]
+    assert [case["ok"] for case in report["cases"]] == [False, True, True, True, True, True, True]
 
 
 def test_normalized_comparison_accepts_identical_cross_language_reports() -> None:
@@ -107,7 +108,7 @@ def test_normalized_comparison_accepts_identical_cross_language_reports() -> Non
     rust_report["runner"] = "rust"
     result = compare_reports(python_report, rust_report)
     assert result["ok"] is True
-    assert result["caseCount"] == 5
+    assert result["caseCount"] == 7
     assert result["pythonNormalizedSha256"] == result["rustNormalizedSha256"]
 
 
@@ -134,6 +135,9 @@ GOLDEN_INPUTS = {
     "compile-result-projection": ROOT / "contracts/differential/inputs/divider-compile-result.json",
     "compile-page-result-projection": ROOT / "contracts/differential/inputs/page-compile-result.json",
     "lint-result-projection": ROOT / "contracts/differential/inputs/empty-page-lint-result.json",
+    "epru-stream-v3-eof": ROOT / "contracts/differential/inputs/epru-stream-v3-eof.json",
+    "epru-stream-v4-eof-truncated": ROOT
+    / "contracts/differential/inputs/epru-stream-v4-eof-truncated.json",
 }
 
 
@@ -324,7 +328,7 @@ def test_manifest_schemas_are_the_files_the_runner_gates_with() -> None:
         for name in SCHEMAS.values()
     }
     assert manifest["schemas"] == expected
-    assert len(manifest["schemas"]) == len(SCHEMAS) == 5
+    assert len(manifest["schemas"]) == len(SCHEMAS) == 6
     assert not any("bridge-error" in path for path in manifest["schemas"])
 
 
@@ -396,7 +400,7 @@ def test_python_runner_refuses_a_golden_that_spells_a_boolean_as_int(
     cases.write_text(json.dumps(book), encoding="utf-8")
     report = run_cases(cases, ROOT)
     assert report["ok"] is False
-    assert [case["ok"] for case in report["cases"]] == [True, True, False, True, True]
+    assert [case["ok"] for case in report["cases"]] == [True, True, False, True, True, True, True]
     monkeypatch.setattr(sys, "argv", [
         "differential", "--cases", str(cases), "--root", str(ROOT),
     ])

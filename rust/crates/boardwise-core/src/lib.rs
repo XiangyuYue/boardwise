@@ -1,5 +1,10 @@
 //! Business-free cross-language contracts for the 540C Rust skeleton.
-//! No review rule, parser, layout algorithm or editor transport lives here.
+//!
+//! What lives here is the contract layer: shapes, canonical bytes, the
+//! differential runner, and the business-free `.epru` record framing that has to
+//! be compared line for line (see [`epru`] — a stream of `{envelope}||{body}`
+//! records, no pad, track or netlist named anywhere in it). What does not: no
+//! review rule, no layout algorithm, no editor transport.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -15,6 +20,7 @@ pub const CLI_RESULT_SCHEMA: &str = "boardwise.cli-result/1";
 pub const DIFFERENTIAL_REPORT_SCHEMA: &str = "boardwise.differential-report/1";
 pub const DIFFERENTIAL_CASES_SCHEMA: &str = "boardwise.differential-cases/1";
 
+pub mod epru;
 pub mod schema;
 
 #[derive(Debug)]
@@ -1228,6 +1234,13 @@ fn project_case(case: &Case, root: &Path) -> Result<Value> {
                 "textReadable": boolean(&payload, "textReadable")?,
             }))
         }
+        // The stream is projected by the module that owns the framing, so this
+        // arm cannot drift from it: `name` identifies the sample for the case
+        // book (the contract makes it required), `text` is all that is read.
+        "epru-stream-sample" => {
+            let stream = epru::project_stream(text(&payload, "text")?);
+            Ok(serde_json::to_value(stream)?)
+        }
         other => Err(ContractError::Shape(format!(
             "unknown differential case kind {other:?}"
         ))),
@@ -1336,7 +1349,7 @@ mod tests {
         let report = run_cases(&root.join("contracts/differential/cases.json"), &root)
             .expect("differential cases run");
         assert!(report.ok, "Rust differential failed: {report:#?}");
-        assert_eq!(report.cases.len(), 5);
+        assert_eq!(report.cases.len(), 7);
         assert_eq!(report.runner, "rust");
     }
 
