@@ -157,6 +157,33 @@ dsh --profile desktop --dump-config | grep tool-boardwise
 多窗口在线时那 4 项会写「未验证」（daemon 设计上不猜窗口），
 用 `project=` / `instance=` 指定一个窗口即转 PASS。
 
+### Electron 管理的 profile（本机 desktop）：用脚本，不要走 dsh plugin
+
+本机实测（2026-11-01）：`dsh plugin --profile desktop ...` 会直接拒绝——
+
+```text
+error: profile "desktop" is managed exclusively by the Electron application
+```
+
+DSH NEXT 把 desktop profile 的所有权锁给了应用本身，CLI 不转发。**这不是 CLI 坏了**：
+同一份 `@deepseek-ai/dsh` 对 `--profile boardwise-clean` 正常（`why boardwise-dsh`
+能报出版本），只是 desktop 那条路被应用接管。
+
+对这类 profile 用仓库脚本，它做 CLI 本来会做的那四件事（备份 → 改依赖 → 补 bundles →
+`pnpm install` → 核对落盘版本）：
+
+```sh
+node tools/dsh_plugin_install.mjs \
+  --profile D:/dsh-home/profiles/desktop \
+  --tarball dsh-plugin/boardwise-dsh-0.6.0.tgz
+
+node tools/dsh_plugin_install.mjs --profile <dir> --tarball <tgz> --dry-run   # 只看计划
+```
+
+备份落在 profile 旁（`profiles/` 不可写时退到 DSH home 根或 profile 内）的
+`_backup_boardwise-dsh_<stamp>`，含 `package.json`、`pnpm-lock.yaml` 和已装包。
+装完**重启 DSH** 才生效；回滚 = 拷回备份里的两个清单再跑一次 `pnpm install`。
+
 ### headless profile 的 store 分裂（已裁：新建 profile）
 
 **现象**：headless profile 上的 `dsh plugin --profile headless add <tgz>` 会报
