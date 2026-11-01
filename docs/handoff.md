@@ -99,14 +99,23 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
   （库无旗标符号的多脚网不许落成标签）**前面**，已把 `flag_downgraded` 拒绝挪回 gnd 分支
   之前。**提交前先跑受影响的测试文件 + 全量**。
 - **534B 实验页已撤回（岳验收 20/100）**：Board2 P2 `dc46ef64fc7385ec` 已删除，
-  Board2 只保留岳的 P1 参考页；Board1 P3 `5d5f8f9f7ac34562` 为空页，等待重做。
-  实验本身记录在 `tasks/534b_v4_layout.md` / `evidence/534b/report.md`（仅证据）。
-  根因：宿主把导线网名以端点向右排，5–10 单位短桩会把文字压回引脚/器件体；
-  统一 40 桩又被 U1 reference 文本占住的右标签走廊挡住，V3 只能退成折线。
-  下一批必须先处理“标签走廊 / reference 文本占位”，再谈 Board1 落图。
+  Board2 只保留岳的 P1 参考页。之后按岳的三轮反馈重做（`tasks/534b_v4_layout.md` 续二–续五）：
+  - **053C `attach`**：`modules[].attach = {to, side, gap}`，把去耦模块贴在宿主岛的一侧
+    （只影响摆放、不合并图形，两岛之间 0 根连接线）；
+  - **053D `partTexts`**：按器件声明位号/型号放在哪一侧，把引脚道让给网络标签；
+  - **053E `gndClustering.radius`**：地网焊盘按直径上限聚类，每簇一枚 GND 旗标、簇间不连线
+    （usb_c 实测 GND 总长 940→565、最长段 205→85、旗标 1→4）；
+  - **053F**：以上三条＋`labelPolicy.stubMin`/`rowModel` 全部改成**规格声明**，
+    **不写＝旧行为逐字节不变**，现有 44 条被打破的测试因此回绿。
+  - **当前落地**：Board1 **P13 `9e6240c6c29a8642`**（唯一原理图页），11 器件 / 54 wire /
+    18 flag；`draw lint` 0E/1W；宿主 DRC 0E/5W；独立逐脚 55/55。commit `263929e`。
+  - **已知未解**（下一批）：CH343 左列标签仍偏挤（10 单位节距的物理限制，强制 ≥40 桩会让
+    右侧 TXD 四向无解、整页拒绝，所以短桩只能兜底）；去耦行与芯片岛仍隔 41（module_gap 下限）；
+    USB3 岛回环未收；D+/D− 标签仍背对背。
 - **合并记录**：worktree `E:/boardwise-wt-layout` 分支 `534b-layout` 已合并 main
-  （`b74ee91`）；全量 Python **8829 passed / 25 skipped / 2 failed**（两条环境红：
-  pytest-slots ACL、MSYS `0xC0000022`）。合并的代码能力保留，实验页不作为交付。
+  （`b74ee91`）；本批（053C–053F）直接在 main 提交（`263929e`），全量
+  **8980 passed / 23 skipped / 2 failed**（两条环境红：pytest-slots ACL、
+  MSYS `0xC0000022`/POSIX installer）。
 
 ### 3.3 插件线 —— boardwise-dsh（发给 dsh 用户的产品面）
 

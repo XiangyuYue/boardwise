@@ -103,6 +103,7 @@
 | 052 | 审查复核与绘制方向建议 | 已落 | tasks/052-schematic-drawing-direction.md（研判；架构被 053 采用，无独立提交） |
 | 053 | 画法编译器（阶段 A/B/C 地基） | 已落 | tasks/053-drawing-compiler-ab.md |
 | 053B | keepout 真实裁剪等收尾三件 | 已落 | tasks/053-drawing-compiler-ab.md §六 |
+| 053C–053F | **画法能力四件**：`modules[].attach`（去耦模块贴宿主岛一侧，只影响摆放）、`partTexts`（位号/型号按器件选边，让开引脚道）、`gndClustering.radius`（地网焊盘按直径上限分簇，每簇一枚 GND 旗标、簇间不连线）、`labelPolicy.stubMin` / `rowModel`（最小桩长与名字行模型）。后三条是**规格声明**：不写＝旧行为逐字节不变 | 已提交 `263929e`；测试 `tests/test_053c_attach.py` / `053d_part_texts.py` / `053e_ground_clusters.py` / `053f_policy_switches.py`；全量 8980 passed / 23 skipped / 2 环境红 | tasks/534b_v4_layout.md 续二–续五 |
 | 054 | 画法编译器落图（C1，单模块进编辑器） | 已落 | `aa61768`；tasks/054-draw-stage-c-editor.md |
 | 055 | 画图编译器收尾 G1/G2/G3/G6 | 已落 | `50ca8b6`；tasks/055-draw-followups-g1-g6.md |
 | 056 | 多模块单页编译（C2a） | 已落 | `0459e74`；tasks/056-draw-stage-c2a-multimodule.md |
@@ -348,7 +349,7 @@
 | 530G | **标题栏 keepout 进岛打包**（S-01）：矩形是**图页符号自己的 `TABLE`**（700×180，锚在角上、不随图幅缩放，`core.pageframe`）+ 下方留白 15%；真反激岛页对真矩形零相交；无 page_box 的岛页摘要仍冻结 | 工作树 | evidence/530g/ |
 | 534 | **CH343 USB 转 UART 小板**：CH343G + Type-C 16P + 2×5P 排针，绘图线第一次全新设计 | **示例已入库 `a8613c5`（四岛版落 `test Board2 P3`）；交付由 534A/534B 收口**：独立 5 岛 spec；**V4 `/test V4` Board2 P2 六岛页全链通过**，V3 P4 与旧 V4 P2 为历史落图 | tasks/534_ch343_uart.md；tasks/534a_ch343_finish.md；tasks/534b_v4_layout.md；evidence/534b/report.md |
 | 534A | **CH343 交付收口**：拆岛降低 `usb_c` 线团、三关全过、lint/连通/视觉证据 | **历史五岛页**：`40091c5d26a5db27`（`test V4` P2）；lint 0E/2W；17 网/58 脚/3 NC PASS；已被 534B 六岛页取代，不再作为交付页 | tasks/534a_ch343_finish.md；evidence/534a_v4/report.md |
-| 534B | **CH343 V4 六岛布局**：CC 并入 USB、去耦拆成 U2 左右卫星岛、LED/排针独立；新增 `moduleOrder` / `moduleColumns` 布局意图 | **实验页已撤回（2026-11-01 岳验收 20/100）**：Board2 P2 `dc46ef64fc7385ec` 已删除，Board2 只留参考 P1；Board1 P3 `5d5f8f9f7ac34562` 空页待重做。根因：网名起点右排+短桩压引脚；统一 40 桩被 U1 reference 走廊挡住 | tasks/534b_v4_layout.md；evidence/534b/report.md（仅实验证据） |
+| 534B | **CH343 V4 布局重做**：从六岛实验页（岳验收 20/100）转成 `attach` 去耦行 + `partTexts` + 地网分簇 | **已落 Board1 P13 `9e6240c6c29a8642`**（唯一原理图页；旧 P2/P3/P4/P5…P12 全部删除）：11 器件 / 54 wire / 18 flag；`draw lint` 0E/1W；宿主 DRC 0E/5W；逐脚 55/55。commit `263929e`。未解：左列标签仍挤、去耦行间距 41、USB 岛回环、D+/D− 背对背 | tasks/534b_v4_layout.md；evidence/534h/、evidence/534i/ |
 | 533 | **岛页落图强制保护**（补 530G 的缺口：`--page-box` 是可选的，不带就没有 keepout → 530F 偏离 4 与 532 页 A 两次落进标题栏）：① 真机探明页面图幅**读得出来**——`sys.get_document_source` 的记录流里图纸符号自己带 `Width/Height/Blade Width/Title Block Position`（`document.current` 的 `schematicPage` 盒是 `{}`，读不出），接进 `parsers.schematic.sheet_attrs_from_text` → `pageframe.title_block_from_sheet_attrs`；② `draw plan` 绑活页 + 多岛时**自动**读图幅推 page_box+keepouts，读不到又没给 `--page-box` 则 exit 5；③ `draw apply` 核对 plan 自己记的 keep-out（`keep_out_note`）与目标页图幅，没记/对不上/读不到则 exit 5，**绝不静默落进标题栏**；④ 真机回归：新建 test 页自动读图幅 → 落图 → 标题栏矩形内 **0** 图元（同口径 532 页 A 仍 32）→ 连通 0 失配 → 删页存盘 | 工作树 | evidence/533/（报告 + probes + raw + 落图 PNG/SVG） |
 | 536 | 岛群→子岛：schema、plan 身份与 hard 校验（不含装配/多群页级） | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/536_archipelago_schema.md；tests/test_536_archipelago_schema.py；tests/test_archipelago_contract.py |
 | 537 | 审查流程环境/证据/权限/交付硬闸，含已复现的采样值输入与 Windows 编码缺口 | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/537_review_workflow_gates.md；Python 7650 passed；connector 536 passed；dsh-plugin 113 passed/1 skipped |
