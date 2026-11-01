@@ -190,6 +190,9 @@ cd dsh-plugin && npm run typecheck && npm test && npm run build
   且 0.5.21 起 `test_520_parts_hunt` 的 fetch_detail 接缝已修、离线密封，不再依赖网络。
   **dsh 侧全量读数与终端等价**（2026-10-23 双边 `6936/0 failed/25/5` 逐字互证），
   发布验收的全量读数 dsh 侧自跑即可。
+- `.tmp_review_line` 当前由全局 `core.autocrlf=true` 检出，三件 `tests/fixtures/drawapply/*.json`
+  是 CRLF，而 differential manifest 固定 LF blob 的 SHA。**不要在该 worktree 直接重生成
+  golden**；038i 采用隔离的 LF blob 树生成并复验，三条相关环境用例也在该树通过。
 
 - **子代理纪律**：一个任务书只装一个缺口 / 一个文件域，串行小批，每批半小时内交卷
   （两小时黑箱 + 大上下文 = 幻觉与返工，060 实测被 timeout 斩）。整机全量并发槽只有 2
@@ -218,7 +221,8 @@ cd dsh-plugin && npm run typecheck && npm test && npm run build
 - **E: 盘三项待岳拍板**：`E:\boardwise-sources-backup-20261015`（21MB，与
   `blocklib/sources/` 逐字节冗余）；两个 mirror（`boardwise-mirror-backup-2026101{5,7}`，
   共 85MB，10-15 历史清洗前旧历史的**唯一**副本）；11 个注册旧实验 worktree
-  （`.tmp_cpsat` 等，约 1.2GB，可 `git worktree remove`）。
+  （`.tmp_cpsat` 等，约 1.2GB）：经审计均有未提交或独有证据，**当前无安全回收项**，
+  保留并逐批归档裁定，不按旧写法直接 `git worktree remove`。
 - **迁移方案 §5 的 Q1–Q14 全部待岳裁**：主代理载体（Web / Desktop / headless）·
   `DSH_HOME` 要不要做一次性 pnpm 重链（store 分裂，裸 `dsh plugin` 必报
   `ERR_PNPM_UNEXPECTED_STORE`）· 子代理模型接不接第三方网关 · 500k 红线纪律怎么改写 ·

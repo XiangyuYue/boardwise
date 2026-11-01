@@ -94,6 +94,133 @@
         "findingCount": 0,
         "textReadable": false
       }
+    },
+    {
+      "id": "epru-stream-v3-eof",
+      "kind": "epru-stream-sample",
+      "input": "contracts/differential/inputs/epru-stream-v3-eof.json",
+      "expected": {
+        "schema": "boardwise.epru-stream/1",
+        "records": [
+          {
+            "lineNo": 0,
+            "type": "DOCHEAD",
+            "hasBody": true,
+            "emptyBody": false,
+            "malformed": false,
+            "docType": "SCH"
+          },
+          {
+            "lineNo": 1,
+            "type": "WIRE",
+            "hasBody": true,
+            "emptyBody": false,
+            "malformed": false
+          },
+          {
+            "lineNo": 2,
+            "type": "DOCHEAD",
+            "hasBody": true,
+            "emptyBody": false,
+            "malformed": false,
+            "docType": "PCB",
+            "document": 0
+          },
+          {
+            "lineNo": 3,
+            "type": "ARC",
+            "hasBody": true,
+            "emptyBody": false,
+            "malformed": false,
+            "document": 0
+          },
+          {
+            "lineNo": 4,
+            "type": "TEXT",
+            "hasBody": true,
+            "emptyBody": false,
+            "malformed": false,
+            "document": 0
+          }
+        ],
+        "total": 5,
+        "malformed": 0,
+        "emptyBody": 0,
+        "documents": [
+          {
+            "docType": "PCB",
+            "recordCount": 3
+          }
+        ],
+        "documentTypes": {
+          "SCH": 1,
+          "PCB": 1
+        },
+        "recordsByType": {
+          "DOCHEAD": 2,
+          "WIRE": 1,
+          "ARC": 1,
+          "TEXT": 1
+        }
+      }
+    },
+    {
+      "id": "epru-stream-v4-eof-truncated",
+      "kind": "epru-stream-sample",
+      "input": "contracts/differential/inputs/epru-stream-v4-eof-truncated.json",
+      "expected": {
+        "schema": "boardwise.epru-stream/1",
+        "records": [
+          {
+            "lineNo": 0,
+            "type": "DOCHEAD",
+            "hasBody": true,
+            "emptyBody": false,
+            "malformed": false,
+            "docType": "FOOTPRINT",
+            "document": 0
+          },
+          {
+            "lineNo": 1,
+            "type": "PAD",
+            "hasBody": false,
+            "emptyBody": true,
+            "malformed": false,
+            "document": 0
+          },
+          {
+            "lineNo": 2,
+            "type": "",
+            "hasBody": false,
+            "emptyBody": false,
+            "malformed": true
+          },
+          {
+            "lineNo": 3,
+            "type": "PAD",
+            "hasBody": false,
+            "emptyBody": true,
+            "malformed": false,
+            "document": 0
+          }
+        ],
+        "total": 4,
+        "malformed": 1,
+        "emptyBody": 2,
+        "documents": [
+          {
+            "docType": "FOOTPRINT",
+            "recordCount": 3
+          }
+        ],
+        "documentTypes": {
+          "FOOTPRINT": 1
+        },
+        "recordsByType": {
+          "DOCHEAD": 1,
+          "PAD": 2
+        }
+      }
     }
   ]
 }

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from boardwise.core.layoutplan import LayoutPlan
+from boardwise.parsers.epru_stream import ParseStats, iter_epru_records, split_documents
 from tools.contract_validate import ContractValidationError, assert_valid, load_path
 from tools.differential_compare import canonical_bytes, write_text_lf
 
@@ -48,7 +49,10 @@ SCHEMAS = {
     "compile-result-projection": "draw-compile-result-v1.schema.json",
     "compile-page-result-projection": "draw-page-compile-result-v1.schema.json",
     "lint-result-projection": "draw-lint-result-v1.schema.json",
+    "epru-stream-sample": "epru-stream-sample-v1.schema.json",
 }
+#: Schema tag of the `.epru` stream projection both runners emit.
+EPRU_STREAM_SCHEMA = "boardwise.epru-stream/1"
 
 
 def _required(mapping: dict[str, Any], key: str, where: str) -> Any:
@@ -88,6 +92,85 @@ def _preview_names(previews: list[str]) -> list[str]:
     and states the same rule the contract's preview pattern enforces.
     """
     return [item.replace("\\", "/").rsplit("/", 1)[-1] for item in previews]
+
+
+def _epru_stream_projection(text: str) -> dict[str, Any]:
+    """Project one ``.epru`` record stream — a second *view*, never a parser.
+
+    The counts and the document split come from the real readers,
+    :func:`~boardwise.parsers.epru_stream.split_documents` (which itself walks
+    :func:`~boardwise.parsers.epru_stream.iter_epru_records`), so a differential
+    mismatch can only ever be about the projection, never about a private copy
+    of the framing rules. The per-line loop below re-reads each line **only** to
+    recover what the stream scan does not hand back per record — the decoded
+    type, body presence, and whether the body was empty — and it reads them from
+    the same decoder with a throwaway :class:`ParseStats`, because folding those
+    counts into the stream's own stats would count every record twice.
+
+    Line numbers are the file's: the decoder numbers a one-line text from 0, so
+    the loop's index replaces ``record.line_no``. A kept-document index is
+    attached from the split's own ``records`` (each records its ``line_no``), so
+    a record belongs to a document exactly when the splitter put it there.
+
+    What is deliberately **not** emitted: bodies (presence only), the record types
+    this parser has never seen (that is a drift signal on ``ParseStats``, not a
+    projection field), and any reason a line was malformed — Python never
+    classifies the failure, and a classification invented here would be a field
+    the Rust side could only agree with by copying it.
+    """
+    stats = ParseStats()
+    documents = split_documents(text, stats)
+    owners: dict[int, int] = {}
+    for index, document in enumerate(documents):
+        for record in document.records:
+            owners[record.line_no] = index
+    records: list[dict[str, Any]] = []
+    for line_no, line in enumerate(text.split("\n")):
+        if not line:
+            continue
+        line_stats = ParseStats()
+        decoded = list(iter_epru_records(line, line_stats))
+        if not decoded:
+            # Malformed: the line is still a record (both runners report the
+            # same line count), it just carries no decoded field.
+            records.append({
+                "lineNo": line_no,
+                "type": "",
+                "hasBody": False,
+                "emptyBody": False,
+                "malformed": True,
+            })
+            continue
+        record = decoded[0]
+        item: dict[str, Any] = {
+            "lineNo": line_no,
+            "type": record.type,
+            "hasBody": record.has_body,
+            "emptyBody": line_stats.empty_body_records > 0,
+            "malformed": False,
+        }
+        # ``docType`` lives in the **body** of a ``DOCHEAD``; ``str`` is what the
+        # splitter counts in ``document_types``, so both say the same name.
+        doc_type = (record.body or {}).get("docType") if record.type == "DOCHEAD" else None
+        if doc_type is not None:
+            item["docType"] = str(doc_type)
+        owner = owners.get(line_no)
+        if owner is not None:
+            item["document"] = owner
+        records.append(item)
+    return {
+        "schema": EPRU_STREAM_SCHEMA,
+        "records": records,
+        "total": stats.total_records,
+        "malformed": stats.malformed_records,
+        "emptyBody": stats.empty_body_records,
+        "documents": [
+            {"docType": document.doc_type, "recordCount": len(document.records)}
+            for document in documents
+        ],
+        "documentTypes": dict(stats.document_types),
+        "recordsByType": dict(stats.records_by_type),
+    }
 
 
 def project_payload(kind: str, payload: Any) -> dict[str, Any]:
@@ -147,6 +230,8 @@ def project_payload(kind: str, payload: Any) -> dict[str, Any]:
             "findingCount": len(payload["findings"]),
             "textReadable": payload["textReadable"],
         }
+    if kind == "epru-stream-sample":
+        return _epru_stream_projection(payload["text"])
     raise ValueError(f"unknown differential case kind: {kind!r}")
 
 

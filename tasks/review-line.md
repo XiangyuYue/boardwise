@@ -47,5 +47,7 @@ import review。Finding、severity、mode 与报告措辞仍归 review；B1–B3
 - 当前路线债：0.6.0 的 200A/B/C 仍按 `tasks/528_060_gate.md` 验收；540B 不替它们报完成。
 - Rust 顺序：shared 纯函数/几何与 parser/model 之后才是 review；不在本线提前批量翻译。
 
-**当前 worktree 状态**：没有为 review 线创建专用 worktree。若以后确需隔离，先在派单里
-写明路径、分支、owner、集成点和独有证据，再逐次申请 git worktree 操作。
+**当前 worktree 状态**：审查线工作区 `E:\boardwise\.tmp_review_line`，分支 `review-v4`，
+owner=审查线；绘制线独立开发、互不改文件，主仓及绘制线的未提交改动不碰。shared 集成、
+全量测试与真机仍由 `tasks/shared-platform.md` 串行。旧 worktree 审计结论：没有可安全回收
+项，证据区不按名字清理。`git worktree add/remove/prune` 仍逐次经岳明确批准。

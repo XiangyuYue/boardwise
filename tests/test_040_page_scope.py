@@ -214,9 +214,19 @@ def test_pages_are_not_welded(foc, motor):
     with the duplicates (its 155 components / 121 names are unchanged). The
     property this test is about — no net spanning two pages — is untouched;
     what moved is the count of the islands the page holds.
+
+    038g re-measured Board3: 35 -> 34 nets. That board is one of the two the
+    038g defect was measured on — ten designator-less ``Short-Symbol``
+    placements, each with a pin on each half of one net and nothing in between.
+    Those jumper placements are not flags, so the library title no longer lends
+    its tail to a net (the fabricated ``Symbol`` net, whose only members were
+    ``Q4.1/2/3`` and ``R18.2``, is gone) and the halves the jumpers bridge are
+    one net (those four pins now read ``IC+``). One island fewer is the whole
+    delta; the page/board isolation this test asserts — no net spanning two
+    pages — is unchanged, and every other net keeps its name and members.
     """
     board3 = _board(foc, "Board3")
-    assert [len(b.nets) for b in foc.boards] == [99, 13, 35]
+    assert [len(b.nets) for b in foc.boards] == [99, 13, 34]
     # The 高速电机控制器 project: two boards with the designer's own titles
     # (板名自定义 — the board *is* the unit, not a board numbered by us).
     # 042 §WI-1 re-measured this pair: the board's displaced attribute blocks
@@ -226,7 +236,13 @@ def test_pages_are_not_welded(foc, motor):
     # 049 re-measured the first board too: 89 -> 104 nets, from the same
     # duplicate-designator split (this board clashes on U15/U16/U17/U20; the
     # second board has none and stays at 53).
-    assert [len(b.nets) for b in motor.boards] == [104, 53]
+    # 038g re-measured that second board as well: 53 -> 52. It carries the same
+    # ten ``Short-Symbol`` jumpers on one page, and the same hand-off applies —
+    # the fabricated ``Symbol`` net (its members were ``C8.1``, ``Q3.1/2/3``
+    # and ``R43.2``) is gone and the halves those jumpers bridge are one net.
+    # Again one island fewer on a board whose pages stay apart: the isolation
+    # this test asserts is what is being measured, not what changed.
+    assert [len(b.nets) for b in motor.boards] == [104, 52]
     assert motor.board_titles() != ["Board1", "Board2"]
     # The old weld's signature: one net with 100+ members. None is left.
     for board_model in (*foc.boards, *motor.boards):

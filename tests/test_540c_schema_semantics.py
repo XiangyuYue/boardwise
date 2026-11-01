@@ -14,9 +14,11 @@ here by tests that fail on the old semantics:
 * **F13** — the unknown-keyword check was lazy: a `oneOf` in a branch the
   instance never reached was never reported.
 
-The five committed schemas keep their public positive inputs and their negative
-cases, and every one of them must pass the whole-tree pre-check, so the fix is a
-semantic one and not a patch for one example.
+The original five committed schemas keep their public positive inputs and their
+negative cases, and every one of them must pass the whole-tree pre-check, so the
+fix is a semantic one and not a patch for one example. The later EPRU sample
+schema has its own positive and negative contract tests in
+``test_038i_epru_differential.py``.
 """
 
 from __future__ import annotations

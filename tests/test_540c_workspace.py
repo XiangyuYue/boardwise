@@ -61,7 +61,7 @@ def test_regex_serves_only_the_versioned_schema_pattern() -> None:
 def test_lockfile_and_contract_inputs_exist_without_real_project_additions() -> None:
     assert (RUST / "Cargo.lock").is_file()
     book = json.loads((ROOT / "contracts" / "differential" / "cases.json").read_text(encoding="utf-8"))
-    assert len(book["cases"]) == 5
+    assert len(book["cases"]) == 7
     for case in book["cases"]:
         path = ROOT / case["input"]
         assert path.is_file()

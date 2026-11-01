@@ -22,12 +22,16 @@ from tools.differential import SCHEMAS
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "contracts" / "differential"
 INPUTS = CONTRACTS / "inputs"
+#: Every published input, keyed by case id — the two `epru-stream-sample` cases
+#: share a kind, so their keys are ids rather than kind names.
 GOLDEN_INPUTS = {
     "review-report-projection": INPUTS / "review-report.json",
     "layout-plan-geometry": INPUTS / "divider-cand1.layout.json",
     "compile-result-projection": INPUTS / "divider-compile-result.json",
     "compile-page-result-projection": INPUTS / "page-compile-result.json",
     "lint-result-projection": INPUTS / "empty-page-lint-result.json",
+    "epru-stream-v3-eof": INPUTS / "epru-stream-v3-eof.json",
+    "epru-stream-v4-eof-truncated": INPUTS / "epru-stream-v4-eof-truncated.json",
 }
 
 

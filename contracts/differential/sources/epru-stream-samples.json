@@ -1,0 +1,18 @@
+{
+  "schema": "boardwise.epru-stream-samples/1",
+  "description": "The two synthetic .epru record streams the differential case book publishes as epru-stream-sample inputs. The text below is the whole input: no editor session, container or fixture is read to obtain it, and no line names a real project. The generator writes one epru-stream-sample-v1 document per entry into its run directory and projects it exactly like a producer's output.",
+  "samples": [
+    {
+      "caseId": "epru-stream-v3-eof",
+      "input": "epru-stream-v3-eof.json",
+      "name": "v3-eof",
+      "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"SCH\"}|\n{\"type\":\"WIRE\",\"ticket\":2}||{\"id\":1}|\n{\"type\":\"DOCHEAD\",\"ticket\":3}||{\"docType\":\"PCB\"}|\n{\"type\":\"ARC\",\"ticket\":4}||{\"id\":\"a1\"}|\n{\"type\":\"TEXT\",\"ticket\":5}||{\"x\":1}"
+    },
+    {
+      "caseId": "epru-stream-v4-eof-truncated",
+      "input": "epru-stream-v4-eof-truncated.json",
+      "name": "v4-eof-truncated",
+      "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"FOOTPRINT\"}|\n{\"type\":\"PAD\",\"ticket\":2}|||\n{\"type\":\"PAD\",\"ticket\":3}\n{\"type\":\"PAD\",\"ticket\":4}||"
+    }
+  ]
+}

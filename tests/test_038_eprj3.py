@@ -40,7 +40,8 @@ def _record(envelope: dict, body: dict | None = None) -> str:
     )
 
 
-def _symbol(uuid: str, title: str, pins: list[tuple[str, float, float]]) -> list[str]:
+def _symbol(uuid: str, title: str, pins: list[tuple[str, float, float]],
+            names: list[str] | None = None) -> list[str]:
     out = [_record({"type": "DOCHEAD"},
                    {"docType": "SYMBOL", "uuid": uuid, "editVersion": "2.3.0"}),
            _record({"type": "META", "id": "META"}, {"title": title, "docType": "SYMBOL"})]
@@ -50,6 +51,10 @@ def _symbol(uuid: str, title: str, pins: list[tuple[str, float, float]]) -> list
                            {"x": x, "y": y, "zIndex": index + 2}))
         out.append(_record({"type": "ATTR", "id": f"n{index}"},
                            {"parentId": pin_id, "key": "Pin Number", "value": number}))
+        if names is not None:
+            out.append(_record({"type": "ATTR", "id": f"m{index}"},
+                               {"parentId": pin_id, "key": "Pin Name",
+                                "value": names[index]}))
         out.append(_record({"type": "ATTR", "id": f"t{index}"},
                            {"parentId": pin_id, "key": "Pin Type", "value": "1"}))
     return out
@@ -87,15 +92,19 @@ def _page(*, y_up: bool, canvas: bool = True) -> list[str]:
     return out
 
 
-def _write(root: Path, *, y_up: bool = False, canvas: bool = True) -> Path:
-    page_dir = root / "sch" / "Schematic1"
-    page_dir.mkdir(parents=True, exist_ok=True)
+def _index(root: Path) -> None:
     (root / "synth.eprj3").write_text(json.dumps({
         "name": "synth",
         "owner_uuid": "0123456789abcdef0123456789abcdef",
         "format": "folder",
         "profile": {"schematics": {}, "sheets": {}, "pcbs": {}},
     }, ensure_ascii=False), encoding="utf-8")
+
+
+def _write(root: Path, *, y_up: bool = False, canvas: bool = True) -> Path:
+    page_dir = root / "sch" / "Schematic1"
+    page_dir.mkdir(parents=True, exist_ok=True)
+    _index(root)
     (page_dir / "P1.esch2").write_text(
         "\n".join(_page(y_up=y_up, canvas=canvas)) + "\n", encoding="utf-8")
     return root
@@ -323,3 +332,153 @@ def test_review_needs_no_view_spelling_for_a_folder_project(tmp_path, capsys):
     assert code in (0, 1), out
     assert "2 components" in out
     assert (tmp_path / "r.json").is_file()
+
+
+# --------------------------------------------------------------------------
+# 5. the same library document on both pages: one row, one meaning (V4)
+# --------------------------------------------------------------------------
+
+#: One two-pin part, and the two identities a pin has (number and name).
+_LIB_PINS = [("1", 0.0, 0.0), ("2", 20.0, 0.0)]
+_LIB_PIN_NAMES = ["A", "B"]
+
+
+def _library_documents() -> list[str]:
+    """A V4 export copies a used part's library into **every** page that uses it.
+
+    So the same ``SYMBOL`` and the same ``DEVICE`` document arrive once per page,
+    byte-for-byte identical and under the same uuid — the folder reader glues the
+    pages into one stream, and it is the merge (not the reader) that has to keep
+    the repetition out of the model.
+    """
+    out = _symbol("sym-1", "R", _LIB_PINS, _LIB_PIN_NAMES)
+    out.append(_record({"type": "DOCHEAD"},
+                       {"docType": "DEVICE", "uuid": "dev-1", "editVersion": "2.3.0"}))
+    out.append(_record({"type": "META"},
+                       {"title": "R-0603", "docType": "DEVICE", "attributes": {
+                           "Symbol": "sym-1", "Name": "R?", "Designator": "R?",
+                           "Supplier Part": "C25804",
+                           "Manufacturer Part": "0603WAF1001T5E",
+                       }}))
+    return out
+
+
+def _page_with_library(page: str, designator: str, *, library: bool) -> list[str]:
+    out = [_record({"type": "DOCHEAD"},
+                   {"docType": "SCH_PAGE", "uuid": f"page-{page}"})]
+    if library:
+        out += _library_documents()
+    part = f"inst-{page}"
+    out.append(_record({"type": "COMPONENT", "id": f"c-{page}"},
+                       {"partId": part, "x": 300.0, "y": -500.0, "rotation": 0,
+                        "isMirror": False, "zIndex": 10}))
+    for ident, key, value in (("d", "Designator", designator),
+                              ("s", "Symbol", "sym-1"),
+                              ("v", "Device", "dev-1")):
+        out.append(_record({"type": "ATTR", "id": f"{ident}-{page}"},
+                           {"parentId": part, "key": key, "value": value}))
+    return out
+
+
+def _write_pages(root: Path, pages: list[tuple[str, str, bool]]) -> Path:
+    """``pages`` is ``(page name, designator, carry the library documents)``."""
+    page_dir = root / "sch" / "Schematic1"
+    page_dir.mkdir(parents=True, exist_ok=True)
+    _index(root)
+    for page, designator, library in pages:
+        (page_dir / f"{page}.esch2").write_text(
+            "\n".join(_page_with_library(page, designator, library=library)) + "\n",
+            encoding="utf-8")
+    return root
+
+
+def _model_fingerprint(path) -> tuple:
+    """The model as data — identity, pins (number **and** name) and nets."""
+    model = build_schematic_model(path)
+    return (
+        tuple(sorted(
+            (name, comp.uid, comp.value, comp.lcsc_part, comp.mpn,
+             comp.props.get("device_uuid"),
+             comp.props.get("library_symbol_uuid"),
+             comp.props.get("device_name"),
+             tuple((pin.number, pin.name, pin.net) for pin in comp.pins))
+            for name, comp in model.components.items()
+        )),
+        tuple(sorted((net, tuple(node.pins)) for net, node in model.nets.items())),
+        tuple(model.duplicate_designators),
+        tuple(sorted((name, tuple(pages))
+                     for name, pages in model.cross_page_designators.items())),
+    )
+
+
+def test_a_library_document_copied_into_both_pages_stays_one_row(tmp_path):
+    """Two pages, the same SYMBOL and the same DEVICE on each: one symbol row,
+    and the two pages' placements of it read identically — same pin count, same
+    pin numbers and names, same library identity.
+
+    A duplicate document that overwrote its twin (rather than being ignored)
+    would be invisible to a pin *count*; it is the pin **name** and the joined
+    library identity that show a second document landing on the first.
+    """
+    from boardwise.parsers.epru_stream import iter_epru_records
+
+    root = _write_pages(tmp_path / "twice",
+                        [("P1", "U1", True), ("P2", "U2", True)])
+
+    text, meta = load_epru_text(root)
+    assert meta["pages"] == ["P1", "P2"]
+    documents = [
+        (json.loads(line.split("||", 1)[0])["type"],
+         json.loads(line.split("||", 1)[1][:-1]))
+        for line in text.splitlines()
+    ]
+    heads = [(kind, body) for kind, body in documents if kind == "DOCHEAD"]
+    assert [body["uuid"] for _, body in heads if body.get("docType") == "SYMBOL"] == [
+        "sym-1", "sym-1"], "both pages carry the symbol document…"
+    assert [body["uuid"] for _, body in heads if body.get("docType") == "DEVICE"] == [
+        "dev-1", "dev-1"], "…and both carry the device document"
+
+    symbols = _collect_symbols(list(iter_epru_records(text)), None,
+                               pin_key=_pin_key_for(meta))
+    assert list(symbols) == ["sym-1"], "…and the merge keeps exactly one symbol row"
+    assert sorted(symbols["sym-1"].pins) == ["1", "2"]
+    assert symbols["sym-1"].pin_names == {"1": "A", "2": "B"}
+
+    model = build_schematic_model(root)
+    assert sorted(model.components) == ["U1", "U2"]
+    first, second = model.components["U1"], model.components["U2"]
+    assert [(pin.number, pin.name) for pin in first.pins] == [
+        ("1", "A"), ("2", "B")]
+    assert [(pin.number, pin.name) for pin in second.pins] == [
+        ("1", "A"), ("2", "B")]
+    assert (first.uid, first.lcsc_part, first.mpn,
+            first.props.get("device_uuid"),
+            first.props.get("library_symbol_uuid"),
+            first.props.get("device_name")) == (
+        second.uid, second.lcsc_part, second.mpn,
+        second.props.get("device_uuid"),
+        second.props.get("library_symbol_uuid"),
+        second.props.get("device_name")) == (
+        "sym-1", "C25804", "0603WAF1001T5E", "dev-1", "sym-1", "R-0603")
+    assert model.duplicate_designators == []
+    assert model.cross_page_designators == {}
+
+
+def test_a_duplicated_library_document_does_not_change_the_model(tmp_path):
+    """The control: the same two pages, the library documents on the first only.
+
+    V4 writes them per page, V3 wrote them once — the model the two shapes build
+    has to be the same model, or a project's reading would depend on which pages
+    happened to place a part.
+    """
+    twice = _write_pages(tmp_path / "twice",
+                         [("P1", "U1", True), ("P2", "U2", True)])
+    once = _write_pages(tmp_path / "once",
+                        [("P1", "U1", True), ("P2", "U2", False)])
+    assert sum('"docType":"SYMBOL"' in path.read_text(encoding="utf-8")
+               for path in eprj3.page_files(twice)) == 2
+    second = once / "sch" / "Schematic1" / "P2.esch2"
+    assert '"docType":"SYMBOL"' not in second.read_text(encoding="utf-8"), (
+        "the control really is the shape without the copy on the second page"
+    )
+    assert _model_fingerprint(twice) == _model_fingerprint(once)

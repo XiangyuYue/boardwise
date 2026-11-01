@@ -207,11 +207,16 @@ def test_the_project_totals_count_parts_not_names(foc):
     The two numbers this test is *about* — placements and names — are unchanged,
     which is what makes the pair worth asserting together: P1 moved connectivity,
     not the roster.
+
+    038g re-measured it once more: 147 -> 146. A ``Short-Symbol`` placement is not
+    a net-naming flag, so Board3's jumper titles no longer produce a fake
+    ``Symbol`` net; that net's five pins joined the ``IC+`` net the jumper
+    physically bridges, and no other net on the board moved.
     """
     assert foc.component_count() == 155
     assert len(foc.designators()) == 121
     assert sum(len(b.components) for b in foc.boards) == 155
-    assert foc.net_count() == 147
+    assert foc.net_count() == 146
 
 
 # --------------------------------------------------------------------------

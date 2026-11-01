@@ -53,7 +53,8 @@ fallback → 删除旧实现」垂直迁移。Python fallback 只过渡，不形
 
 ## 5. worktree 与并行派单
 
-当前只有一个模块化单体，**没有为 review/draw/shared 创建专用 worktree**。两线可独立派
-小批，但 shared 集成点由本文件串行。以后确需隔离时，派单必须先写路径、分支、owner、
-集成顺序、独有证据与回收判据，再逐次申请 git worktree 操作；旧档案 worktree 不可解释成
+审查线工作区是 `E:\boardwise\.tmp_review_line`（分支 `review-v4`，owner=审查线）；
+绘制线独立开发、互不改文件，主仓及绘制线的未提交改动不碰。两线可独立派小批，但 shared
+集成、全量测试与真机由本文件串行。旧 worktree 审计结论：没有可安全回收项，证据区不按
+名字清理。`git worktree add/remove/prune` 仍逐次经岳批准；已注册 worktree 不可解释成
 可写工作区或临时目录。
