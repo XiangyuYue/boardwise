@@ -343,9 +343,50 @@ def test_poured_is_now_parsed_and_reads_as_board_coordinates():
         # nets above. These two numbers are fixture-derived and the parser batch
         # that lands H1-H6 may move them again — re-measure rather than trust
         # the digit if they fail after that batch.
+        #
+        # --- 038k moved PGND again, and the number above 30 became an artefact:
+        #
+        #   PGND 30 -> 12: 038k taught `_path_points` to apply the ``rotation``
+        #     of a ``["R", x, y, w, h, rot, radius]`` region (pivot: the
+        #     rectangle's own ``(x, y)`` corner, declared angle CCW in the y-up
+        #     frame — measured on the two ``rotation: -90`` regions, whose
+        #     POURED copper sits exactly 4 mil inside). 毕设FOC 1.0.0 stores
+        #     three rotated regions, and **only this one moves the count**:
+        #     ``0ad0a69ed96084b5`` (GND) and ``41a3e47860f2653b`` (PGND) each
+        #     have a ``fill: true`` POURED, so ``_poured_supersedes`` drops
+        #     their *regions* and the rectangles never reach the union. The
+        #     third, ``70c0da6feb4302a3`` (PGND, w 252 .441 x h 200.7007,
+        #     area 50 665.0854 sq mil), carries a ``["POURED", …]`` record
+        #     whose ``pourFill`` is **empty**, so under the unchanged 135/131f
+        #     semantics its region still counts as copper.
+        #
+        #     30 was where that rectangle had been put with the rotation
+        #     dropped: x 6176.2803..6428.7213, y -2656.7615..-2456.0608. With
+        #     the rotation applied it is x 6176.2803..6376.981, y
+        #     -2456.0608..-2203.6198 (far corner moves (-51.74, +453.14)), and
+        #     it now meets the verified ``rotation: -90`` region
+        #     ``41a3e47860f2653b`` by 13.5117 x 127.551 mil — before, the two
+        #     were 118.82 mil apart in y and did not touch. Old islands 8..23,
+        #     25, 28, 29 (19 of them) become one island of 30 elements: the
+        #     region itself, the two POURED results ``41a3e47860f2653b`` /
+        #     ``aeb7c3f1c7b35d09``, 24 vias (``010ae0540bcf8154`` …) and pads
+        #     ``D1.2`` / ``R48.2`` / ``R49.2``; area 68 033.7221 sq mil, layers
+        #     1/2/15/16. ``30 - 19 + 1 = 12``.
+        #
+        #     This is connectivity, not counting twice: the net still has 104
+        #     elements on both sides of the change, the summed pour area is
+        #     205 038.9147 sq mil on both, and no element appears in two
+        #     islands. The 30 in the 162a paragraph above is kept as the
+        #     pre-038k reading, not erased.
+        #
+        #     **Not decided here:** whether a POURED record with an empty
+        #     ``pourFill`` should supersede its region at all. Under that other
+        #     policy PGND would read 29 and the other five nets would not move.
+        #     038k changes no supersession rule; it only places rotated
+        #     rectangles where the file says they are.
         (FOC_100, "AGND", 67, 1),
         (FOC_100, "+24V", 36, 3),
-        (FOC_100, "PGND", 81, 30),
+        (FOC_100, "PGND", 81, 12),
         (FOC_100, "MOTA", 5, 1),
         (FOC_100, "IA+", 4, 1),
         (FOC_100, "GND", 45, 37),

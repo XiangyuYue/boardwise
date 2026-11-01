@@ -474,7 +474,9 @@ DEVICE_ATTR_FIELDS: tuple[tuple[str, str], ...] = (
 DECLARED_TYPE_KEY = "declared_type"
 
 
-def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, Any]]:
+def _collect_device_meta(
+    records: list[Any], parse_stats: ParseStats | None = None
+) -> dict[str, dict[str, Any]]:
     """DEVICE doc uuid -> the library metadata that only the DEVICE has.
 
     Why this join exists (measured 2026-09-14, the 006b "library swap" root
@@ -508,18 +510,37 @@ def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, Any]]:
     :data:`boardwise.core.partkind.METADATA_TYPE_KEYS`' three keys are carried,
     not the whole ``attributes`` dict: the props a rule reads stay countable, and
     which keys a judgement may use is a decision made in one place.
+
+    ``parse_stats`` (optional, so a titles-only caller can stay as it was) is
+    where the merge's one blind spot now leaves a trace: V4 copies a used part's
+    ``DEVICE`` into every page that places it, so one uuid can arrive several
+    times. Reading stays **first-wins**, and
+    ``parse_stats.conflicting_library_documents`` counts the later copies whose
+    *model-visible* meta differs from the first (title, the
+    :data:`DEVICE_ATTR_FIELDS` values, the library ``Symbol``, the declared type
+    keys, ``is_part``). ``editVersion``, ``zIndex``/record order and raw text are
+    deliberately outside the comparison — they differ without changing a
+    reading, so counting them would be a false alarm.
+
+    A ``DEVICE`` document that carries more than one ``META`` is read the way it
+    always was — the document's first ``META`` is its meta and the rest are
+    ignored — and that rule is not generalised into a document normaliser here.
     """
     out: dict[str, dict[str, Any]] = {}
     uuid = ""
+    # Whether the *current* DEVICE document's first META has already been read:
+    # per document, not per uuid, so a second META inside one document is the
+    # same "already read" case it always was.
+    read_meta = False
     for record in records:
         if record.type == "DOCHEAD":
             head = record.body or {}
             uuid = str(head.get("uuid") or "") if head.get("docType") == "DEVICE" else ""
+            read_meta = False
             continue
-        if not uuid or record.type != "META":
+        if not uuid or record.type != "META" or read_meta:
             continue
-        if uuid in out:
-            continue
+        read_meta = True
         body = record.body or {}
         attributes = body.get("attributes") or {}
         meta: dict[str, Any] = {"title": str(body.get("title") or "").strip()}
@@ -560,7 +581,14 @@ def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, Any]]:
             # its title has no hyphen and both its ``Global Net Name`` and
             # ``Name`` attributes are empty strings.
             meta["is_part"] = "yes" if str(attributes.get("Designator") or "").strip() else "no"
-        out[uuid] = meta
+        first = out.get(uuid)
+        if first is None:
+            out[uuid] = meta
+        elif first != meta and parse_stats is not None:
+            # Same uuid, a different library device: first wins, the later copy
+            # is counted (see the docstring — only the model-visible projection
+            # is compared, so a re-save that changed nothing readable is 0).
+            parse_stats.conflicting_library_documents += 1
     return out
 
 
@@ -1032,6 +1060,31 @@ def _fill_pin_attr(run: _PinRun, key: str, value: str) -> bool:
     return True
 
 
+def _symbol_definition(symbol: _SymbolDef) -> tuple[Any, ...]:
+    """The definition projection two copies of one library symbol are compared by.
+
+    Everything a reading of the part depends on — uuid, title, pin number →
+    *point*, pin names, pin types — and deliberately **not** the pin's ``ez
+    ref``. The ref is a handle inside one document: eprj3 keys a pin by the PIN
+    row's own ``id`` and V3 by ``e<zIndex>``, both per-document numbering, so a
+    copy that renumbers its elements while describing the same part (same
+    points, same names, same types) is the same definition and must not read as
+    a conflict.
+
+    That is a claim about *definitions* only. ``NO_CONNECT`` resolution does use
+    the refs of the document first-wins kept, and it is a separate relation —
+    a pin whose renumbered copy would break that link is not what this count
+    reports.
+    """
+    return (
+        symbol.uuid,
+        symbol.title,
+        tuple(sorted((number, point) for number, (point, _ref) in symbol.pins.items())),
+        tuple(sorted(symbol.pin_names.items())),
+        tuple(sorted(symbol.pin_types.items())),
+    )
+
+
 def _commit_symbol(
     records: list[Any], symbols: dict[str, _SymbolDef],
     parse_stats: ParseStats | None, pin_key: str,
@@ -1061,6 +1114,20 @@ def _commit_symbol(
     no number: such a pin is not in the symbol's pin map, so the whole pin —
     name, position and every connection it makes — is dropped. Counting changes
     nothing about the returned symbol.
+
+    A V4 export copies a used part's ``SYMBOL`` into every page that places it,
+    so the same uuid reaches this merge once per page. The merge stays
+    **first-wins**; ``parse_stats.conflicting_library_documents`` is only the
+    trace of the case that used to be silent — a later document under the same
+    uuid that is *not* the same symbol (a pin more, a moved pin, another name).
+    The comparison is :func:`_symbol_definition`: the **definition** the model
+    reads — uuid, title, pin number → point, pin names, pin types — and **not**
+    the pin's ``(point, ez ref)`` ref, which is a document-local handle (see
+    there). So two copies that differ only in ``editVersion``, in the order
+    their records were written, or in the element numbering their document
+    happens to use compare equal and count nothing. The first copy's refs stay
+    in the model untouched; the ``NO_CONNECT`` parent chain is a separate
+    relation resolved against them and is not judged by this count.
     """
     symbol = _SymbolDef(uuid="")
     runs: list[_PinRun] = []
@@ -1141,7 +1208,16 @@ def _commit_symbol(
         if run.type:
             symbol.pin_types[run.number] = run.type
     if symbol.uuid:
-        symbols.setdefault(symbol.uuid, symbol)
+        first = symbols.get(symbol.uuid)
+        if first is None:
+            symbols[symbol.uuid] = symbol
+        elif (_symbol_definition(first) != _symbol_definition(symbol)
+              and parse_stats is not None):
+            # Same uuid, a different definition: the first document wins (V4
+            # copies the library per page, and a page's copy is not a new
+            # definition), but the drop is now counted instead of silent. The
+            # pin refs are outside the comparison — see `_symbol_definition`.
+            parse_stats.conflicting_library_documents += 1
 
 
 def _collect_symbols(
@@ -1267,7 +1343,7 @@ def build_pin_offsets(
     records = _iter_schematic_records(text, stats)
     instances = _split_page(records).instances
     symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
-    device_meta = _collect_device_meta(records)
+    device_meta = _collect_device_meta(records, stats)
 
     offsets: dict[str, dict[str, Point]] = {}
     for inst in instances:
@@ -1497,7 +1573,7 @@ def build_project_model(
 
     split = _split_page(records, stats)
     symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
-    device_meta = _collect_device_meta(records)
+    device_meta = _collect_device_meta(records, stats)
     footprint_titles = _collect_footprint_titles(text)
 
     project = ProjectModel(source=str(path), project_raw={"project": dict(meta)})

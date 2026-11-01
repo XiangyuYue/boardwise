@@ -1399,6 +1399,12 @@ class ParseStats:
     designator, and that is neither the page frame nor a net flag. Before 042
     that number was 5 on ``robot_live.epro2`` and 67 on the 高速板, and nothing
     reported it — the parts simply were not in the model.
+
+    :attr:`conflicting_library_documents` is not a drop of a *record* but of a
+    *meaning*: a library document that arrived twice under one uuid with two
+    different definitions, where reading keeps the first and leaves the second
+    no trace. Like every counter here it only counts — first-wins is still the
+    model's rule.
     """
 
     source: str = ""
@@ -1445,6 +1451,18 @@ class ParseStats:
     #: out of them. Not a drop of the record — it is counted as a pour with
     #: an empty ``points``.
     poured_without_fill: int = 0
+    #: Library documents (``SYMBOL`` / ``DEVICE``) that arrived **more than
+    #: once under the same uuid with a different model-visible definition**.
+    #: A V4 ``.eprj3`` export copies each used part's library into *every* page
+    #: that places it, so the same uuid arrives once per page; the merge is
+    #: first-wins and stays first-wins, which is exactly right when the copies
+    #: are identical and silently lossy when they are not (a second copy with
+    #: one pin more is dropped whole). This counts the copies that disagreed —
+    #: one per later *document*, identically-defined repeats add nothing.
+    #: Only the projection the model reads is compared, never ``editVersion``,
+    #: record order or raw text (see ``schematic._commit_symbol`` and
+    #: ``schematic._collect_device_meta``).
+    conflicting_library_documents: int = 0
     edit_version: str | None = None
     editor_version: str | None = None
 
@@ -1468,6 +1486,7 @@ class ParseStats:
             "poured_with_parent": self.poured_with_parent,
             "poured_orphans": self.poured_orphans,
             "poured_without_fill": self.poured_without_fill,
+            "conflicting_library_documents": self.conflicting_library_documents,
             "edit_version": self.edit_version,
             "editor_version": self.editor_version,
         }

@@ -42,8 +42,13 @@ cargo test
 机器路径；来源、输入与 case book 的 SHA-256 记录在 `manifest.json`。不要在变更无关
 业务输出时顺手再生成 golden。
 
-仓库 case book 当前有 **7 个 case**：review 投影、layout 几何、module compile 投影、
-page compile 投影、lint 投影，以及两个 `epru-stream-sample` 的 `.epru` 记录流投影。
+仓库 case book 当前有 **9 个 case**：review 投影、layout 几何、module compile 投影、
+page compile 投影、lint 投影，两个 `epru-stream-sample` 的 `.epru` 记录流投影，以及
+两个 `symbol-library-sample` 的 SYMBOL 库投影。后两组各自「一个 kind、两个 case id」：
+kind 决定 schema 与投影，id 决定输入名与 case 行。`symbol-library-sample` 的输入多带
+一个 `pinKey`（`zIndex` 对 V3 `.epro2` 的 `e<zIndex>` 寻址，`pin_id` 对 eprj3 行自身
+`id` 寻址），两台风扇都会从同一份 `text`+`pinKey` 推出同一份
+`boardwise.symbol-library/1`。
 两份 compile 结果是**彼此独立的合同**：module 文档用
 `draw-compile-result-v1.schema.json` 的 `candidates`，page 文档用
 `draw-page-compile-result-v1.schema.json` 的 `pages`，投影字段也各说各的名字
@@ -106,9 +111,9 @@ schema 文件按 Python 口径从“代码旁”的仓库读（不受 `--root` �
 作用于 `prefixItems` 之后、`enum/const` 递归且 `true ≠ 1`、`1.0` 算 integer、非有限数
 拒绝（`NaN` token 与 `1e999`）。
 
-`contracts/json` 现有 **7 份 schema**（`bridge-error-v1`、`draw-compile-result-v1`、
+`contracts/json` 现有 **8 份 schema**（`bridge-error-v1`、`draw-compile-result-v1`、
 `draw-lint-result-v1`、`draw-page-compile-result-v1`、`epru-stream-sample-v1`、
-`layout-plan-v1`、`review-report-v1`）。每一份都由 `schema.rs` 的单元测试整树预检（可读且落在支持的
+`layout-plan-v1`、`review-report-v1`、`symbol-library-sample-v1`）。每一份都由 `schema.rs` 的单元测试整树预检（可读且落在支持的
 子集内），仓库里的公开差分输入则作为正例逐个跑一遍；page 与 module 两份 compile
 合同还各有负例，证明任一输入都过不了对方的 schema、也进不了对方的 kind。
 `epru-stream-sample-v1` 的输入就是两个声明样本（`contracts/differential/sources/

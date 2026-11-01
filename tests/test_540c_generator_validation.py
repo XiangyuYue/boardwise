@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "contracts" / "differential"
 INPUTS = CONTRACTS / "inputs"
 #: Every published input, keyed by case id — the two `epru-stream-sample` cases
-#: share a kind, so their keys are ids rather than kind names.
+#: and the two `symbol-library-sample` cases share one kind each, so their keys
+#: are ids rather than kind names.
 GOLDEN_INPUTS = {
     "review-report-projection": INPUTS / "review-report.json",
     "layout-plan-geometry": INPUTS / "divider-cand1.layout.json",
@@ -32,6 +33,8 @@ GOLDEN_INPUTS = {
     "lint-result-projection": INPUTS / "empty-page-lint-result.json",
     "epru-stream-v3-eof": INPUTS / "epru-stream-v3-eof.json",
     "epru-stream-v4-eof-truncated": INPUTS / "epru-stream-v4-eof-truncated.json",
+    "symbol-library-v3-zindex": INPUTS / "symbol-library-v3-zindex.json",
+    "symbol-library-v4-pin-id": INPUTS / "symbol-library-v4-pin-id.json",
 }
 
 

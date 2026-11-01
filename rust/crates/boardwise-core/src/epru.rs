@@ -33,6 +33,12 @@
 //! presence only, and unknown record types are not counted (they are simply
 //! keys of [`EpruStreamProjection::records_by_type`]).
 //!
+//! The record type does keep the envelope's `id` and the decoded body — Python's
+//! `EpruRecord.id`/`.body` — but only as **internal** fields (`#[serde(skip)]`),
+//! so the `boardwise.epru-stream/1` document is unchanged and a view over the
+//! stream ([`crate::symbol`]) is the only reader. That is what keeps the framing
+//! rules in one place instead of having a second decoder re-read the text.
+//!
 //! Known decoder dialect gaps against Python's `json.loads`, which only a
 //! non-object `type`/`docType` value or a JSON extension could reach:
 //! `NaN`/`Infinity` literals are refused here and accepted by Python, and an
@@ -70,7 +76,7 @@ pub const EPRU_STREAM_SCHEMA: &str = "boardwise.epru-stream/1";
 /// lines Python saw) but carries no decoded fields: Python skips such a line
 /// before any record exists, so a `type` reported here would be a field no
 /// counter ever saw.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpruRecord {
     pub line_no: usize,
@@ -93,7 +99,41 @@ pub struct EpruRecord {
     /// has run. `None` = the record belongs to no kept document.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document: Option<usize>,
+    /// The envelope's `id` — Python's `EpruRecord.id`. Internal: the stream
+    /// projection states no ids, so this never reaches JSON, and a view over the
+    /// stream ([`crate::symbol`]) is the only reader.
+    #[serde(skip)]
+    pub envelope_id: Option<Value>,
+    /// The decoded body **object**. Python's `EpruRecord.body`, kept so that a
+    /// view can read the fields the stream projection deliberately reduces to
+    /// presence. Skipped by serde for the same reason as `envelope_id`: the
+    /// `boardwise.epru-stream/1` document states `hasBody`/`emptyBody`, never
+    /// the payload.
+    #[serde(skip)]
+    pub body: Option<Map<String, Value>>,
 }
+
+/// Equality is the **projection**, not the decode's working state.
+///
+/// `envelope_id` and `body` are what [`crate::symbol`] reads; the
+/// `boardwise.epru-stream/1` document states neither, so two records that
+/// describe the same line are equal even when only one of them still carries the
+/// payload — which is exactly what a `serde` round-trip produces. Comparing them
+/// too would make a documented field of the projection decide whether a
+/// round-tripped record is "the same record".
+impl PartialEq for EpruRecord {
+    fn eq(&self, other: &Self) -> bool {
+        self.line_no == other.line_no
+            && self.record_type == other.record_type
+            && self.has_body == other.has_body
+            && self.empty_body == other.empty_body
+            && self.malformed == other.malformed
+            && self.doc_type == other.doc_type
+            && self.document == other.document
+    }
+}
+
+impl Eq for EpruRecord {}
 
 /// A kept ``DOCHEAD``-delimited document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,6 +307,10 @@ fn decode_line(line_no: usize, line: &str) -> EpruRecord {
         malformed: false,
         doc_type,
         document: None,
+        // Python keeps the envelope's raw `id` and the decoded body on the
+        // record; a malformed line never reaches either.
+        envelope_id: fields.get("id").cloned(),
+        body,
     }
 }
 
@@ -295,6 +339,8 @@ fn malformed_line(line_no: usize) -> EpruRecord {
         malformed: true,
         doc_type: None,
         document: None,
+        envelope_id: None,
+        body: None,
     }
 }
 
@@ -304,8 +350,9 @@ fn malformed_line(line_no: usize) -> EpruRecord {
 /// Scalars match CPython: `None`, `True`, `False`, integers as written, floats
 /// through [`python_float_repr`]. Arrays and objects fall back to compact JSON
 /// (Python would print `repr`); the gap is recorded in the module doc because
-/// only a non-object `type`/`docType` could reach it.
-fn python_text(value: &Value) -> String {
+/// only a non-object `type`/`docType` value could reach it — and, in
+/// [`crate::symbol`], a PIN's `zIndex` or an ATTR's `value`.
+pub(crate) fn python_text(value: &Value) -> String {
     match value {
         Value::Null => "None".to_owned(),
         Value::Bool(true) => "True".to_owned(),

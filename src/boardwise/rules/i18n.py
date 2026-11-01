@@ -81,12 +81,19 @@ EMPTY_PCB_VIEW_HINT = (
 
 
 def parse_drop_hint(pins_dropped: int, components_without_symbol: int,
-                    instances_without_designator: int = 0) -> str:
-    """解析丢了东西时的中文提示（任务 020 WI-1）；三项都为 0 时返回空串。
+                    instances_without_designator: int = 0,
+                    conflicting_library_documents: int = 0) -> str:
+    """解析丢了东西时的中文提示（任务 020 WI-1）；各项都为 0 时返回空串。
 
     与 :data:`EMPTY_PCB_VIEW_HINT` 同样的分工：文案在这里，什么时候出现由 CLI
     判断（`cli._parse_drop_note` 的英文版与它同源，两句话说的是同一组计数——
     086 起是三个：丢脚 / 丢符号 / 丢位号，第三种是整颗器件从模型消失）。
+
+    038j 补第四项：同 UUID 的库文档副本**定义冲突**。它不是"丢了一条记录"，
+    而是"合并按 first-wins 保留了第一份，后面那份的定义没人读"——V4 `.eprj3`
+    导出把每颗用到的库复制进**每一个**用到它的页，多数副本逐字节相同（不算冲突），
+    少数不同（第二份多一个脚、或 `Supplier Part` 不一样），那种副本的差异此前
+    一个字都不说。旧的三参调用照旧，第四项缺省 0 就不出现。
 
     **只报非 0 的项。** 0 在这里不是证据——pcb 视图的解析根本不经过原理图那条
     通路，这些计数不会被填（见 `cli._load_model`），把 "0 个引脚被丢弃" 写进
@@ -102,6 +109,11 @@ def parse_drop_hint(pins_dropped: int, components_without_symbol: int,
         parts.append(f"{components_without_symbol} 个器件未能解析符号")
     if instances_without_designator:
         parts.append(f"{instances_without_designator} 个器件因无可用位号被丢弃")
+    if conflicting_library_documents:
+        parts.append(
+            f"{conflicting_library_documents} 份同 UUID 的库文档定义冲突"
+            f"（合并按 first-wins 保留第一份）"
+        )
     if not parts:
         return ""
     return "提示：解析中有" + "、".join(parts) + "——审查覆盖不完整，结果可能漏报。"

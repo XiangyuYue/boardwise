@@ -662,16 +662,19 @@ def test_the_parse_stats_reach_the_report(tmp_path):
     assert stats["pins_dropped_no_number"] == 0
     assert stats["components_without_symbol"] == 0
     assert stats["instances_without_designator"] == 0
+    assert stats["conflicting_library_documents"] == 0
     # ... and the gate's own number is their sum, read from one place. This
-    # fixture parses clean, so all three are 0 and the equality cannot tell the
-    # terms apart — `test_the_records_dropped_sum_reads_all_three_counters` is
+    # fixture parses clean, so all four are 0 and the equality cannot tell the
+    # terms apart — `test_the_records_dropped_sum_reads_every_gated_counter` is
     # where the wiring is pinned down, on distinct values. What this one holds
-    # is the *contract*: the sum has three terms, so unwiring the third here
-    # reads as a broken assertion rather than a passing one.
+    # is the *contract*: the sum has four terms (038j added the library-copy
+    # conflict), so unwiring any of them here reads as a broken assertion
+    # rather than a passing one.
     assert report["completion"]["coverage"]["recordsDropped"] == (
         stats["pins_dropped_no_number"]
         + stats["components_without_symbol"]
         + stats["instances_without_designator"]
+        + stats["conflicting_library_documents"]
     )
 
 
@@ -712,13 +715,14 @@ def test_the_coverage_section_reads_the_tier_ladder_and_the_parse():
     assert coverage["rulesRefused"] == 0, "nothing is welded here, so nothing is refused"
 
 
-def test_the_records_dropped_sum_reads_all_three_counters():
+def test_the_records_dropped_sum_reads_every_gated_counter():
     """Issue #33: ``instances_without_designator`` is a producer too, so it gates.
 
-    The three counters carry **distinct** values and two ungated counters carry
-    live decoy values, so the sum names the exact three fields: swap the third
-    term for any other ``ParseStats`` int and the total moves off 10. Equal
-    values would not witness that — adding a zeroed field looks identical.
+    The gated counters carry **distinct** values and two ungated counters carry
+    live decoy values, so the sum names the exact fields: swap a term for any
+    other ``ParseStats`` int and the total moves off 17. Equal values would not
+    witness that — adding a zeroed field looks identical, which is why 038j's
+    fourth term carries 7 here rather than the 0 every fixture produces.
     """
     from boardwise.cli import _coverage_section
     from boardwise.core.geometry import ParseStats
@@ -730,6 +734,9 @@ def test_the_records_dropped_sum_reads_all_three_counters():
         pins_dropped_no_number=2,
         components_without_symbol=3,
         instances_without_designator=5,
+        # 038j: the fourth gated counter, and the only one that is a dropped
+        # *definition* rather than a dropped record.
+        conflicting_library_documents=7,
         # Not gated, and deliberately non-zero so a wrong term cannot add up.
         pads_without_net=9,
         empty_body_records=11,
@@ -739,10 +746,10 @@ def test_the_records_dropped_sum_reads_all_three_counters():
         model=model, board=None, attempts=[], parse_stats=stats, rules_errored=[],
     )
 
-    assert coverage["recordsDropped"] == 10, (
-        "2 pins + 3 parts without a symbol + 5 parts without a designator; "
-        "pads_without_net=9 / empty_body_records=11 are not producers and must "
-        "not be in the sum"
+    assert coverage["recordsDropped"] == 17, (
+        "2 pins + 3 parts without a symbol + 5 parts without a designator + 7 "
+        "conflicting library copies; pads_without_net=9 / empty_body_records=11 "
+        "are not producers and must not be in the sum"
     )
 
 
@@ -753,6 +760,13 @@ DROP_COUNTERS: tuple[str, ...] = (
     "pins_dropped_no_number",
     "components_without_symbol",
     "instances_without_designator",
+    # 038j: a library document that arrived twice under one uuid with two
+    # different definitions. Not a dropped *record* — first-wins keeps the first
+    # copy and the model holds everything it could — but a dropped *definition*,
+    # so the run's coverage is incomplete for the same reason. Gated, not
+    # explained away: the model may carry a pin, a C-number or a value the page
+    # that disagreed does not have.
+    "conflicting_library_documents",
 )
 
 #: The int counters on `ParseStats` that deliberately do **not** gate, and why.

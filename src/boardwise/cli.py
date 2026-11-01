@@ -303,6 +303,7 @@ def _parse_drop_note(
     pins_dropped: int,
     components_without_symbol: int,
     instances_without_designator: int = 0,
+    conflicting_library_documents: int = 0,
 ) -> str:
     """The console note for a schematic parse that dropped things, or ``""``.
 
@@ -312,8 +313,8 @@ def _parse_drop_note(
     dropped" would be a claim about a parse that did not happen. A zeroed item
     therefore contributes nothing instead of "0".
 
-    The three facts are separate claims and stay separately worded, because
-    they are not the same size of loss:
+    The three facts 086 speaks of are separate claims and stay separately
+    worded, because they are not the same size of loss:
 
     * a dropped pin is one connection the reviewer never saw;
     * a component without a symbol is a whole part whose pins are all missing;
@@ -323,8 +324,16 @@ def _parse_drop_note(
       carrying dozens of them used to render as silence here while
       ``coverage.recordsDropped`` already counted it.
 
-    All three mean the same thing to the reader — the report under-covers this
-    board — so all three carry the same tail.
+    038j adds a fourth, and it is the only one that is not a *record* loss: a V4
+    ``.eprj3`` export copies each used part's library into every page that places
+    it, so the same ``SYMBOL``/``DEVICE`` uuid can arrive twice with two different
+    definitions. The merge is first-wins and stays first-wins — the first copy is
+    read, the later one leaves no trace — so what goes unread here is a
+    *definition*, not a record: a part can be modelled with a pin the board has
+    or a C-number the other page refuted. Same consequence as the other three
+    (the report under-covers this board), which is why it carries the same tail.
+
+    All four mean the same thing to the reader, so all four carry the same tail.
     """
     parts: list[str] = []
     if pins_dropped:
@@ -335,6 +344,11 @@ def _parse_drop_note(
         parts.append(
             f"{instances_without_designator} component(s) dropped during parse "
             f"(no usable designator)"
+        )
+    if conflicting_library_documents:
+        parts.append(
+            f"{conflicting_library_documents} library document(s) with a conflicting "
+            f"definition under the same uuid (first copy kept)"
         )
     if not parts:
         return ""
@@ -1244,10 +1258,15 @@ def _cmd_review(args: argparse.Namespace) -> int:
     # English for the console and once in Chinese for the summary. All three
     # producers reach the console now (086); `instances_without_designator` is
     # the one that used to be counted and gate-closed but never spoken of.
+    # 038j brings a fourth, and it is the odd one: `conflicting_library_documents`
+    # is not a dropped record but a definition the first-wins merge never read,
+    # so it is spoken of here for the same reason (a report that under-covers
+    # must say so) even though the model kept everything it could keep.
     drop_note = _parse_drop_note(
         parse_stats.pins_dropped_no_number,
         parse_stats.components_without_symbol,
         parse_stats.instances_without_designator,
+        parse_stats.conflicting_library_documents,
     )
 
     components, nets = _model_component_counts(model)
@@ -1302,6 +1321,7 @@ def _cmd_review(args: argparse.Namespace) -> int:
                 parse_stats.pins_dropped_no_number,
                 parse_stats.components_without_symbol,
                 parse_stats.instances_without_designator,
+                parse_stats.conflicting_library_documents,
             ),
         )
         Path(args.md_path).write_text(
@@ -2854,18 +2874,25 @@ def _coverage_section(
       Counted against ``intent_source``'s per-run rule list, since the
       module-level instances carry no contract and would file none of the
       contract-scoped refusals (#66 A2);
-    * ``recordsDropped`` — `ParseStats`'s three drop counters, summed. The split
-      itself is in ``source.parseStats`` (the audit trail, added by this task).
-      These used to reach the console only, which left the CI path (`--file`)
-      unable to see them in the report at all. The three are not equal in
-      weight, which is why the sum is what gates and the audit trail keeps the
-      split: ``pins_dropped_no_number`` loses one pin's connections,
+    * ``recordsDropped`` — `ParseStats`'s drop counters, summed: the three 086
+      lists (``pins_dropped_no_number`` / ``components_without_symbol`` /
+      ``instances_without_designator``) plus, since 038j,
+      ``conflicting_library_documents``. The split itself is in
+      ``source.parseStats`` (the audit trail, added by this task). These used to
+      reach the console only, which left the CI path (`--file`) unable to see
+      them in the report at all. The three are not equal in weight, which is why
+      the sum is what gates and the audit trail keeps the split:
+      ``pins_dropped_no_number`` loses one pin's connections,
       ``components_without_symbol`` loses one part's pins, and
       ``instances_without_designator`` (task 042 §WI-2) loses the **whole
       part** — no usable designator means it is not in the model at all, hence
       invisible to every rule that reads the model, the highest severity of
       the three. That last one was counted but never wired here (issue #33),
-      so a board carrying 67 unnamed parts read as ``complete``;
+      so a board carrying 67 unnamed parts read as ``complete``. 038j's fourth
+      term is not a record at all — it is a library *definition* the first-wins
+      merge dropped (the same uuid arrived twice with two different bodies), so
+      it belongs in this sum for the same reason: the report under-covers the
+      board, and the run may no longer call itself ``complete``;
     * ``rulesErrored`` — ids of rules that raised while running (fork 2). The run
       survives them now; this is how the report says so.
     * ``pcbReviewMissing`` (126d) — the run read a **file** backup that **has**
@@ -2899,6 +2926,12 @@ def _coverage_section(
         int(parse_stats.pins_dropped_no_number)
         + int(parse_stats.components_without_symbol)
         + int(parse_stats.instances_without_designator)
+        # 038j: not a record, a definition — a library document under a uuid that
+        # arrived twice with two different bodies, where first-wins kept the
+        # first and read nothing of the second. It gates for the same reason the
+        # three above do: a part modelled from one copy is a part the other copy
+        # would have described differently.
+        + int(parse_stats.conflicting_library_documents)
     )
     return {
         "parseIncomplete": bool(model_empty or parse_stats.malformed_records),
@@ -3002,9 +3035,12 @@ def _coverage_reasons(coverage: dict) -> list[str]:
             "——逐条见 findings 的 UNKNOWN 行）"
         )
     if coverage.get("recordsDropped"):
+        # 038j: the count is no longer records-only (a conflicting library
+        # document is a dropped *definition*), so the paren names four sources
+        # and the sentence says 「丢弃记录/定义」 rather than 「记录」.
         reasons.append(
-            f"解析丢弃 {coverage['recordsDropped']} 项记录（管脚无编号 / 器件无符号 / "
-            "器件无位号，见 source.parseStats）：覆盖不完整，结果可能漏报"
+            f"解析丢弃 {coverage['recordsDropped']} 项记录/定义（管脚无编号 / 器件无符号 / "
+            "器件无位号 / 库副本定义冲突，见 source.parseStats）：覆盖不完整，结果可能漏报"
         )
     errored = coverage.get("rulesErrored") or []
     if errored:
@@ -3752,8 +3788,8 @@ def _review_conclusion(
         text += "；整次审查没有输入（模型为空/归档读不出内容，可能被截断或损坏）"
     if coverage_gaps:
         text += (
-            f"；另有 {coverage_gaps} 类覆盖缺口（少页/空板/规则 withheld/解析丢弃记录/规则报错，"
-            "逐条见 completion.verdictWhy 与 completion.coverage）"
+            f"；另有 {coverage_gaps} 类覆盖缺口（少页/空板/规则 withheld/解析丢弃记录或定义/"
+            "规则报错，逐条见 completion.verdictWhy 与 completion.coverage）"
         )
     # 126d: the eighth clause. `pcbReviewMissing` is an **incomplete** gate (not
     # a gap count), so it needs its own flag rather than riding in
@@ -6824,8 +6860,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # recomputed or patched afterwards, which is the #30 trap in a new costume.
     # The three notes that follow move with it, since each one reads the section.
     # What the parse saw, in the report rather than only on the console (#30's
-    # adjacent gap): `coverage.recordsDropped` is the sum of the three drop
-    # counters, and this is the audit trail a reader checks it against.
+    # adjacent gap): `coverage.recordsDropped` is the sum of the 086 drop
+    # counters (three) plus 038j's conflicting library documents (one more — a
+    # definition the first-wins merge never read, not a record), and this is the
+    # audit trail a reader checks it against.
     source["parseStats"] = parse_stats.as_dict()
 
     # 126a/126b: the PCB runner used to run here, right after the schematic

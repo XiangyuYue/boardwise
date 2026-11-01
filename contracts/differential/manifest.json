@@ -7,11 +7,12 @@
     "tests/fixtures/drawapply/library.json": "a4ec679d85c7b40685c9d34dbcf7bc8e3ddc760a4ad441de3b7c1e18c5c9cadc",
     "contracts/differential/sources/page.circuit.json": "8c60973f358649e730713cc5dd95c3a59a05360504940759593e9c0d2458281b",
     "contracts/differential/sources/page.presentation.json": "7dabd0640546ced72e0308c23420e3efeaaedd4e1a7ad990ebc3b78d3d4f4892",
-    "contracts/differential/sources/epru-stream-samples.json": "e82d821bc2c506ca3bcad0291e8022749a4adc25ba8c28f3b9be6d883712903a"
+    "contracts/differential/sources/epru-stream-samples.json": "e82d821bc2c506ca3bcad0291e8022749a4adc25ba8c28f3b9be6d883712903a",
+    "contracts/differential/sources/symbol-library-samples.json": "8ffa17fca7d8a71a024c528875876c006b6958da204f44e876dbd27c39424c60"
   },
   "producerVersions": {
     "ruleset": "a0c5e0a0",
-    "rulebody": "8aea9fed"
+    "rulebody": "541db813"
   },
   "schemas": {
     "contracts/json/review-report-v1.schema.json": "644470549812db3d440fd72966b99801da58e845514eb163890f407e48b7ea20",
@@ -19,14 +20,16 @@
     "contracts/json/draw-compile-result-v1.schema.json": "aa6466feffa9fe14d89cd17533fb543a8b68194ac64b27710878e8b994c25464",
     "contracts/json/draw-page-compile-result-v1.schema.json": "1cb90569888bae967f1a13f691fb395c29ae2b2633790c306a9c360d0153fc6a",
     "contracts/json/draw-lint-result-v1.schema.json": "8985ab24d1b71d8a0080fa4e87b03df54200363cf871b6c0024fb5193ba5b383",
-    "contracts/json/epru-stream-sample-v1.schema.json": "dc3c60395f513e684af66405ddb995601a4f051a178abcd905da7ff5742d5a1b"
+    "contracts/json/epru-stream-sample-v1.schema.json": "dc3c60395f513e684af66405ddb995601a4f051a178abcd905da7ff5742d5a1b",
+    "contracts/json/symbol-library-sample-v1.schema.json": "091d1f54adbaf2bce894e08f39908847a0db490afe7d576319ab4a1906ebabf7"
   },
   "producers": [
     "python -m boardwise.cli checkup --file tests/fixtures/ch340_golden.epro2 --out <OUT>/checkup (accept 0 or 3)",
     "python -m boardwise.cli draw compile --circuit <FIXTURES>/divider.circuit.json --presentation <FIXTURES>/divider.presentation.json --profiles <FIXTURES>/library.json --page-box 0,-1000,1200,0 --out <OUT>/compile --json <OUT>/compile-result.json",
     "python -m boardwise.cli draw compile --circuit contracts/differential/sources/page.circuit.json --presentation contracts/differential/sources/page.presentation.json --profiles <FIXTURES>/library.json --page-box 0,0,1169,826 --out <OUT>/compile-page --json <OUT>/page-compile-result.json",
     "python -m boardwise.cli draw lint --snapshot <OUT>/lint-snapshot.json --render <OUT>/lint-render.svg --json <OUT>/lint-result.json",
-    "declared samples contracts/differential/sources/epru-stream-samples.json -> <OUT>/epru-stream-v3-eof.json <OUT>/epru-stream-v4-eof-truncated.json (written from the declaration file, not from the editor, a container or a fixture)"
+    "declared samples contracts/differential/sources/epru-stream-samples.json -> <OUT>/epru-stream-v3-eof.json <OUT>/epru-stream-v4-eof-truncated.json (written from the declaration file, not from the editor, a container or a fixture)",
+    "declared samples contracts/differential/sources/symbol-library-samples.json -> <OUT>/symbol-library-v3-zindex.json <OUT>/symbol-library-v4-pin-id.json (written from the declaration file, carrying the pinKey each stream is keyed by)"
   ],
   "regenerate": ".venv/Scripts/python.exe -m tools.build_differential_fixtures",
   "sanitization": [
@@ -38,16 +41,18 @@
     "no real project container is read or copied; inputs come only from the public/synthetic sources above"
   ],
   "inputs": {
-    "contracts/differential/inputs/review-report.json": "a76c25cb3c05401114c60bc68ab4aba4da0aa99c2616463e3a12df85001b74c8",
+    "contracts/differential/inputs/review-report.json": "2b2a021e6ccb87d101b9c63709067342a25ec1cd54bd5579ccd0d5148e6585d3",
     "contracts/differential/inputs/divider-cand1.layout.json": "5241c07f5f0417ea8226720cfbd39f74c813c2a0513635fb1d83cf866f48a233",
     "contracts/differential/inputs/divider-compile-result.json": "2b91af1b5bdac828b08f5b471a565ad6e37c7734c71e3ea5f8344623733e71c1",
     "contracts/differential/inputs/page-compile-result.json": "e1b32d0b7b6280f411dc0741d97e4091ec0c4ef60251afbad6e2e4ec8bce42ab",
     "contracts/differential/inputs/empty-page-lint-result.json": "15cc8a152471395e2354a6de6f5fd1c29bb6e671a7d217f62be887e7082fd465",
     "contracts/differential/inputs/epru-stream-v3-eof.json": "13e4c8ec9beffc0a70b1cfcd237d82620081e6647fd2bb12d4112fb5a6ac46c1",
-    "contracts/differential/inputs/epru-stream-v4-eof-truncated.json": "b2647d6c445f97ad5c0a64bb15cfea0e2428c8da0b00873085a386a904c2bee2"
+    "contracts/differential/inputs/epru-stream-v4-eof-truncated.json": "b2647d6c445f97ad5c0a64bb15cfea0e2428c8da0b00873085a386a904c2bee2",
+    "contracts/differential/inputs/symbol-library-v3-zindex.json": "824c6940dad0629a784952013ede4e454bfb416c49a593737ba589ee759e951d",
+    "contracts/differential/inputs/symbol-library-v4-pin-id.json": "2c22270ea308c8f9bc2c5a2e5175edbc6360aa8c3649a194c4ef68bea42fd5ea"
   },
   "caseBook": {
     "path": "contracts/differential/cases.json",
-    "sha256": "c02a720bb6147a5b59c5accafac06ce32c7fdde294bd8dc6de74285a233b9e7a"
+    "sha256": "3a958c952dcf5518acb5da475d4a1f583a3a86b19862a569deda348b915122fa"
   }
 }

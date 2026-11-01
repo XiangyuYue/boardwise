@@ -29,6 +29,14 @@ ATTR 的 PIN 记录，也就是唯一还该被丢掉、该被报出来的形状�
 第三参与第三种子句。它和前两个不是一回事：丢的是**整颗器件**，它根本不在模型里，所以
 每条读模型的规则都看不见它（见 §2 末的钉子）。前两个计数器的断言与零语义原样不动。
 
+**038j 起第四项，而且它不是"丢记录"（本节 2026-10-30 补）**：V4 `.eprj3` 把每颗用到的
+库文档复制进**每一个**用到它的页，同 uuid 的两份定义可能不一样（第二份多一个脚、或
+`Supplier Part` 不同）。合并规则是 first-wins 且不改，被丢的是**定义**不是记录——模型里
+一颗器件都没少，但"另一份副本说它还有第三个脚"这句话没人读。`_parse_drop_note` /
+`parse_drop_hint` 各补第四参，旧三参调用逐字不变；`coverage.recordsDropped` 与它同源
+（`tests/test_072_coverage_gate.py` 的 `DROP_COUNTERS`）。端到端证据在
+`tests/test_038_eprj3.py`（双页冲突 → console / md / checkup 报告三处同一数字）。
+
 覆盖范围的**诚实说明**：这两个计数只有 `--view schematic` 会填。pcb 视图的模型来自
 PCB 文档（`parsers/epro2_model.py`），根本不读 SYMBOL 文档，计数"恒为 0"是结构决定的、
 不是量出来的——所以 `_load_model` 不往那里塞统计，`cli._parse_drop_note` 也不把 0 当作
@@ -411,6 +419,54 @@ def test_a_synthetic_backup_with_both_defects_says_both(tmp_path, capsys):
         "note: 1 pin(s) dropped during parse (missing pin number) "
         "and 1 component(s) without a resolvable symbol" + PARSE_DROP_NOTE_TAIL
     )
+
+
+def test_the_library_copy_conflict_is_a_fourth_word_and_zero_says_nothing():
+    """038j：第四项——同 UUID 的库文档副本**定义冲突**。
+
+    前三种丢的是记录，这一种丢的是**定义**：V4 `.eprj3` 把每颗用到的库复制进
+    每一个用到它的页，合并按 first-wins 保留第一份，第二份的定义没人读。它和前三
+    种一样意味着"报告没看全"，所以共用同一个尾巴；不同之处是模型里一颗器件都没少
+    ——少的是"另一份副本说它还有第三个脚 / 另一个供应商号"。
+
+    两件事钉在这里：**文字**（英文/中文各一句，说的是冲突与 first-wins）和**零
+    语义**（第四项缺省 0 时旧三参的字符串逐字不变、0 不出现）。
+    """
+    # 旧三参调用逐字兼容：第四项缺省 0，等于显式传 0。
+    assert _parse_drop_note(7, 3) == _parse_drop_note(7, 3, 0, 0)
+    assert _parse_drop_note(7, 3) == (
+        "note: 7 pin(s) dropped during parse (missing pin number) "
+        "and 3 component(s) without a resolvable symbol" + PARSE_DROP_NOTE_TAIL
+    )
+
+    # 只有第四项非 0：一句英文，说清"多少份、同 uuid、定义冲突、保留第一份"。
+    note = _parse_drop_note(0, 0, 0, 2)
+    assert note == (
+        "note: 2 library document(s) with a conflicting definition under the "
+        "same uuid (first copy kept)" + PARSE_DROP_NOTE_TAIL
+    )
+    assert "review coverage is incomplete" in note
+
+    # 与前三种同现时按参数顺序接在后面，尾巴只有一个。
+    both = _parse_drop_note(1, 0, 0, 2)
+    assert both.index("pin(s)") < both.index("library document(s)")
+    assert both.count(PARSE_DROP_NOTE_TAIL) == 1
+
+    # 零语义：0 不出现（pcb 视图从来不填这些计数，0 不是证据）。
+    assert _parse_drop_note(0, 0, 0) == ""
+    assert "library" not in _parse_drop_note(5, 0, 0, 0)
+    assert "library" not in _parse_drop_note(0, 0, 4, 0)
+
+    # 中文侧同源、同取舍：同一句话说的是同一组四个计数。
+    assert parse_drop_hint(0, 0, 0, 2) == (
+        "提示：解析中有2 份同 UUID 的库文档定义冲突（合并按 first-wins 保留第一份）"
+        "——审查覆盖不完整，结果可能漏报。"
+    )
+    assert parse_drop_hint(0, 0, 0) == ""
+    assert parse_drop_hint(7, 3) == parse_drop_hint(7, 3, 0, 0)
+    assert "库文档" not in parse_drop_hint(5, 0, 0, 0)
+    assert parse_drop_hint(1, 0, 0, 2).index("引脚") < parse_drop_hint(
+        1, 0, 0, 2).index("库文档")
 
 
 # --------------------------------------------------------------------------

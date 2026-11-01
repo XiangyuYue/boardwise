@@ -3,8 +3,10 @@
 //! What lives here is the contract layer: shapes, canonical bytes, the
 //! differential runner, and the business-free `.epru` record framing that has to
 //! be compared line for line (see [`epru`] — a stream of `{envelope}||{body}`
-//! records, no pad, track or netlist named anywhere in it). What does not: no
-//! review rule, no layout algorithm, no editor transport.
+//! records, no pad, track or netlist named anywhere in it) together with the
+//! library view over that stream ([`symbol`] — pin numbers, points and the names
+//! a SYMBOL document writes, and no decision about what they are for). What does
+//! not: no review rule, no layout algorithm, no editor transport.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -22,6 +24,7 @@ pub const DIFFERENTIAL_CASES_SCHEMA: &str = "boardwise.differential-cases/1";
 
 pub mod epru;
 pub mod schema;
+pub mod symbol;
 
 #[derive(Debug)]
 pub enum ContractError {
@@ -1241,6 +1244,15 @@ fn project_case(case: &Case, root: &Path) -> Result<Value> {
             let stream = epru::project_stream(text(&payload, "text")?);
             Ok(serde_json::to_value(stream)?)
         }
+        // 038L: the library projection is derived by the module that owns the
+        // SYMBOL reading, from the same record stream the `epru-stream-sample`
+        // arm above scans — the two arms cannot disagree about the framing.
+        "symbol-library-sample" => {
+            let records = epru::iter_epru_records(text(&payload, "text")?);
+            let pin_key = symbol::PinKey::parse(text(&payload, "pinKey")?)?;
+            let library = symbol::project_library(&records, pin_key)?;
+            Ok(serde_json::to_value(library)?)
+        }
         other => Err(ContractError::Shape(format!(
             "unknown differential case kind {other:?}"
         ))),
@@ -1349,7 +1361,7 @@ mod tests {
         let report = run_cases(&root.join("contracts/differential/cases.json"), &root)
             .expect("differential cases run");
         assert!(report.ok, "Rust differential failed: {report:#?}");
-        assert_eq!(report.cases.len(), 7);
+        assert_eq!(report.cases.len(), 9);
         assert_eq!(report.runner, "rust");
     }
 

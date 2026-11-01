@@ -221,6 +221,83 @@
           "PAD": 2
         }
       }
+    },
+    {
+      "id": "symbol-library-v3-zindex",
+      "kind": "symbol-library-sample",
+      "input": "contracts/differential/inputs/symbol-library-v3-zindex.json",
+      "expected": {
+        "schema": "boardwise.symbol-library/1",
+        "pinKey": "zIndex",
+        "symbols": {
+          "sym-v3-ldo": {
+            "title": "LDO-3V3",
+            "pins": {
+              "1": {
+                "point": [
+                  0.0,
+                  50.0
+                ],
+                "ref": "e1",
+                "name": "VIN"
+              },
+              "2": {
+                "point": [
+                  100.0,
+                  -0.0
+                ],
+                "ref": "e2",
+                "name": "GND"
+              },
+              "3": {
+                "point": [
+                  200.0,
+                  100.0
+                ],
+                "ref": "e3",
+                "name": "VOUT",
+                "type": "Power"
+              }
+            }
+          }
+        },
+        "pinsDroppedNoNumber": 0,
+        "conflictingDocuments": 0
+      }
+    },
+    {
+      "id": "symbol-library-v4-pin-id",
+      "kind": "symbol-library-sample",
+      "input": "contracts/differential/inputs/symbol-library-v4-pin-id.json",
+      "expected": {
+        "schema": "boardwise.symbol-library/1",
+        "pinKey": "pin_id",
+        "symbols": {
+          "sym-v4-opamp": {
+            "title": "OPA-2CH",
+            "pins": {
+              "1": {
+                "point": [
+                  0.0,
+                  -0.0
+                ],
+                "ref": "n1",
+                "name": "IN+"
+              },
+              "2": {
+                "point": [
+                  0.0,
+                  100.0
+                ],
+                "ref": "n2",
+                "name": "IN-"
+              }
+            }
+          }
+        },
+        "pinsDroppedNoNumber": 3,
+        "conflictingDocuments": 1
+      }
     }
   ]
 }

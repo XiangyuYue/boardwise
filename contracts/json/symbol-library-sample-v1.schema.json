@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boardwise.dev/contracts/symbol-library-sample-v1.schema.json",
+  "title": "boardwise symbol library sample — one differential case input",
+  "description": "A declared sample of .epru record text plus the key its pins are addressed by. The input carries no expected projection: both runners derive boardwise.symbol-library/1 from the text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "name", "text", "pinKey"],
+  "properties": {
+    "schema": {"const": "boardwise.symbol-library-sample/1"},
+    "name": {"type": "string", "minLength": 1},
+    "text": {
+      "type": "string",
+      "x-meaning": "The .epru record stream verbatim: {envelope}||{body}| lines, terminator optional on the last line."
+    },
+    "pinKey": {
+      "enum": ["zIndex", "pin_id"],
+      "x-meaning": "How a PIN row is addressed: the synthesised e<zIndex> of a V3 .epro2, or the row's own envelope id (eprj3)."
+    }
+  }
+}

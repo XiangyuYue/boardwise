@@ -23,7 +23,8 @@ coordinates — and every consumer read that instead.
   record reads ``unit: "mil"``, ``gridXSize: 5`` on every fixture, and under
   ``×10`` every filled point of a parent-linked ``POURED`` lands inside its own
   parent region — re-measured for all three boards that store ``POUR`` regions,
-  subject to the rotated-rectangle caveat spelled out in that test.
+  rotated regions included since 038k taught ``_path_points`` to apply
+  ``rotation`` (that measurement lives in that test).
 * **Parent chain.** ``POURED``'s id tuple's second slot resolves to a ``POUR``
   on some records and to **nothing** on the rest: 毕设FOC 1.0.0 splits 27 / 24,
   1.1.0 33 / 22, ROBOT 3 / 1, llc 0 / 4. The orphans are not another record
@@ -203,57 +204,48 @@ def test_every_filled_point_of_a_parent_linked_poured_lands_in_its_parent():
     that parent's region. A tolerance band of 0.6 mil absorbs points sitting
     exactly on the region outline.
 
-    **Scope: regions the parser can place.** A ``POUR`` stored as
-    ``["R", x, y, w, h, rotation, radius]`` is expanded by
-    ``_path_points``, which **reads ``rotation`` but does not apply it** — so a
-    region drawn rotated is an axis-aligned box in the wrong place. That is a
-    pre-existing gap in the rectangle reader (it predates this task and is not
-    a ``POURED`` question), and it makes exactly two of 毕设FOC 1.0.0's 27
-    parent regions unusable as anchors: ``0ad0a69ed96084b5`` and
-    ``41a3e47860f2653b``, both stored with ``rotation: -90``. The other 18
-    unrotated rectangular anchors all pass, and so does the ``rotation: 90``
-    case ``70c0da6feb4302a3`` (its ``POURED`` carries no filled polygon). This
-    test therefore asserts the 18 that the parser can actually place; the two
-    rotated ones are left as they are, and this comment is the record.
+    **Every parent region is asserted, rotated ones included (038k).** Two of
+    毕设FOC 1.0.0's regions are stored ``["R", x, y, w, h, -90, 0]``
+    (``0ad0a69ed96084b5`` and ``41a3e47860f2653b``); this test used to skip
+    them because ``_path_points`` read ``rotation`` and did not apply it, which
+    left those regions as axis-aligned boxes in the wrong place. 038k fixed the
+    reader (pivot: the rectangle's own ``(x, y)`` corner, declared angle CCW in
+    the y-up frame — the transform is pinned synthetically in
+    ``tests/test_038k_rotated_rectangles.py``), so the skip is gone and both
+    anchors are asserted like any other. Measured, they are the tightest
+    evidence in the file: each of their 5 filled points sits exactly 4 mil —
+    the pour's own edge clearance — inside the rotated rectangle.
+
+    ``total`` is pinned at the measurement rather than at a floor: 1843 filled
+    points over 54 parent links (毕设FOC 1.0.0 887 / 1.1.0 365 / ROBOT 591).
+    A region that stops resolving, or a reader change that drops a ``POURED``
+    island, moves that number.
     """
     total = 0
-    skipped = []
+    parents = 0
     for path in (FOC_100, FOC_110, ROBOT):
         board = parse_epro2(str(path))
         regions = {
             p.id: p.points for p in board.pours
             if p.kind == "pour" and len(p.points) >= 3
         }
-        checked = 0
+        seen: set[str] = set()
         for poured in _poured(board):
             region = regions.get(poured.poured_from or "")
             if region is None:
                 continue  # an orphan: nothing to check it against
-            if poured.poured_from in _ROTATED_REGION_IDS:
-                skipped.append(poured.poured_from)
-                continue
+            seen.add(poured.poured_from or "")
             for point in poured.points:
                 total += 1
                 assert _within(point, region), (
                     f"{path.name}: {poured.id} point {point} is outside its "
                     f"parent region {poured.poured_from}"
                 )
-                checked += 1
-        assert checked, f"{path.name}: no parent-linked POURED at all"
-    assert total > 1000, total
-    # The two known-unplaceable anchors were seen, so the skip is exercised.
-    assert set(skipped) == _ROTATED_REGION_IDS
-
-
-#: 毕设FOC 1.0.0 POUR regions stored with a non-zero ``rotation`` **whose
-#: POURED carries filled copper**, so the region would be the anchor but the
-#: parser cannot place it (``_path_points`` reads ``rotation`` and does not
-#: apply it). A third rotated region exists,
-#: ``["R", …, 90, 0]`` ``70c0da6feb4302a3``, but its ``POURED`` holds no
-#: filled polygon at all, so it never reaches the check. See the test above.
-_ROTATED_REGION_IDS = frozenset(
-    {"0ad0a69ed96084b5", "41a3e47860f2653b"}
-)
+        assert seen, f"{path.name}: no parent-linked POURED at all"
+        parents += len(seen)
+    # Measured on the three fixtures by 038k; the rotated regions are inside it.
+    assert total == 1843, total
+    assert parents == 54, parents
 
 
 def _within(point: Point, polygon: list[Point], eps: float = 0.6) -> bool:

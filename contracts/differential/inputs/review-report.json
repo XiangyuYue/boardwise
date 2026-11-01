@@ -58,6 +58,7 @@
       "poured_with_parent": 0,
       "poured_orphans": 0,
       "poured_without_fill": 0,
+      "conflicting_library_documents": 0,
       "edit_version": null,
       "editor_version": "3.2.149.88089769"
     },
@@ -1950,7 +1951,7 @@
     },
     "sourceVersions": {
       "ruleset": "a0c5e0a0",
-      "rulebody": "8aea9fed"
+      "rulebody": "541db813"
     },
     "verdict": "incomplete",
     "verdictWhy": [

@@ -50,8 +50,8 @@ INPUTS_RELATIVE = "contracts/differential/inputs"
 CASES_RELATIVE = "contracts/differential/cases.json"
 # One public input name per **case id**; `_render` publishes in the order
 # `_produce` returns. The five producer cases are named after their kind, so their
-# ids read as kinds; the two declared `.epru` samples share one kind, which is what
-# `CASE_KINDS` says out loud.
+# ids read as kinds; the two declared `.epru` samples and the two declared SYMBOL
+# library samples share one kind each, which is what `CASE_KINDS` says out loud.
 INPUT_NAMES = {
     "review-report-projection": "review-report.json",
     "layout-plan-geometry": "divider-cand1.layout.json",
@@ -60,6 +60,8 @@ INPUT_NAMES = {
     "lint-result-projection": "empty-page-lint-result.json",
     "epru-stream-v3-eof": "epru-stream-v3-eof.json",
     "epru-stream-v4-eof-truncated": "epru-stream-v4-eof-truncated.json",
+    "symbol-library-v3-zindex": "symbol-library-v3-zindex.json",
+    "symbol-library-v4-pin-id": "symbol-library-v4-pin-id.json",
 }
 #: The case ids whose kind is *not* the id itself. A case book is keyed by id, so
 #: two cases of one kind need two ids; the kind decides the schema and projection,
@@ -67,12 +69,27 @@ INPUT_NAMES = {
 CASE_KINDS = {
     "epru-stream-v3-eof": "epru-stream-sample",
     "epru-stream-v4-eof-truncated": "epru-stream-sample",
+    "symbol-library-v3-zindex": "symbol-library-sample",
+    "symbol-library-v4-pin-id": "symbol-library-sample",
 }
 #: The contract tag of a declared sample document (see `contracts/json/
 #: epru-stream-sample-v1.schema.json`).
 EPRU_SAMPLE_SCHEMA = "boardwise.epru-stream-sample/1"
 #: Declared `.epru` sample text — synthetic record streams, not a producer's output.
 SAMPLE_SOURCES = SOURCES / "epru-stream-samples.json"
+#: The case ids `SAMPLE_SOURCES` must declare, exactly. Stated once so the file
+#: that is checked and the file that is read cannot drift apart.
+EPRU_SAMPLE_CASE_IDS = frozenset({"epru-stream-v3-eof", "epru-stream-v4-eof-truncated"})
+#: The contract tag of a declared SYMBOL library sample (see `contracts/json/
+#: symbol-library-sample-v1.schema.json`): a record stream *plus* the `pinKey` its
+#: pins are addressed by.
+SYMBOL_SAMPLE_SCHEMA = "boardwise.symbol-library-sample/1"
+#: Declared SYMBOL library sample text — synthetic record streams, not a
+#: producer's output, and no real project content.
+SYMBOL_SAMPLE_SOURCES = SOURCES / "symbol-library-samples.json"
+SYMBOL_SAMPLE_CASE_IDS = frozenset(
+    {"symbol-library-v3-zindex", "symbol-library-v4-pin-id"}
+)
 
 # An absolute path that survived sanitization, whatever machine it came from: a
 # Windows drive (D:/..., E:\... as it appears inside JSON) or a POSIX home/temp
@@ -160,6 +177,10 @@ def _produce() -> dict[str, Path]:
     # out of `SAMPLE_SOURCES`, and they publish after the five producer cases.
     for case_id, path in _declared_samples().items():
         produced[case_id] = path
+    # The SYMBOL library samples follow the `.epru` ones: one more declared kind,
+    # published after it, so the seven earlier case rows cannot move.
+    for case_id, path in _declared_symbol_samples().items():
+        produced[case_id] = path
     return produced
 
 
@@ -176,11 +197,11 @@ def _declared_samples() -> dict[str, Path]:
     """
     declared = load_path(SAMPLE_SOURCES)
     entries = declared["samples"]
-    if sorted(entry["caseId"] for entry in entries) != sorted(CASE_KINDS):
+    if sorted(entry["caseId"] for entry in entries) != sorted(EPRU_SAMPLE_CASE_IDS):
         raise RuntimeError(
             f"{SAMPLE_SOURCES.name} declares "
             f"{sorted(entry['caseId'] for entry in entries)}, "
-            f"not the case ids {sorted(CASE_KINDS)}"
+            f"not the case ids {sorted(EPRU_SAMPLE_CASE_IDS)}"
         )
     produced: dict[str, Path] = {}
     for entry in entries:
@@ -188,6 +209,42 @@ def _declared_samples() -> dict[str, Path]:
             "schema": EPRU_SAMPLE_SCHEMA,
             "name": entry["name"],
             "text": entry["text"],
+        }
+        if _sanitize(payload) != payload:
+            raise RuntimeError(
+                f"declared sample {entry['caseId']!r} does not survive sanitization; "
+                "a declared sample must publish exactly the text it declares"
+            )
+        path = RUN_ROOT / entry["input"]
+        write_text_lf(path, _dump(payload))
+        produced[entry["caseId"]] = path
+    return produced
+
+
+def _declared_symbol_samples() -> dict[str, Path]:
+    """Write each declared SYMBOL library sample into this run's fresh directory.
+
+    Same shape as :func:`_declared_samples`, one contract further: a SYMBOL
+    library sample is a record stream **plus** the `pinKey` its pins are keyed by,
+    because a V3 `.epro2` addresses a PIN row by the synthesised `e<zIndex>` while
+    an eprj3/`pin_id` stream addresses it by the row's own id. Both spellings are
+    part of the contract, so the input states which one it means.
+    """
+    declared = load_path(SYMBOL_SAMPLE_SOURCES)
+    entries = declared["samples"]
+    if sorted(entry["caseId"] for entry in entries) != sorted(SYMBOL_SAMPLE_CASE_IDS):
+        raise RuntimeError(
+            f"{SYMBOL_SAMPLE_SOURCES.name} declares "
+            f"{sorted(entry['caseId'] for entry in entries)}, "
+            f"not the case ids {sorted(SYMBOL_SAMPLE_CASE_IDS)}"
+        )
+    produced: dict[str, Path] = {}
+    for entry in entries:
+        payload = {
+            "schema": SYMBOL_SAMPLE_SCHEMA,
+            "name": entry["name"],
+            "text": entry["text"],
+            "pinKey": entry["pinKey"],
         }
         if _sanitize(payload) != payload:
             raise RuntimeError(
@@ -354,6 +411,7 @@ def _render(produced: Mapping[str, Path]) -> dict[Path, str]:
         SOURCES / "page.circuit.json",
         SOURCES / "page.presentation.json",
         SAMPLE_SOURCES,
+        SYMBOL_SAMPLE_SOURCES,
     ]
     manifest = {
         "schema": "boardwise.differential-manifest/1",
@@ -371,6 +429,7 @@ def _render(produced: Mapping[str, Path]) -> dict[Path, str]:
             "python -m boardwise.cli draw compile --circuit contracts/differential/sources/page.circuit.json --presentation contracts/differential/sources/page.presentation.json --profiles <FIXTURES>/library.json --page-box 0,0,1169,826 --out <OUT>/compile-page --json <OUT>/page-compile-result.json",
             "python -m boardwise.cli draw lint --snapshot <OUT>/lint-snapshot.json --render <OUT>/lint-render.svg --json <OUT>/lint-result.json",
             "declared samples contracts/differential/sources/epru-stream-samples.json -> <OUT>/epru-stream-v3-eof.json <OUT>/epru-stream-v4-eof-truncated.json (written from the declaration file, not from the editor, a container or a fixture)",
+            "declared samples contracts/differential/sources/symbol-library-samples.json -> <OUT>/symbol-library-v3-zindex.json <OUT>/symbol-library-v4-pin-id.json (written from the declaration file, carrying the pinKey each stream is keyed by)",
         ],
         "regenerate": ".venv/Scripts/python.exe -m tools.build_differential_fixtures",
         "sanitization": [

@@ -1597,8 +1597,16 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 两个值都在**当前这棵工作树**上按上方同一配方直接量得；recursive 与
     # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
     # 由官方生成器同步更新。
-    assert old_digest == "7d9d55b3"
-    assert recursive == "8aea9fed", (
+    # **038j（conflicting_library_documents）两个值都动**：本批只改 `rules/i18n.py`
+    # 的文案（新增「同 UUID 的库文档定义冲突」一句），而 `i18n.py` 落在 `rules/`
+    # 顶层，direct 口径也覆盖它——direct 7d9d55b3 -> 1854fea9、recursive
+    # 8aea9fed -> 541db813。两个值都在**当前这棵工作树**上按上方同一配方直接量得，
+    # recursive 与 `contracts/differential/manifest.json` 的
+    # `producerVersions.rulebody`（541db813）、`contracts/differential/inputs/
+    # review-report.json` 的 `completion.sourceVersions.rulebody` 一致，均由官方
+    # `tools.build_differential_fixtures` 重生成同步。
+    assert old_digest == "1854fea9"
+    assert recursive == "541db813", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

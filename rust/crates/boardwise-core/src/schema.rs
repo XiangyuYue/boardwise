@@ -70,7 +70,13 @@ const TYPE_NAMES: [&str; 7] = [
 /// the two declared `.epru` samples in the case book are gated by their own file,
 /// and the projection each runner derives from `text` is compared as golden. The
 /// id/kind split (two cases, one kind) lives in `tools/build_differential_fixtures.py`.
-const SCHEMAS: [(&str, &str); 6] = [
+///
+/// `symbol-library-sample` is the seventh kind, and it is also "one kind, two
+/// cases": its two declared SYMBOL library samples state a `pinKey` beside the
+/// record stream, because a V3 `.epro2` addresses a PIN row by `e<zIndex>` while
+/// an eprj3/`pin_id` stream addresses it by the row's own id. Both runners derive
+/// the same `boardwise.symbol-library/1` from `text` + `pinKey`.
+const SCHEMAS: [(&str, &str); 7] = [
     ("review-report-projection", "review-report-v1.schema.json"),
     ("layout-plan-geometry", "layout-plan-v1.schema.json"),
     (
@@ -85,6 +91,10 @@ const SCHEMAS: [(&str, &str); 6] = [
     ),
     ("lint-result-projection", "draw-lint-result-v1.schema.json"),
     ("epru-stream-sample", "epru-stream-sample-v1.schema.json"),
+    (
+        "symbol-library-sample",
+        "symbol-library-sample-v1.schema.json",
+    ),
 ];
 
 fn validation_error(message: impl Into<String>) -> ContractError {
@@ -889,6 +899,7 @@ mod tests {
             "epru-stream-sample-v1.schema.json",
             "layout-plan-v1.schema.json",
             "review-report-v1.schema.json",
+            "symbol-library-sample-v1.schema.json",
         ] {
             let schema = contract_file("contracts/json", name);
             check_schema(&schema).unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -920,6 +931,14 @@ mod tests {
                 "epru-stream-v4-eof-truncated.json",
                 "epru-stream-sample-v1.schema.json",
             ),
+            (
+                "symbol-library-v3-zindex.json",
+                "symbol-library-sample-v1.schema.json",
+            ),
+            (
+                "symbol-library-v4-pin-id.json",
+                "symbol-library-sample-v1.schema.json",
+            ),
         ];
         for (input_name, schema_name) in pairs {
             let schema = contract_file("contracts/json", schema_name);
@@ -935,6 +954,8 @@ mod tests {
             ("empty-page-lint-result.json", "lint-result-projection"),
             ("epru-stream-v3-eof.json", "epru-stream-sample"),
             ("epru-stream-v4-eof-truncated.json", "epru-stream-sample"),
+            ("symbol-library-v3-zindex.json", "symbol-library-sample"),
+            ("symbol-library-v4-pin-id.json", "symbol-library-sample"),
         ] {
             validate_for_kind(&input(input_name), kind)
                 .unwrap_or_else(|error| panic!("{input_name} as {kind}: {error}"));

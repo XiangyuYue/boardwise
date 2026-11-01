@@ -34,6 +34,7 @@ from typing import Any
 
 from boardwise.core.layoutplan import LayoutPlan
 from boardwise.parsers.epru_stream import ParseStats, iter_epru_records, split_documents
+from boardwise.parsers.schematic import _SymbolDef, _collect_symbols
 from tools.contract_validate import ContractValidationError, assert_valid, load_path
 from tools.differential_compare import canonical_bytes, write_text_lf
 
@@ -43,6 +44,12 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_RESULT_SCHEMA = "boardwise.cli-result/1"
 #: "the request cannot be carried out" — never 1, which means a golden differs.
 ERROR_EXIT_CODE = 2
+#: ``kind`` → schema file.
+#:
+#: ``symbol-library-sample`` (038L) joined as the seventh kind once its two
+#: declared samples were published into the case book; the projection it gates is
+#: :func:`_symbol_library_projection`, the same one the Rust runner derives from
+#: the same `text` + `pinKey`.
 SCHEMAS = {
     "review-report-projection": "review-report-v1.schema.json",
     "layout-plan-geometry": "layout-plan-v1.schema.json",
@@ -50,9 +57,15 @@ SCHEMAS = {
     "compile-page-result-projection": "draw-page-compile-result-v1.schema.json",
     "lint-result-projection": "draw-lint-result-v1.schema.json",
     "epru-stream-sample": "epru-stream-sample-v1.schema.json",
+    "symbol-library-sample": "symbol-library-sample-v1.schema.json",
 }
 #: Schema tag of the `.epru` stream projection both runners emit.
 EPRU_STREAM_SCHEMA = "boardwise.epru-stream/1"
+#: Schema tag of the SYMBOL library projection both runners emit.
+SYMBOL_LIBRARY_SCHEMA = "boardwise.symbol-library/1"
+#: The two refs a pin can be addressed by, as the sample contract's
+#: ``pinKey`` enum states them (V3 ``.epro2`` vs eprj3).
+SYMBOL_PIN_KEYS = ("zIndex", "pin_id")
 
 
 def _required(mapping: dict[str, Any], key: str, where: str) -> Any:
@@ -173,6 +186,69 @@ def _epru_stream_projection(text: str) -> dict[str, Any]:
     }
 
 
+def _symbol_pin(symbol: _SymbolDef, number: str) -> dict[str, Any]:
+    """One pin of a ``_SymbolDef``, in the projection's spelling.
+
+    The point is **already canvas space**: ``_commit_symbol`` negates the stored
+    y once (``_page_y``) and rounds to ``COORD_PRECISION``, so flipping it again
+    here would be the second negation task 010c forbids. ``name``/``type`` are
+    omitted rather than stated empty — a pin the library never named has no
+    name, and ``""`` would be a value the Rust side could only reproduce by
+    inventing the same placeholder.
+    """
+    point, ref = symbol.pins[number]
+    pin: dict[str, Any] = {"point": [point[0], point[1]], "ref": ref}
+    name = symbol.pin_names.get(number)
+    if name:
+        pin["name"] = name
+    pin_type = symbol.pin_types.get(number)
+    if pin_type:
+        pin["type"] = pin_type
+    return pin
+
+
+def _symbol_library_projection(payload: dict[str, Any]) -> dict[str, Any]:
+    """Project one ``.epru`` SYMBOL library — a second *view*, never a parser.
+
+    Both counts and both merge rules come from the real reader:
+    :func:`~boardwise.parsers.epru_stream.iter_epru_records` decodes the stream
+    into the records the schematic parser consumes, and
+    :func:`~boardwise.parsers.schematic._collect_symbols` turns those records
+    into ``uuid -> _SymbolDef`` exactly as the review path does — including
+    first-wins on a repeated uuid, its conflicting-document counter, and the
+    dropped-pin counter for a run that ends with no number. Both counters come
+    from the **same** :class:`~boardwise.core.geometry.ParseStats`, so a
+    differential mismatch can only ever be about the projection.
+
+    What is deliberately **not** emitted: the ``Pin Name``/``Pin Type`` of a pin
+    that has no number (there is no key to file it under — it is counted, not
+    projected), any record the symbol parser does not read, and the
+    ``editVersion`` of a document (two copies that differ only there are the
+    same symbol, and the counter already says so).
+    """
+    pin_key = payload["pinKey"]
+    if pin_key not in SYMBOL_PIN_KEYS:
+        raise ValueError(f"unknown symbol pinKey: {pin_key!r}")
+    stats = ParseStats()
+    records = list(iter_epru_records(payload["text"], stats))
+    symbols = _collect_symbols(records, stats, pin_key=pin_key)
+    return {
+        "schema": SYMBOL_LIBRARY_SCHEMA,
+        "pinKey": pin_key,
+        "symbols": {
+            uuid: {
+                "title": symbol.title,
+                "pins": {
+                    number: _symbol_pin(symbol, number) for number in symbol.pins
+                },
+            }
+            for uuid, symbol in symbols.items()
+        },
+        "pinsDroppedNoNumber": stats.pins_dropped_no_number,
+        "conflictingDocuments": stats.conflicting_library_documents,
+    }
+
+
 def project_payload(kind: str, payload: Any) -> dict[str, Any]:
     """Emit the language-neutral projection from an already-parsed payload.
 
@@ -232,6 +308,8 @@ def project_payload(kind: str, payload: Any) -> dict[str, Any]:
         }
     if kind == "epru-stream-sample":
         return _epru_stream_projection(payload["text"])
+    if kind == "symbol-library-sample":
+        return _symbol_library_projection(payload)
     raise ValueError(f"unknown differential case kind: {kind!r}")
 
 

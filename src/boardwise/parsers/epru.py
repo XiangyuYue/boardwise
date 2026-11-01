@@ -63,6 +63,7 @@ from ..core.geometry import (
     MULTI_LAYER_TYPES,
     BoardGeometry,
     BoardOutline,
+    COORD_PRECISION,
     ComponentPlacement,
     LayerInfo,
     NetMeta,
@@ -326,6 +327,26 @@ def _path_points(path: Any) -> list[Point]:
     * ``[x0, y0, "L", x1, y1, ...]``   — POLY / POURED, flat.
     * ``["R", x, y, w, h, rotation, radius]`` — rectangle, expanded to 4 corners.
 
+    The ``R`` form's ``rotation`` turns the rectangle **about its own stored
+    ``(x, y)`` corner**, in degrees counter-clockwise in the y-up frame. Both
+    halves of that sentence are measured, not documented: 毕设FOC 1.0.0's two
+    ``rotation: -90`` pour regions each hold every one of their ``POURED``
+    points exactly 4 mil — the pour's own edge clearance — inside this reading
+    (``0ad0a69ed96084b5``: x 6097.308..6192.308, y -2192.308..-2062.308 for
+    points spanning x 6101.308..6188.308, y -2188.308..-2066.308;
+    ``41a3e47860f2653b``: x 6107.308..6189.792, y -2382.308..-2254.757 for
+    points spanning x 6111.308..6185.792, y -2378.308..-2258.757). Every other
+    pivot leaves those points outside (the rectangle's centre: 5 of 5 outside,
+    109.3 mil away; ``(x + w, y - h)``: 5 of 5; ``(x, y - h)`` with the sign
+    flipped: 2 of 5), so corner and sign are both fixed by measurement.
+
+    Two things this reading is **not**: ``rotation`` is applied to the four
+    straight edges of the rectangle, so a ``radius`` (rounded corners) is not
+    read at all — it is ignored exactly as before, and a rotated *rounded*
+    rectangle has no reading here. And ``rotation`` is applied here alone:
+    :func:`_ring_points` still refuses a rotated ring (see its own comment), so
+    a rotated ``BOARD_OUTLINE`` is unaffected.
+
     ``"L"`` is a line-to command and is dropped. ``"ARC"`` carries
     ``[sweep, x, y]`` (inferred — the first value is an angle, not a
     coordinate), so the sweep is dropped and the point kept.
@@ -348,11 +369,23 @@ def _path_points(path: Any) -> list[Point]:
         # Height runs along -y: on the fixture the outline rectangle is
         # ["R", -1.811, -3.189, 6102.3622, 3149.6063, 0, 150] and all copper
         # sits at negative y, i.e. the board spans y = -3.19 .. -3152.80.
+        corners = ((x, y), (x + w, y), (x + w, y - h), (x, y - h))
+        rotation = nums[4] if len(nums) > 4 else 0.0
+        if not rotation:
+            # Unrotated rectangles keep the reading every fixture already has,
+            # unrounded and byte for byte.
+            return [Point(corner_x, corner_y) for corner_x, corner_y in corners]
+        theta = math.radians(rotation)
+        cos_v, sin_v = math.cos(theta), math.sin(theta)
+        # `COORD_PRECISION` only suppresses the trig noise of cos/sin (the
+        # cosine of 90 degrees is 6.1e-17, not 0); it never rounds a coordinate
+        # the file itself wrote, which already carries 4 decimals.
         return [
-            Point(x, y),
-            Point(x + w, y),
-            Point(x + w, y - h),
-            Point(x, y - h),
+            Point(
+                round(x + (corner_x - x) * cos_v - (corner_y - y) * sin_v, COORD_PRECISION),
+                round(y + (corner_x - x) * sin_v + (corner_y - y) * cos_v, COORD_PRECISION),
+            )
+            for corner_x, corner_y in corners
         ]
 
     points: list[Point] = []
