@@ -63,19 +63,20 @@
 | `sch.place_netlabel` | 可用 | **4.1.93 超时/不可用** | 继续 name stub，不把降级写成 V4 缺陷 |
 | `sch.doc.save` | 支持 | 支持，但只到 `saved_unverified` | 无 close/reopen 就不能写 `saved_verified` |
 | 删除页/图元 | 支持 | 支持（逐件慢） | 破坏性动作先确认 |
-| 绘制 compile/plan/apply | 支持 | **CH343 五岛页已在 V4 P2 全链实测**；简单分压页 D3 也通过 | 只按页面类型/符号集合声明，不外推全库 |
+| 绘制 compile/plan/apply | 支持 | **CH343 六岛页已在 V4 P2 全链实测**；简单分压页 D3 也通过 | 只按页面类型/符号集合声明，不外推全库 |
 
-**当前样本归属（2026-11-01 更正）**：534A 的 CH343 五岛页现在以 **V4 `/test V4` P2**
-（`40091c5d26a5db27`，`.eprj3`）为交付页：11 器件 / 54 段计划线 / 15 旗标，
-apply exit 0、lint 0E/2W、独立逐脚 **17 网 / 58 脚 / 3 NC PASS**、`saved_unverified`。
-V3 `/test` P4（`26e6a63bae878c44`）的同一份 spec 落图仍在，但**已被 V4 P2 取代，
-不再作为交付页**；V3 页未删除。
+**当前样本归属（2026-11-01 534B）**：CH343 以 **V4 `/test V4` Board2 P2**
+（`dc46ef64fc7385ec`，`.eprj3`）为交付页：6 岛 `usb_c/v3_cap/ch343/vcc_cap/hdr/led`，
+11 器件 / 54 段计划线 / 16 旗标，lint **0E/1W**、独立逐脚 **17 网 / 58 脚 / 3 NC PASS**、
+`saved_unverified`。V3 `/test` P4（`26e6a63bae878c44`）和旧 V4 P2
+（`40091c5d26a5db27`）都保留但已被取代，不再作为交付页。
 
 V4 本页实测差异：LCSC 索引对 11 个器件全 miss（精确搜索/MPN 回退后才落位）、
-native netlabel 仍不可用（走 name stub）、H1 `Name` 表达式需改为 `2x5P` 才不压线、
-`sch.set_component_attribute` 回执 `applied:false` 但 readback 正确、标题栏页码
-字段显示 `1/1`（宿主元数据未刷新）。详见
-[`evidence/534a_v4/report.md`](../evidence/534a_v4/report.md)。
+native netlabel 仍不可用（走 name stub）、H2 `Name` 表达式需改为 `2x5P` 才不压线、
+`sch.set_component_attribute` 回执 `applied:false` 但 readback 正确。布局新增
+`moduleOrder` / `moduleColumns`（显式页面顺序与列数）；C7/C8 是 U2 左右的卫星岛，
+不是同一岛内部贴脚。详见
+[`evidence/534b/report.md`](../evidence/534b/report.md)。
 
 ## 4. 绘制线专用边界
 
