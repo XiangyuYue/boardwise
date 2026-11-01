@@ -595,7 +595,10 @@ def compile_page(
     # 3. the variant search: orders x grid shapes x gap rungs x generations.
     orders = _placement_orders(ctx)
     seen: set[str] = set()
-    for variant in _variants(orders, len(ctx.modules), budget):
+    for variant in _variants(
+        orders, len(ctx.modules), budget,
+        columns_hint=ctx.presentation.module_columns or None,
+    ):
         page, failure, violations, need, kind = _assemble(ctx, variant)
         if page is None:
             result.rejected.append(PageRejection(
@@ -1254,8 +1257,13 @@ def _placement_orders(ctx: _Context) -> list[tuple[str, ...]]:
     Every sequence that respects the flow (056 sec.2: "flow 给出偏序，不做全排列
     爆炸"), enumerated in a fixed order and cut at :data:`MAX_ORDERS`; a page that
     states no flow is read in module-name order, which is the fallback the task
-    book fixes ("无 flow 边时按模块名排序兜底").
+    book fixes ("无 flow 边时按模块名排序兜底"). A page that states
+    ``moduleOrder`` uses that one sequence — it is the author's placement
+    statement, not a second flow, and the parser has already checked it is a
+    permutation of the modules.
     """
+    if ctx.presentation.module_order:
+        return [tuple(ctx.presentation.module_order)]
     names = sorted(module.id for module in ctx.modules)
     edges = [
         (edge.from_module, edge.to_module) for edge in ctx.presentation.flow
@@ -1310,7 +1318,8 @@ class _Variant:
 
 
 def _variants(
-    orders: Sequence[tuple[str, ...]], count: int, budget: PageCompileBudget
+    orders: Sequence[tuple[str, ...]], count: int, budget: PageCompileBudget,
+    *, columns_hint: int | None = None,
 ) -> list[_Variant]:
     """The finite search space, in a fixed order and cut at `max_variants`.
 
@@ -1319,11 +1328,16 @@ def _variants(
     needs a different module drawing" is reachable without a product over
     modules. Columns then run from one to the module count (a stack, a row, and
     everything between), and the gap ladder gives a crowded page more room.
+    A stated ``moduleColumns`` replaces that column sweep with the one grid shape
+    the author asked for.
     """
     variants: list[_Variant] = []
+    column_choices = (
+        (min(columns_hint, count),) if columns_hint else range(1, count + 1)
+    )
     for generation in (0, 1):
         for order in orders:
-            for columns in range(1, count + 1):
+            for columns in column_choices:
                 for rung in budget.gap_ladder:
                     variants.append(_Variant(
                         generation=generation, order=order, columns=columns,

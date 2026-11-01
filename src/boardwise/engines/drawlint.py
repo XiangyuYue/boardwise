@@ -582,9 +582,12 @@ def render_box(
     The width is :func:`text_width` — the Arial advance table times the em the
     render declares (:data:`boardwise.core.textmetrics.RENDER_TEXT_PX`); 150
     corrected that from the row pitch, which had made every box 1.39893x too
-    wide. Box height is the text *row* (:data:`CANVAS_TEXT_UNITS`), and the box
-    starts at the anchor for ``start``-anchored nodes (the render's canvas text
-    is uniformly start-anchored — measured 2026-10-04). The estimate is
+    wide. Box height is the text *row* (:data:`CANVAS_TEXT_UNITS`). The box
+    starts at the anchor for ``start``-anchored nodes, is centred on it for
+    ``middle``, and grows **left** from it for ``end`` — the host draws a wire's
+    net name end-anchored at the conductor's endpoint (measured on V4 Board2 P1:
+    ``RXD`` at x=235 with ``text-anchor="end"``; reading it as start made the
+    box run right into C2 and produced a false L2). The estimate is
     deliberately the *plain* box: :data:`TEXT_BOX_SLACK` is added only where a
     predicate wants its noise margin, so the threshold numbers below stay
     readable.
@@ -610,6 +613,8 @@ def render_box(
     height = CANVAS_TEXT_UNITS
     if anchor == "middle":
         x0 = x - width / 2
+    elif anchor == "end":
+        x0 = x - width
     else:
         x0 = x
     canvas_y = -y
@@ -1372,6 +1377,15 @@ def check_duplicate_annotation(sheet: Sheet) -> list[LintFinding]:
                 a, b = boxes[i], boxes[j]
                 if _same_carrier(a, b, sheet):
                     continue
+                # 534A: a Type-C receptacle states D+/D- twice on purpose —
+                # A6/B6 (and A7/B7) are one reversible pair, and the drawing
+                # obligation is one short carrier + same-name label per pin,
+                # never a U-line across the two.  When both labels ride
+                # different carriers whose **pin ends** are nearest to the
+                # same component, they are that component's own two pin
+                # statements, not two independent statements of the net.
+                if _same_component_pin_pair(a, b, sheet):
+                    continue
                 gap = _box_gap(a.box, b.box)
                 if gap >= L5_DUPLICATE_NET_GAP:
                     continue
@@ -1443,6 +1457,44 @@ def _label_carriers(box: TextBox, sheet: Sheet) -> set[str]:
         ):
             carriers.add(wire.primitive)
     return carriers
+
+
+#: How close a carrier's pin end must sit to a component's origin for the two
+#: same-net labels to read as that component's own pin pair (534A).  A measured
+#: Type-C pin is 20–35 units from the symbol origin; this only has to cover the
+#: connector's own pin ring, not an arbitrary nearby part.
+MIRRORED_PIN_RADIUS = 45.0
+
+
+def _carrier_touches_part(box: TextBox, part: "Part", sheet: Sheet) -> bool:
+    """Does a carrier wire of this label run through the part's pin ring?"""
+    for primitive in _label_carriers(box, sheet):
+        wire = next((w for w in sheet.wires if w.primitive == primitive), None)
+        if wire is None:
+            continue
+        if any(
+            math.dist(point, (part.x, part.y)) <= MIRRORED_PIN_RADIUS
+            for point in wire.points
+        ):
+            return True
+    return False
+
+
+def _same_component_pin_pair(a: TextBox, b: TextBox, sheet: Sheet) -> bool:
+    """Both labels are the two pin statements of one component (534A).
+
+    The duplicate-annotation rule exists to catch the same net named twice as
+    two independent statements.  A reversible connector is the measured
+    exception: its mirrored pins carry one net, and the drawing obligation says
+    each pin gets its own short carrier and same-name label.  This returns true
+    only when both labels' carriers run through the pin ring of the *same*
+    component (within :data:`MIRRORED_PIN_RADIUS` of its origin).
+    """
+    return any(
+        _carrier_touches_part(a, part, sheet)
+        and _carrier_touches_part(b, part, sheet)
+        for part in sheet.parts
+    )
 
 
 def _box_nearest_point(

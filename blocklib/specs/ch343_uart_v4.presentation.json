@@ -1,0 +1,127 @@
+{
+  "kind": "boardwise-presentation-spec",
+  "specVersion": 1,
+  "grammarRef": "ic-periphery",
+  "sidePreferences": {
+    "input": "left",
+    "output": "right",
+    "load": "left",
+    "source": "left",
+    "power": "top",
+    "gnd": "bottom"
+  },
+  "portRoles": {
+    "D+": "load",
+    "D-": "load",
+    "VCC": "input",
+    "TXD": "output",
+    "RXD": "input",
+    "RTS": "output",
+    "CTS": "input",
+    "DTR": "output",
+    "DSR": "input",
+    "DCD": "input",
+    "RI": "input"
+  },
+  "flow": [
+    [
+      "usb_c",
+      "ch343"
+    ],
+    [
+      "ch343",
+      "hdr"
+    ]
+  ],
+  "modules": [
+    {
+      "id": "usb_c",
+      "parts": [
+        "USB1",
+        "C1",
+        "C2",
+        "R1",
+        "R2"
+      ],
+      "role": "USB cluster",
+      "grammarRef": "ic-periphery",
+      "core": "USB1"
+    },
+    {
+      "id": "ch343",
+      "parts": [
+        "U1"
+      ],
+      "role": "CH343G",
+      "grammarRef": "ic-periphery",
+      "core": "U1"
+    },
+    {
+      "id": "v3_cap",
+      "parts": [
+        "C3"
+      ],
+      "role": "V3 decoupling",
+      "grammarRef": "ic-periphery"
+    },
+    {
+      "id": "vcc_cap",
+      "parts": [
+        "C4"
+      ],
+      "role": "VCC decoupling",
+      "grammarRef": "ic-periphery"
+    },
+    {
+      "id": "hdr",
+      "parts": [
+        "H1"
+      ],
+      "role": "header",
+      "grammarRef": "ic-periphery",
+      "core": "H1"
+    },
+    {
+      "id": "led",
+      "parts": [
+        "D1",
+        "R3"
+      ],
+      "role": "indicator",
+      "grammarRef": "voltage-divider"
+    }
+  ],
+  "labelPolicy": {
+    "local": "wire",
+    "crossModule": "label",
+    "highFanout": "label",
+    "stub": "straight"
+  },
+  "directWiringObligations": [
+    {
+      "nets": [
+        "LED_A"
+      ],
+      "note": "the VBUS lamp's cathode and R3 are one conductor inside the usb_c island: labelPolicy.local is 'wire', so naming the lamp's return would be a label where the policy promises a wire (534; the pair is D1 pin 2 to R3 pin 1, nothing else on the net)"
+    }
+  ],
+  "localLabelObligations": [
+    {
+      "nets": [
+        "D+",
+        "D-"
+      ],
+      "note": "Type-C 可逆引脚交错: the receptacle's data pins are mirrored pairs, D+ on USB1.A6/B6 and D- on USB1.A7/B7, so one wire inside usb_c would have to tie the two halves of a pair and draw a U-line that presents one pin as the other; instead each of the four pins takes its own short stub and the golden board's same-name label (D+ on A6 and B6, D- on A7 and B7), and the pair reaches U1.5/U1.6 by the same-named labels there — the name carries the net, no U-line does"
+    }
+  ],
+  "userLocks": [],
+  "moduleOrder": [
+    "usb_c",
+    "v3_cap",
+    "ch343",
+    "vcc_cap",
+    "hdr",
+    "led"
+  ],
+  "moduleColumns": 4
+}

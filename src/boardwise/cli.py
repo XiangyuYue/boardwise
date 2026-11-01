@@ -11594,6 +11594,117 @@ async def _draw_apply_flow(
             writes=True,
         )
         report["write"]["calls"] += 1
+        # 038D2a: the V4 project library answers `getByLcscIds` with no match even
+        # for a device its own search returns (measured on test V4 4.1.93:
+        # C20482775 and C9900012843 are both searchable exact hits, both refused
+        # by `sch.place_component lcsc=`). The connector's resolver only walks
+        # LCSC -> uuid -> keyword and stops at the empty LCSC index, so the draw
+        # flow supplies the exact hit as a uuid pair on the **second** attempt.
+        # Only the connector's definite "no library device" answer is retried —
+        # no timeout, no unknown outcome, no page write happened on the first.
+        if (
+            placed is None
+            and part.lcsc
+            and records[-1].get("code") == "CONNECTOR_ERROR"
+            and "matched no library device" in str(records[-1].get("message") or "")
+        ):
+            lookup = await call(
+                "lib.device.search",
+                {"keyword": part.lcsc, "limit": 8},
+                f"resolve {part.designator}'s LCSC {part.lcsc} through the library search",
+            )
+            items = (lookup or {}).get("items") if isinstance(lookup, dict) else []
+            wanted = part.lcsc.strip().upper()
+            hit = next(
+                (
+                    item for item in (items or [])
+                    if isinstance(item, dict)
+                    and (
+                        str(item.get("supplierId") or "").strip().upper() == wanted
+                        or str((item.get("otherProperty") or {}).get("Supplier Part") or "")
+                        .strip().upper() == wanted
+                    )
+                ),
+                None,
+            )
+            if isinstance(hit, dict) and hit.get("uuid") and hit.get("libraryUuid"):
+                retry = dict(place_params)
+                retry["deviceUuid"] = str(hit.get("uuid"))
+                retry["libraryUuid"] = str(hit.get("libraryUuid"))
+                placed = await call(
+                    "sch.place_component", retry,
+                    f"place {part.designator} by its exact library device "
+                    f"{hit.get('name') or part.lcsc}",
+                    writes=True,
+                )
+                report["write"]["calls"] += 1
+                if placed is not None:
+                    notes.append(
+                        f"{part.designator}: the host's LCSC index missed "
+                        f"{part.lcsc}; the exact library-search hit "
+                        f"{hit.get('name') or hit.get('uuid')} was placed by uuid "
+                        "instead (038D2a, V4 4.1.93)"
+                    )
+            elif part.mpn and lookup is not None:
+                # 534A: a host library can miss a device's Supplier Part in its
+                # LCSC index *and* in the exact-Supplier-Part search, while the
+                # same library still knows the part by its manufacturer number
+                # (measured 2026-11-01 on V4 4.1.93: C2286 / KT-0603R).  This
+                # second search is still exact: it only accepts the MPN on the
+                # item's Manufacturer Part / manufacturerId / name, never a
+                # fuzzy first row.
+                by_mpn = await call(
+                    "lib.device.search",
+                    {"keyword": part.mpn, "limit": 8},
+                    f"resolve {part.designator}'s MPN {part.mpn} through the library search",
+                )
+                items = (by_mpn or {}).get("items") if isinstance(by_mpn, dict) else []
+                wanted_mpn = part.mpn.strip().upper()
+                hit = next(
+                    (
+                        item for item in (items or [])
+                        if isinstance(item, dict)
+                        and (
+                            str(item.get("manufacturerId") or "").strip().upper()
+                            == wanted_mpn
+                            or str((item.get("otherProperty") or {}).get("Manufacturer Part")
+                                   or "").strip().upper() == wanted_mpn
+                            or str(item.get("name") or "").strip().upper() == wanted_mpn
+                        )
+                    ),
+                    None,
+                )
+                if isinstance(hit, dict) and hit.get("uuid") and hit.get("libraryUuid"):
+                    retry = dict(place_params)
+                    retry["deviceUuid"] = str(hit.get("uuid"))
+                    retry["libraryUuid"] = str(hit.get("libraryUuid"))
+                    placed = await call(
+                        "sch.place_component", retry,
+                        f"place {part.designator} by its exact MPN device "
+                        f"{hit.get('name') or part.mpn}",
+                        writes=True,
+                    )
+                    report["write"]["calls"] += 1
+                    if placed is not None:
+                        notes.append(
+                            f"{part.designator}: the host's LCSC index missed "
+                            f"{part.lcsc}, and the exact Supplier Part search found "
+                            f"nothing; the exact MPN search {part.mpn} found "
+                            f"{hit.get('name') or hit.get('uuid')} and placed it by uuid "
+                            "(534A, V4 4.1.93)"
+                        )
+                else:
+                    notes.append(
+                        f"{part.designator}: the host's LCSC index missed {part.lcsc}, "
+                        f"and neither the exact Supplier Part search nor the exact MPN "
+                        f"search {part.mpn} returned a device; the placement stays failed"
+                    )
+            elif lookup is not None:
+                notes.append(
+                    f"{part.designator}: the host's LCSC index missed {part.lcsc}, and "
+                    "the exact library search returned no device with that Supplier "
+                    "Part; the placement stays failed"
+                )
         entry = {
             "designator": part.designator, "value": part.value, "lcsc": part.lcsc,
             "x": part.x, "y": part.y, "rotation": part.rotation,

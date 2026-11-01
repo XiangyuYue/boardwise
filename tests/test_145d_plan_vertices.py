@@ -27,6 +27,9 @@ from __future__ import annotations
 
 import pytest
 
+from types import SimpleNamespace
+
+from boardwise.core.changeplan import PlanDrawWire
 from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.layoutplan import (
     LayoutLabel,
@@ -510,3 +513,31 @@ def test_a_net_that_keeps_a_conductor_keeps_the_behaviour_it_had() -> None:
     assert "carries the name instead" not in text, text
     assert text.count("a planned wire of RAIL runs through that point") == 2, text
     assert text.count("other planned wire(s) of RAIL carry the name") == 2, text
+
+
+def test_a_merged_collinear_label_wire_still_reaches_its_interior_endpoint() -> None:
+    """534A: the host merged a label carrier and its stub into one primitive.
+
+    The planned carrier ends at (10,0) and the stub starts there; the host keeps
+    one segment (0,0)-(20,0), so (10,0) is no longer a vertex although the wire
+    still reaches it.  That is one conductor, not a missing run.
+    """
+    plan = SimpleNamespace(change=SimpleNamespace(draw_wires=[
+        PlanDrawWire(
+            net="D+", points=[(0.0, 0.0), (10.0, 0.0)],
+            purpose="the wire that carries this net's label (S-14)",
+        ),
+        PlanDrawWire(
+            net="D+", points=[(10.0, 0.0), (20.0, 0.0)],
+            purpose="name stub (057: stands in for a label this host cannot place)",
+        ),
+    ]))
+    page = _page(wires=[("D+", [(0.0, 0.0), (20.0, 0.0)])])
+    assert drawapply._wire_problems(plan, page) == []
+
+    # Negative control: an interior point on another net is not this wire.
+    page = _page(wires=[("OTHER", [(0.0, 0.0), (20.0, 0.0)])])
+    assert any(
+        "no wire vertex at (10, 0)" in item
+        for item in drawapply._wire_problems(plan, page)
+    )

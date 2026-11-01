@@ -77,6 +77,8 @@ class _FakeEditor:
         source_hide_truncated: bool = False,
         active_page: str | None = None,
         focus_refused: bool = False,
+        lcsc_index_miss: tuple[str, ...] = (),
+        library_search_hits: list[dict] | None = None,
     ):
         self.page = page
         self.exists = exists
@@ -136,6 +138,11 @@ class _FakeEditor:
         #: `doc.focus` answers, and the focus does not move (a host that refuses
         #: to bring the page forward is exactly what 5c has to notice).
         self.focus_refused = focus_refused
+        #: 038D2a: the V4 library's exact-LCSC index can miss a device its own
+        #: search still returns. A test that fills these two exercises the
+        #: draw-apply fallback without pretending the first attempt wrote.
+        self.lcsc_index_miss = {item.upper() for item in lcsc_index_miss}
+        self.library_search_hits = list(library_search_hits or [])
 
     # ---------------------------------------------------------- the page
 
@@ -316,8 +323,14 @@ class _FakeEditor:
             self.page = "page-created"
             return {"schematicUuid": "sheet-created", "pageUuid": self.page}
         if action == "sch.place_component":
-            self.writes.append((action, params))
             device_uuid = str(params.get("deviceUuid") or "")
+            lcsc = str(params.get("lcsc") or "")
+            if not device_uuid and lcsc and lcsc.upper() in self.lcsc_index_miss:
+                raise _BridgeError(
+                    "CONNECTOR_ERROR",
+                    f"LCSC {lcsc} matched no library device",
+                )
+            self.writes.append((action, params))
             ground = next(
                 (name for name, device in self.ground_symbols.items()
                  if str(device.get("uuid") or "") == device_uuid),
@@ -376,12 +389,24 @@ class _FakeEditor:
         if action == "lib.device.search":
             # 180: `draw apply` looks up `Ground-<net>` before falling back to
             # `sch.place_power`. Read-only, and an exact-name match only — the same
-            # rule the flow applies to the answer.
+            # rule the flow applies to the answer. 038D2a adds the exact-LCSC
+            # fallback rows a V4 library answers when its own index missed.
             keyword = str(params.get("keyword") or "")
             items = [
                 {"name": name, **dict(device)}
                 for name, device in self.ground_symbols.items() if name == keyword
             ]
+            wanted = keyword.upper()
+            items.extend(
+                item for item in self.library_search_hits
+                if str(item.get("supplierId") or "").upper() == wanted
+                or str((item.get("otherProperty") or {}).get("Supplier Part") or "").upper()
+                == wanted
+                or str(item.get("manufacturerId") or "").upper() == wanted
+                or str((item.get("otherProperty") or {}).get("Manufacturer Part") or "").upper()
+                == wanted
+                or str(item.get("name") or "").upper() == wanted
+            )
             return {"keyword": keyword, "returned": len(items), "shown": len(items),
                     "items": items}
         if action == "sch.place_power":
@@ -1625,3 +1650,101 @@ def test_a_read_that_does_not_say_it_was_complete_is_not_trusted(
     assert envelope["truncated"] is None, "the answer did not carry the field"
     assert "truncated" in envelope["problem"], envelope["problem"]
     _nothing_was_drawn(editor, payload)
+
+
+def test_apply_falls_back_to_exact_library_search_when_v4_lcsc_index_misses(
+    monkeypatch, tmp_path, capsys,
+):
+    """038D2a: a V4 library can search a device its `getByLcscIds` index misses.
+
+    The first placement is a definite connector refusal
+    (``matched no library device``), not a timeout and not a write.  The flow
+    asks the library search for the exact Supplier Part, then places that
+    device by uuid.  Both parts must land, and the retry must still carry the
+    plan's LCSC for the read-back/report.
+    """
+    plan_path, plan = _plan(tmp_path)
+    editor = _FakeEditor(
+        exists=False,
+        netlists=[{"components": {}}, _live_netlist_for(plan)],
+        lcsc_index_miss=("C25744",),
+        library_search_hits=[{
+            "uuid": "dev-r0402",
+            "libraryUuid": "lib-r0402",
+            "supplierId": "C25744",
+            "name": "R0402",
+            "otherProperty": {"Supplier Part": "C25744"},
+        }],
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+
+    assert code == 0, printed
+    assert editor.calls.count("sch.place_component") == 4, (
+        "two definite LCSC-index misses, then two uuid placements"
+    )
+    placed = [
+        params for action, params in editor.writes
+        if action == "sch.place_component"
+    ]
+    assert len(placed) == 2
+    assert all(item.get("deviceUuid") == "dev-r0402" for item in placed)
+    assert all(item.get("lcsc") == "C25744" for item in placed), (
+        "the retry carries the plan's Supplier Part for the read-back and report"
+    )
+    assert payload["write"]["calls"] >= 4
+    place_steps = [
+        step for step in payload["steps"]
+        if step["action"] == "sch.place_component"
+    ]
+    assert len(place_steps) == 4
+    assert [step["ok"] for step in place_steps] == [False, True, False, True], (
+        "each part: definite LCSC miss, then the uuid retry"
+    )
+    assert "LCSC index missed" in printed
+    assert {item["designator"] for item in payload["write"]["placed"]} == {"R1", "R2"}
+
+
+def test_apply_falls_back_to_exact_mpn_search_when_lcsc_and_supplier_part_miss(
+    monkeypatch, tmp_path, capsys,
+):
+    """534A: a host can know the device by MPN when both LCSC searches miss.
+
+    Measured on V4 4.1.93: C2286 / KT-0603R is placeable once the library is
+    searched by its manufacturer part, while the LCSC index and the exact
+    Supplier Part search both answer nothing.  The plan therefore carries the
+    MPN; the fallback may use it, but only as an exact identity match.
+    """
+    plan_path, plan = _plan(tmp_path)
+    for part in plan.change.draw_parts:
+        part.mpn = "R0402"
+    plan.dump(plan_path)
+    editor = _FakeEditor(
+        exists=False,
+        netlists=[{"components": {}}, _live_netlist_for(plan)],
+        lcsc_index_miss=("C25744",),
+        library_search_hits=[{
+            "uuid": "dev-r0402-mpn",
+            "libraryUuid": "lib-r0402",
+            "manufacturerId": "R0402",
+            "name": "R0402",
+            "otherProperty": {"Manufacturer Part": "R0402"},
+        }],
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+
+    assert code == 0, printed
+    assert editor.calls.count("sch.place_component") == 4, (
+        "two definite LCSC-index misses, then two uuid placements by MPN"
+    )
+    placed = [
+        params for action, params in editor.writes
+        if action == "sch.place_component"
+    ]
+    assert len(placed) == 2
+    assert all(item.get("deviceUuid") == "dev-r0402-mpn" for item in placed)
+    assert all(item.get("lcsc") == "C25744" for item in placed), (
+        "the retry still carries the plan's Supplier Part for the read-back/report"
+    )
+    assert "exact MPN search R0402" in printed
+    assert {item["designator"] for item in payload["write"]["placed"]} == {"R1", "R2"}
+

@@ -223,6 +223,30 @@ def test_the_anchor_centred_box_is_no_longer_produced():
     assert label.bbox[2] == pytest.approx(point[0] - dc.TEXT_GAP)
 
 
+def test_the_straight_stub_policy_pushes_the_text_box_off_the_pin_tip():
+    """534B: ``stub=straight`` adds its standoff on the pin's escape ray.
+
+    The electrical anchor does not move; only the reserved text box does, so the
+    page layer draws a longer straight stub and the pin's own name row keeps its
+    clearance.
+    """
+    point = (0.0, 0.0)
+    auto = dc._label_at("RXD", point, (1.0, 0.0), [])
+    straight = dc._label_at(
+        "RXD", point, (1.0, 0.0), [], standoff=dc.LABEL_STRAIGHT_STANDOFF,
+    )
+    assert straight.x == auto.x and straight.y == auto.y
+    assert straight.bbox[0] == pytest.approx(
+        auto.bbox[0] + dc.LABEL_STRAIGHT_STANDOFF
+    )
+    assert straight.bbox[2] == pytest.approx(
+        auto.bbox[2] + dc.LABEL_STRAIGHT_STANDOFF
+    )
+    assert straight.bbox[3] - straight.bbox[1] == pytest.approx(
+        auto.bbox[3] - auto.bbox[1]
+    )
+
+
 # --------------------------------- 器件文字只看"画出来的东西"（本批真正解封的那处）
 
 
