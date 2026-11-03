@@ -35,6 +35,12 @@ GOLDEN_INPUTS = {
     "epru-stream-v4-eof-truncated": INPUTS / "epru-stream-v4-eof-truncated.json",
     "symbol-library-v3-zindex": INPUTS / "symbol-library-v3-zindex.json",
     "symbol-library-v4-pin-id": INPUTS / "symbol-library-v4-pin-id.json",
+    "device-library-v3-meta": INPUTS / "device-library-v3-meta.json",
+    "device-library-v4-copies": INPUTS / "device-library-v4-copies.json",
+    "footprint-library-v3-title": INPUTS / "footprint-library-v3-title.json",
+    "footprint-library-v4-copies": INPUTS / "footprint-library-v4-copies.json",
+    "footprint-declared-v3-hit": INPUTS / "footprint-declared-v3-hit.json",
+    "footprint-declared-v4-empty": INPUTS / "footprint-declared-v4-empty.json",
 }
 
 

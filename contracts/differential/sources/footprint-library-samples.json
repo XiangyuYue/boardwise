@@ -1,0 +1,18 @@
+{
+  "schema": "boardwise.footprint-library-samples/1",
+  "description": "The two synthetic .epru FOOTPRINT library streams the differential case book publishes as footprint-library-sample inputs. A FOOTPRINT document is addressed by its own uuid and its name travels in a META title, so an entry is the record stream alone and nothing is keyed by an element handle. The V3 case is one FOOTPRINT whose title is padded with whitespace, preceded by an ATTR that carries a title-like value so the golden can show a non-META record is not read, and followed by a second META with another title so the golden can show the document's first META is the one that wins. The V4 case is one uuid copied document by document, the way a V4 export repeats a used document: the second copy differs only in editVersion and in the order its records were written (the reading does not move), and the third states another title and still loses to the first. It also copies a second uuid whose first title is blank, so the golden can show an empty title occupies the entry and keeps the later, non-empty one out. The projection has no conflict counter: the reader that produces it takes no ParseStats and counts nothing. The text below is the whole input: no editor session, container or fixture is read to obtain it, and no line names a real project.",
+  "samples": [
+    {
+      "caseId": "footprint-library-v3-title",
+      "input": "footprint-library-v3-title.json",
+      "name": "v3-title",
+      "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"fp-v3-qfn32-synth\",\"editVersion\":\"3.2.186\"}|\n{\"type\":\"ATTR\",\"ticket\":2}||{\"title\":\"ATTR-SHOULD-NOT-WIN\",\"key\":\"Footprint Name\",\"value\":\"QFN-32-5X5-SYNTH\"}|\n{\"type\":\"META\",\"ticket\":3}||{\"title\":\"  QFN-32-5X5-SYNTH  \",\"attributes\":{\"Pads\":\"33\",\"Footprint Name\":\"QFN-32-5X5-SYNTH\"}}|\n{\"type\":\"META\",\"ticket\":4}||{\"title\":\"SHOULD-NOT-WIN\",\"attributes\":{\"Pads\":\"99\"}}|"
+    },
+    {
+      "caseId": "footprint-library-v4-copies",
+      "input": "footprint-library-v4-copies.json",
+      "name": "v4-copies",
+      "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"fp-v4-0402-synth\",\"editVersion\":\"4.0.1\"}|\n{\"type\":\"META\",\"ticket\":2}||{\"title\":\"RES-0402-SYNTH\",\"attributes\":{\"Pads\":\"2\"}}|\n{\"type\":\"DOCHEAD\",\"ticket\":3}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"fp-v4-0402-synth\",\"editVersion\":\"4.0.2\"}|\n{\"type\":\"ATTR\",\"ticket\":4}||{\"key\":\"Footprint Name\",\"value\":\"RES-0402-SYNTH\"}|\n{\"type\":\"META\",\"ticket\":5}||{\"attributes\":{\"Pads\":\"2\"},\"title\":\"RES-0402-SYNTH\"}|\n{\"type\":\"DOCHEAD\",\"ticket\":6}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"fp-v4-0402-synth\",\"editVersion\":\"4.0.3\"}|\n{\"type\":\"META\",\"ticket\":7}||{\"title\":\"SHOULD-NOT-WIN-0402\",\"attributes\":{\"Pads\":\"2\"}}|\n{\"type\":\"DOCHEAD\",\"ticket\":8}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"fp-v4-blank-synth\",\"editVersion\":\"4.0.1\"}|\n{\"type\":\"META\",\"ticket\":9}||{\"title\":\"   \"}|\n{\"type\":\"DOCHEAD\",\"ticket\":10}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"fp-v4-blank-synth\",\"editVersion\":\"4.0.2\"}|\n{\"type\":\"META\",\"ticket\":11}||{\"title\":\"LATE-TITLE-SHOULD-NOT-WIN\"}|"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "schema": "boardwise.footprint-declared-sample/1",
+  "name": "v3-hit",
+  "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"0a1b2c3d4e5f6071\",\"editVersion\":\"3.2.186\"}|\n{\"type\":\"META\",\"ticket\":2}||{\"title\":\"  CAP-SMD_L8.0-W6.0-LS11.4  \",\"attributes\":{\"Pads\":\"2\",\"Footprint Name\":\"CAP-SMD_L8.0-W6.0-LS11.4\"}}|",
+  "value": "0a1b2c3d4e5f6071"
+}

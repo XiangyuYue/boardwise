@@ -507,10 +507,12 @@ def _load_model(
     subject). ``BoardGeometry`` is available for the pcb view of a ``.epro2`` and,
     since 038F5, of a folder project (``pcb/<board>.epcb2`` through 038F4's
     adapter); both views of one ``.epro2`` come from one parse of the file, and
-    the folder path likewise reads the board file once.
+    the folder path likewise reads every board file once.
     Raises :class:`EncryptedProjectError` for an unreadable backup and
     ``ValueError`` for an unsupported extension, an unreadable folder project,
-    or a folder project with no single board.
+    a folder project with no board at all, or (038P) a **pcb** view of a folder
+    project with more than one board — one model is one board, so the choice is
+    named and refused rather than answered with the first board.
 
     ``parse_stats`` (task 020 §WI-1) is an optional caller-owned
     :class:`boardwise.core.geometry.ParseStats` the schematic parse fills in.
@@ -528,11 +530,11 @@ def _load_model(
         # `pcb/<board>.epcb2` is a complete record stream of its own, so the same
         # two builders the `.epro2` branch below uses consume it unchanged — the
         # container difference stops in the adapter. A project with no board
-        # file, with more than one, or with a board file holding no PCB document
-        # is still refused by `load_eprj3_pcb_source` rather than answered with
-        # an empty model (a model with 0 components and 0 nets reads as "a clean
-        # board" — SKILL pit 14); that refusal is an `Eprj3Error`, a
-        # `ValueError`, so every caller already turns it into exit 2.
+        # file, or with a board file holding no PCB document, is refused by
+        # `load_eprj3_pcb_source` rather than answered with an empty model (a
+        # model with 0 components and 0 nets reads as "a clean board" — SKILL
+        # pit 14); that refusal is an `Eprj3Error`, a `ValueError`, so every
+        # caller already turns it into exit 2.
         if view != "pcb":
             from .parsers.schematic import build_project_model
 
@@ -540,6 +542,34 @@ def _load_model(
         from .parsers.eprj3 import load_eprj3_pcb_source
 
         source = load_eprj3_pcb_source(path)
+        # 038P: the adapter now reads **every** board (that is what the review
+        # runner needs), but this function returns **one** model. Answering with
+        # `build_design_model(source)` alone would silently be the first board —
+        # `Epro2Source.pcb_context()` reads one document — so several boards are
+        # refused here, by name, and `checkup --file` (the per-board path: it
+        # goes through `run_pcb_review`, never through this function) is what a
+        # multi-board project is meant to use. The names come from the adapter's
+        # own `pcbTitles` (a list in PCB-document order, 038P1) — one naming
+        # convention, not a second one here; a board the list does not name is
+        # still named by its uuid rather than dropped from the message.
+        boards = source.documents_of_type("PCB")
+        if len(boards) > 1:
+            titles = [
+                str(name or "")
+                for name in (source.project_meta.get("pcbTitles") or [])
+            ]
+            naming = "、".join(
+                titles[index]
+                if index < len(titles) and titles[index]
+                else str(document.uuid or "") or "(无标题板)"
+                for index, document in enumerate(boards)
+            )
+            raise ValueError(
+                f"本工程有 {len(boards)} 块板（{naming}）——`--view pcb` 只建"
+                "**一块**板的网表/几何模型，多板没有「哪一块」可指定，这里点名拒绝，"
+                "不静默取第一块。逐板审查走离线 checkup（`pcb_review.boards[]` 每板一节）："
+                f'boardwise checkup --file "{path}" --out <目录>'
+            )
         return build_design_model(source), build_board_geometry(source)
     if suffix == ".enet":
         return parse_enet(path), None

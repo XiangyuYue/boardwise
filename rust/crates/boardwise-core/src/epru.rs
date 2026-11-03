@@ -348,10 +348,14 @@ fn malformed_line(line_no: usize) -> EpruRecord {
 /// `record_type` and `document_types`.
 ///
 /// Scalars match CPython: `None`, `True`, `False`, integers as written, floats
-/// through [`python_float_repr`]. Arrays and objects fall back to compact JSON
+/// through [`python_float_repr`], and a float literal beyond `f64`'s range
+/// through [`overflow_float_text`] (Python reads it as an infinity and prints
+/// `inf`). Arrays and objects fall back to compact JSON
 /// (Python would print `repr`); the gap is recorded in the module doc because
 /// only a non-object `type`/`docType` value could reach it — and, in
-/// [`crate::symbol`], a PIN's `zIndex` or an ATTR's `value`.
+/// [`crate::symbol`], a PIN's `zIndex` or an ATTR's `value`; in
+/// [`crate::device`], a META attribute value; in [`crate::footprint`], a
+/// FOOTPRINT document's uuid and the META title it is filed under.
 pub(crate) fn python_text(value: &Value) -> String {
     match value {
         Value::Null => "None".to_owned(),
@@ -363,7 +367,16 @@ pub(crate) fn python_text(value: &Value) -> String {
                 .bytes()
                 .any(|byte| matches!(byte, b'.' | b'e' | b'E'))
             {
-                number.as_f64().map_or(literal, python_float_repr)
+                // `Number::as_f64` filters out the non-finite results of
+                // `arbitrary_precision` literals, so `None` means "this float
+                // literal is out of `f64`'s range" — `1e309`. Python's
+                // `float()` reads that as an infinity and `str()` spells it
+                // `inf`/`-inf`; the literal itself is never what Python prints.
+                // No `f64` value is ever refused here: a bare integer keeps its
+                // digits, because Python prints the exact integer.
+                number
+                    .as_f64()
+                    .map_or_else(|| overflow_float_text(&literal), python_float_repr)
             } else {
                 literal
             }
@@ -371,4 +384,17 @@ pub(crate) fn python_text(value: &Value) -> String {
         Value::String(text) => text.clone(),
         other => other.to_string(),
     }
+}
+
+/// `str(float(literal))` for a float literal with no `f64` value.
+///
+/// CPython's `float()` saturates an overflowing literal to an infinity, and its
+/// `str()`/`repr()` spell that `inf` or `-inf` — the same tokens
+/// [`python_float_repr`] writes for the non-finite values it receives.
+fn overflow_float_text(literal: &str) -> String {
+    python_float_repr(if literal.starts_with('-') {
+        f64::NEG_INFINITY
+    } else {
+        f64::INFINITY
+    })
 }

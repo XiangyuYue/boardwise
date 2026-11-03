@@ -8,7 +8,10 @@
     "contracts/differential/sources/page.circuit.json": "8c60973f358649e730713cc5dd95c3a59a05360504940759593e9c0d2458281b",
     "contracts/differential/sources/page.presentation.json": "7dabd0640546ced72e0308c23420e3efeaaedd4e1a7ad990ebc3b78d3d4f4892",
     "contracts/differential/sources/epru-stream-samples.json": "e82d821bc2c506ca3bcad0291e8022749a4adc25ba8c28f3b9be6d883712903a",
-    "contracts/differential/sources/symbol-library-samples.json": "8ffa17fca7d8a71a024c528875876c006b6958da204f44e876dbd27c39424c60"
+    "contracts/differential/sources/symbol-library-samples.json": "8ffa17fca7d8a71a024c528875876c006b6958da204f44e876dbd27c39424c60",
+    "contracts/differential/sources/device-library-samples.json": "0472a0ddd58702eb9de89edf7368c798422501ddd8e98cbc49add4890a281df0",
+    "contracts/differential/sources/footprint-library-samples.json": "45ae4b001dd46ef858e5ed41ef6c74f990ff7e868ce34b90d7476164baec3607",
+    "contracts/differential/sources/footprint-declared-samples.json": "de27dc61f4808bd1386e46418ade564f4ac48d330d8f9e201bcb4e27bd80b425"
   },
   "producerVersions": {
     "ruleset": "a0c5e0a0",
@@ -21,7 +24,10 @@
     "contracts/json/draw-page-compile-result-v1.schema.json": "1cb90569888bae967f1a13f691fb395c29ae2b2633790c306a9c360d0153fc6a",
     "contracts/json/draw-lint-result-v1.schema.json": "8985ab24d1b71d8a0080fa4e87b03df54200363cf871b6c0024fb5193ba5b383",
     "contracts/json/epru-stream-sample-v1.schema.json": "dc3c60395f513e684af66405ddb995601a4f051a178abcd905da7ff5742d5a1b",
-    "contracts/json/symbol-library-sample-v1.schema.json": "091d1f54adbaf2bce894e08f39908847a0db490afe7d576319ab4a1906ebabf7"
+    "contracts/json/symbol-library-sample-v1.schema.json": "091d1f54adbaf2bce894e08f39908847a0db490afe7d576319ab4a1906ebabf7",
+    "contracts/json/device-library-sample-v1.schema.json": "36d1663013aaa1f1e6f08b2722c18e92ea8708cac1966853959edd4eef93954b",
+    "contracts/json/footprint-library-sample-v1.schema.json": "d110b6cbf171c624ca9301840abc842c17e7dfeef9a0c25e60b584d8c200323c",
+    "contracts/json/footprint-declared-sample-v1.schema.json": "cc1ec8ec3ba4f8e8b1b52653056e8aa2912dd1a75e582fe2de986ed0854066c2"
   },
   "producers": [
     "python -m boardwise.cli checkup --file tests/fixtures/ch340_golden.epro2 --out <OUT>/checkup (accept 0 or 3)",
@@ -29,7 +35,10 @@
     "python -m boardwise.cli draw compile --circuit contracts/differential/sources/page.circuit.json --presentation contracts/differential/sources/page.presentation.json --profiles <FIXTURES>/library.json --page-box 0,0,1169,826 --out <OUT>/compile-page --json <OUT>/page-compile-result.json",
     "python -m boardwise.cli draw lint --snapshot <OUT>/lint-snapshot.json --render <OUT>/lint-render.svg --json <OUT>/lint-result.json",
     "declared samples contracts/differential/sources/epru-stream-samples.json -> <OUT>/epru-stream-v3-eof.json <OUT>/epru-stream-v4-eof-truncated.json (written from the declaration file, not from the editor, a container or a fixture)",
-    "declared samples contracts/differential/sources/symbol-library-samples.json -> <OUT>/symbol-library-v3-zindex.json <OUT>/symbol-library-v4-pin-id.json (written from the declaration file, carrying the pinKey each stream is keyed by)"
+    "declared samples contracts/differential/sources/symbol-library-samples.json -> <OUT>/symbol-library-v3-zindex.json <OUT>/symbol-library-v4-pin-id.json (written from the declaration file, carrying the pinKey each stream is keyed by)",
+    "declared samples contracts/differential/sources/device-library-samples.json -> <OUT>/device-library-v3-meta.json <OUT>/device-library-v4-copies.json (written from the declaration file; a DEVICE is addressed by its own uuid, so the input states no pinKey)",
+    "declared samples contracts/differential/sources/footprint-library-samples.json -> <OUT>/footprint-library-v3-title.json <OUT>/footprint-library-v4-copies.json (written from the declaration file; a FOOTPRINT is addressed by its own uuid and named by its first META title, so the input states neither a pinKey nor a projection)",
+    "declared samples contracts/differential/sources/footprint-declared-samples.json -> <OUT>/footprint-declared-v3-hit.json <OUT>/footprint-declared-v4-empty.json (written from the declaration file; each entry states the .epru stream and the schematic Footprint field verbatim, empty string included, and no projection)"
   ],
   "regenerate": ".venv/Scripts/python.exe -m tools.build_differential_fixtures",
   "sanitization": [
@@ -49,10 +58,16 @@
     "contracts/differential/inputs/epru-stream-v3-eof.json": "13e4c8ec9beffc0a70b1cfcd237d82620081e6647fd2bb12d4112fb5a6ac46c1",
     "contracts/differential/inputs/epru-stream-v4-eof-truncated.json": "b2647d6c445f97ad5c0a64bb15cfea0e2428c8da0b00873085a386a904c2bee2",
     "contracts/differential/inputs/symbol-library-v3-zindex.json": "824c6940dad0629a784952013ede4e454bfb416c49a593737ba589ee759e951d",
-    "contracts/differential/inputs/symbol-library-v4-pin-id.json": "2c22270ea308c8f9bc2c5a2e5175edbc6360aa8c3649a194c4ef68bea42fd5ea"
+    "contracts/differential/inputs/symbol-library-v4-pin-id.json": "2c22270ea308c8f9bc2c5a2e5175edbc6360aa8c3649a194c4ef68bea42fd5ea",
+    "contracts/differential/inputs/device-library-v3-meta.json": "ee08146e8d070c54142f1df2936901d236243819e8b415d7ba167d02f7a4ecc1",
+    "contracts/differential/inputs/device-library-v4-copies.json": "e77c0fb87068cde8163e700f387c7e516e74d8914136585e3ee6c8c52bd57992",
+    "contracts/differential/inputs/footprint-library-v3-title.json": "5048efbb96d84a4278f674bdc62b43a5142d62a8baa42798b6c78ed979a0d09b",
+    "contracts/differential/inputs/footprint-library-v4-copies.json": "d754361b7d4e50a74770b45fcef775d43a3c6cffeaa235999633f6e38802e8d2",
+    "contracts/differential/inputs/footprint-declared-v3-hit.json": "c276354da844c488df2db7e5d84d4cf5eabfa835df910d28e59e9fac184917fd",
+    "contracts/differential/inputs/footprint-declared-v4-empty.json": "0d56b511ceb2498973f65894ab2758e9b385711bceb78b7d614f3628e648518a"
   },
   "caseBook": {
     "path": "contracts/differential/cases.json",
-    "sha256": "3a958c952dcf5518acb5da475d4a1f583a3a86b19862a569deda348b915122fa"
+    "sha256": "442d57b4e3ab155278b64eea13c6e418546919d5f586d677dda20ec3d22a60c3"
   }
 }

@@ -1,0 +1,18 @@
+{
+  "schema": "boardwise.device-library-samples/1",
+  "description": "The two synthetic .epru DEVICE library streams the differential case book publishes as device-library-sample inputs. A DEVICE document is addressed by its own uuid and its metadata travels in a META, so an entry is the record stream alone, no pinKey, and nothing keyed by an element handle. The V3 case is one DEVICE whose first META wins: every model-visible field is stated once, an empty and a \"null\" attribute are stated so the golden can show they are not emitted, and a second META states different values so the golden can show it is ignored. The V4 case is one DEVICE uuid copied page by page, the way a V4 export repeats a used part into every page that places it: the second copy differs only in editVersion and in the order its records were written (not a conflict), and the third differs in a model-visible value (first wins, conflictingDocuments counts it). The text below is the whole input: no editor session, container or fixture is read to obtain it, and no line names a real project.",
+  "samples": [
+    {
+      "caseId": "device-library-v3-meta",
+      "input": "device-library-v3-meta.json",
+      "name": "v3-meta",
+      "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"DEVICE\",\"uuid\":\"dev-v3-buck-synth\",\"editVersion\":\"3.2.186\"}|\n{\"type\":\"META\",\"ticket\":2}||{\"title\":\"  BUCK-5V0-SYNTH  \",\"attributes\":{\"Supplier Part\":\" C000001 \",\"Manufacturer Part\":\"SYN-MPN-5V0\",\"Manufacturer\":\"\",\"Datasheet\":\"https://example.invalid/synth-buck.pdf\",\"Supplier Footprint\":\" SOP-8 \",\"Name\":\"{{Value}}\",\"Symbol\":\"sym-v3-buck-synth\",\"Type\":\" DC-DC \",\"LCSC Part Name\":\"null\",\"Designator\":\" U? \"}}|\n{\"type\":\"META\",\"ticket\":3}||{\"title\":\"SHOULD-NOT-WIN\",\"attributes\":{\"Supplier Part\":\"C000999\",\"Designator\":\"R?\"}}|"
+    },
+    {
+      "caseId": "device-library-v4-copies",
+      "input": "device-library-v4-copies.json",
+      "name": "v4-copies",
+      "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"DEVICE\",\"uuid\":\"dev-v4-res-0603-synth\",\"editVersion\":\"4.0.1\"}|\n{\"type\":\"META\",\"ticket\":2}||{\"title\":\"RES-0603-SYNTH\",\"attributes\":{\"Supplier Part\":\"C000002\",\"Supplier Footprint\":\"0603\",\"Name\":\"{{Value}}\",\"Symbol\":\"sym-v4-res-synth\",\"Type\":\"Chip Resistor\",\"Designator\":\"R?\"}}|\n{\"type\":\"DOCHEAD\",\"ticket\":3}||{\"docType\":\"DEVICE\",\"uuid\":\"dev-v4-res-0603-synth\",\"editVersion\":\"4.0.2\"}|\n{\"type\":\"ATTR\",\"ticket\":4}||{\"key\":\"Convert to PCB\",\"value\":\"1\"}|\n{\"type\":\"META\",\"ticket\":5}||{\"attributes\":{\"Designator\":\"R?\",\"Type\":\"Chip Resistor\",\"Symbol\":\"sym-v4-res-synth\",\"Name\":\"{{Value}}\",\"Supplier Footprint\":\"0603\",\"Supplier Part\":\"C000002\"},\"title\":\"RES-0603-SYNTH\"}|\n{\"type\":\"DOCHEAD\",\"ticket\":6}||{\"docType\":\"DEVICE\",\"uuid\":\"dev-v4-res-0603-synth\",\"editVersion\":\"4.0.3\"}|\n{\"type\":\"META\",\"ticket\":7}||{\"title\":\"RES-0603-SYNTH\",\"attributes\":{\"Supplier Part\":\"C000003\",\"Supplier Footprint\":\"0603\",\"Name\":\"{{Value}}\",\"Symbol\":\"sym-v4-res-synth\",\"Type\":\"Chip Resistor\",\"Designator\":\"R?\"}}|"
+    }
+  ]
+}

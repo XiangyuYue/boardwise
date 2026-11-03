@@ -14,9 +14,10 @@ one existing path?」 rather than 「is there a new path?」:
   geometry canvas, so `pcbReviewMissing` is false for a project that was really
   reviewed;
 
-and the two refusals stay loud: a folder with **no** board file is still "no
-PCB", and a folder with **several** is refused by name rather than reduced to the
-first (the adapter's own rule since 038F4).
+and the refusals stay loud: a folder with **no** board file is still "no PCB", a
+board file holding no PCB document is refused by name, and a folder with
+**several** boards is reviewed board by board since 038P — only the one-model
+caller (`--view pcb`) refuses it, by name, instead of answering with the first.
 
 The synthetic project is a folder shell around a board stream in the same record
 frame the real sample uses; the real V4 sample's readings (counts, GHA, the two
@@ -32,7 +33,6 @@ from pathlib import Path
 import pytest
 
 from boardwise import cli
-from boardwise.parsers.eprj3 import Eprj3Error
 
 SHELF = Path(__file__).resolve().parents[1] / "blocklib" / "parts.json"
 
@@ -210,7 +210,10 @@ def test_the_runner_reviews_the_folder_board(tmp_path):
     assert isinstance(findings, list)
 
 
-def test_a_multi_board_folder_is_refused_by_the_adapter(tmp_path):
+def test_a_multi_board_folder_is_reviewed_board_by_board(tmp_path):
+    """038P: the adapter reads both boards; the runner reports both, in file order."""
+    from boardwise.engines.pcbreview import run_pcb_review
+
     root = _write_project(
         tmp_path / "proj",
         boards={
@@ -218,14 +221,34 @@ def test_a_multi_board_folder_is_refused_by_the_adapter(tmp_path):
             "pcb/PCB2.epcb2": _pcb_stream(uuid="b", title="PCB2"),
         })
 
-    with pytest.raises(Eprj3Error) as caught:
+    findings, section = run_pcb_review(root)
+
+    assert section is not None and section["available"] is True
+    assert [entry["title"] for entry in section["boards"]] == ["PCB1", "PCB2"]
+    assert [entry["boardUuid"] for entry in section["boards"]] == ["", ""], (
+        "the synthetic stream declares no META.board link; nothing is guessed from a title"
+    )
+    assert isinstance(findings, list)
+
+
+def test_load_model_pcb_view_refuses_two_boards_by_name(tmp_path):
+    """One model is one board: several are named and refused, never the first."""
+    root = _write_project(
+        tmp_path / "proj",
+        boards={
+            "pcb/PCB1.epcb2": _pcb_stream(uuid="a", title="PCB1"),
+            "pcb/PCB2.epcb2": _pcb_stream(uuid="b", title="PCB2"),
+        })
+
+    with pytest.raises(ValueError) as caught:
         cli._load_model(root, view="pcb")
-    assert "2 PCB files" in str(caught.value)
+    message = str(caught.value)
+    assert "2 块板" in message
+    assert "PCB1" in message and "PCB2" in message, "the boards are listed, not counted"
+    assert "checkup" in message, "the refusal points at the per-board path"
 
-    from boardwise.engines.pcbreview import run_pcb_review
-
-    with pytest.raises(Eprj3Error):
-        run_pcb_review(root)
+    model, board = cli._load_model(root, view="schematic")
+    assert board is None, "the schematic view is one project-wide model and stays usable"
 
 
 def test_review_pcb_view_refuses_a_multi_board_folder(tmp_path, capsys):
@@ -241,7 +264,7 @@ def test_review_pcb_view_refuses_a_multi_board_folder(tmp_path, capsys):
     err = capsys.readouterr().err
 
     assert code == 2, "a refusal is exit 2, never a report about one of two boards"
-    assert "2 PCB files" in err
+    assert "2 块板" in err and "checkup" in err
 
 
 # --------------------------------------------------------------------------
@@ -295,7 +318,8 @@ def test_checkup_produces_pcb_review_and_a_canvas(tmp_path, monkeypatch):
     assert code == report["conclusion"]["exitCode"]
 
 
-def test_checkup_keeps_the_multi_board_refusal_loud(tmp_path, monkeypatch):
+def test_checkup_reviews_every_board(tmp_path, monkeypatch):
+    """038P: `checkup --file` reads both boards — the per-board path is not the refusal."""
     root = _write_project(
         tmp_path / "proj",
         boards={
@@ -303,16 +327,28 @@ def test_checkup_keeps_the_multi_board_refusal_loud(tmp_path, monkeypatch):
             "pcb/PCB2.epcb2": _pcb_stream(uuid="b", title="PCB2"),
         })
 
-    code, report, _out = _run_checkup(tmp_path, monkeypatch, root, "multi")
+    code, report, out = _run_checkup(tmp_path, monkeypatch, root, "multi")
 
-    assert "pcb_review" not in report, "no board was picked without a mapping"
-    notes = report["source"]["notes"]
-    assert any("PCB 审查未完成" in note and "2 PCB files" in note for note in notes), (
-        "the refusal is named in source.notes, not silently reduced to one board"
+    review = report["pcb_review"]
+    assert [entry["title"] for entry in review["boards"]] == ["PCB1", "PCB2"], (
+        "two boards, in file order — not one, and not a merged one"
     )
-    assert report["completion"]["coverage"]["pcbReviewMissing"] is True
+    assert all(entry["checksRun"] for entry in review["boards"])
+    indexes = [index for entry in review["boards"] for index in entry["findings"]]
+    assert len(indexes) == len(set(indexes)), (
+        "each board's findings index its own rows in the merged findings[]"
+    )
+    assert report["completion"]["coverage"]["pcbReviewMissing"] is False
+    assert report["evidence"]["channels"]["archivePcb"]["status"] == "ok"
+    assert not any("PCB 审查未完成" in note for note in report["source"]["notes"])
+    canvas = report["ai_slots"]["canvas_images"]
+    assert [row["board"] for row in canvas] == ["PCB1", "PCB2"], (
+        "one geometry picture per reviewed board"
+    )
+    for row in canvas:
+        assert not row.get("error"), row
+        assert (out / row["file"]).is_file()
     assert code == report["conclusion"]["exitCode"]
-    assert report["completion"]["verdict"] == "incomplete"
 
 
 def test_checkup_without_a_board_file_is_still_no_pcb(tmp_path, monkeypatch):

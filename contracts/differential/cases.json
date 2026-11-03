@@ -298,6 +298,97 @@
         "pinsDroppedNoNumber": 3,
         "conflictingDocuments": 1
       }
+    },
+    {
+      "id": "device-library-v3-meta",
+      "kind": "device-library-sample",
+      "input": "contracts/differential/inputs/device-library-v3-meta.json",
+      "expected": {
+        "schema": "boardwise.device-library/1",
+        "devices": {
+          "dev-v3-buck-synth": {
+            "title": "BUCK-5V0-SYNTH",
+            "lcsc_part": "C000001",
+            "mpn": "SYN-MPN-5V0",
+            "datasheet": "https://example.invalid/synth-buck.pdf",
+            "footprint": "SOP-8",
+            "name_template": "{{Value}}",
+            "symbol": "sym-v3-buck-synth",
+            "declared_type": {
+              "Type": "DC-DC",
+              "Supplier Footprint": "SOP-8"
+            },
+            "is_part": "yes"
+          }
+        },
+        "conflictingDocuments": 0
+      }
+    },
+    {
+      "id": "device-library-v4-copies",
+      "kind": "device-library-sample",
+      "input": "contracts/differential/inputs/device-library-v4-copies.json",
+      "expected": {
+        "schema": "boardwise.device-library/1",
+        "devices": {
+          "dev-v4-res-0603-synth": {
+            "title": "RES-0603-SYNTH",
+            "lcsc_part": "C000002",
+            "footprint": "0603",
+            "name_template": "{{Value}}",
+            "symbol": "sym-v4-res-synth",
+            "declared_type": {
+              "Type": "Chip Resistor",
+              "Supplier Footprint": "0603"
+            },
+            "is_part": "yes"
+          }
+        },
+        "conflictingDocuments": 1
+      }
+    },
+    {
+      "id": "footprint-library-v3-title",
+      "kind": "footprint-library-sample",
+      "input": "contracts/differential/inputs/footprint-library-v3-title.json",
+      "expected": {
+        "schema": "boardwise.footprint-library/1",
+        "footprints": {
+          "fp-v3-qfn32-synth": "QFN-32-5X5-SYNTH"
+        }
+      }
+    },
+    {
+      "id": "footprint-library-v4-copies",
+      "kind": "footprint-library-sample",
+      "input": "contracts/differential/inputs/footprint-library-v4-copies.json",
+      "expected": {
+        "schema": "boardwise.footprint-library/1",
+        "footprints": {
+          "fp-v4-0402-synth": "RES-0402-SYNTH",
+          "fp-v4-blank-synth": ""
+        }
+      }
+    },
+    {
+      "id": "footprint-declared-v3-hit",
+      "kind": "footprint-declared-sample",
+      "input": "contracts/differential/inputs/footprint-declared-v3-hit.json",
+      "expected": {
+        "schema": "boardwise.footprint-declared/1",
+        "footprint": "CAP-SMD_L8.0-W6.0-LS11.4",
+        "libraryId": "0a1b2c3d4e5f6071"
+      }
+    },
+    {
+      "id": "footprint-declared-v4-empty",
+      "kind": "footprint-declared-sample",
+      "input": "contracts/differential/inputs/footprint-declared-v4-empty.json",
+      "expected": {
+        "schema": "boardwise.footprint-declared/1",
+        "footprint": "9c8b7a6f5e4d3c2b",
+        "libraryId": ""
+      }
     }
   ]
 }

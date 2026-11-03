@@ -199,10 +199,10 @@ def test_success_stdout_exit_and_bytes_are_unchanged(
     assert output.read_bytes() == captured.out.encode("utf-8")
     report = json.loads(captured.out)
     assert report["ok"] is True
-    # Nine cases, each a JSON `true`. `is True` rather than `== True` on purpose:
+    # Eleven cases, each a JSON `true`. `is True` rather than `== True` on purpose:
     # `1 == True` in Python, and a golden that spelled a boolean as 1 must not
     # pass here while the Rust side reads it as a number.
-    assert len(report["cases"]) == 9
+    assert len(report["cases"]) == 15
     assert all(case["ok"] is True for case in report["cases"])
 
 

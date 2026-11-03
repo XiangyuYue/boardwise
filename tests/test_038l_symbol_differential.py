@@ -419,7 +419,7 @@ def test_the_kind_is_the_seventh_kind_the_runner_gates() -> None:
     """The Python schema table now carries the kind: the two declared samples are
     published, so `project_case` resolves them instead of refusing the name."""
     assert differential.SCHEMAS[KIND] == "symbol-library-sample-v1.schema.json"
-    assert len(differential.SCHEMAS) == 7
+    assert len(differential.SCHEMAS) == 10
 
 
 # ------------------------------------------------------- the two published cases
@@ -472,8 +472,8 @@ def test_the_two_cases_are_appended_after_the_seven_that_came_before() -> None:
         "epru-stream-v3-eof",
         "epru-stream-v4-eof-truncated",
     ]
-    assert ids[7:] == [V3_ZINDEX, V4_PIN_ID]
-    assert len(ids) == len(set(ids)) == 9
+    assert ids[7:9] == [V3_ZINDEX, V4_PIN_ID]
+    assert len(ids) == len(set(ids)) == 15
 
 
 def test_the_v3_case_keys_its_pins_by_the_synthesised_ref_not_the_envelope_id() -> None:

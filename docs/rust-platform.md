@@ -42,13 +42,31 @@ cargo test
 机器路径；来源、输入与 case book 的 SHA-256 记录在 `manifest.json`。不要在变更无关
 业务输出时顺手再生成 golden。
 
-仓库 case book 当前有 **9 个 case**：review 投影、layout 几何、module compile 投影、
-page compile 投影、lint 投影，两个 `epru-stream-sample` 的 `.epru` 记录流投影，以及
-两个 `symbol-library-sample` 的 SYMBOL 库投影。后两组各自「一个 kind、两个 case id」：
-kind 决定 schema 与投影，id 决定输入名与 case 行。`symbol-library-sample` 的输入多带
-一个 `pinKey`（`zIndex` 对 V3 `.epro2` 的 `e<zIndex>` 寻址，`pin_id` 对 eprj3 行自身
-`id` 寻址），两台风扇都会从同一份 `text`+`pinKey` 推出同一份
-`boardwise.symbol-library/1`。
+仓库 case book 当前有 **15 个 case**：review 投影、layout 几何、module compile 投影、
+page compile 投影、lint 投影，加上五组各两个 case 的 kind——`epru-stream-sample` 是
+**记录流投影**（`.epru` 记录逐个翻译成 JSON，不做任何库合并），`symbol-library-sample`、
+`device-library-sample`、`footprint-library-sample` 三组才是**库投影**，最后一组
+`footprint-declared-sample` 是**声明解析投影**（不是库投影：它不产库表，只回答一个字段
+声明了什么）。五组各自「一个 kind、两个 case id」：kind 决定 schema 与投影，id 决定输入名
+与 case 行。
+`symbol-library-sample` 的输入多带一个 `pinKey`（`zIndex` 对 V3 `.epro2` 的 `e<zIndex>` 寻址，
+`pin_id` 对 eprj3 行自身 `id` 寻址），两台风扇都会从同一份 `text`+`pinKey` 推出同一份
+`boardwise.symbol-library/1`。`device-library-sample` 的输入**只有 `text`**（不发 `pinKey`），
+输出 `boardwise.device-library/1`，合并语义对齐 Python 的 `_collect_device_meta`：每个
+文档的首个 `META` 生效，重复 uuid first-wins，只有模型可见字段不同才计入
+`conflicting_documents`。`footprint-library-sample` 的输入同样**只有 `text`**，输出
+`boardwise.footprint-library/1`，形状只有 `schema` 与 `footprints`（uuid → 封装标题），
+**没有 `stats`、也没有冲突计数**——它是 `_collect_footprint_titles` 的查表，不做差异判定：
+`FOOTPRINT` 文档的首个 `META` 生效，重复 uuid first-wins，**空标题也占位**（先到的空串
+挡住后来的标题），字面 `"null"` 标题原样保留（DEVICE 属性值那条排除规则在这里不适用）。
+`footprint-declared-sample` 的输入是 **`text` 加 `value`**：`text` 是一份 `.epru` 记录流，
+`value` 是原理图器件 `Footprint` 字段的原文（原样，空串也算一条）。两侧都先用
+`_collect_footprint_titles` 建同一张 `uuid → 标题` 表，再交给 `_resolve_declared_footprint`
+回答「这个字段声明了什么」，输出 `boardwise.footprint-declared/1`，形状只有
+`schema`/`footprint`/`libraryId`：`value` 先 trim；**只有命中表且该标题非空**才返回标题
+加原始库 id；普通名称、空串、以及本归档没有的中 id 一律把 trim 后的原文回填
+`footprint`、`libraryId` 留空串。是哪个分支**不单独出字段**——`(footprint, libraryId)`
+这一对已经说清，多读一个字段就是 Rust 侧只能靠复制该投影才对得上的东西。
 两份 compile 结果是**彼此独立的合同**：module 文档用
 `draw-compile-result-v1.schema.json` 的 `candidates`，page 文档用
 `draw-page-compile-result-v1.schema.json` 的 `pages`，投影字段也各说各的名字

@@ -44,10 +44,35 @@ container uses, so both builders work unchanged. 038F5 wired it into the CLI:
 ``_load_model(view="pcb")`` returns that adapter's source through
 ``build_design_model`` / ``build_board_geometry``, and
 :func:`boardwise.engines.pcbreview._review_units` selects it for a folder project
-before running the one shared PCB review path. A project with no board file, with
-several, or whose board file holds no PCB document is refused by the adapter by
-name — never answered with an empty model (a model with 0 components and 0 nets
-reads as "a clean board" — SKILL pit 14).
+before running the one shared PCB review path. A project with no board file, or
+whose board file holds no PCB document, is refused by the adapter by name — never
+answered with an empty model (a model with 0 components and 0 nets reads as "a
+clean board" — SKILL pit 14).
+
+**Several boards are normal here** (038P): a V4 folder keeps one ``.epcb2`` per
+board, and the real sample ships two. The adapter reads them all, in
+:func:`pcb_files` order, into one multi-document stream — the same shape an
+``.epro2`` backup of a multi-board project already has, so the review runner
+returns one ``boards[]`` entry per board with no new parser and no new list API.
+The single-model caller (``--view pcb``) is the one that cannot take several, and
+it says so by name instead of letting ``pcb_context()`` answer with the first.
+
+**Merging several files is not always honest** (038P1), and the merged stream is
+where an `.epro2` never had to answer the question. Two things are refused here,
+**by name**, and only when the project really has more than one board file:
+
+* the **same PCB document uuid** in two files — one physical board exported
+  twice (a copy/duplicate) would be reviewed twice, and the report would claim
+  two boards where the design has one. Nothing is aggregated by title and
+  nothing is deduplicated silently: delete the copy. (Even identical content is
+  refused: the *board* is the duplicate, not a library copy of it.)
+* a **library document** (``FOOTPRINT`` / ``DEVICE`` / ``SYMBOL``) with the same
+  uuid but a **different body** in two files. Both builders key a library by its
+  uuid, so a merged stream keeps the last one read and the first board is then
+  laid out with the other board's footprint — the wrong pads, silently. Two
+  boards carrying the *same* library copy is normal and allowed
+  (:func:`document_signature` decides what "the same" means); a real disagreement
+  cannot be merged safely, so it is refused instead of resolved.
 
 A PCB document carries **no** ``yAxisDirection`` the way a page does: PCB
 coordinates are the cloud frame already, and the board's libraries (``SYMBOL`` /
@@ -98,6 +123,18 @@ CONTENT_DOC_TYPES = frozenset({"SCH", "SCH_PAGE", "PCB", "PANEL"})
 #: Files that declare a content ``DOCHEAD`` but are not part of the tier-A stream
 #: (the root schematic config, the PCB, the panel). Read for the version only.
 CONTENT_DOC_GLOBS = ("sch/**/*.ecfg", f"pcb/**/*{EPCB2_SUFFIX}", "panel/**/*.epan2")
+
+#: Library documents a board file copies along with the board itself. Two board
+#: files of one project routinely copy the same part, so a merged stream holds
+#: both copies and the guards below have to say when that is harmless.
+LIBRARY_DOC_TYPES = frozenset({"FOOTPRINT", "DEVICE", "SYMBOL"})
+
+#: ``DOCHEAD`` body fields that are per-save bookkeeping rather than content: two
+#: saves of the same part differ in these and in nothing else. Everything else on
+#: the head (``docType`` / ``uuid`` / …) is content and stays in the signature.
+DOCHEAD_BOOKKEEPING_FIELDS = frozenset(
+    {"editVersion", "updateTime", "version", "client", "user"}
+)
 
 #: Which body field of which primitive carries y (the spec's table, verbatim).
 FLIPPED_FIELDS: dict[str, tuple[str, ...]] = {
@@ -453,6 +490,89 @@ def load_eprj3_text(path: str | Path) -> tuple[str, dict[str, Any]]:
     return text, meta
 
 
+def document_signature(document: Any) -> str:
+    """Canonical text of one document's record sequence (038P1's sameness test).
+
+    Two copies of one library part are "the same" only if a merge cannot change
+    what either board reads. What a reader can observe is the record sequence —
+    order, element ids, bodies — so that is what this hashes, as
+    ``(type, id, body)`` per record, canonically serialised by the stdlib's own
+    ``json`` (sorted keys, no whitespace).
+
+    ``DOCHEAD`` is included but with :data:`DOCHEAD_BOOKKEEPING_FIELDS` dropped:
+    two saves of one part differ in exactly those, and refusing them would refuse
+    the normal case. Nothing else is normalised — a renumbered element or a
+    reordered record changes the signature, and that is deliberate: this reader
+    does not claim two differently-ordered documents are semantically equal, it
+    only lets the literal copies through.
+    """
+    records: list[list[Any]] = []
+    for record in getattr(document, "records", ()) or ():
+        body = record.body
+        if record.type == "DOCHEAD" and isinstance(body, dict):
+            body = {
+                key: value
+                for key, value in body.items()
+                if key not in DOCHEAD_BOOKKEEPING_FIELDS
+            }
+        records.append([record.type, record.id, body])
+    return json.dumps(
+        records, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+
+def _guard_multi_file_documents(
+    documents: list[Any], origin: dict[int, Path]
+) -> None:
+    """Refuse a multi-file project whose documents cannot be merged honestly.
+
+    Only called when the project has more than one board file: a single file is
+    the `.epro2` shape, where a repeated uuid is not something this reader has
+    ever had to interpret, and it must keep reading exactly as before.
+
+    Two refusals, both naming the uuid and the files (see the module docstring):
+
+    * a repeated **PCB** document uuid — the same physical board exported twice;
+    * a ``FOOTPRINT`` / ``DEVICE`` / ``SYMBOL`` uuid whose body disagrees between
+      files — a merge would keep one and lay out the other board with it.
+    """
+    boards_seen: dict[str, Path] = {}
+    library_seen: dict[tuple[str, str], tuple[str, Path]] = {}
+    for document in documents:
+        path = origin[id(document)]
+        uuid = str(getattr(document, "uuid", "") or "").strip()
+        if not uuid:
+            # A head without a uuid (038P1) cannot be matched to anything; the
+            # boards are still named, from the file stem (see `_pcb_title`).
+            continue
+        if document.doc_type == "PCB":
+            first = boards_seen.get(uuid)
+            if first is None:
+                boards_seen[uuid] = path
+                continue
+            raise Eprj3Error(
+                f"{first} 和 {path} 声明了同一个 PCB 文档 uuid {uuid} —— 这是同一块物理"
+                "板被重复导出（拷贝/副本），合流后会被审两遍，报告会凭空多出一块板。"
+                "重复/副本板不重复审：删掉多余的那份再读。这里不按标题聚合，也不静默去重"
+            )
+        if document.doc_type not in LIBRARY_DOC_TYPES:
+            continue
+        signature = document_signature(document)
+        key = (document.doc_type, uuid)
+        previous = library_seen.get(key)
+        if previous is None:
+            library_seen[key] = (signature, path)
+            continue
+        if previous[0] == signature:
+            continue  # 同内容的库副本：两块板各带一份，合并后读到的仍是同一份
+        raise Eprj3Error(
+            f"{previous[1]} 和 {path} 里的 {document.doc_type} 文档 uuid {uuid} 内容不一致 "
+            "—— 多文件合流后库文档只能留一份（后读的覆盖先读的），先读的那块板就会按"
+            "另一块板的库几何来审（错的焊盘、错的丝印，且不报错）。当前不能安全合并，"
+            "这里拒绝读取，不产出错误几何。请核对两份库副本，或把不一致的板拆开单独审"
+        )
+
+
 def _pcb_title(index: dict[str, Any], document: Any, pcb_path: Path) -> str:
     """The board document's own title, in the index's words when it has them.
 
@@ -497,13 +617,43 @@ def load_eprj3_pcb_source(path: str | Path) -> "Epro2Source":
     ``SYMBOL`` / ``FOOTPRINT`` documents the file carries are library payload that
     the schematic transform would flip. The file is therefore read verbatim.
 
-    ``project_meta`` is the index (its identity fields included), with ``title``
-    set from the board's own name and ``editorVersion`` from 038F2's rule — the
-    index when it names one, else the content documents' ``editVersion``.
+    **Every** board of the project is read (038P). A folder project keeps **one
+    file per board** (``pcb/PCB1.epcb2``, ``pcb/PCB2.epcb2`` in the real V4
+    sample), and each file is a complete record stream of its own, so they are
+    read in :func:`pcb_files` order and glued with newlines into **one**
+    :class:`Epro2Source` — exactly the multi-document stream an ``.epro2``
+    container yields. Nothing downstream learns a second shape: ``_pcb_documents``
+    already walks every PCB document, and one shared runner reviews each board on
+    its own (one ``boards[]`` entry apiece). A file that holds **no** PCB document
+    is refused **by name** — a board file without a board is not an empty board
+    (SKILL 坑 14), and the project's other boards do not excuse it.
 
-    Only **one** board is read: without a mapping that says which board a caller
-    means, several ``.epcb2`` files (or several PCB documents in one file) are
-    refused by name rather than silently reduced to the first one.
+    ``project_meta`` is the index (its identity fields included), with
+    ``editorVersion`` from 038F2's rule — the index when it names one, else the
+    content documents' ``editVersion``. The board **names** follow the same
+    either/or as the stream: ``title`` is set only when the project holds exactly
+    one board (the historic shape), and with several the names travel as
+    ``pcbTitles`` — a **list in the same order as the PCB documents** of
+    ``source.documents_of_type("PCB")``, one name per board, each resolved the way
+    :func:`_pcb_title` resolves one board: the index's ``profile.pcbs`` title
+    first, then the document's own ``META.title``, then the file stem. A list and
+    not a uuid→name table (038P1): a board file whose ``DOCHEAD`` carries no
+    ``uuid`` still has a name (the stem), and a table keyed by uuid used to drop
+    it, leaving that board's ``boards[].title`` empty. ``_pcb_documents`` and
+    the caller in ``cli._load_model`` consume the list by position and keep their
+    META/uuid fallback. ``boardUuid`` is **not** in this list and never comes from
+    a title: it stays the document's own ``META.board`` link (151).
+
+    ``--view pcb`` (which builds one model, not a list) is the one caller that
+    cannot take several boards; ``cli._load_model`` refuses that case **by name**
+    rather than letting ``pcb_context()`` answer with the first board. Every
+    per-board consumer (``checkup --file``) goes through the review runner and is
+    unaffected.
+
+    **Multi-file refusals** (038P1): with more than one board file, a PCB document
+    uuid repeated across files and a library document uuid whose body disagrees
+    across files are both refused by :func:`_guard_multi_file_documents`. A
+    single-file project takes neither check, so its reading is unchanged.
     """
     from ..core.geometry import ParseStats
     from .epru import Epro2Source
@@ -520,43 +670,53 @@ def load_eprj3_pcb_source(path: str | Path) -> "Epro2Source":
             "no board document, and an empty board model would read as \"0 器件 0 网\" "
             "(SKILL 坑 14)"
         )
-    if len(boards) > 1:
-        raise Eprj3Error(
-            f"{root}: {len(boards)} PCB files under pcb/ ("
-            + ", ".join(board.name for board in boards)
-            + "); this slice reads one board and the project index names no mapping "
-            "that would say which one a caller means — refusing rather than picking "
-            "the first"
-        )
-    pcb_path = boards[0]
-    try:
-        text = pcb_path.read_text(encoding="utf-8-sig")
-    except UnicodeDecodeError:
-        text = pcb_path.read_text(encoding="utf-8-sig", errors="replace")
-    except OSError as exc:
-        raise Eprj3Error(f"{pcb_path}: cannot be read ({exc})") from exc
+
+    chunks: list[str] = []
+    for pcb_path in boards:
+        try:
+            chunks.append(pcb_path.read_text(encoding="utf-8-sig"))
+        except UnicodeDecodeError:
+            chunks.append(pcb_path.read_text(encoding="utf-8-sig", errors="replace"))
+        except OSError as exc:
+            raise Eprj3Error(f"{pcb_path}: cannot be read ({exc})") from exc
+    text = "\n".join(chunk.rstrip("\n") for chunk in chunks)
 
     meta = dict(index)
     meta.setdefault("name", root.name)
     meta["format"] = "eprj3"
     meta["sourcePath"] = str(root)
-    meta["pcbPath"] = str(pcb_path)
+    meta["pcbPaths"] = [str(board) for board in boards]
+    if len(boards) == 1:
+        meta["pcbPath"] = str(boards[0])
     _apply_editor_version(meta, _stream_versions(text) + _file_versions(root))
 
     stats = ParseStats(source=str(root), editor_version=meta.get("editorVersion"))
-    documents = split_documents(text, stats)
-    pcb_documents = [document for document in documents if document.doc_type == "PCB"]
-    if not pcb_documents:
-        raise Eprj3Error(
-            f"{pcb_path}: no PCB document (DOCHEAD docType \"PCB\") inside the file — "
-            "a board file without a board is not an empty board"
-        )
-    if len(pcb_documents) > 1:
-        raise Eprj3Error(
-            f"{pcb_path}: {len(pcb_documents)} PCB documents in one file — refusing to "
-            "pick one without a mapping that says which"
-        )
-    meta["title"] = _pcb_title(index, pcb_documents[0], pcb_path)
+    documents: list[Any] = []
+    found: list[tuple[Any, Path]] = []
+    origin: dict[int, Path] = {}
+    for pcb_path, chunk in zip(boards, chunks):
+        file_documents = split_documents(chunk, stats)
+        file_boards = [
+            document for document in file_documents if document.doc_type == "PCB"
+        ]
+        if not file_boards:
+            raise Eprj3Error(
+                f"{pcb_path}: no PCB document (DOCHEAD docType \"PCB\") inside the file — "
+                "a board file without a board is not an empty board"
+            )
+        documents.extend(file_documents)
+        found.extend((document, pcb_path) for document in file_boards)
+        for document in file_documents:
+            origin[id(document)] = pcb_path
+
+    if len(boards) > 1:
+        _guard_multi_file_documents(documents, origin)
+
+    titles = [_pcb_title(index, document, pcb_path) for document, pcb_path in found]
+    if len(found) == 1:
+        meta["title"] = titles[0]
+    else:
+        meta["pcbTitles"] = titles
     return Epro2Source(
         source=str(root), stats=stats, documents=documents, project_meta=meta,
     )

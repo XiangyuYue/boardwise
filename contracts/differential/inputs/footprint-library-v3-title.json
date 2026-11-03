@@ -1,0 +1,5 @@
+{
+  "schema": "boardwise.footprint-library-sample/1",
+  "name": "v3-title",
+  "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"fp-v3-qfn32-synth\",\"editVersion\":\"3.2.186\"}|\n{\"type\":\"ATTR\",\"ticket\":2}||{\"title\":\"ATTR-SHOULD-NOT-WIN\",\"key\":\"Footprint Name\",\"value\":\"QFN-32-5X5-SYNTH\"}|\n{\"type\":\"META\",\"ticket\":3}||{\"title\":\"  QFN-32-5X5-SYNTH  \",\"attributes\":{\"Pads\":\"33\",\"Footprint Name\":\"QFN-32-5X5-SYNTH\"}}|\n{\"type\":\"META\",\"ticket\":4}||{\"title\":\"SHOULD-NOT-WIN\",\"attributes\":{\"Pads\":\"99\"}}|"
+}

@@ -44,14 +44,53 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   最终候选读数见 `evidence/540/candidate-regression.md`（Python **8132/94/5/0 failed**），
   不再等待该文件；它是 540 的历史读数，0.6.0 发布验收另记。
 - **V4 / #89 已进入候选**：`e431e94`、`ba4fbae`、`1a7e4a1`、`643cf6d` 覆盖 V4 单 PCB、
-  主机 ERC、同网测量与证据边界。V4 多 PCB、部分跨视图语义和实时 PCB 位图缺口仍公开；
+  主机 ERC、同网测量与证据边界。归档**多 PCB 逐板**已在 038P 工作树完成（未提交）；
+  真实多板 + 库工程、部分跨视图语义和实时 PCB 位图缺口仍公开；
   `incomplete/partial` 不解释为板级通过。
 - **038G–038L 已随 `d542f14` 收口**：Short-Symbol 不再造假网；分歧库副本有第四类覆盖计数，
   纯重编号不误报；旋转 R 矩形按 `(x,y)` pivot 读取（54 父区域/1843 点全过，PGND 30→12）；
   Rust SYMBOL 与 Python 9-case 差分一致，重复脚号逐字段合并。真机 `test` doctor 9/9、
   evidence 与焦点恢复正常，`conflicting_library_documents=0`；在线没有这些专项实例，不冒充覆盖。
-- **审查线下一步**：eprj3 在线容器、真实 NC、缺省 `yAxisDirection`、多 PCB 归属映射；
-  旋转圆角/BOARD_OUTLINE 另需样本。语义网表函数层暂缓，等专门排期。
+- **038M 工作树已完成，尚未提交**：Rust DEVICE 库垂直迁移——`device-library-sample` 成为
+  第 8 个 kind，case book 9→11（新增 `device-library-v3-meta`、`device-library-v4-copies`），
+  Python/Rust 投影一致、旧 9 case 不变。输入只有 `text`（无 `pinKey`），输出
+  `boardwise.device-library/1`，合并语义对齐 `_collect_device_meta`（首 `META`、重复 uuid
+  first-wins、模型可见差异才计冲突）。
+- **038N 工作树已完成，尚未提交**：Rust FOOTPRINT 库垂直迁移——`footprint-library-sample`
+  成为第 9 个 kind，case book 11→13（新增 `footprint-library-v3-title`、
+  `footprint-library-v4-copies`），Python/Rust 投影一致、旧 11 input 不变。输入只有 `text`，
+  输出 `boardwise.footprint-library/1`，形状只有 `schema` + `footprints`（uuid→title），
+  **没有** `stats`、也没有冲突计数：首个 `META` 生效、重复 uuid first-wins（空标题同样占位），
+  字面 `"null"` 标题原样保留（DEVICE 属性值的排除规则不适用于这里）。
+- **038P 工作树已完成，尚未提交**：eprj3 **多 PCB 逐板审查**——同一 `source`/`runner` 逐板
+  出 `boards`（title/boardUuid/components/checksRun/findings，索引不串板），`checkup --file`
+  逐板落地；`_load_model(view="pcb")` 对多板**列出板名后拒绝**并指向 `checkup`（一模型一板），
+  单板历史形状不变。实测 `test V4` 两个**空 PCB**：在线/离线 `boards`、32 checks、
+  40 findings 一致；空板读 0 器件是读数不是缺板。**未覆盖**：真实多板 + 库工程（只有合成证据）。
+- **联合挖洞修复（工作树，未提交；四类）**：多板合流那道缝挖出的四类问题一次修掉——
+  ① **Rust DEVICE 属性浮点溢出**与 Python 对齐成 `inf`/`-inf`（`json.dumps` 的
+  `NaN`/`Infinity` 拼写保留，有限值读数不变）；② 板文档 **`DOCHEAD` 无 uuid** 时按文件
+  stem 命名，不再出无名板（板名改按 PCB 文档顺序逐位消费，不再用 uuid 查表）；③ **重复 PCB
+  文档 uuid 明确拒绝**——同一块板导出两次不合流、不审两遍、不静默去重；④ `FOOTPRINT` /
+  `DEVICE` / `SYMBOL` 同 uuid 只有**签名（记录顺序/id/body，剔 `DOCHEAD` 簿记字段）相同**
+  才允许合流，**分歧即拒绝**，不拿另一块板的库几何去审。证据：
+  `tests/test_038p1_eprj3_multi_guards.py` 与 Rust 侧 `device_library` 差分；本地探针在
+  `.tmp_joint_audit/`（ignored，未提交，不是已提交产物）。单文件工程与旧差分 case 读数不变；
+  真实多板 + 库工程仍未实测，分歧/重复守卫是**合成证据**。
+- **038T 工作树已完成，尚未提交**：`footprint-declared-sample` 成为第 10 个 kind，case book
+  13→15（新增 `footprint-declared-v3-hit`、`footprint-declared-v4-empty`），Python/Rust
+  15/15 一致、旧 13 input 不变。输入 `{schema,name,text,value}`——`text` 是一份 `.epru`
+  记录流，`value` 是器件 `Footprint` 字段原文；输出
+  `{schema:"boardwise.footprint-declared/1",footprint,libraryId}`：`value` 先 trim，只有
+  命中且该标题非空才返回标题 + 原始库 id，空标题/未命中都保留 raw text、`libraryId` 为空；
+  普通名称 trim 后不解析。
+- **审查线下一步**：eprj3 在线容器、真实 NO_CONNECT、`down` 与 envelope marker（信封字段
+  缺省形态）、缺省 `yAxisDirection`、旋转几何样本；多板 + 库组合另需样本。语义网表函数层
+  暂缓，等专门排期。
+- **原生 CBB 已排为独立方向（038Q，11-03 调研/任务书完成）**：仓库当前**没有**原生 CBB
+  实现；`core/blocks.py` 的 `BlockSymbol` 是绘图模板域，不是宿主原生块。type 17 只是线索，
+  **待证实**，不得写成事实。**需真实 CBB 样本**才开阶段 A（离线只读），先读后写；
+  与 038P / FOOTPRINT / Rust 迁移**不混批**，未承诺版本与发布日期。
 - **独立派单**：审查读 `tasks/review-line.md`，绘制读 `tasks/draw-line.md`，shared/CLI/bridge/
   parser/model 的集成改动读 `tasks/shared-platform.md`。两线可独立派小批，shared、全量、真机串行；
   算法与迁移不同批。旧档案 worktree 不当可写工作区；新建/删除 worktree 仍逐次问岳。
@@ -59,7 +98,7 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   `evidence/540/c-acceptance.md`；构建见 `docs/rust-platform.md`。V4 在线证据见
   `outputs/review/v4-online-acceptance.md`，#89 见 `tasks/89a_regulator_same_net_distance.md`、
   `tasks/89b_fb_same_net_distance.md`。
-- **下一段**：0.6.x 绘制算法与 Rust strangler 并行，V4 后续样本/多 PCB 和 041 跨板网络分批；
+- **下一段**：0.6.x 绘制算法与 Rust strangler 并行，V4 后续样本/多板 + 库组合和 041 跨板网络分批；
   R4 stub 仍冻结。版本骨架见 `docs/roadmap.md` §1–§2。
 
 > 以下 3.1–3.4 保留 2026-10-23/24 的业务与发布历史；当前派单和平台状态以 §3.0 为准。

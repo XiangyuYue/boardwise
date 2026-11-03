@@ -129,7 +129,7 @@ fn differential_command_executes_the_repository_case_book() {
     assert_eq!(value["schema"], "boardwise.differential-report/1");
     assert_eq!(value["runner"], "rust");
     assert_eq!(value["ok"], true);
-    assert_eq!(value["cases"].as_array().unwrap().len(), 9);
+    assert_eq!(value["cases"].as_array().unwrap().len(), 15);
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn differential_without_flags_uses_the_repository_not_the_current_directory() {
     let value = stdout(&output);
     assert_eq!(value["schema"], "boardwise.differential-report/1");
     assert_eq!(value["ok"], true);
-    assert_eq!(value["cases"].as_array().expect("cases").len(), 9);
+    assert_eq!(value["cases"].as_array().expect("cases").len(), 15);
 }
 
 #[test]

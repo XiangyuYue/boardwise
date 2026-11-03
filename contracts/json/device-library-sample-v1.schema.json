@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boardwise.dev/contracts/json/device-library-sample-v1.schema.json",
+  "title": "boardwise device library sample — one differential case input",
+  "description": "A declared sample of .epru record text. The input carries no expected projection: both runners derive boardwise.device-library/1 from the text. No pinKey: a DEVICE document is addressed by its own uuid, and nothing in its META is keyed by an element handle.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "name", "text"],
+  "properties": {
+    "schema": {"const": "boardwise.device-library-sample/1"},
+    "name": {"type": "string", "minLength": 1},
+    "text": {
+      "type": "string",
+      "x-meaning": "The .epru record stream verbatim: {envelope}||{body}| lines, terminator optional on the last line."
+    }
+  }
+}

@@ -884,3 +884,104 @@ def test_the_skill_review_route_compresses_the_tail_order_and_points_at_the_sop(
         "docs/review-sop.md",
     ):
         assert token in skill, f"SKILL lost {token!r} from the review route"
+
+
+def test_rust_platform_names_the_real_case_book_size():
+    """护 `docs/rust-platform.md` §3 的那句「仓库 case book 当前有 **N 个 case**」。
+
+    唯一的量是 `contracts/differential/cases.json` 的 `cases` 长度；文档只是它的转述。
+    失效形态：加了一组差分 case（038M 从 9 变 11、038N 从 11 变 13、038T 从 13 变 15）
+    而平台文档仍写旧数——读的人会误判 Rust 覆盖率；反向同样算漂移——文档一旦不再提
+    `device-library-sample`、`footprint-library-sample` 或 `footprint-declared-sample`，
+    那句「五组各一个 kind、两个 case id」、「三组才是库投影」与「最后一组是声明解析投影」
+    就失去字面支撑，读者找不到 DEVICE / FOOTPRINT / DECLARED 投影的入口。
+    """
+    cases = json.loads(
+        (REPO / "contracts" / "differential" / "cases.json").read_text(encoding="utf-8")
+    )["cases"]
+    platform = re.sub(
+        r"\s+",
+        " ",
+        (REPO / "docs" / "rust-platform.md").read_text(encoding="utf-8"),
+    )
+    count = len(cases)
+    assert f"**{count} 个 case**" in platform, (
+        "docs/rust-platform.md's case-book count drifted from "
+        f"contracts/differential/cases.json ({count} cases)"
+    )
+    for kind, label in (
+        ("device-library-sample", "DEVICE"),
+        ("footprint-library-sample", "FOOTPRINT"),
+        ("footprint-declared-sample", "DECLARED"),
+    ):
+        assert kind in platform, (
+            f"docs/rust-platform.md no longer names `{kind}` — the {label} "
+            "projection kind lost its entry in the case-book paragraph"
+        )
+
+
+def test_the_cbb_book_pins_its_negative_controls_and_its_unproven_lead():
+    """护 038Q 的两处口径钉，它们都是「删掉一句就变成假话」的脆弱点。
+
+    ① 原生 CBB 目前**不存在**实现，`type 17` 只是线索。任务书一旦把「待证实」写丢、
+    或把「先读后写」写丢，后来的人就会照着线索去写解析或先写后补证据（R3 的反面）。
+    ② 三条 negative control 是「兼容 CBB」这句话的全部支撑：已接块端口静默、真悬空仍报、
+    普通器件读数不变。少一条，误报修复就会退化成全局静默。
+    ③ 兼容矩阵的要求归 `tasks/shared-platform.md` 的集成锁管；它被删掉时，以后每批都会
+    拿单一维度的绿读数冒充兼容。
+    """
+    book = re.sub(
+        r"\s+",
+        " ",
+        (REPO / "tasks" / "038q_cbb_native.md").read_text(encoding="utf-8"),
+    )
+    for token in (
+        "type 17 待证实",
+        "先读后写",
+        "block_symbol",
+        "已接块端口",
+        "真悬空",
+        "普通器件读数不变",
+    ):
+        assert token in book, f"tasks/038q_cbb_native.md lost {token!r}"
+    platform = re.sub(
+        r"\s+",
+        " ",
+        (REPO / "tasks" / "shared-platform.md").read_text(encoding="utf-8"),
+    )
+    for token in ("兼容矩阵", "negative control", "未覆盖不得写"):
+        assert token in platform, f"tasks/shared-platform.md lost {token!r}"
+
+
+def test_the_boundary_doc_names_the_multi_board_guards_without_hiding_the_gap():
+    """护 038P1 之后 `docs/v3-v4-boundary.md` 与 `tasks/shared-platform.md` 的口径。
+
+    多板合流的三道守卫（相同库副本允许 / 分歧拒绝 / 重复 PCB 拒绝 / 无 uuid 板按文件名）
+    是「多板能读了」这句话的全部支撑；边界文档一旦退回泛泛的「多板未支持」，或把守卫写丢，
+    后来的人就会以为多板 + 库要么全能读、要么全都不能读——两种误读都会让人跳过真实样本。
+    缺口那句同理：守卫只有合成证据，**真实多板 + 库工程未实测**必须留着，否则合成样本
+    会被读成真机覆盖。
+
+    `tasks/shared-platform.md` 的集成锁要求每批写 negative control，两个多板例子是它唯一的
+    具体样式：少了它们，「不该变的东西必须不变」就退化成一句口号。
+    """
+    def tight(relative: str) -> str:
+        return re.sub(r"\s+", "", (REPO / relative).read_text(encoding="utf-8"))
+
+    boundary = tight("docs/v3-v4-boundary.md")
+    for token in ("相同库副本允许", "分歧拒绝", "重复PCB拒绝", "按文件名命名"):
+        assert token in boundary, (
+            "docs/v3-v4-boundary.md no longer states the multi-board guard "
+            f"{token!r} — the boundary fell back to a blanket 「多板未支持」"
+        )
+    assert "真实多板+库工程未实测" in boundary, (
+        "docs/v3-v4-boundary.md lost the honest gap: the guards are synthetic-sample "
+        "evidence, no real multi-board + library project has been read"
+    )
+
+    platform = tight("tasks/shared-platform.md")
+    for token in ("分歧库", "重复PCB"):
+        assert token in platform, (
+            "tasks/shared-platform.md no longer carries the multi-board negative "
+            f"control example {token!r}"
+        )

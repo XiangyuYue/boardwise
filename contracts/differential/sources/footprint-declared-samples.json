@@ -1,0 +1,20 @@
+{
+  "schema": "boardwise.footprint-declared-samples/1",
+  "description": "The two synthetic declared-Footprint samples the differential case book publishes as footprint-declared-sample inputs. Unlike the library samples, an entry states two things: the .epru record stream the field is read against, and the schematic Footprint field itself (`value`). The projection is the answer to one question - what did this field declare - so the input carries no expected document and no branch name. The V3 case is one FOOTPRINT document whose META title is padded with whitespace and a value that is that document's uuid: the golden is the trimmed title plus the raw id, the one shape in which a field is *resolved*. The V4 case copies one uuid document by document the way a V4 export repeats a used document: the first copy's title is blank and the later copies state titles, so the archive names the footprint nothing and the golden is the raw id with an empty library id - the first META wins, and a copy that states a title does not fill in an entry that is already there. The text below is the whole input: no editor session, container or fixture is read to obtain it, and no line names a real project.",
+  "samples": [
+    {
+      "caseId": "footprint-declared-v3-hit",
+      "input": "footprint-declared-v3-hit.json",
+      "name": "v3-hit",
+      "value": "0a1b2c3d4e5f6071",
+      "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"0a1b2c3d4e5f6071\",\"editVersion\":\"3.2.186\"}|\n{\"type\":\"META\",\"ticket\":2}||{\"title\":\"  CAP-SMD_L8.0-W6.0-LS11.4  \",\"attributes\":{\"Pads\":\"2\",\"Footprint Name\":\"CAP-SMD_L8.0-W6.0-LS11.4\"}}|"
+    },
+    {
+      "caseId": "footprint-declared-v4-empty",
+      "input": "footprint-declared-v4-empty.json",
+      "name": "v4-empty",
+      "value": "9c8b7a6f5e4d3c2b",
+      "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"9c8b7a6f5e4d3c2b\",\"editVersion\":\"4.0.1\"}|\n{\"type\":\"META\",\"ticket\":2}||{\"title\":\"   \"}|\n{\"type\":\"DOCHEAD\",\"ticket\":3}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"9c8b7a6f5e4d3c2b\",\"editVersion\":\"4.0.2\"}|\n{\"type\":\"ATTR\",\"ticket\":4}||{\"key\":\"Footprint Name\",\"value\":\"PWR-DFN-8-SYNTH\"}|\n{\"type\":\"META\",\"ticket\":5}||{\"title\":\"PWR-DFN-8-SYNTH\",\"attributes\":{\"Pads\":\"9\"}}|\n{\"type\":\"DOCHEAD\",\"ticket\":6}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"9c8b7a6f5e4d3c2b\",\"editVersion\":\"4.0.3\"}|\n{\"type\":\"META\",\"ticket\":7}||{\"title\":\"LATE-SHOULD-NOT-WIN\"}|"
+    }
+  ]
+}

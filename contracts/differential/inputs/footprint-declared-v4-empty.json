@@ -1,0 +1,6 @@
+{
+  "schema": "boardwise.footprint-declared-sample/1",
+  "name": "v4-empty",
+  "text": "{\"type\":\"DOCHEAD\",\"ticket\":1}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"9c8b7a6f5e4d3c2b\",\"editVersion\":\"4.0.1\"}|\n{\"type\":\"META\",\"ticket\":2}||{\"title\":\"   \"}|\n{\"type\":\"DOCHEAD\",\"ticket\":3}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"9c8b7a6f5e4d3c2b\",\"editVersion\":\"4.0.2\"}|\n{\"type\":\"ATTR\",\"ticket\":4}||{\"key\":\"Footprint Name\",\"value\":\"PWR-DFN-8-SYNTH\"}|\n{\"type\":\"META\",\"ticket\":5}||{\"title\":\"PWR-DFN-8-SYNTH\",\"attributes\":{\"Pads\":\"9\"}}|\n{\"type\":\"DOCHEAD\",\"ticket\":6}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"9c8b7a6f5e4d3c2b\",\"editVersion\":\"4.0.3\"}|\n{\"type\":\"META\",\"ticket\":7}||{\"title\":\"LATE-SHOULD-NOT-WIN\"}|",
+  "value": "9c8b7a6f5e4d3c2b"
+}

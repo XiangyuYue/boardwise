@@ -76,7 +76,22 @@ const TYPE_NAMES: [&str; 7] = [
 /// record stream, because a V3 `.epro2` addresses a PIN row by `e<zIndex>` while
 /// an eprj3/`pin_id` stream addresses it by the row's own id. Both runners derive
 /// the same `boardwise.symbol-library/1` from `text` + `pinKey`.
-const SCHEMAS: [(&str, &str); 7] = [
+///
+/// `device-library-sample` is the eighth kind. Its input states only `text`: a
+/// DEVICE document is addressed by its own uuid, so nothing in its `META` needs
+/// a key selector, and both runners derive `boardwise.device-library/1` from the
+/// record stream alone.
+///
+/// `footprint-library-sample` is the ninth kind, and states the same thing: its
+/// input is a tag, a name and the record stream, and both runners derive
+/// `boardwise.footprint-library/1` (uuid → the document's `META` title) from it.
+///
+/// `footprint-declared-sample` is the tenth kind and reads the other half of that
+/// table: the input states the record stream **and** one schematic `Footprint`
+/// field, and both runners emit `boardwise.footprint-declared/1` — what the field
+/// declared, plus the raw library id when the archive names it. `value` may be
+/// empty; the contract states it rather than defaulting it.
+const SCHEMAS: [(&str, &str); 10] = [
     ("review-report-projection", "review-report-v1.schema.json"),
     ("layout-plan-geometry", "layout-plan-v1.schema.json"),
     (
@@ -94,6 +109,18 @@ const SCHEMAS: [(&str, &str); 7] = [
     (
         "symbol-library-sample",
         "symbol-library-sample-v1.schema.json",
+    ),
+    (
+        "device-library-sample",
+        "device-library-sample-v1.schema.json",
+    ),
+    (
+        "footprint-library-sample",
+        "footprint-library-sample-v1.schema.json",
+    ),
+    (
+        "footprint-declared-sample",
+        "footprint-declared-sample-v1.schema.json",
     ),
 ];
 
@@ -896,10 +923,13 @@ mod tests {
             "draw-compile-result-v1.schema.json",
             "draw-lint-result-v1.schema.json",
             "draw-page-compile-result-v1.schema.json",
+            "device-library-sample-v1.schema.json",
             "epru-stream-sample-v1.schema.json",
+            "footprint-library-sample-v1.schema.json",
             "layout-plan-v1.schema.json",
             "review-report-v1.schema.json",
             "symbol-library-sample-v1.schema.json",
+            "footprint-declared-sample-v1.schema.json",
         ] {
             let schema = contract_file("contracts/json", name);
             check_schema(&schema).unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -939,6 +969,30 @@ mod tests {
                 "symbol-library-v4-pin-id.json",
                 "symbol-library-sample-v1.schema.json",
             ),
+            (
+                "device-library-v3-meta.json",
+                "device-library-sample-v1.schema.json",
+            ),
+            (
+                "device-library-v4-copies.json",
+                "device-library-sample-v1.schema.json",
+            ),
+            (
+                "footprint-library-v3-title.json",
+                "footprint-library-sample-v1.schema.json",
+            ),
+            (
+                "footprint-library-v4-copies.json",
+                "footprint-library-sample-v1.schema.json",
+            ),
+            (
+                "footprint-declared-v3-hit.json",
+                "footprint-declared-sample-v1.schema.json",
+            ),
+            (
+                "footprint-declared-v4-empty.json",
+                "footprint-declared-sample-v1.schema.json",
+            ),
         ];
         for (input_name, schema_name) in pairs {
             let schema = contract_file("contracts/json", schema_name);
@@ -956,6 +1010,24 @@ mod tests {
             ("epru-stream-v4-eof-truncated.json", "epru-stream-sample"),
             ("symbol-library-v3-zindex.json", "symbol-library-sample"),
             ("symbol-library-v4-pin-id.json", "symbol-library-sample"),
+            ("device-library-v3-meta.json", "device-library-sample"),
+            ("device-library-v4-copies.json", "device-library-sample"),
+            (
+                "footprint-library-v3-title.json",
+                "footprint-library-sample",
+            ),
+            (
+                "footprint-library-v4-copies.json",
+                "footprint-library-sample",
+            ),
+            (
+                "footprint-declared-v3-hit.json",
+                "footprint-declared-sample",
+            ),
+            (
+                "footprint-declared-v4-empty.json",
+                "footprint-declared-sample",
+            ),
         ] {
             validate_for_kind(&input(input_name), kind)
                 .unwrap_or_else(|error| panic!("{input_name} as {kind}: {error}"));
@@ -992,6 +1064,113 @@ mod tests {
             .expect("sample is an object")
             .insert("body".to_owned(), json!("no"));
         validate_for_kind(&extra, "epru-stream-sample").expect_err("no extra field is accepted");
+    }
+
+    /// The DEVICE sample kind is gated by its own file: the tag, a non-empty
+    /// name and the text — and, unlike the SYMBOL sample, no key selector, since
+    /// a DEVICE document is addressed by its own uuid.
+    #[test]
+    fn device_library_sample_kind_is_gated_by_its_own_schema() {
+        let sample = json!({
+            "schema": "boardwise.device-library-sample/1",
+            "name": "synthetic",
+            "text": "{\"type\":\"DOCHEAD\"}||{\"docType\":\"DEVICE\",\"uuid\":\"d\"}|",
+        });
+        validate_for_kind(&sample, "device-library-sample").expect("a declared sample validates");
+
+        let mut nameless = sample.clone();
+        nameless
+            .as_object_mut()
+            .expect("sample is an object")
+            .remove("name");
+        validate_for_kind(&nameless, "device-library-sample").expect_err("a sample needs a name");
+
+        let mut keyed = sample.clone();
+        keyed
+            .as_object_mut()
+            .expect("sample is an object")
+            .insert("pinKey".to_owned(), json!("zIndex"));
+        validate_for_kind(&keyed, "device-library-sample")
+            .expect_err("a DEVICE is addressed by its uuid, not by a pinKey");
+
+        let mut other_tag = sample;
+        other_tag["schema"] = json!("boardwise.symbol-library-sample/1");
+        validate_for_kind(&other_tag, "device-library-sample")
+            .expect_err("the tag is the contract's own");
+    }
+
+    /// The FOOTPRINT sample kind is gated by its own file: the tag, a non-empty
+    /// name and the text — and again no key selector, since a FOOTPRINT document
+    /// is addressed by its own uuid.
+    #[test]
+    fn footprint_library_sample_kind_is_gated_by_its_own_schema() {
+        let sample = json!({
+            "schema": "boardwise.footprint-library-sample/1",
+            "name": "synthetic",
+            "text": "{\"type\":\"DOCHEAD\"}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"f\"}|",
+        });
+        validate_for_kind(&sample, "footprint-library-sample")
+            .expect("a declared sample validates");
+
+        let mut nameless = sample.clone();
+        nameless
+            .as_object_mut()
+            .expect("sample is an object")
+            .remove("name");
+        validate_for_kind(&nameless, "footprint-library-sample")
+            .expect_err("a sample needs a name");
+
+        let mut keyed = sample.clone();
+        keyed
+            .as_object_mut()
+            .expect("sample is an object")
+            .insert("pinKey".to_owned(), json!("zIndex"));
+        validate_for_kind(&keyed, "footprint-library-sample")
+            .expect_err("a FOOTPRINT is addressed by its uuid, not by a pinKey");
+
+        let mut other_tag = sample;
+        other_tag["schema"] = json!("boardwise.device-library-sample/1");
+        validate_for_kind(&other_tag, "footprint-library-sample")
+            .expect_err("the tag is the contract's own");
+    }
+
+    /// The declared-footprint sample kind is gated by its own file: the tag, a
+    /// non-empty name, the text and the field value — and `value` is required
+    /// even when it is empty, because "the field is empty" and "the field is not
+    /// stated" are two different samples.
+    #[test]
+    fn footprint_declared_sample_kind_is_gated_by_its_own_schema() {
+        let sample = json!({
+            "schema": "boardwise.footprint-declared-sample/1",
+            "name": "synthetic",
+            "text": "{\"type\":\"DOCHEAD\"}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"f\"}|",
+            "value": "0a1b2c3d4e5f6071",
+        });
+        validate_for_kind(&sample, "footprint-declared-sample")
+            .expect("a declared sample validates");
+
+        let mut empty_field = sample.clone();
+        empty_field["value"] = json!("");
+        validate_for_kind(&empty_field, "footprint-declared-sample")
+            .expect("an empty field is a stated value");
+
+        let mut valueless = sample.clone();
+        valueless
+            .as_object_mut()
+            .expect("sample is an object")
+            .remove("value");
+        validate_for_kind(&valueless, "footprint-declared-sample")
+            .expect_err("the field value is required, never defaulted");
+
+        let mut numeric = sample.clone();
+        numeric["value"] = json!(7);
+        validate_for_kind(&numeric, "footprint-declared-sample")
+            .expect_err("the field is a string, empty included");
+
+        let mut other_tag = sample;
+        other_tag["schema"] = json!("boardwise.footprint-library-sample/1");
+        validate_for_kind(&other_tag, "footprint-declared-sample")
+            .expect_err("the tag is the contract's own");
     }
 
     /// `pages` and `candidates` are two documents, not one renamed field: each

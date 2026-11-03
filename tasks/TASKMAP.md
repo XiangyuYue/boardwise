@@ -22,8 +22,9 @@
   542 P0 反激整页三关、岳人眼与重开持久化验收通过；`527D2/D3` 已落地。
   540 平台准备、CH343 示例、V4 首批适配和 #89 同网测量修复也已进入本版。
 - **V4 / #89 最近四笔**：`e431e94`（V4 工作流）、`ba4fbae`（同网测量）、
-  `1a7e4a1`（测量状态文案）、`643cf6d`（V4 证据边界）。V4 当前只承诺单 PCB 工作流；
-  多 PCB、部分跨视图语义和实时 PCB 位图缺口不关闭、不隐瞒。
+  `1a7e4a1`（测量状态文案）、`643cf6d`（V4 证据边界）。V4 归档已从单 PCB 走到**逐板**
+  （038P 工作树，未提交；`test V4` 两空板对账）；**多板 + 库文档同名、部分跨视图语义和
+  实时 PCB 位图缺口不关闭、不隐瞒**。原生 CBB 另立独立方向 038Q（调研/任务书，待真实样本）。
 - **540 最终候选证据已产生**：`evidence/540/candidate-regression.md` 记录 Python
   **8132 passed / 94 skipped / 5 xfailed / 0 failed**，其他门禁与差分结果见同文件；
   不再写成「待 candidate-regression.md」。它是 540 的历史候选读数，不冒充 0.6.0 最终全量。
@@ -358,15 +359,21 @@
 | 540 | 0.6.0 前工作区整理、审查/绘制解耦、Rust 迁移平台准备；不改业务算法、不批量翻译 | 已落（A/B/C + 对抗修复 + 只读真机追加验收；最终候选 8132 passed / 94 skipped / 5 xfailed） | tasks/540_pre060_platform.md；tasks/540b_review_draw_decoupling.md；tasks/540c_rust_platform.md；**evidence/540/candidate-regression.md**；outputs/review/540/ |
 | 541 | **审查分阶段交付与可中断流程**：initial/partial 检查点、冻结输入、同基准复读、中止只读已有产物出 partial；RunManifest / 重算 guard / harness 硬闸仍为规划 | 已落 | docs/review-sop.md §3.0a；tasks/review-stage-runtime-gates.md；tests/test_review_stage_delivery.py；两份 SKILL 的 3.0a 路由 |
 | 542 | **原理图绘制 3.0**：drawing-line 集成、反激整页三关、四缝挖洞修复、RC 冻结与 V4 交接；CH343 示例 | **P0 完成并纳入 0.6.0**：P4 三关、岳人眼与重开 `saved_verified` 全过 | tasks/542_schematic_3_0_nov01.md；evidence/542/final-p4.md；evidence/201h/live/ |
-| V4 | **立创 EDA Pro 4.x 适配**：归档与 `.eprj3` 单 PCB 审查、在线容器/page、主机 ERC 与证据边界 | **首批已随 `e431e94` 落入 0.6.0**；多 PCB、部分跨视图语义、实时 PCB 位图与后续真样本仍开放。**边界口径见 `docs/v3-v4-boundary.md`** | tasks/038-eprj3-tierA.md；tasks/038_v4_live_gaps.md；docs/v3-v4-boundary.md |
+| V4 | **立创 EDA Pro 4.x 适配**：归档与 `.eprj3` 单 PCB 审查、在线容器/page、主机 ERC 与证据边界 | **首批已随 `e431e94` 落入 0.6.0**；**归档多 PCB 逐板已在 038P 工作树完成（未提交）**；多板 + 库文档同名、真实 NC、缺省 `yAxisDirection`、部分跨视图语义、实时 PCB 位图与后续真样本仍开放。**边界口径见 `docs/v3-v4-boundary.md`** | tasks/038-eprj3-tierA.md；tasks/038_v4_live_gaps.md；tests/test_038p_eprj3_multi_pcb.py；docs/v3-v4-boundary.md |
 | 038R | **V4 审查线差分调研**：容器/在线通道与 P0–P2 顺序、共享模型边界 | 调研完成，首批已实施 | tasks/038_v4_review_line_research.md；outputs/review/v4-review-line-research.md |
-| 038S | **真实 eprj3 样本只读差分**：证实原理图一致与 PCB builder 复用，发现 EOF、覆盖、版本与 POUR/POURED 单位差 | 样本调研完成，首批适配已实施；POURED 1:10 与旋转矩形已由 038K 关闭，多 PCB、真实 NC、缺省 yAxisDirection 与 eprj3 在线容器仍开放 | tasks/038_v4_sample_research.md；outputs/review/v4-review-line-research.md §6；.tmp_v4_sample_20261031/REPORT.md |
-| 038F | **V3/V4 容器隔离与单 PCB Tier-B**：F1 EOF、F2 版本、F3 覆盖、F4 source、F5 CLI/checkup；共享规则/报告 | **已随 `e431e94` 落入候选**；多 PCB、真实 NC 与 eprj3 在线容器未关闭，POURED 单位与旋转矩形不再列为开放项 | tasks/038_v4_isolation_plan.md；outputs/review/v4-eof-frame.md；v4-eprj3-version.md；v4-eprj3-pcb-coverage.md；v4-eprj3-pcb-source.md；v4-eprj3-tierb.md |
+| 038S | **真实 eprj3 样本只读差分**：证实原理图一致与 PCB builder 复用，发现 EOF、覆盖、版本与 POUR/POURED 单位差 | 样本调研完成，首批适配已实施；POURED 1:10 与旋转矩形已由 038K 关闭，归档多 PCB 已由 038P 工作树关闭（未提交）；真实 NC、缺省 yAxisDirection 与 eprj3 在线容器仍开放 | tasks/038_v4_sample_research.md；outputs/review/v4-review-line-research.md §6；.tmp_v4_sample_20261031/REPORT.md |
+| 038F | **V3/V4 容器隔离与单 PCB Tier-B**：F1 EOF、F2 版本、F3 覆盖、F4 source、F5 CLI/checkup；共享规则/报告 | **已随 `e431e94` 落入候选**；**归档多 PCB 逐板已由 038P 工作树关闭（未提交；`test V4` 两空板对账，真实多板 + 库工程未实测）**；单模型 `review --view pcb` 多板仍拒绝，真实 NC 与 eprj3 在线容器未关闭，POURED 单位与旋转矩形不再列为开放项 | tasks/038_v4_isolation_plan.md；outputs/review/v4-eof-frame.md；v4-eprj3-version.md；v4-eprj3-pcb-coverage.md；v4-eprj3-pcb-source.md；v4-eprj3-tierb.md；tests/test_038p_eprj3_multi_pcb.py |
 | 038O | **V4.1.93 在线只读验收与 O1–O3 修复**：doctor 9/9、page 采集、PCB render 不适用、逐条 ERC 与证据缺口披露 | **已随 `e431e94`/`643cf6d` 落入候选**；板级仍 incomplete，多 PCB/全格式语义未关闭 | tasks/038_v4_online_acceptance.md；tasks/038_v4_live_gaps.md；outputs/review/v4-online-acceptance.md；outputs/review/v4-live-gaps-acceptance.md |
 | 038G | **Short-Symbol 网表语义**：跳线不再产生假 `Symbol` 网，按页并网；冗余跳线不再翻转普通簇的显式标签/电源旗标优先级 | 已落 `466ca6e`，冗余守卫随 `d542f14` 收口；合成回归含跨页隔离、悬空脚与命名优先级 | tests/test_038g_short_symbol.py；tests/test_040_page_scope.py |
 | 038J | **V4 分歧库副本诊断**：SYMBOL/DEVICE 同 UUID 的模型可见定义不同才计数，纯元素重编号不误报；first-wins 不变，冲突进入 console/md 与 coverage 闸 | 已落 `d542f14`；相同复制 0、真实冲突逐份计数，`coverage.recordsDropped` 含第四项 | tests/test_038_eprj3.py；tests/test_020_parse_drops.py；tests/test_072_coverage_gate.py |
 | 038K | **旋转矩形与 POURED 几何**：R 路径按存储 `(x,y)` pivot、声明角度 CCW 读取；空 POURED supersession 语义不变 | 已落 `d542f14`；54 父区域/1843 点 containment 全过，PGND 铜岛 30→12 有元素与面积证据；旋转圆角和 BOARD_OUTLINE 不扩支持 | tests/test_038k_rotated_rectangles.py；tests/test_135_poured_result.py；tests/test_131f_mcu_crystal_keepout.py |
 | 038L | **Rust SYMBOL 垂直迁移**：V3 zIndex/V4 pin_id、两阶段 ATTR、重复脚号逐字段合并、重编号不参与冲突判断 | 已落 `d542f14`；Python/Rust 9-case 差分一致，工作区 74 passed/4 ignored | rust/crates/boardwise-core/src/symbol.rs；tests/test_038l_symbol_differential.py；docs/rust-platform.md |
+| 038M | **Rust DEVICE 垂直迁移**：`device-library-sample` 成为第 8 个 kind，首 `META`、重复 uuid first-wins、模型可见差异才计冲突 | 工作树完成，未提交；case book 9→11，Python/Rust 投影一致，旧 9 case 不变；**属性浮点溢出的文本差分已修**（与 Python 对齐 `inf`/`-inf`，`json.dumps` 的 `NaN`/`Infinity` 拼写保留、有限值不变） | rust/crates/boardwise-core/src/device.rs；tests/test_038m_device_differential.py；docs/rust-platform.md |
+| 038N | **Rust FOOTPRINT 库垂直迁移**：`footprint-library-sample` 成为第 9 个 kind，首 `META` 生效、重复 uuid first-wins（空标题占位）、字面 `"null"` 标题保留；输出只有 `schema`+`footprints`，无 stats、无冲突计数 | 工作树完成，未提交；case book 11→13，Python/Rust 投影一致，旧 11 input 不变 | rust/crates/boardwise-core/src/footprint.rs；tests/test_038n_footprint_differential.py；docs/rust-platform.md |
+| 038P | **eprj3 多 PCB 逐板审查**：同一 `source`/`runner` 逐板出 `boards`（title/boardUuid/components/checksRun/findings），`checkup --file` 逐板落地；`_load_model(view=pcb)` 多板**列出板名后拒绝**并指向 `checkup`，单板历史形状不变；**合流守卫见 038P1**（重复板拒绝、分歧库拒绝、相同副本允许、无 uuid 板按 stem 命名） | 工作树完成，未提交；`test V4` 两个空 PCB 在线/离线 `boards`、32 checks、40 findings 一致；**真实多板 + 库工程未实测**（守卫只有合成证据）；`review --view pcb` 多板仍拒绝 | tests/test_038p_eprj3_multi_pcb.py；src/boardwise/parsers/eprj3.py；src/boardwise/engines/pcbreview.py；docs/v3-v4-boundary.md |
+| 038P1 | **多文件合流的三处说谎面**：① 无 `DOCHEAD.uuid` 的板按文件 stem 命名（`pcbTitles` 改为按 PCB 文档顺序的列表，不做 uuid 查表）；② 两份文件同一个 PCB 文档 uuid **明确拒绝**（同一块板导出两次不审两遍、不按标题聚合、不静默去重）；③ `FOOTPRINT`/`DEVICE`/`SYMBOL` 同 uuid 只有**记录序列签名相同**（保留顺序/id/body，仅剔 `DOCHEAD` 的 editVersion/updateTime/version/client/user）才允许合流，**分歧拒绝**、不串板 | 工作树完成，未提交；单文件旧行为不变，旧差分 case 与两空板读数不变；**合成样本证据**，真实多板 + 库工程未实测 | tests/test_038p1_eprj3_multi_guards.py；src/boardwise/parsers/eprj3.py；docs/v3-v4-boundary.md；本地探针 `.tmp_joint_audit/`（ignored，非已提交产物） |
+| 038T | **Rust 声明解析投影垂直迁移**：`footprint-declared-sample` 成为第 10 个 kind，输入 `text`+`value` 走同一对 Python 阅读器（`_collect_footprint_titles` → `_resolve_declared_footprint`），只回答原理图 `Footprint` 字段声明了什么；输出 `schema`+`footprint`+`libraryId`，三个分支不单独出字段 | 工作树完成，未提交；case book 13→15，Python/Rust 15/15 一致，旧 13 input 不变 | rust/crates/boardwise-core/src/footprint.rs；tests/test_038t_footprint_declared.py；docs/rust-platform.md |
+| 038Q | **原生 CBB（`block_symbol`）接入调研**：库搜索/身份/归档 → 受控个人库样件与放置 → 写后回读真实 `block_symbol` → 块端口规则；仓库当前无原生实现，`core/blocks.py` 的 `BlockSymbol` 是绘图模板域不是宿主原生块 | **调研/任务书完成（11-03），未开工**；**待真实 CBB 样本**，无样本不开阶段 A；**type 17 待证实**，不得写成事实；不承诺版本/发布日期 | tasks/038q_cbb_native.md；tests/test_doc_claims.py；docs/v3-v4-boundary.md |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）
 

@@ -22,7 +22,9 @@ pub const CLI_RESULT_SCHEMA: &str = "boardwise.cli-result/1";
 pub const DIFFERENTIAL_REPORT_SCHEMA: &str = "boardwise.differential-report/1";
 pub const DIFFERENTIAL_CASES_SCHEMA: &str = "boardwise.differential-cases/1";
 
+pub mod device;
 pub mod epru;
+pub mod footprint;
 pub mod schema;
 pub mod symbol;
 
@@ -205,14 +207,18 @@ fn boolean(value: &Value, key: &str) -> Result<bool> {
 //    `\u00XX` for the remaining control characters);
 // 3. numbers spelled by `float.__repr__` — shortest round-trip digits, fixed
 //    notation while `-4 < decpt <= 16`, exponent otherwise, `.0` on integral
-//    values, and `-0.0` keeping its sign;
+//    values, and `-0.0` keeping its sign; a non-finite value gets the token
+//    `json.dumps` writes for it (`Infinity`), not the `inf` that `str()` does;
 // 4. no whitespace anywhere.
 //
-// `python_float_repr` is the third rule on its own. Rust's `{:e}` supplies
-// shortest round-trip digits but breaks exact halfway ties the other way from
-// CPython's dtoa (measured: `1000000000000000.25` is `1000000000000000.2` in
-// Python, `...3` in Rust), so an ambiguous candidate is recomputed from the
-// value's exact decimal expansion, rounding half to even like dtoa does.
+// `python_float_repr` is the digits of the third rule on its own, spelled the
+// way `str()`/`repr()` spell a double. Rust's `{:e}` supplies shortest
+// round-trip digits but breaks exact halfway ties the other way from CPython's
+// dtoa (measured: `1000000000000000.25` is `1000000000000000.2` in Python,
+// `...3` in Rust), so an ambiguous candidate is recomputed from the value's
+// exact decimal expansion, rounding half to even like dtoa does.
+// `json_float_repr` wraps it for this file's own writing: finite values through
+// `python_float_repr`, the non-finite ones through `json.dumps`' tokens.
 
 /// One JSON value, numbered by its Python spelling.
 #[derive(Debug, Clone)]
@@ -238,7 +244,7 @@ impl Canon {
             Self::PosInt(value) => out.push_str(&value.to_string()),
             Self::NegInt(value) => out.push_str(&value.to_string()),
             Self::Integer(value) => out.push_str(value),
-            Self::Float(value) => out.push_str(&python_float_repr(*value)),
+            Self::Float(value) => out.push_str(&json_float_repr(*value)),
             Self::Text(value) => write_json_string(value, out),
             Self::Array(items) => {
                 out.push('[');
@@ -482,16 +488,17 @@ fn shortest_decimal(value: f64) -> DecimalDigits {
     }
 }
 
-/// `repr(value)` for a positive finite double, digits chosen like CPython's dtoa.
+/// `repr(value)` for a double: CPython's `str()`/`repr()` spelling, digits
+/// chosen like its dtoa, and `nan`/`inf`/`-inf` for the non-finite values.
 pub fn python_float_repr(value: f64) -> String {
     if value.is_nan() {
-        return "NaN".to_owned();
+        return "nan".to_owned();
     }
     if value.is_infinite() {
         return if value.is_sign_negative() {
-            "-Infinity"
+            "-inf"
         } else {
-            "Infinity"
+            "inf"
         }
         .to_owned();
     }
@@ -505,6 +512,25 @@ pub fn python_float_repr(value: f64) -> String {
         decimal = exact_shortest(magnitude);
     }
     decimal.format(negative)
+}
+
+/// `json.dumps(float)` for a double: `float.__repr__` for the finite values,
+/// and the tokens `allow_nan=True` writes for the rest — `NaN`, `Infinity`,
+/// `-Infinity`. The canonical digest compares against Python's `json.dumps`, so
+/// this path keeps those spellings even though `str()` says `nan`/`inf`.
+fn json_float_repr(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_owned();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        }
+        .to_owned();
+    }
+    python_float_repr(value)
 }
 
 /// Is this the only candidate of its length that reads back as `value`?
@@ -651,6 +677,25 @@ fn layout_list<'a>(map: &'a Map<String, Value>, key: &str) -> Result<&'a [Value]
 /// `char::is_whitespace` does not consider whitespace.
 fn python_whitespace(character: char) -> bool {
     character.is_whitespace() || matches!(character, '\u{1c}'..='\u{1f}')
+}
+
+/// Python truthiness of a decoded JSON value: only `None`, `False`, `0`, `""`
+/// and the empty containers are falsy; `float("nan")` is truthy here and in
+/// Python (`bool(nan)` is `True`).
+///
+/// The readers use it everywhere Python writes `value or default`, which is how
+/// `None`/`""`/`{}`/`[]` all become the same "absent" without the reader having
+/// to enumerate them. `crate::symbol` carries a private copy of this same
+/// predicate; the two have to answer identically.
+fn python_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_none_or(|value| value != 0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(fields) => !fields.is_empty(),
+    }
 }
 
 /// `LayoutPlan._text`: absent/null is `""` (or a refusal when required), a
@@ -1253,6 +1298,34 @@ fn project_case(case: &Case, root: &Path) -> Result<Value> {
             let library = symbol::project_library(&records, pin_key)?;
             Ok(serde_json::to_value(library)?)
         }
+        // 038M: the DEVICE library projection, derived by the module that owns
+        // the DEVICE reading from the same record stream. The input states only
+        // `text` — a DEVICE document is addressed by its own uuid, so there is
+        // no key to select the way a SYMBOL pin needs a `pinKey`.
+        "device-library-sample" => {
+            let records = epru::iter_epru_records(text(&payload, "text")?);
+            let library = device::project_library(&records);
+            Ok(serde_json::to_value(library)?)
+        }
+        // 038N: the FOOTPRINT library projection, derived by the module that owns
+        // the FOOTPRINT reading from the same record stream. The input states only
+        // `text`: the projection is the archive's own uuid → title table, so there
+        // is no key to select and no counter to report (the Python reader takes no
+        // `ParseStats` and counts nothing).
+        "footprint-library-sample" => {
+            let records = epru::iter_epru_records(text(&payload, "text")?);
+            let library = footprint::project_library(&records);
+            Ok(serde_json::to_value(library)?)
+        }
+        // 038T: what one declared `Footprint` field says, resolved against the
+        // same archive table. The titles come from `footprint::project_library`
+        // — the arm above — so the two cannot disagree about what this archive
+        // names; only the reading of the field is new here.
+        "footprint-declared-sample" => {
+            let records = epru::iter_epru_records(text(&payload, "text")?);
+            let declared = footprint::project_declared(&records, text(&payload, "value")?);
+            Ok(serde_json::to_value(declared)?)
+        }
         other => Err(ContractError::Shape(format!(
             "unknown differential case kind {other:?}"
         ))),
@@ -1361,7 +1434,7 @@ mod tests {
         let report = run_cases(&root.join("contracts/differential/cases.json"), &root)
             .expect("differential cases run");
         assert!(report.ok, "Rust differential failed: {report:#?}");
-        assert_eq!(report.cases.len(), 9);
+        assert_eq!(report.cases.len(), 15);
         assert_eq!(report.runner, "rust");
     }
 
@@ -1501,6 +1574,12 @@ mod tests {
             (f64::from_bits(0x430c_6bf5_2634_0002), "1000000000000000.2"),
             (f64::from_bits(0xc31a_cd24_2c8d_7601), "-1885976161115520.2"),
             (f64::from_bits(0x4312_cb29_1ac0_c8d9), "1322481745932854.2"),
+            // Non-finite values: `str()`/`repr()` spell these `nan`/`inf`, and
+            // `json.dumps` spells the very same bits `NaN`/`Infinity` — the
+            // token the canonical digest has to write.
+            (f64::NAN, "nan"),
+            (f64::INFINITY, "inf"),
+            (f64::NEG_INFINITY, "-inf"),
         ];
         for (value, expected) in rows {
             assert_eq!(
@@ -1509,6 +1588,10 @@ mod tests {
                 "repr({value:?}) must follow Python"
             );
         }
+        assert_eq!(json_float_repr(f64::NAN), "NaN");
+        assert_eq!(json_float_repr(f64::INFINITY), "Infinity");
+        assert_eq!(json_float_repr(f64::NEG_INFINITY), "-Infinity");
+        assert_eq!(json_float_repr(95.0), "95.0");
     }
 
     #[test]

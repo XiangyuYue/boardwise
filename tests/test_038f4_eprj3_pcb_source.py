@@ -9,9 +9,9 @@ builders that must keep working on the result.
 
 Two rules are the ones a later refactor is most likely to break, so they are the
 ones spelled out: a PCB file is **not** y-flipped (its coordinates are already the
-cloud frame, and its copied libraries must never be flipped either), and a project
-with more than one board is **refused** rather than silently reduced to the first
-one.
+cloud frame, and its copied libraries must never be flipped either), and every
+board file of the project is **read** into the one stream, in file order (038P —
+before it, more than one board was refused rather than reduced to the first).
 """
 
 from __future__ import annotations
@@ -146,7 +146,8 @@ def test_a_schematic_page_is_not_a_board(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# 2. the refusals: no board, and more than one board
+# 2. the refusals: no board at all, a board file with no board in it — and the
+#    one shape that used to be refused and is now read board by board (038P)
 # --------------------------------------------------------------------------
 
 
@@ -171,7 +172,8 @@ def test_a_board_file_without_a_board_document_is_refused(tmp_path):
     assert "PCB document" in str(caught.value)
 
 
-def test_two_boards_are_refused_rather_than_the_first_picked(tmp_path):
+def test_every_board_file_is_read_in_file_order(tmp_path):
+    """038P: two boards are two documents in one stream — neither refused nor merged."""
     root = _write_project(
         tmp_path / "proj",
         pcb={
@@ -179,12 +181,21 @@ def test_two_boards_are_refused_rather_than_the_first_picked(tmp_path):
             "pcb/PCB2.epcb2": _pcb_stream(uuid="b", title="PCB2"),
         },
     )
-    with pytest.raises(Eprj3Error) as caught:
-        load_eprj3_pcb_source(root)
-    message = str(caught.value)
-    assert "2 PCB files" in message
-    assert "PCB1.epcb2" in message and "PCB2.epcb2" in message
-    assert "first" in message, "the refusal has to say what it declined to do"
+    source = load_eprj3_pcb_source(root)
+
+    assert [document.uuid for document in source.documents_of_type("PCB")] == ["a", "b"], (
+        "file order, and both boards present — the adapter picks nothing"
+    )
+    assert "title" not in source.project_meta, (
+        "one `title` would be the first board's name wearing the project's hat"
+    )
+    assert source.project_meta["pcbTitles"] == ["PCB1", "PCB2"], (
+        "a list in PCB-document order (038P1): a board head without a uuid has "
+        "no key in a uuid→name table, and its name used to be dropped"
+    )
+    assert source.project_meta["pcbPaths"] == [
+        str(root / "pcb" / "PCB1.epcb2"), str(root / "pcb" / "PCB2.epcb2")
+    ]
 
 
 # --------------------------------------------------------------------------

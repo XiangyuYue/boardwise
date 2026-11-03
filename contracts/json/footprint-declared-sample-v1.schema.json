@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boardwise.dev/contracts/json/footprint-declared-sample-v1.schema.json",
+  "title": "boardwise declared footprint sample — one differential case input",
+  "description": "A declared sample of one schematic Footprint field, read against the .epru record text it lives in. The input carries no expected projection: both runners look the value up in the archive's own uuid -> title table and emit boardwise.footprint-declared/1. `value` is the field verbatim and may be empty; there is no default spelling for an absent field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "name", "text", "value"],
+  "properties": {
+    "schema": {"const": "boardwise.footprint-declared-sample/1"},
+    "name": {"type": "string", "minLength": 1},
+    "text": {
+      "type": "string",
+      "x-meaning": "The .epru record stream verbatim: {envelope}||{body}| lines, terminator optional on the last line."
+    },
+    "value": {
+      "type": "string",
+      "x-meaning": "The schematic Footprint field verbatim: a footprint name, a raw library id, or the empty string. Never omitted — an absent field and an empty one are two different statements."
+    }
+  }
+}

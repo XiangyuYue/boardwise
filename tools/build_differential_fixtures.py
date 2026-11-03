@@ -50,8 +50,10 @@ INPUTS_RELATIVE = "contracts/differential/inputs"
 CASES_RELATIVE = "contracts/differential/cases.json"
 # One public input name per **case id**; `_render` publishes in the order
 # `_produce` returns. The five producer cases are named after their kind, so their
-# ids read as kinds; the two declared `.epru` samples and the two declared SYMBOL
-# library samples share one kind each, which is what `CASE_KINDS` says out loud.
+# ids read as kinds; the two declared `.epru` samples, the two declared SYMBOL
+# library samples, the two declared DEVICE library samples and the two declared
+# FOOTPRINT library samples share one kind each, which is what `CASE_KINDS` says
+# out loud.
 INPUT_NAMES = {
     "review-report-projection": "review-report.json",
     "layout-plan-geometry": "divider-cand1.layout.json",
@@ -62,6 +64,12 @@ INPUT_NAMES = {
     "epru-stream-v4-eof-truncated": "epru-stream-v4-eof-truncated.json",
     "symbol-library-v3-zindex": "symbol-library-v3-zindex.json",
     "symbol-library-v4-pin-id": "symbol-library-v4-pin-id.json",
+    "device-library-v3-meta": "device-library-v3-meta.json",
+    "device-library-v4-copies": "device-library-v4-copies.json",
+    "footprint-library-v3-title": "footprint-library-v3-title.json",
+    "footprint-library-v4-copies": "footprint-library-v4-copies.json",
+    "footprint-declared-v3-hit": "footprint-declared-v3-hit.json",
+    "footprint-declared-v4-empty": "footprint-declared-v4-empty.json",
 }
 #: The case ids whose kind is *not* the id itself. A case book is keyed by id, so
 #: two cases of one kind need two ids; the kind decides the schema and projection,
@@ -71,6 +79,12 @@ CASE_KINDS = {
     "epru-stream-v4-eof-truncated": "epru-stream-sample",
     "symbol-library-v3-zindex": "symbol-library-sample",
     "symbol-library-v4-pin-id": "symbol-library-sample",
+    "device-library-v3-meta": "device-library-sample",
+    "device-library-v4-copies": "device-library-sample",
+    "footprint-library-v3-title": "footprint-library-sample",
+    "footprint-library-v4-copies": "footprint-library-sample",
+    "footprint-declared-v3-hit": "footprint-declared-sample",
+    "footprint-declared-v4-empty": "footprint-declared-sample",
 }
 #: The contract tag of a declared sample document (see `contracts/json/
 #: epru-stream-sample-v1.schema.json`).
@@ -89,6 +103,39 @@ SYMBOL_SAMPLE_SCHEMA = "boardwise.symbol-library-sample/1"
 SYMBOL_SAMPLE_SOURCES = SOURCES / "symbol-library-samples.json"
 SYMBOL_SAMPLE_CASE_IDS = frozenset(
     {"symbol-library-v3-zindex", "symbol-library-v4-pin-id"}
+)
+#: The contract tag of a declared DEVICE library sample (see `contracts/json/
+#: device-library-sample-v1.schema.json`): the record stream alone, because a
+#: DEVICE document is addressed by its own uuid and nothing in its `META` is
+#: keyed by an element handle.
+DEVICE_SAMPLE_SCHEMA = "boardwise.device-library-sample/1"
+#: Declared DEVICE library sample text — synthetic record streams, not a
+#: producer's output, and no real project content.
+DEVICE_SAMPLE_SOURCES = SOURCES / "device-library-samples.json"
+DEVICE_SAMPLE_CASE_IDS = frozenset(
+    {"device-library-v3-meta", "device-library-v4-copies"}
+)
+#: The contract tag of a declared FOOTPRINT library sample (see `contracts/json/
+#: footprint-library-sample-v1.schema.json`): the record stream alone, because a
+#: FOOTPRINT document is addressed by its own uuid and its name is its `META`
+#: title.
+FOOTPRINT_SAMPLE_SCHEMA = "boardwise.footprint-library-sample/1"
+#: Declared FOOTPRINT library sample text — synthetic record streams, not a
+#: producer's output, and no real project content.
+FOOTPRINT_SAMPLE_SOURCES = SOURCES / "footprint-library-samples.json"
+FOOTPRINT_SAMPLE_CASE_IDS = frozenset(
+    {"footprint-library-v3-title", "footprint-library-v4-copies"}
+)
+#: The contract tag of a declared-footprint sample (see `contracts/json/
+#: footprint-declared-sample-v1.schema.json`): a record stream **plus** the
+#: schematic `Footprint` field it is read against, because the projection answers
+#: what one field declared and the field may be a name, a library id or empty.
+FOOTPRINT_DECLARED_SAMPLE_SCHEMA = "boardwise.footprint-declared-sample/1"
+#: Declared field samples — a synthetic record stream and one field value, not a
+#: producer's output, and no real project content.
+FOOTPRINT_DECLARED_SAMPLE_SOURCES = SOURCES / "footprint-declared-samples.json"
+FOOTPRINT_DECLARED_SAMPLE_CASE_IDS = frozenset(
+    {"footprint-declared-v3-hit", "footprint-declared-v4-empty"}
 )
 
 # An absolute path that survived sanitization, whatever machine it came from: a
@@ -181,6 +228,17 @@ def _produce() -> dict[str, Path]:
     # published after it, so the seven earlier case rows cannot move.
     for case_id, path in _declared_symbol_samples().items():
         produced[case_id] = path
+    # The DEVICE library samples follow the SYMBOL ones, and the FOOTPRINT
+    # library samples follow those, staying last for the same reason: the nine
+    # earlier case rows (and the two DEVICE rows after them) keep their order.
+    for case_id, path in _declared_device_samples().items():
+        produced[case_id] = path
+    for case_id, path in _declared_footprint_samples().items():
+        produced[case_id] = path
+    # The declared-footprint samples stay last for the same reason: the thirteen
+    # rows before them keep their order and their bytes.
+    for case_id, path in _declared_footprint_declared_samples().items():
+        produced[case_id] = path
     return produced
 
 
@@ -250,6 +308,116 @@ def _declared_symbol_samples() -> dict[str, Path]:
             raise RuntimeError(
                 f"declared sample {entry['caseId']!r} does not survive sanitization; "
                 "a declared sample must publish exactly the text it declares"
+            )
+        path = RUN_ROOT / entry["input"]
+        write_text_lf(path, _dump(payload))
+        produced[entry["caseId"]] = path
+    return produced
+
+
+def _declared_device_samples() -> dict[str, Path]:
+    """Write each declared DEVICE library sample into this run's fresh directory.
+
+    Same shape as :func:`_declared_symbol_samples`, one key shorter: a DEVICE
+    library sample is the record stream **alone**. A DEVICE document is addressed
+    by its own uuid, so nothing in its `META` needs a key selector, and the merge
+    rules (the document's first `META` wins, `is_part`, the conflicting-copy
+    counter) belong to the runners that read the stream — publishing them here
+    would let a declaration decide a reading.
+    """
+    declared = load_path(DEVICE_SAMPLE_SOURCES)
+    entries = declared["samples"]
+    if sorted(entry["caseId"] for entry in entries) != sorted(DEVICE_SAMPLE_CASE_IDS):
+        raise RuntimeError(
+            f"{DEVICE_SAMPLE_SOURCES.name} declares "
+            f"{sorted(entry['caseId'] for entry in entries)}, "
+            f"not the case ids {sorted(DEVICE_SAMPLE_CASE_IDS)}"
+        )
+    produced: dict[str, Path] = {}
+    for entry in entries:
+        payload = {
+            "schema": DEVICE_SAMPLE_SCHEMA,
+            "name": entry["name"],
+            "text": entry["text"],
+        }
+        if _sanitize(payload) != payload:
+            raise RuntimeError(
+                f"declared sample {entry['caseId']!r} does not survive sanitization; "
+                "a declared sample must publish exactly the text it declares"
+            )
+        path = RUN_ROOT / entry["input"]
+        write_text_lf(path, _dump(payload))
+        produced[entry["caseId"]] = path
+    return produced
+
+
+def _declared_footprint_samples() -> dict[str, Path]:
+    """Write each declared FOOTPRINT library sample into this run's fresh directory.
+
+    Same shape as :func:`_declared_device_samples`, and the same one key: a
+    FOOTPRINT library sample is the record stream **alone**. A FOOTPRINT document
+    is addressed by its own uuid and its name is its first `META` title, so the
+    declaration states no key selector and no projection — the first-`META`,
+    empty-title and first-wins rules belong to the runners that read the stream.
+    """
+    declared = load_path(FOOTPRINT_SAMPLE_SOURCES)
+    entries = declared["samples"]
+    if sorted(entry["caseId"] for entry in entries) != sorted(FOOTPRINT_SAMPLE_CASE_IDS):
+        raise RuntimeError(
+            f"{FOOTPRINT_SAMPLE_SOURCES.name} declares "
+            f"{sorted(entry['caseId'] for entry in entries)}, "
+            f"not the case ids {sorted(FOOTPRINT_SAMPLE_CASE_IDS)}"
+        )
+    produced: dict[str, Path] = {}
+    for entry in entries:
+        payload = {
+            "schema": FOOTPRINT_SAMPLE_SCHEMA,
+            "name": entry["name"],
+            "text": entry["text"],
+        }
+        if _sanitize(payload) != payload:
+            raise RuntimeError(
+                f"declared sample {entry['caseId']!r} does not survive sanitization; "
+                "a declared sample must publish exactly the text it declares"
+            )
+        path = RUN_ROOT / entry["input"]
+        write_text_lf(path, _dump(payload))
+        produced[entry["caseId"]] = path
+    return produced
+
+
+def _declared_footprint_declared_samples() -> dict[str, Path]:
+    """Write each declared-field sample into this run's fresh directory.
+
+    One key longer than :func:`_declared_footprint_samples`: the sample states the
+    record stream **and** the schematic `Footprint` field, because the projection
+    answers "what did this field declare" and that answer is only about the pair.
+    `value` is published exactly as declared, the empty string included — the
+    contract has no default spelling for an absent field, so an empty one has to
+    be stated.
+    """
+    declared = load_path(FOOTPRINT_DECLARED_SAMPLE_SOURCES)
+    entries = declared["samples"]
+    if sorted(entry["caseId"] for entry in entries) != sorted(
+        FOOTPRINT_DECLARED_SAMPLE_CASE_IDS
+    ):
+        raise RuntimeError(
+            f"{FOOTPRINT_DECLARED_SAMPLE_SOURCES.name} declares "
+            f"{sorted(entry['caseId'] for entry in entries)}, "
+            f"not the case ids {sorted(FOOTPRINT_DECLARED_SAMPLE_CASE_IDS)}"
+        )
+    produced: dict[str, Path] = {}
+    for entry in entries:
+        payload = {
+            "schema": FOOTPRINT_DECLARED_SAMPLE_SCHEMA,
+            "name": entry["name"],
+            "text": entry["text"],
+            "value": entry["value"],
+        }
+        if _sanitize(payload) != payload:
+            raise RuntimeError(
+                f"declared sample {entry['caseId']!r} does not survive sanitization; "
+                "a declared sample must publish exactly what it declares"
             )
         path = RUN_ROOT / entry["input"]
         write_text_lf(path, _dump(payload))
@@ -412,6 +580,9 @@ def _render(produced: Mapping[str, Path]) -> dict[Path, str]:
         SOURCES / "page.presentation.json",
         SAMPLE_SOURCES,
         SYMBOL_SAMPLE_SOURCES,
+        DEVICE_SAMPLE_SOURCES,
+        FOOTPRINT_SAMPLE_SOURCES,
+        FOOTPRINT_DECLARED_SAMPLE_SOURCES,
     ]
     manifest = {
         "schema": "boardwise.differential-manifest/1",
@@ -430,6 +601,9 @@ def _render(produced: Mapping[str, Path]) -> dict[Path, str]:
             "python -m boardwise.cli draw lint --snapshot <OUT>/lint-snapshot.json --render <OUT>/lint-render.svg --json <OUT>/lint-result.json",
             "declared samples contracts/differential/sources/epru-stream-samples.json -> <OUT>/epru-stream-v3-eof.json <OUT>/epru-stream-v4-eof-truncated.json (written from the declaration file, not from the editor, a container or a fixture)",
             "declared samples contracts/differential/sources/symbol-library-samples.json -> <OUT>/symbol-library-v3-zindex.json <OUT>/symbol-library-v4-pin-id.json (written from the declaration file, carrying the pinKey each stream is keyed by)",
+            "declared samples contracts/differential/sources/device-library-samples.json -> <OUT>/device-library-v3-meta.json <OUT>/device-library-v4-copies.json (written from the declaration file; a DEVICE is addressed by its own uuid, so the input states no pinKey)",
+            "declared samples contracts/differential/sources/footprint-library-samples.json -> <OUT>/footprint-library-v3-title.json <OUT>/footprint-library-v4-copies.json (written from the declaration file; a FOOTPRINT is addressed by its own uuid and named by its first META title, so the input states neither a pinKey nor a projection)",
+            "declared samples contracts/differential/sources/footprint-declared-samples.json -> <OUT>/footprint-declared-v3-hit.json <OUT>/footprint-declared-v4-empty.json (written from the declaration file; each entry states the .epru stream and the schematic Footprint field verbatim, empty string included, and no projection)",
         ],
         "regenerate": ".venv/Scripts/python.exe -m tools.build_differential_fixtures",
         "sanitization": [

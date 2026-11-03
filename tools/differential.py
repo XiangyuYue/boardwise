@@ -34,7 +34,13 @@ from typing import Any
 
 from boardwise.core.layoutplan import LayoutPlan
 from boardwise.parsers.epru_stream import ParseStats, iter_epru_records, split_documents
-from boardwise.parsers.schematic import _SymbolDef, _collect_symbols
+from boardwise.parsers.schematic import (
+    _SymbolDef,
+    _collect_device_meta,
+    _collect_footprint_titles,
+    _collect_symbols,
+    _resolve_declared_footprint,
+)
 from tools.contract_validate import ContractValidationError, assert_valid, load_path
 from tools.differential_compare import canonical_bytes, write_text_lf
 
@@ -50,6 +56,25 @@ ERROR_EXIT_CODE = 2
 #: declared samples were published into the case book; the projection it gates is
 #: :func:`_symbol_library_projection`, the same one the Rust runner derives from
 #: the same `text` + `pinKey`.
+#:
+#: ``device-library-sample`` (038M) is the eighth kind and states the same thing
+#: on both sides: its two declared DEVICE library samples are published as cases,
+#: gated by their own file, and the projection each runner derives from `text`
+#: alone — a DEVICE document is addressed by its own uuid, so the input carries no
+#: key selector — is compared as golden.
+#:
+#: ``footprint-library-sample`` (038N) is the ninth kind. Its input also states
+#: only `text`: the projection is the archive's own ``uuid -> META.title`` table,
+#: taken from `_collect_footprint_titles` unchanged — that reader has no stats and
+#: no counter, so the projection has none either.
+#:
+#: ``footprint-declared-sample`` (038T) is the tenth kind and reads the *other*
+#: half of the same table: an input states a record stream plus one schematic
+#: ``Footprint`` field, and both runners answer "what did this field declare" with
+#: :func:`~boardwise.parsers.schematic._resolve_declared_footprint` over
+#: :func:`~boardwise.parsers.schematic._collect_footprint_titles`' titles. The
+#: field may be a real name, a raw library id this archive names, or an id it does
+#: not — and the empty string, which the contract states rather than defaults.
 SCHEMAS = {
     "review-report-projection": "review-report-v1.schema.json",
     "layout-plan-geometry": "layout-plan-v1.schema.json",
@@ -58,11 +83,20 @@ SCHEMAS = {
     "lint-result-projection": "draw-lint-result-v1.schema.json",
     "epru-stream-sample": "epru-stream-sample-v1.schema.json",
     "symbol-library-sample": "symbol-library-sample-v1.schema.json",
+    "device-library-sample": "device-library-sample-v1.schema.json",
+    "footprint-library-sample": "footprint-library-sample-v1.schema.json",
+    "footprint-declared-sample": "footprint-declared-sample-v1.schema.json",
 }
 #: Schema tag of the `.epru` stream projection both runners emit.
 EPRU_STREAM_SCHEMA = "boardwise.epru-stream/1"
 #: Schema tag of the SYMBOL library projection both runners emit.
 SYMBOL_LIBRARY_SCHEMA = "boardwise.symbol-library/1"
+#: Schema tag of the DEVICE library projection both runners emit.
+DEVICE_LIBRARY_SCHEMA = "boardwise.device-library/1"
+#: Schema tag of the FOOTPRINT library projection both runners emit.
+FOOTPRINT_LIBRARY_SCHEMA = "boardwise.footprint-library/1"
+#: Schema tag of the declared-footprint resolution both runners emit.
+FOOTPRINT_DECLARED_SCHEMA = "boardwise.footprint-declared/1"
 #: The two refs a pin can be addressed by, as the sample contract's
 #: ``pinKey`` enum states them (V3 ``.epro2`` vs eprj3).
 SYMBOL_PIN_KEYS = ("zIndex", "pin_id")
@@ -249,6 +283,86 @@ def _symbol_library_projection(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _device_library_projection(payload: dict[str, Any]) -> dict[str, Any]:
+    """Project one ``.epru`` DEVICE library — a *view*, never a parser.
+
+    Both the map and the one counter come from the real reader:
+    :func:`~boardwise.parsers.epru_stream.iter_epru_records` decodes the stream
+    into the records the schematic parser consumes, and
+    :func:`~boardwise.parsers.schematic._collect_device_meta` turns those records
+    into ``uuid -> meta`` exactly as the review path does — including the
+    document's first ``META`` winning over its later ones, first-wins on a
+    repeated uuid, and the conflicting-document counter for a later copy whose
+    model-visible meta differs. The counter is read from the **same**
+    :class:`~boardwise.core.geometry.ParseStats` the collector filled, so a
+    differential mismatch can only ever be about the projection.
+
+    The entries are emitted as the collector returns them, deliberately
+    untranslated: what a DEVICE means to the model is decided in **one** place
+    (``_collect_device_meta``), and a second spelling here would be a field the
+    Rust side could only agree with by copying this projection instead of the
+    reading. ``editVersion``, the element numbering and the order the records
+    were written are outside the comparison on both sides.
+    """
+    stats = ParseStats()
+    records = list(iter_epru_records(payload["text"], stats))
+    devices = _collect_device_meta(records, stats)
+    return {
+        "schema": DEVICE_LIBRARY_SCHEMA,
+        "devices": devices,
+        "conflictingDocuments": stats.conflicting_library_documents,
+    }
+
+
+def _footprint_library_projection(payload: dict[str, Any]) -> dict[str, Any]:
+    """Project one ``.epru`` FOOTPRINT library — a *view*, never a parser.
+
+    The whole map comes from the real reader:
+    :func:`~boardwise.parsers.schematic._collect_footprint_titles` walks the
+    record stream itself and returns ``uuid -> title`` exactly as the review path
+    reads it — only ``FOOTPRINT`` documents open a uuid, only a ``META`` fills it,
+    the document's first ``META`` wins, and an empty title still occupies the
+    entry. The titles are emitted as that reader returns them, deliberately
+    untranslated.
+
+    What is deliberately **not** emitted: a conflict or dropped-record counter.
+    That reader is called with no :class:`~boardwise.core.geometry.ParseStats` and
+    counts nothing, so a count here would be a number the Rust side could only
+    agree with by inventing it. ``attributes``, ``editVersion``, the element
+    numbering and the record order are outside the comparison on both sides.
+    """
+    return {
+        "schema": FOOTPRINT_LIBRARY_SCHEMA,
+        "footprints": _collect_footprint_titles(payload["text"]),
+    }
+
+
+def _footprint_declared_projection(payload: dict[str, Any]) -> dict[str, Any]:
+    """Resolve one declared ``Footprint`` field against one ``.epru`` library.
+
+    Both halves come from the readers the model path already uses, in the order
+    it uses them: :func:`~boardwise.parsers.schematic._collect_footprint_titles`
+    builds the archive's ``uuid -> title`` table from ``text``, and
+    :func:`~boardwise.parsers.schematic._resolve_declared_footprint` answers what
+    ``value`` declares against it. Nothing here re-states either rule — a name
+    alone, an empty field and an id this archive does not name all stay
+    "unresolved", and only a hit in the table names a footprint *and* keeps the
+    raw id beside it.
+
+    What is deliberately **not** emitted: which of the three branches fired. The
+    pair ``(footprint, libraryId)`` already says it — ``""`` as the id is "not
+    resolved", and a caller inferring more would be reading a second field the
+    Rust side could only agree with by copying this projection.
+    """
+    titles = _collect_footprint_titles(payload["text"])
+    footprint, library_id = _resolve_declared_footprint(payload["value"], titles)
+    return {
+        "schema": FOOTPRINT_DECLARED_SCHEMA,
+        "footprint": footprint,
+        "libraryId": library_id,
+    }
+
+
 def project_payload(kind: str, payload: Any) -> dict[str, Any]:
     """Emit the language-neutral projection from an already-parsed payload.
 
@@ -310,6 +424,12 @@ def project_payload(kind: str, payload: Any) -> dict[str, Any]:
         return _epru_stream_projection(payload["text"])
     if kind == "symbol-library-sample":
         return _symbol_library_projection(payload)
+    if kind == "device-library-sample":
+        return _device_library_projection(payload)
+    if kind == "footprint-library-sample":
+        return _footprint_library_projection(payload)
+    if kind == "footprint-declared-sample":
+        return _footprint_declared_projection(payload)
     raise ValueError(f"unknown differential case kind: {kind!r}")
 
 

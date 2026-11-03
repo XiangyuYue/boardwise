@@ -667,12 +667,24 @@ def _cross_view_auto_net_aliases(schematic: Any, pcb_model: Any) -> list[dict]:
 
 
 def _pcb_documents(source: Any) -> list[tuple[str, str, Any]]:
-    """``(META title, META board, document)`` for every PCB document, in file order.
+    """``(title, META board, document)`` for every PCB document, in file order.
 
     The title is read from the document's own ``META`` record (钉 4). A document
     whose META carries no title falls back to its uuid so it is still
     addressable and still distinguishable — but the two real fixtures all name
     themselves ("PCB1"/"PCB2"/"PCB3"), which is what the test pins.
+
+    **A container that states the project's own names wins** (038P): a folder
+    project with several boards carries ``project_meta["pcbTitles"]`` — a **list**
+    in the same order as the PCB documents themselves, each name resolved by
+    :func:`~boardwise.parsers.eprj3.load_eprj3_pcb_source` (the index's
+    ``profile.pcbs`` title first, then the META title, then the file stem). The
+    list is positional on purpose (038P1): a board file whose ``DOCHEAD`` has no
+    ``uuid`` is still named — by its file stem — where a uuid→name table had no
+    key to hold it and left the title empty. When the list names a document, its
+    word is the board's name; the META/uuid chain below stays the fallback, so an
+    ``.epro2`` (which has no such list) reads exactly as before. ``board`` is
+    unaffected either way — it is never derived from a title.
 
     ``board`` is the same META's declared link to the schematic board (151): it
     is the uuid of a ``BOARD`` document, which is exactly what
@@ -683,8 +695,11 @@ def _pcb_documents(source: Any) -> list[tuple[str, str, Any]]:
     hits, no fallback needed. Empty string when the document states none, which
     a rule reads as 「板链读不出」 rather than as board 0.
     """
+    meta = getattr(source, "project_meta", None) or {}
+    declared = meta.get("pcbTitles") if isinstance(meta, dict) else None
+    declared = list(declared) if isinstance(declared, (list, tuple)) else []
     titled: list[tuple[str, str, Any]] = []
-    for document in source.documents_of_type("PCB"):
+    for position, document in enumerate(source.documents_of_type("PCB")):
         title = ""
         parent_board = ""
         for record in document.records:
@@ -693,6 +708,11 @@ def _pcb_documents(source: Any) -> list[tuple[str, str, Any]]:
                 parent_board = str(record.body.get("board") or "")
                 if title:
                     break
+        project_title = ""
+        if position < len(declared):
+            project_title = str(declared[position] or "").strip()
+        if project_title:
+            title = project_title
         if not title:
             title = str(document.uuid or "")
         titled.append((title, parent_board, document))
@@ -1311,10 +1331,12 @@ def _review_units(source_path: str | Path) -> list[tuple[str, str, Any, Any]]:
     The two readers are deferred so an ``.epro2`` with three PCB documents
     still parses one board at a time, exactly as before R3. An ``.epro2`` gives
     one unit per PCB document (titled by its ``META``, 钉 4). A folder project
-    (038F5) gives exactly the one board 038F4's
-    :func:`~boardwise.parsers.eprj3.load_eprj3_pcb_source` accepts, titled the
-    way that adapter titled it; its refusals (no board file, several board
-    files) propagate, so this function never turns a refusal into an empty
+    (038F5) gives one unit per board too: 038F4's
+    :func:`~boardwise.parsers.eprj3.load_eprj3_pcb_source` reads every
+    ``pcb/**/*.epcb2`` into one multi-document stream (038P), so the same
+    `_pcb_documents` below walks them in file order — nothing here knows the
+    container. Its refusals (no board file, a board file with no PCB document)
+    propagate, so this function never turns a refusal into an empty
     list. A KiCad project
     (R3) gives **one** unit — a ``.kicad_pcb`` is one board — titled by the
     board file's stem, with no schematic-board link (``board_uuid`` empty: KiCad
@@ -1343,13 +1365,13 @@ def _review_units(source_path: str | Path) -> list[tuple[str, str, Any, Any]]:
     from ..parsers.epru import extract_board, load_epro2_source
 
     # 038F5: the only container difference this runner knows about. A folder
-    # project's board is ``pcb/<board>.epcb2``, and 038F4's adapter hands it over
-    # as the same :class:`~boardwise.parsers.epru.Epro2Source` the ``.epro2``
-    # reader returns — so every line below (`_pcb_documents`, footprints /
-    # artwork, `extract_board`, `build_design_model`) is one shared path and
-    # there is no second V4 review driver. The adapter's own refusals (no board
-    # file, several board files, a file with no PCB document) are its
-    # `Eprj3Error`s, raised here before any document is selected.
+    # project's boards are ``pcb/<board>.epcb2`` (one file per board, 038P reads
+    # them all), and 038F4's adapter hands them over as the same
+    # :class:`~boardwise.parsers.epru.Epro2Source` the ``.epro2`` reader returns —
+    # so every line below (`_pcb_documents`, footprints / artwork, `extract_board`,
+    # `build_design_model`) is one shared path and there is no second V4 review
+    # driver. The adapter's own refusals (no board file, a file with no PCB
+    # document) are its `Eprj3Error`s, raised here before any document is selected.
     if looks_like_eprj3(source_path):
         source = load_eprj3_pcb_source(source_path)
     else:
@@ -1392,9 +1414,12 @@ def run_pcb_review(
     in principle disagree with the board the findings came from).
 
     ``source_path`` is any readable container this runner knows: an ``.epro2``
-    backup, a KiCad project, or (038F5) an eprj3 folder project whose single
-    board is ``pcb/<board>.epcb2``. **166** is why the ``.epro2`` half of that
-    sentence is worth spelling out: the online `checkup` calls this function too,
+    backup, a KiCad project, or (038F5) an eprj3 folder project whose boards are
+    ``pcb/<board>.epcb2`` — 038P reads **every** one of them into the same
+    multi-document stream, so a two-board folder returns two ``boards[]``
+    entries exactly like a two-board ``.epro2`` does. **166** is why the ``.epro2``
+    half of that sentence is worth spelling out: the online `checkup` calls this
+    function too,
     handing it the archive its `project-file` tier downloaded from
     ``sys.get_project_file`` (written to a temporary file for the duration of the
     call). The two callers differ in where the file came from and in nothing

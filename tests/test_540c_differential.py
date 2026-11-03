@@ -29,6 +29,9 @@ EXPECTED_KINDS = {
     "lint-result-projection",
     "epru-stream-sample",
     "symbol-library-sample",
+    "device-library-sample",
+    "footprint-library-sample",
+    "footprint-declared-sample",
 }
 
 
@@ -45,7 +48,7 @@ def test_python_runner_executes_every_repository_golden_case() -> None:
     assert report["schema"] == "boardwise.differential-report/1"
     assert report["runner"] == "python"
     assert report["ok"] is True
-    assert len(report["cases"]) == 9
+    assert len(report["cases"]) == 15
     assert {case["kind"] for case in _json(CASES)["cases"]} == EXPECTED_KINDS
     assert all(case["ok"] and case["actual"] == case["expected"] for case in report["cases"])
 
@@ -64,7 +67,7 @@ def test_manifest_pins_sources_sanitized_inputs_and_case_book() -> None:
 def test_differential_inputs_are_unique_and_machine_path_sanitized() -> None:
     book = _json(CASES)
     ids = [case["id"] for case in book["cases"]]
-    assert len(ids) == len(set(ids)) == 9
+    assert len(ids) == len(set(ids)) == 15
     forbidden = [
         ".tmp_540", str(ROOT), str(ROOT).replace("\\", "/"),
         str(Path.home()), str(Path.home()).replace("\\", "/"),
@@ -100,7 +103,10 @@ def test_a_changed_golden_is_a_failure_not_a_pass(tmp_path, monkeypatch, capsys)
     assert captured.err == ""
     report = json.loads(captured.out)
     assert report["ok"] is False
-    assert [case["ok"] for case in report["cases"]] == [False, True, True, True, True, True, True, True, True]
+    assert [case["ok"] for case in report["cases"]] == [
+        False, True, True, True, True, True, True, True, True, True, True, True, True,
+        True, True,
+    ]
 
 
 def test_normalized_comparison_accepts_identical_cross_language_reports() -> None:
@@ -109,7 +115,7 @@ def test_normalized_comparison_accepts_identical_cross_language_reports() -> Non
     rust_report["runner"] = "rust"
     result = compare_reports(python_report, rust_report)
     assert result["ok"] is True
-    assert result["caseCount"] == 9
+    assert result["caseCount"] == 15
     assert result["pythonNormalizedSha256"] == result["rustNormalizedSha256"]
 
 
@@ -143,6 +149,18 @@ GOLDEN_INPUTS = {
     / "contracts/differential/inputs/symbol-library-v3-zindex.json",
     "symbol-library-v4-pin-id": ROOT
     / "contracts/differential/inputs/symbol-library-v4-pin-id.json",
+    "device-library-v3-meta": ROOT
+    / "contracts/differential/inputs/device-library-v3-meta.json",
+    "device-library-v4-copies": ROOT
+    / "contracts/differential/inputs/device-library-v4-copies.json",
+    "footprint-library-v3-title": ROOT
+    / "contracts/differential/inputs/footprint-library-v3-title.json",
+    "footprint-library-v4-copies": ROOT
+    / "contracts/differential/inputs/footprint-library-v4-copies.json",
+    "footprint-declared-v3-hit": ROOT
+    / "contracts/differential/inputs/footprint-declared-v3-hit.json",
+    "footprint-declared-v4-empty": ROOT
+    / "contracts/differential/inputs/footprint-declared-v4-empty.json",
 }
 
 
@@ -333,7 +351,7 @@ def test_manifest_schemas_are_the_files_the_runner_gates_with() -> None:
         for name in SCHEMAS.values()
     }
     assert manifest["schemas"] == expected
-    assert len(manifest["schemas"]) == len(SCHEMAS) == 7
+    assert len(manifest["schemas"]) == len(SCHEMAS) == 10
     assert not any("bridge-error" in path for path in manifest["schemas"])
 
 
@@ -405,7 +423,10 @@ def test_python_runner_refuses_a_golden_that_spells_a_boolean_as_int(
     cases.write_text(json.dumps(book), encoding="utf-8")
     report = run_cases(cases, ROOT)
     assert report["ok"] is False
-    assert [case["ok"] for case in report["cases"]] == [True, True, False, True, True, True, True, True, True]
+    assert [case["ok"] for case in report["cases"]] == [
+        True, True, False, True, True, True, True, True, True, True, True, True, True,
+        True, True,
+    ]
     monkeypatch.setattr(sys, "argv", [
         "differential", "--cases", str(cases), "--root", str(ROOT),
     ])
