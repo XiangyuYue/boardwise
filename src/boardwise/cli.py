@@ -10830,6 +10830,7 @@ def _cmd_draw_plan(args: argparse.Namespace) -> int:
                 baseline_findings=baseline_findings,
                 keep_names=bool(getattr(args, "keep_names", False)),
                 notes=plan_notes,
+                page_box=page_box,
             )
         except drawapply.DrawPlanError as exc:
             print(f"boardwise draw plan: {exc}", file=sys.stderr)
@@ -11060,6 +11061,396 @@ async def _draw_render(call, page: str, args, report: dict, notes: list[str],
         f"([{last.get('code', '')}] {last.get('message', 'no step recorded')}) — the "
         "drawing is on the page; the picture is the missing evidence"
     )
+
+
+def _draw_attribute_report(moves) -> dict:
+    """The report section 053R adds **only** when the plan asks for a move."""
+    return {
+        "requested": [
+            {
+                "owner": (
+                    {"kind": "part", "specId": item.spec_id}
+                    if item.owner_kind == "part"
+                    else {"kind": "wire", "index": int(item.wire_index)}
+                ),
+                "role": item.role,
+                "to": item.to_fields(),
+            }
+            for item in moves
+        ],
+        "capability": {},
+        "moves": [],
+        "applied": False,
+    }
+
+
+async def _draw_attribute_capability(call, page: str, moves=()) -> list[str]:
+    """053R: the attribute read/write API must exist **before** the first write.
+
+    The check proves the API surface and nothing else — it is deliberately not
+    reported as a move: a host that has `getAll`/`modify` can still refuse the
+    write, and that refusal is what the per-move read-back below decides. It runs
+    only for a plan with moves, so a plan without them makes exactly the calls it
+    always did.
+
+    053U: when a row asks for `valueVisible`, the **read port** is part of the
+    surface — a hide nobody can read back is not attempted. The page's own rows
+    are the evidence: an attribute row without the `valueVisible` field, or a
+    `readErrors` entry naming it, means this connector/host cannot confirm the
+    write, and the run stops here, before any part is placed.
+    """
+    problems: list[str] = []
+    listing = await call(
+        "sch.list_attributes", {"pageUuid": page},
+        "read the attribute namespace before any write (053R)",
+    )
+    if listing is None:
+        problems.append("`sch.list_attributes` 失败或连接器没有该动作")
+    elif not isinstance(listing, dict) or not isinstance(listing.get("attributes"), list):
+        problems.append("`sch.list_attributes` 没有返回属性数组")
+    elif any(getattr(move, "value_visible", None) is not None for move in moves or ()):
+        rows = [row for row in listing.get("attributes") or [] if isinstance(row, dict)]
+        read_errors = listing.get("readErrors") or []
+        missing = [str(item) for item in read_errors if "valueVisible" in str(item)]
+        if missing:
+            problems.append(
+                "本页 ATTR 的 `valueVisible` 读取失败（" + "；".join(missing) + "）"
+            )
+        elif rows and not any("valueVisible" in row for row in rows):
+            problems.append(
+                "连接器返回的属性行没有 `valueVisible` —— 隐藏写无法回读，不写"
+            )
+    probe = await call(
+        "sys.probe", {"checks": {"sch_PrimitiveAttribute": ["modify"]}},
+        "check that sch_PrimitiveAttribute.modify exists before any write (053R)",
+    )
+    status = {}
+    if isinstance(probe, dict):
+        checks = probe.get("checks")
+        if isinstance(checks, dict):
+            entry = checks.get("sch_PrimitiveAttribute")
+            if isinstance(entry, dict) and isinstance(entry.get("status"), dict):
+                status = entry["status"]
+    if status.get("modify") != "function":
+        problems.append(
+            "`sch_PrimitiveAttribute.modify` 不可用（"
+            + str(status.get("modify", "sys.probe 没有答复"))
+            + "）"
+        )
+    return problems
+
+
+#: The `to` key -> the attribute row field it is compared by (053R's idempotence probe).
+_ATTRIBUTE_TO_ROW = {
+    "x": "x", "y": "y", "rotation": "rotation", "alignMode": "alignMode",
+    "valueVisible": "valueVisible",
+}
+
+
+def _draw_attribute_move_problems(plan, listing, geometry) -> list[str]:
+    """Is this page's attribute text already where the plan asks? (053R, read-only)
+
+    The early `already_applied` verdict used to read only the plan's
+    postconditions — parts, wires and the netlist — so a page whose drawings were
+    landed but whose **text** had not been moved answered "already applied" and
+    the moves were skipped forever. This is the missing leg, and it is a pure
+    reading of what the page says now:
+
+    * the whole page's attribute rows plus its ``readErrors`` (a field the host
+      could not read is not a field that matches);
+    * a part's parent is resolved from the page's **actual** designator, so a
+      renamed kept name is not a false negative;
+    * a wire's parent must be one of the page's own wire ids, and the row is found
+      by the wire's net — a re-run may legitimately meet the host's merged wire
+      (a different id, same net), but not an arbitrary primitive;
+    * ``role``/content/visibility and every field the row's ``to`` declares are
+      compared literally, except a part's ``value`` role: its visible ``Name``
+      holds the host's own formula (a real R900 says ``={Value}``, the plan says
+      ``1k``), so that row is picked by parent + coordinates + ``valueVisible``
+      alone; two candidates for one move, or one attribute serving two moves, is
+      a refusal — never a pick.
+
+    An empty return means "already in place". Anything else is the list of
+    reasons the page is **not** yet the plan's, and the run continues to its
+    ordinary write path (this probe never moves anything itself).
+    """
+    moves = plan.change.attribute_moves
+    if not moves:
+        return []
+    if not isinstance(listing, dict) or not isinstance(listing.get("attributes"), list):
+        return ["整页 ATTR 读不到（sch.list_attributes 没有返回数组）"]
+    read_errors = listing.get("readErrors")
+    if read_errors:
+        return [f"整页 ATTR 有 {len(read_errors)} 个字段读取失败（readErrors）"]
+    rows = [row for row in listing["attributes"] if isinstance(row, dict)]
+    components = (geometry or {}).get("components") or []
+    designator_to_parent: dict[str, str] = {}
+    for component in components:
+        state = component.get("state") if isinstance(component, dict) else None
+        if not isinstance(state, dict):
+            continue
+        designator = state.get("Designator")
+        if isinstance(designator, str) and designator:
+            designator_to_parent[designator] = str(
+                component.get("primitiveId") or state.get("PrimitiveId") or ""
+            )
+    page_wires = (geometry or {}).get("wires") or []
+    wire_parents_by_net: dict[str, set[str]] = {}
+    for wire in page_wires:
+        state = wire.get("state") if isinstance(wire, dict) else None
+        if not isinstance(state, dict):
+            continue
+        wire_id = str(wire.get("primitiveId") or state.get("PrimitiveId") or "")
+        net = state.get("Net")
+        if wire_id and isinstance(net, str):
+            wire_parents_by_net.setdefault(net, set()).add(wire_id)
+    parts_by_spec = {part.spec_id: part for part in plan.change.draw_parts}
+    problems: list[str] = []
+    used: set[str] = set()
+    for index, move in enumerate(moves):
+        spot = f"attributeMoves[{index}]"
+        if move.owner_kind == "part":
+            part = parts_by_spec.get(move.spec_id)
+            parent = designator_to_parent.get(part.designator if part else "", "")
+            owner = f"part {move.spec_id!r}"
+            if not parent:
+                problems.append(f"{spot}: {owner} 不在本页（找不到实际位号对应器件）")
+                continue
+            parents = {parent}
+            if move.role == "reference":
+                key, content = "Designator", (part.designator if part else "")
+            else:
+                # A part's visible ``Name`` is the host's own formula, not the design
+                # value: a real R900 carries ``value: "={Value}"`` while the plan says
+                # ``1k``. Comparing the two would make every correctly moved value
+                # read as "not in place" on a re-run, so the row is selected by parent,
+                # coordinates and visibility only — never by guessing a formula.
+                key, content = "Name", None
+        else:
+            if not (0 <= move.wire_index < len(plan.change.draw_wires)):
+                problems.append(f"{spot}: wire 下标越界")
+                continue
+            wire = plan.change.draw_wires[move.wire_index]
+            parents = sorted(wire_parents_by_net.get(wire.net, ()))
+            owner = f"wire #{move.wire_index} ({wire.net!r})"
+            if not parents:
+                problems.append(f"{spot}: {owner} 不在本页的 wires 里")
+                continue
+            parent = ""
+            key, content = "Name", wire.net
+        candidates = [
+            row for row in rows
+            if row.get("key") == key
+            and (content is None or row.get("value") == content)
+            and str(row.get("parentPrimitiveId") or "") in parents
+        ]
+        if move.role in ("value", "net"):
+            # A **display** move (no visibility asked, or `true`) needs a visible
+            # text; a **hide** move (`valueVisible: false`, 053U) is in place
+            # once the row reads back hidden — the probe must not keep asking
+            # for `visible: true` over a row whose whole purpose is being hidden.
+            expected_visible = (
+                True if move.value_visible is None else bool(move.value_visible)
+            )
+            candidates = [
+                row for row in candidates
+                if row.get("x") is not None and row.get("y") is not None
+                and row.get("valueVisible") is expected_visible
+            ]
+        if not candidates:
+            wanted = f"{key}={content!r}" if content is not None else f"{key} 可见文字"
+            problems.append(f"{spot}: {owner} 的 {wanted} 文字行不在位（未移动/被隐藏）")
+            continue
+        if len(candidates) > 1:
+            problems.append(
+                f"{spot}: {owner} 的 {key} 文字行有 {len(candidates)} 枚候选，不挑"
+            )
+            continue
+        row = candidates[0]
+        row_id = str(row.get("primitiveId") or "")
+        if row_id in used:
+            problems.append(f"{spot}: 属性 {row_id} 已被另一条 move 使用，不能一处两用")
+            continue
+        used.add(row_id)
+        for field, column in _ATTRIBUTE_TO_ROW.items():
+            if field not in move.to_fields():
+                continue
+            want = move.to_fields()[field]
+            got = row.get(column)
+            if got != want:
+                problems.append(
+                    f"{spot}: {owner} 的 {column} 是 {got!r}，计划要求 {want!r}"
+                )
+    return problems
+
+
+async def _draw_attribute_moves(
+    call, page: str, moves, parts, wires, part_ids: dict[str, str], wire_ids: list,
+    report, notes,
+) -> list[str]:
+    """Resolve every move's target on the page and hand it to `sch.move_attribute`.
+
+    The parent comes from what this run **actually placed** (a part's returned
+    primitive id, a wire's returned uuid), never from the plan's text. The target
+    attribute is then resolved from the page's own attribute rows, so the plan
+    cannot name an id, rewrite a key/value, or pick the first of two candidates:
+
+    * ``reference`` — the parent's ``Designator`` row; the *value* is read back
+      from the page, because the host may have renamed a kept name mid-run;
+    * ``value`` — the parent's ``Name`` row, and only when exactly one is both
+      positioned and visible (a printed value; a hidden or coordinate-less row is
+      not a text to move);
+    * ``net`` — the ``Name`` row whose value is the wire's net.
+
+    Zero candidates, more than one, a failed call or a read-back that does not
+    equal the request all stop here: no cleanup, no retry, no fallback polyline,
+    and nothing saved (the caller stops before the verification/save legs).
+    """
+    problems: list[str] = []
+    for index, move in enumerate(moves):
+        spot = f"attributeMoves[{index}]"
+        wire_net = (
+            wires[move.wire_index].net
+            if move.owner_kind == "wire" and 0 <= move.wire_index < len(wires)
+            else ""
+        )
+        if move.owner_kind == "part":
+            # `part_ids` is keyed by the **designator the host placed**, not by the
+            # plan's spec id (an allocated plan lands `R7` for spec `R1`), so the
+            # spec id is translated through this plan's own part table first.
+            designator = next(
+                (item.designator for item in parts if item.spec_id == move.spec_id), ""
+            )
+            parent = part_ids.get(designator, "")
+            owner_text = f"part {move.spec_id!r}"
+        else:
+            parent = (
+                wire_ids[move.wire_index]
+                if 0 <= move.wire_index < len(wire_ids)
+                else None
+            ) or ""
+            owner_text = f"wire #{move.wire_index} ({wire_net!r})"
+        entry: dict = {
+            "owner": (
+                {"kind": "part", "specId": move.spec_id}
+                if move.owner_kind == "part"
+                else {"kind": "wire", "index": int(move.wire_index)}
+            ),
+            "role": move.role,
+            "to": move.to_fields(),
+            "parentPrimitiveId": parent,
+            "primitiveId": "",
+            "expectedKey": "",
+            "expectedValue": "",
+            "applied": False,
+        }
+        report["moves"].append(entry)
+        if not parent:
+            problems.append(
+                f"{spot}: {owner_text} 没有本次放置返回的图元 id —— 无法定位父级，不猜"
+            )
+            break
+        listing = await call(
+            "sch.list_attributes", {"pageUuid": page, "parentPrimitiveId": parent},
+            f"read the attributes of {owner_text} ({parent}) before moving one (053R)",
+        )
+        rows = listing.get("attributes") if isinstance(listing, dict) else None
+        if not isinstance(rows, list):
+            problems.append(
+                f"{spot}: 读不到 {owner_text} 的属性行（{parent}）—— 目标不明，不猜"
+            )
+            break
+        if move.role == "reference":
+            candidates = [
+                row for row in rows
+                if isinstance(row, dict) and row.get("key") == "Designator"
+            ]
+            expected_key = "Designator"
+        elif move.role == "value":
+            candidates = [
+                row for row in rows
+                if isinstance(row, dict) and row.get("key") == "Name"
+                and row.get("x") is not None and row.get("y") is not None
+                and row.get("valueVisible") is True
+            ]
+            expected_key = "Name"
+        else:
+            candidates = [
+                row for row in rows
+                if isinstance(row, dict) and row.get("key") == "Name"
+                and row.get("value") == wire_net
+            ]
+            expected_key = "Name"
+        if not candidates:
+            problems.append(
+                f"{spot}: {owner_text} 下找不到 role={move.role!r} 的 {expected_key} 文字行 —— "
+                "候选缺失，不猜、不挑"
+            )
+            break
+        if len(candidates) > 1:
+            ids = ", ".join(str(row.get("primitiveId")) for row in candidates)
+            problems.append(
+                f"{spot}: {owner_text} 下 role={move.role!r} 的 {expected_key} 文字行有 "
+                f"{len(candidates)} 枚（{ids}）—— 不挑第一枚"
+            )
+            break
+        target = candidates[0]
+        primitive_id = str(target.get("primitiveId") or "")
+        value = target.get("value")
+        entry["primitiveId"] = primitive_id
+        entry["expectedKey"] = expected_key
+        entry["expectedValue"] = "" if value is None else str(value)
+        if expected_key == "Designator" and not entry["expectedValue"]:
+            problems.append(
+                f"{spot}: {owner_text} 的 Designator 行没有值 —— 实际位号读不出来，不猜"
+            )
+            break
+        params = {
+            "pageUuid": page,
+            "primitiveId": primitive_id,
+            "parentPrimitiveId": parent,
+            "expectedKey": expected_key,
+            "expectedValue": entry["expectedValue"],
+            **move.to_fields(),
+        }
+        answered = await call(
+            "sch.move_attribute", params,
+            f"move {owner_text} {move.role} text to "
+            + ",".join(
+                f"{k}={v:g}" if isinstance(v, (int, float)) and not isinstance(v, bool)
+                else f"{k}={v!r}"
+                for k, v in move.to_fields().items()
+            )
+            + f" (expecting {expected_key}={entry['expectedValue']!r})",
+            writes=True,
+        )
+        if not isinstance(answered, dict):
+            problems.append(f"{spot}: sch.move_attribute 失败（无答复）—— 现场保留，不保存")
+            break
+        entry["applied"] = bool(answered.get("applied"))
+        entry["after"] = answered.get("after")
+        entry["mismatched"] = answered.get("mismatched")
+        if not entry["applied"]:
+            problems.append(
+                f"{spot}: 回读与请求不符（{answered.get('mismatched')}）—— 现场保留，不保存"
+            )
+            break
+        # `applied` is the action's own read-back verdict; the fields it read are
+        # compared here too, so a report cannot say "applied" over an `after` that
+        # disagrees with what the plan asked for.
+        after = answered.get("after") if isinstance(answered.get("after"), dict) else {}
+        wrong = {
+            field: after.get(field)
+            for field, want in move.to_fields().items()
+            if after.get(field) != want
+        }
+        if wrong:
+            entry["applied"] = False
+            problems.append(
+                f"{spot}: 动作自称生效，但 after 与计划不符（{wrong}）—— 现场保留，不保存"
+            )
+            break
+    return problems
 
 
 async def _draw_apply_flow(
@@ -11567,7 +11958,30 @@ async def _draw_apply_flow(
             "(there is no rule for this kind, so the plan states what done means)"
         ),
     }
-    if drawapply.all_satisfied(state):
+    # 053R: the postconditions above say nothing about where the **text** sits,
+    # so a page landed by a pre-053R build (or one whose moves never ran) would
+    # answer "already applied" and the moves would be skipped forever. A plan
+    # with moves therefore reads the page's whole attribute table here, before
+    # the verdict, and only a page whose text is already at the planned positions
+    # may take the idempotent exit. Read-only: this probe never moves anything.
+    attribute_probe: dict = {}
+    attribute_satisfied = True
+    if plan.change.attribute_moves:
+        attribute_probe = {"checked": drawapply.all_satisfied(state), "problems": []}
+        if attribute_probe["checked"]:
+            listing = await call(
+                "sch.list_attributes", {"pageUuid": page},
+                "read the page's attributes to judge the move postconditions (053R)",
+            )
+            attribute_probe["problems"] = _draw_attribute_move_problems(
+                plan, listing, geometry
+            )
+            attribute_satisfied = not attribute_probe["problems"]
+        else:
+            attribute_satisfied = False
+        report["attributeMoves"] = _draw_attribute_report(plan.change.attribute_moves)
+        report["attributeMoves"]["probe"] = attribute_probe
+    if drawapply.all_satisfied(state) and attribute_satisfied:
         notes.append(
             "the plan's postconditions already hold on this page — a repeat run, or the "
             "drawing was made by hand; nothing was written (idempotent)"
@@ -11633,6 +12047,29 @@ async def _draw_apply_flow(
     if problems:
         notes.append("；".join(problems) + " — 位号在 plan 与 apply 之间被占用了；没有写")
         return done(4, "refused", "designator_taken")
+
+    # ---- 4b. the attribute API (053R), before the first part is written ----
+    #
+    # A plan with moves pays for this and pays **before** any write: a host
+    # without `sch_PrimitiveAttribute.getAll/modify` has to refuse here, not after
+    # placing parts nobody then moves. A plan without moves makes exactly the
+    # calls it always did — the section is absent from the report too.
+    if plan.change.attribute_moves:
+        if "attributeMoves" not in report:
+            report["attributeMoves"] = _draw_attribute_report(plan.change.attribute_moves)
+        problems = await _draw_attribute_capability(
+            call, page, plan.change.attribute_moves
+        )
+        report["attributeMoves"]["capability"] = {
+            "ok": not problems, "problems": list(problems),
+        }
+        if problems:
+            notes.append(
+                "属性移动需要 `sch.list_attributes` 与 `sch_PrimitiveAttribute.modify`；"
+                + "；".join(problems)
+                + " —— 器件写入之前停下，没有写任何东西"
+            )
+            return done(4, "refused", "attribute_api_missing")
 
     # ---- 5. the writes: the parts -----------------------------------------
     # The pose the editor takes is the *negation* of the layout's angle — one
@@ -12181,6 +12618,10 @@ async def _draw_apply_flow(
     # (`unnamed_nets`) is still the one the canvas leg and the discard match by, and
     # 530D widens it to every wire of a net that is not the label's own.
     executed: list[dict] = []
+    # 053R: the id each wire actually came back as, by `draw_wires` index — the
+    # only parent a wire-owned move may use. Kept beside `executed` rather than in
+    # it so a plan without moves produces the report it always did.
+    wire_ids: list[str | None] = []
     for wire in plan.change.draw_wires:
         params: dict = {
             "points": [list(point) for point in wire.points],
@@ -12207,6 +12648,9 @@ async def _draw_apply_flow(
             "route": [list(point) for point in wire.points],
             "fromPin": wire.from_pin, "ok": answered is not None,
         })
+        wire_ids.append(
+            str(answered.get("uuid") or "") if isinstance(answered, dict) else None
+        )
     # ---- 8. the flags -----------------------------------------------------
     #
     # 180 (178b 裁决的正面回应): a **ground** flag is placed *by its library
@@ -12321,6 +12765,26 @@ async def _draw_apply_flow(
     for note in drawapply.ground_family_observations(ground_glyphs, ground_refs):
         observe(note)
     report["write"]["connections"] = executed
+
+    # ---- 8b. the attribute text positions (053R) --------------------------
+    #
+    # After every primitive is on the page and before the verification legs: a
+    # move needs the ids the host returned, and a failure here keeps the page as
+    # it stands (parts and wires placed, nothing saved, no polyline rolled back).
+    # The moves never change connectivity — that is why the netlist leg below can
+    # still be the judgement it always was.
+    if plan.change.attribute_moves:
+        move_problems = await _draw_attribute_moves(
+            call, page, plan.change.attribute_moves, parts, plan.change.draw_wires,
+            primitive_ids, wire_ids, report["attributeMoves"], notes,
+        )
+        report["attributeMoves"]["applied"] = not move_problems
+        if move_problems:
+            notes.append(
+                "；".join(move_problems)
+                + " —— 属性文字没有按计划落位；现场保留（器件与线已放），不保存、不回退折线"
+            )
+            return done(3, "unknown", "attribute_move_failed")
 
     # ---- 9. the verification: both legs, plus the flag census -------------
     verify = await call("sch.geometry", {}, "read the page back independently after the writes")
@@ -12968,6 +13432,7 @@ def _draw_plan_from_page(
         label_stubs=True,
         module_label="page " + "+".join(module.id for module in page.modules),
         keep_names=bool(keep_names),
+        page_box=page.page_box,
     )
 
 

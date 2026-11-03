@@ -613,6 +613,73 @@ and value.
 Offline evidence: `tools/057_scenarios.py` (writes `outputs/057_offline/`); the
 real-machine steps for E1–E7 are `tools/057_live_runbook.md`.
 
+### Service interval for a uniquely served shunt (543B)
+
+`serviceLayout` is an optional top-level PresentationSpec object; it is **not
+written when absent**, so every document compiled before 543B keeps its bytes,
+digest and drawing. It carries one key:
+
+```json
+"serviceLayout": {"pinGap": 30}
+```
+
+`pinGap` is a positive, finite number of canvas units. When stated, the compiler
+asks the read-only decoupling analysis (`engines/layoutroles.py`, 543A) about each
+two-terminal **shunt** branch and uses `pinGap` as the distance between that
+shunt's service pin and the host pin it serves, instead of the branch ladder's
+first rung. The interval is fixed, not a rung: the ladder's per-branch index does
+not add to it. The side, pose and wire are still constructed from the symbols,
+the net partition and the relations; the key states a distance, never a
+coordinate.
+
+It is consumed only when the relation is `served`, the host is the branch's
+owner, the served net is the branch's own shared net, the service pin is the
+branch's own shared pin, and the host has **exactly one** pin on that net. An
+ambiguous host, several hosts or several equivalent host pins are left to the
+ordinary ladder — the key is not a licence to guess. The normal readability and
+lint gates still run unchanged.
+
+### Service channels, paired labels and final-plan bounds (543C–543F)
+
+These are all opt-in behaviours; a document that states neither `serviceLayout`
+nor the corresponding native text options keeps its previous drawing. The
+current validation case is the CH343 page specified in
+`evidence/543d2/effective.presentation.json`, with regression coverage in
+`tests/test_543c_service_channels.py`, `test_543d_label_layout.py`,
+`test_543d2_usb_pair.py`, `test_543e2_service_siblings.py` and
+`test_543f2_changeplan_bounds.py`.
+
+- **Agent owns semantic islands.** Merging the two core decoupling capacitors
+  into the CH343 island and splitting the CC pull-downs into their own island
+  are PresentationSpec decisions, not automatic island inference. The compiler
+  consumes that intent and regenerates every coordinate and conductor.
+- **Service channels are hard reservations.** On an island with a uniquely
+  served shunt, the return pad/lane and the measured label boxes are reserved
+  before routing; labels also avoid the promised ground-flag seats. A later
+  shunt on the same host pin may take a perpendicular seat at the same
+  `pinGap`, but if no legal seat exists the compiler returns `layout-unsat`
+  instead of sharing an origin and reporting a false pass.
+- **Native labels follow the declared reading side.** With both
+  `serviceLayout` and `textPlacement: native-attr`, local label pins must leave
+  toward the module's stated side. Duplicate names remain on their wires and
+  keep their net, but only one is visible; page ports prefer that visible name.
+  The CH343 case therefore has D+/D− to the right of the mirrored USB
+  connector and to the left of the CH343, with straight landing stubs.
+- **Bounds apply to the final ChangePlan, not only the LayoutPlan.**
+  `drawapply.module_plan(..., page_box=...)` rejects every stub candidate whose
+  segment endpoint leaves the sheet and tries the next direction/length; if no
+  candidate fits, the label is refused by name. `draw plan` supplies the actual
+  page box (and the page-document path supplies `page.page_box`). Passing no
+  `page_box` preserves the previous behaviour. This covers stubs generated only
+  while the final ChangePlan is built, which is where the P30 `x=-5` defect had
+  escaped the LayoutPlan-only check.
+
+The first P31 landing has `draw lint` **0E/0W/0I** and independent per-pin
+**55/55 connections + 3/3 NC**, but its CC1 carrier makes the host print CC1
+vertically. It is therefore an experiment, not a completed replacement for
+P29. A generic second topology, the second same-pin decoupling layout, and
+close/reopen persistence remain unverified. Evidence: `evidence/543f2/`.
+
 ## Flag and naming rules on compiled pages (060–074)
 
 After 057 landed pages, xianyuyijinban ruled five drawing conventions on the
@@ -708,6 +775,114 @@ compile/plan 的 `--intent PATH` 消费同一份合同（见下）。
 exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那条腿用 `--profiles` 的库文档，
 编辑器侧那条腿只能靠放完后的引脚回读，所以它是 exit 3 且件已放）。
 
+**053R：`attributeMoves`（可选，公开计划的一部分）**。plan 的 `change` 里可以带一个**可选**数组，
+声明「哪几行属性文字要挪到哪里」，每一行是 `{"moveVersion": 1, "owner": ..., "role": ..., "to": {...}}`：
+
+- **空态就是旧行为**：没有 `attributeMoves` 键（空列表也不写这个键）时，plan 的字节、apply 的动作序
+  （不调 `sch.list_attributes` / `sys.probe` / `sch.move_attribute`）、CLI 参数、退出码和报告字段
+  全部与 053R 之前一致；报告里也不会出现 `attributeMoves` 段。
+- **行级版本只认 1**。`owner` 只许 `{"kind": "part", "specId": <本 plan 放置的 specId>}`
+  或 `{"kind": "wire", "index": <draw_wires 的非负下标>}`；`role` 只许 part 的
+  `reference`/`value` 与 wire 的 `net`；`to` 只许 `x`/`y`/`rotation`/`alignMode` 至少一项，
+  数值有限、`alignMode` 1..9。**任意 `primitiveId`、key/value 改写、可见性、字体、颜色或额外键
+  一律在读计划时按名拒绝**，不会转发给宿主，也不会被当成"没写"悄悄放过。
+  每行**必须显式写 `moveVersion`**：缺失即读计划时拒绝（053R 的行内必填合同，parser 不替行补 1）。
+  只有程序里构造 `PlanAttributeMove` 时该字段默认 1，序列化输出仍照写 1。
+- **053U：`moveVersion: 2` 才许 `to.valueVisible`**（严格 bool），且只许 wire 的 `net` 行——
+  这是"保留 NET、隐藏多余同名文字"的唯一入口：只改那一枚 ATTR 的 `ValueVisible=false`，
+  **不清空导线 net、不删 ATTR、不跨脚拉线**，宿主 netlist 必须逐字节不变。它可以单独构成
+  一次隐藏（`to` 只有 `valueVisible` 也算"至少一项"）。part 的可见性、非 bool、未知版本、
+  版本 1 里出现的 `valueVisible` 一律读计划时拒绝。隐藏完成的幂等探针核对该行
+  `valueVisible=false` + 父级/net 不变（**不再**要求它可见）；显示仍要求可见。旧版本
+  计划的行、序列化字节与 apply 调用序不变。
+- **apply 怎么定位**：父级取这一趟**实际放置**返回的 id（part 的 primitiveId、线段的
+  `sch.place_wire` uuid），目标文字从页面自己的属性表解析——part `reference` 用页面回读的
+  **实际位号**，part `value` 只认父级下**唯一**有坐标且可见的 `Name` 行，wire `net` 认父级下
+  `key=Name` 且值等于该 wire 网名的唯一行。候选缺失、多候选、调用失败或回读不符 → **停**（exit 3），
+  现场保留、不清理、不回退折线、**不保存**。
+- **只有非空 moves 才做写前能力检查**（`sch.list_attributes` + `sys.probe` 查
+  `sch_PrimitiveAttribute.modify`），宿主缺 API 在**器件写入之前** exit 4；检查只证明 API 面，
+  不冒充移动成功。空 moves 一次多余调用都不发。
+- **幂等**：带 moves 的 plan 再跑时，`already_applied` 之前先读**整页 ATTR**逐行核对
+  role/内容/可见性和 `to` 声明的字段；同一条 move 多候选、两条 move 共用同一行、`readErrors`
+  非空、坐标/姿态不符都**不算**已到位——文字没挪过去的页面不会被当成"已完成"而跳过移动。
+  这一步**只读**，探针本身从不移动文字。
+- **053R 时这批不生成它**：`attributeMoves` 最初由一次性合成计划提供，compiler/readability/label
+  stub 当时未改，也不决定布局；P22 的合成计划是一次性探针，不是自动布局能力。053S 起由显式
+  规格开关生成，规则见下节。
+
+**053S：`textPlacement`（可选顶层开关）——编译器生成 `attributeMoves`**。唯一的非缺省值是
+`"native-attr"`；**不写这个键 = 与 053S 之前逐字节相同**（spec 不写 `textPlacement`，plan 没有
+`attributeMoves` 键，apply 不调 `sch.list_attributes` / `sys.probe` / `sch.move_attribute`）。
+未知值、非字符串、把坐标塞进这个键一律在读 spec 时按名拒绝；pagecompiler 切模块时把它原样
+传给每个模块的子 spec。它要求宿主/connector 具备 ATTR 能力（053R 的写前检查），没有能力时在
+写任何器件**之前** exit 4，不会静默退回旧画法。
+
+开启后编译器自动生成三类移动（不启用就一个都没有）：
+
+- **器件文字**：`layout.texts` 的 `reference` / `value` 以 `LayoutText.x/y` 为目标（缺省用 bbox
+  中心），只写 x/y，不发明 rotation / alignMode。`partTexts` 指定侧的器件即使符号声明了自然
+  锚点也走编译器的候选侧阶梯——015S 的声明因此在画布上真正生效；文档没点名的器件仍沿用自然
+  锚点，不生成"挪到原地"的空移动。
+- **网名**：最终 wires 稳定**之后**（`_drop_covered_runs` / `_cut_at_flag_attachments` 已跑过），
+  按 `LayoutLabel` 的 anchor/net 找 `is_label_wire` 的承载线，生成 `role=net`、目标为 label
+  bbox 中心的移动。下标取**落地计划里的最终下标**，不拿 layout 的陈旧下标。
+- **歧义不猜**：一个 label 找不到承载线、有两根承载线，或两个 label 落在同一根线上，`draw plan`
+  以 `DrawPlanError` 明确报 native 标签歧义并拒绝出计划——不挑第一枚、不额外调用
+  `createNetLabel`。本批不去重连续多段同名、不禁弯、不改旗标；CH343 这类页面若撞歧义就是
+  **不落图**，所以本批不宣称 CH343 已完成。
+- 数值目标与移动后的回读核对仍走 053R 的 apply 合同（唯一可见 `Name` 行、坐标/姿态逐行核对、
+  不到位的页面不算 `already_applied`）。
+
+**053T：一条连续导线只印一个网名、native 只走直桩、文字按真实盒子建模**。`textPlacement` 不变，
+`native-attr` 开启后行为收紧，不开时旧 candidates / labels / plan 逐字节不变：
+
+- **连续段只留一个名**：`LayoutLabel` 多了可选 `textMode`（缺省不序列化、不进 geometry digest）。
+  编译在 readability 与 geometry hash **之前**按现有 segments 的同网连通分量筛标签：共享端点、
+  或一段的顶点落在另一段上（T 接）算连续，连续的只留第一个名；**同网不等于连续**——断开的同网
+  各留一个（Type-C 的可逆脚就是这种），本批绝不为了合并而加线。053V 起再由可见性 pass 把这些
+  断开的同名收敛成"一枚显示、其余隐藏"（见下节）。
+- **被省略的标签必须本来就有导体**：anchor 不在本网任何导线上的标签原样保留；旗标覆盖的网名
+  不走该筛选，也不产生 attr 移动。
+- **native 短桩只走直线**：候选阶梯里折线（099f 三折、r19 四折、r23 near stagger）在 `text_mode`
+  为 native 时整段不提供；四向直桩全被挡就照旧拒绝，不借折线通过。名字行、owner/其它文字
+  碰撞与 `nameCarriers` 都按**保留标签自己的 bbox**（ATTR 打印的位置）量，不按导线中点盒。
+- **readability 读真实盒子**：native 标签的名字行取 label bbox（水平 ATTR），不再额外造一个
+  导线中点的幽灵 Name 行，也不再用导线方向判竖排；旧 labels / `_named_wire_rows` 行为不变。
+- **降级文案**：native 页面的 downgrade 说"wire 承载网名 + ATTR 移字到哪里"，不再声称当前 V4
+  的 ATTR 不可用（029 只描述旧宿主）。
+- 页面路径要把 `textMode` 一起搬到页坐标（`pagecompiler` 的两处标签拷贝），否则 native 页面会
+  静默退回旧画法。
+- 实测边界（`evidence/534t/`）：CH343 v45（v44 布局 + `native-attr`）页级 compile 出 4 个候选、
+  `legality=0/findings=0`；`draw plan` 在 D- 的两个可逆脚名字行相距 8.5（L5 的 20 下限）处
+  **拒绝出计划**，四处候选一致。那是 USB 回环/旗标那批的活，本批不修、不落画布。
+
+**053V：每个模块视图每网只显示一个名，重复名用 `valueVisible: false` 隐藏**。053T 只合并
+**连续**段；断开的同网（Type-C 可逆脚）各留一个名，因此仍可能有两行相距 8.5（L5 下限 20）。
+053U 已实测：导线 net 不动、只把该行 `Name` 的 `valueVisible` 写 false，宿主 netlist **逐字节不变**。
+本批把两件事接起来，`textPlacement: native-attr` 下的行为再收紧一层；不开开关仍逐字节不变：
+
+- **每模块视图每网一枚显示名**：`LayoutLabel.text_mode` 新增 `"native-hidden"`。053T 的物理连通
+  去重照旧先跑；之后在同一次模块编译视图内，把该网其余（**不连续**）标签标为 `native-hidden`。
+  相关标签仍留在 plan 里——导线继续带该网名、同一名字跨岛仍按名合并——**不清 net、不删标签、
+  不跨可逆脚补线**，只是不印字。
+- **显示项怎么选**：取 **label bbox 中心离该承载段离开的 pin 更远**的那一枚（即更长更清楚的桩），
+  同距离按原顺序（`max` 取第一个），因此 5 单位短桩不会挤掉长桩的名；判定是量出来的，不是猜的。
+  pin 由 plan 自己的线段读出：承载段起点是 pin，标签 anchor 是远端，所以取该段离 anchor 最远的
+  端点。
+- **隐藏项的形状**：`native-hidden` 生成 **version 2**、`owner.kind="wire"`、`role="net"` 的
+  `to = {"valueVisible": false}`（无 pose——行留在宿主原地，只改可见性）；显示项仍 version 1、
+  移到 label bbox 中心。两种行的 wire 下标都取落地计划的**最终**下标，一 label 一线，重复候选
+  照旧拒绝（native 标签歧义）。
+- **隐藏项不是墨**：不产生文字盒、不算 `nameCarriers`、不参与 owner/其它文字碰撞；readability
+  不再为它造默认中点的幽灵 Name 行、不拿导线方向判竖排、`_text_boxes` 不把它的 bbox 当文字障碍。
+  **导线净空与直桩规则照查**（承载段仍要直、仍要过 `_label_stub_candidates` 的净空阶梯）。
+- **降级文案**：隐藏标签的 downgrade 说"wire 承载网名 + ATTR 的 `valueVisible: false` 隐藏
+  （本模块视图只印一次）"，不说 V4 的 ATTR 不可用（029 只描述旧宿主）。
+- **边界**：旗标网维持原例外（旗标名字，不产生 attr 移动）；anchor 不在本网任何导线上的标签不被
+  本 pass 挑动。未写 `textPlacement` 的规格仍无 `textMode`、无 `attributeMoves`，plan 与 geometry
+  digest 逐字节不变；`pagecompiler` 继续把两种 `textMode` 一起搬到页坐标。
+
 **LDO（C3）现场有两条真机事实，照坑 33/34 走**：真机 AMS1117 符号的 VIN/VOUT/GND 全在**同一侧**
 （外加一颗重复 VOUT），`ldo` 文法的默认"in 左 out 右"**无合法姿态**——要么按坑 33 用
 `sidePreferences`（这是一个**说明**"下面那条输出支路"，不是"输出在下方"），要么换一颗符号；
@@ -763,3 +938,84 @@ exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那
   降到一次（第 175 批前该走线出自一折快路，因此单提常量对它无效）；`FB_SENSE` 的穿越从 120 起
   被绕开。另见 `docs/draw.md` 的旗引线一节（074）——**普通信号布线穿越不硬化**这条未变。
 
+
+- **053W：旗标外形压线是硬检查，native 页按网格避让**。新增硬 kind
+  `flag-body-on-wire`（`readability._check_flag_body_on_wire`）：用 `flag_glyph_box`
+  实测的旗标外形，按 `FLAG_BODY_CLEARANCE = 5.0` 测导线与它的**净距**，报旗标 net、
+  `symbolRef`、位置与 box、被穿 wire 的下标与 net，以及实测 gap。**净距内贴边也报**；
+  唯一豁免是从 anchor 向 glyph 反方向离开的正常引线，其余各点仍满足净距。
+  **未知 profile/body 不测量、不假装零碰撞**；**同网主干穿过也报**
+  （`drawcompiler._flag_room` 本来就是这条规则）。
+  该检查在 readability 门里只对 **native 页**启用（`textPlacement == "native-attr"`）；未写
+  该键的旧规格保持旧布局与旧判定，`flag-body-on-wire` 不出现。要专项审计任意 `LayoutPlan`
+  仍可直接调 `_check_flag_body_on_wire`（053AD：净距 5 是 native 文本模型的排版约束，
+  不是对所有旧图纸的追溯判定）。
+- **native 的修复在整页拼装之后、readability 之前**（`pagecompiler._relocate_native_flags`，
+  只读 `textPlacement == "native-attr"`）：按**最近网格距离**（1..20 步，5 单位/步）、
+  固定方向顺序（上、下、左、右）尝试移位；保留 `symbolRef`、net 与**竖直姿态**（不旋转）。
+  原 anchor 到候选用**同网直线**连接：旧 anchor 是既有 lead 末端且共线就**延长**该 lead
+  （不共线则在该 lead 上追加一段折），没有 lead 才新增两点段——不留悬空、不跨异网。
+  候选外形须避开全部导线、器件、文字、其它旗标外形与页界；被移动旗标所属 module 的
+  frame 同步扩张且不得与邻框重叠，该 module 的 flag port 锚点同步。plan notes 逐条记
+  原位置、候选、距离/步数与 lead 变化。**找不到合法位置即整页失败**（`layout-unsat`），
+  不回落压线、不删旗标、不清 net。非 native 规格（未写 `textPlacement`）一个旗标都不动，
+  旧图字节不变。
+- **053W续（净距 5）**：内部交叉**不是**判据。`flag-body-on-wire` 改成按
+  `FLAG_BODY_CLEARANCE = 5.0`（与 `drawcompiler.FLAG_CLEARANCE` 同值同义）测
+  **净距**，violation 报实测 gap；边/角接触、2 单位开外的run 一律报，唯一豁免是同网、
+  端点落在 anchor、第一步背离 glyph、其余各点仍 ≥5 的自身 lead。同网主干不豁免。
+  `pagecompiler` 的碰撞识别与候选复检调同一个 `readability._flag_body_offence`。
+  实测：P20 旧计划 GND 旗标被自己的 GND 主干擦过 **1.0 单位**，「0 内部交叉」把这条盖住了。
+- **053W续二（模块梯子与整页净距统一）**：模块级旗标梯子
+  （`drawcompiler._rail_flag_seat` / `_flag_pin_lead` 的 `fits`）在算出候选 glyph 后，
+  对 `router.edges` 与 `router.own_edges` 调**同一个** `readability._flag_body_offence`
+  （`drawcompiler._flag_wire_ruler`），原有 solids/page/blocked/lead 净空照旧；非 native
+  规格该尺子恒放行，字节不变。同时 `_seat_wire_flags` 为 native 页预留的墙由「只有 glyph」
+  改成 `_flag_box(margin=FLAG_CLEARANCE)`——路由器的 1 单位 epsilon 会让导线贴着墙走，
+  只留 glyph 的墙就是把旗标交给门禁去判 1 单位。**两处都用同一个常量、同一套语义，
+  不是第二把尺子**。不写 `textPlacement` 的规格两处都不变。
+- **v45 恢复 4 个合法候选**（`.tmp_534w`/`evidence/534w/offline_v45_ladder.json`）：
+  修复前同一输入 0 候选，`usb_c` 的 `R1.2` GND 梯子全被旧 room 判死；修复后四个候选
+  `_check_flag_body_on_wire` 全为 0 条，**每个旗标对非引线导线的最小净距 6.0**，
+  无需整页移位（plan 无 `053W:` note）。真机 test V4 的空白 P26 `9b729f3ad67a20d6` 上
+  `draw plan --page-box 0,0,1170,825` = exit 0 / planned / candidate 0，P26 依旧空白、**未 apply**。
+- 053W 早期结论「v45 四候选 0 内部交叉、避障是惰性的」只对**内部交叉**成立；净距 5 之下
+  同一批布局是被模块梯子自己的 room 模型选出来的，所以续二必须把两把尺子合成一把。
+- **053Z：native 名字必须住在自己的载体上（`native-label-off-carrier`）**。
+  `textPlacement: native-attr` 下主机把网名印在 label 的 box 上（`_native_attribute_moves`
+  的目标就是 box 中心），所以 box 离自己的引线多远，名字就印在多远。新增硬 kind
+  `native-label-off-carrier`（`readability.NATIVE_LABEL_CARRIER_LIMIT = 10`，一个 10 单位网格）：
+  对每个 `textMode: "native"` 的可见 label，载体 = 其 anchor 所在的导线（同网优先，其次本页无名
+  引线）或 tip 就是 anchor 的引脚线，退路是同网任意一段；**量的是文字盒到 polyline 的最近距**
+  （`_box_run_gap`，不是 anchor，也不是 lineGroup）。P27 实测 `CTS=40`、`RI=55` 必须复现
+  （`tests/test_534z_label_carriers.py`）；`native-hidden` 不印字不检，非 native 路径字节不变。
+  盒心在 anchor 的行/列上（一条直桩到得了）且距离 ≤10 才算合格——页编译器原本就按轴摆放，
+  所以 v46 四个候选仍 0 条。
+- **053Z：native 候选盒重选（`pagecompiler._native_label_seat`）**。`_add_label(native=True)`
+  不再走 `_label_box`，改按固定梯子 `_NATIVE_LABEL_SEATS = (1, 2)`（贴锚点一格 + 第二列）
+  四方向试位：盒尺寸与水平阅读不变（`font_text_box`）、盒心在 anchor 的行/列（直桩到得了）、
+  距每个**异网**导线 ≥10、直桩本身不跨异网导线；无合法位置返回 `layout-unsat`，**不回退到
+  离岸短桩**。该选择发生在整页 `_reseat_native_labels`（`_assemble` 内、flag 迁移之后、
+  readability 与 geometry hash 之前），因此 `_native_attribute_moves` 的目标、直桩终点与
+  gate 量的是**同一个 box**。非 native 的 `_label_box` 分支一行未改。
+- **H1 长型号**：v47 = v46 + `partTexts.H1 = "right"`（`.tmp_534z/v47.presentation.json`），
+  不带任何 `localLabelObligations`（053Y 证明它会改契约且不可编译）。离线几何核对长型号
+  值框与 x=140 地旗引线（`140,450 → 140,425`）不相交。
+- **053Z 真机（未通过，现场保留）**：新页 P28 `ea468a6523625fa0`（工程 `test V4`，
+  census 0/0/0 起）apply 成功（11 器件 / 52 导线 / 16 旗标，live+canvas ok，保存，
+  `evidence/534z/p28.png`），独立逐脚 **55/55 连接 + 3/3 NC = 58/58**；但 `draw lint`
+  **2E/2W/3I**：`L1` H1 长型号被 net DSR 导线穿过 77 单位、`L2` 该文字与 `RI` 盒重叠 7.1×7.0，
+  `L5` 仍报 `RXD`/`DSR` 各被印了第二个名字（`CTS`/`RI`）；且页面网表里 `CC1/CC2/V3` 落成
+  `$9N4/$9N13/$9N14` 自动名。**0E 未达成**，P28 保留待修，P20/P27/参考页与 Board2 P1 未动、
+  未删任何页。缺的那一块写在这里：模块自带的标签（`PAGE_PORT_LABEL` 的 `if labels:` 分支）
+  在页面上**没有落地它的直桩**，所以 box 离引线 28–68 单位、属性行照 box 印到邻线上——
+  下一批要么让整页为这些标签补直桩导线，要么把它们的 box 收到载体旁≤10。
+- **053X：页间标签也必须是 native**。`pagecompiler._port` 复用的模块标签
+  （`PAGE_PORT_LABEL` 的 `if labels:` 分支，`_native_text_mode`）与新造的标签
+  （`_add_label(..., native=…)`）在 `textPlacement: native-attr` 下都写
+  `textMode: "native"`；已有 `native-hidden` **不改可见**，非 native 规格一个字节都不动。
+  没有这个标记时跨岛 `V3`/`RTS` 等名是空 `textMode`：readability 继续按导线中点建行
+  （旧中点幽灵），`drawcompiler` 也按"沿导线印名"排版，竖直载体就印成折线/竖排。
+  回归 `tests/test_534x_page_native_layout.py`（9 项）；v46（C3/C4 并入 `ch343`，
+  `C3=(-70,0)`/`C4=(70,0)` 芯片外侧）离线 4 候选、16 旗、`flag-body-on-wire` 0 条，
+  真机 P27 `fcbf0ddbe79dc94d` 已 apply（11 件/52 线/16 旗）。

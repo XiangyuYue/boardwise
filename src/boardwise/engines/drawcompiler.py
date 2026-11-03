@@ -116,6 +116,8 @@ from boardwise.core.designintent import DesignIntent, IntentSource
 from boardwise.core.geometry import transform_point
 from boardwise.core.layoutplan import (
     DOWNGRADE_NOTE_PREFIX,
+    TEXT_MODE_NATIVE,
+    TEXT_MODE_NATIVE_HIDDEN,
     LayoutEvidence,
     LayoutJunction,
     LayoutLabel,
@@ -128,7 +130,8 @@ from boardwise.core.layoutplan import (
 )
 from boardwise.core import textmetrics
 from boardwise.core.presentationspec import (
-    LABEL_LABEL, LABEL_STUB_STRAIGHT, PresentationSpec, main_path_wire,
+    LABEL_LABEL, LABEL_STUB_STRAIGHT, TEXT_PLACEMENT_NATIVE, PresentationSpec,
+    main_path_wire,
 )
 #: 540B1: the isolation-domain word list now lives in the shared vocabulary
 #: (``core/netdomains.py``), so the drawing chain and the reviewer read one copy
@@ -153,6 +156,7 @@ from boardwise.core.symbolprofile import (
 
 from . import readability
 from . import placement
+from .layoutroles import STATUS_SERVED, analyze_decoupling
 from .grammar import bind as bind_grammar
 #: The lattice search and the geometry helpers it is defined in terms of, moved
 #: to `engines/router.py` (112) so the interactive draw flows can route on the
@@ -1674,6 +1678,19 @@ class _Context:
     #: domains on the page, never on the module-local slice — see
     #: :func:`_ground_domains`.
     ground_domains: frozenset[str] | None = None
+    #: **543B**: the decoupling service relations this document's parts have,
+    #: computed lazily once per compilation and only when the presentation states
+    #: `serviceLayout`. ``None`` means "not asked yet"; the field is not a
+    #: second reading of the circuit, it is the 543A analysis (which is pure).
+    service_relations: Any = None
+
+    def services(self):
+        """The 543A relations, computed once per compilation (543B)."""
+        if self.service_relations is None:
+            self.service_relations = analyze_decoupling(
+                self.circuit, self.presentation
+            )
+        return self.service_relations
 
     def profile(self, part_id: str) -> SymbolProfile:
         part = self.circuit.part(part_id)
@@ -2036,7 +2053,20 @@ def _prepare(
     for part_id in sorted(slots):
         slot = slots[part_id]
         if slot.kind == "branch":
-            ctx.body_dirs[part_id] = _branch_body_direction(ctx, slot)
+            if _service_pin_gap(ctx, slot) is not None:
+                # 543C: a **uniquely served shunt** under `serviceLayout` runs
+                # its body along the service axis — the return pad leaves on the
+                # far side of the service pin instead of dropping into the
+                # core's label row. The shared pin is still the near pad, so the
+                # service wire keeps its stated interval; only the return side
+                # moves. The pose predicate below enforces that ordering.
+                outward = _branch_offset_direction(
+                    ctx, slot, {slot.owner: SymbolPose()}, {},
+                )
+                if outward is not None:
+                    ctx.body_dirs[part_id] = outward
+            else:
+                ctx.body_dirs[part_id] = _branch_body_direction(ctx, slot)
         poses, problem = _accepted_poses(ctx, slot)
         if problem is not None:
             failures.append(problem)
@@ -2628,10 +2658,76 @@ def _accepted_poses(
     )
 
 
+def _label_side_pose_ok(
+    ctx: _Context, part_id: str, profile: SymbolProfile, pose: SymbolPose
+) -> bool:
+    """Do this part's locally named pins leave toward the module's stated side?
+
+    543D's opt-in (``serviceLayout`` **and** ``textPlacement: native-attr``)
+    states a reading side for a role through the module's own
+    ``sidePreferences``; a net the document names at each of its pins
+    (``localLabelObligations``) has to leave that way, or the printed name sits
+    on the wrong side of its own pin and the two island ends point the same way.
+    On the Type-C receptacle every data pin points left, so the side statement
+    can only be honoured by the mirrored core pose — the compiler then chooses
+    that pose and regenerates the island, instead of an agent moving anything.
+
+    A net with no stated side, a pin whose symbol gives no direction, or a
+    document without either key says nothing and every pose stays legal, which
+    is what keeps every pre-543D drawing byte for byte.
+    """
+    presentation = getattr(ctx, "presentation", None)
+    if (
+        presentation is None
+        or presentation.service_layout is None
+        or getattr(presentation, "text_placement", "") != TEXT_PLACEMENT_NATIVE
+    ):
+        return True
+    vectors = {
+        "left": (-1.0, 0.0),
+        "right": (1.0, 0.0),
+        "top": (0.0, 1.0),
+        "up": (0.0, 1.0),
+        "bottom": (0.0, -1.0),
+        "down": (0.0, -1.0),
+    }
+    for obligation in presentation.local_label_obligations:
+        for net_id in obligation.nets:
+            role = presentation.port_roles.get(net_id, "")
+            vector = vectors.get(presentation.side_for(role)) if role else None
+            if vector is None:
+                continue
+            net = ctx.circuit.net(net_id)
+            if net is None:
+                continue
+            for member in net.members:
+                owner, _, token = member.partition(".")
+                if owner != part_id:
+                    continue
+                pin = _pin_of_token(profile, token)
+                if pin is None:
+                    continue
+                local = {
+                    "left": (-1.0, 0.0), "right": (1.0, 0.0),
+                    "up": (0.0, 1.0), "down": (0.0, -1.0),
+                }.get(pin.direction)
+                if local is None:
+                    continue
+                directed = _posed(local, pose, (0.0, 0.0))
+                if abs(directed[0]) >= abs(directed[1]):
+                    if vector[0] == 0.0 or directed[0] * vector[0] <= 0.0:
+                        return False
+                elif vector[1] == 0.0 or directed[1] * vector[1] <= 0.0:
+                    return False
+    return True
+
+
 def _pose_satisfies(
     ctx: _Context, slot: _Slot, profile: SymbolProfile, pose: SymbolPose
 ) -> bool:
     """Does this pose put the pins where the relations need them?"""
+    if not _label_side_pose_ok(ctx, slot.part_id, profile, pose):
+        return False
     if slot.kind == "chain":
         if not _stated_sides_are_reachable(ctx, slot.part_id, pose):
             return False
@@ -3452,6 +3548,63 @@ def _place(
     return _place_chain_and_shelf(ctx, variant)
 
 
+def _service_pin_gap(ctx: _Context, slot: _Slot) -> float | None:
+    """The stated service interval for this branch, or ``None`` (543B).
+
+    Read only when **all** of these hold, so the key can never become a licence
+    to guess:
+
+    * the presentation states `serviceLayout` (absent = old drawing);
+    * this slot is a two-terminal **shunt** branch, the role `ic-periphery`
+      binds for a part from one core pin net to the rail/ground;
+    * 543A's relation for it is :data:`STATUS_SERVED` with exactly **one** host
+      pin on the served net (an ambiguous host, several hosts or several
+      equivalent pins are left to the ordinary ladder);
+    * the relation's host is this branch's owner, its net is the branch's
+      shared net, and its service pin is the branch's own shared pin — i.e. the
+      compiler and the analysis agree about which pin hangs on which net.
+
+    The returned value is the distance from the host pin to the shunt's service
+    pin, in canvas units; the caller snaps it to the lattice and keeps the
+    lattice's floor.
+    """
+    if slot.kind != "branch" or slot.role != "shunt":
+        return None
+    layout = ctx.presentation.service_layout
+    if layout is None:
+        return None
+    relation = ctx.services().for_part(slot.part_id)
+    if relation is None or relation.status != STATUS_SERVED:
+        return None
+    if not relation.has_unique_host_pin:
+        return None
+    if relation.host_id != slot.owner:
+        return None
+    if relation.net_id != slot.shared_net:
+        return None
+    if relation.service_pin != slot.pin_shared:
+        return None
+    return layout.pin_gap
+
+
+def _service_channels(ctx: _Context) -> bool:
+    """Is this module the island of a **uniquely served** shunt? (543C)
+
+    The text/flag channel reservations are scoped to that island, not to the
+    whole page: a document that states `serviceLayout` still asks the USB module
+    and the header to draw exactly as they did. The 543A analysis is read on the
+    module's own slice, so a capacitor whose host has several equivalent pins
+    (C1/C2 on the Type-C VBUS pair) is not a service shunt and its module is left
+    alone.
+    """
+    if ctx.presentation.service_layout is None:
+        return False
+    return any(
+        relation.status == STATUS_SERVED and relation.has_unique_host_pin
+        for relation in ctx.services().services
+    )
+
+
 def _chain_and_shelf_layout(
     ctx: _Context, variant: _Variant
 ) -> tuple[
@@ -3555,6 +3708,10 @@ def _chain_and_shelf_layout(
             )
 
     counts: dict[tuple[str, tuple[float, float]], int] = {}
+    # 543E-2: shunts served by the same host pin get distinct orthogonal seats.
+    # Counted per (owner, host-pin point), so a non-service branch in the same
+    # direction cannot shift the seat a later shunt takes.
+    service_counts: dict[tuple[str, tuple[float, float]], int] = {}
     branch_ids = _branch_order(ctx)
     rungs: dict[str, _BranchRung] = {}
     for part_id in branch_ids:
@@ -3583,7 +3740,119 @@ def _chain_and_shelf_layout(
             # measures the box, not the pin — must not push it back out.
             lane = DECAP_LANE
             floor = GAP
-        distance = max(lane + step * index, floor)
+        service_gap = _service_pin_gap(ctx, slot)
+        if service_gap is not None:
+            # 543B: the presentation asked for a service interval, and 543A
+            # resolved this shunt to exactly one host pin whose net is the one
+            # this branch hangs on. A fixed interval, not a rung: the point is
+            # the distance to *that* pin, so the ladder's index must not add to
+            # it. The floor is GAP for the reason DECAP_LANE's is — the part's
+            # own pin length reaches the pad, and the box extent would otherwise
+            # measure the body as if it had to clear the pin tip.
+            lane = service_gap
+            floor = GAP
+            distance = max(service_gap, floor)
+            seat_index = service_counts.get((owner, anchor), 0)
+            service_counts[(owner, anchor)] = seat_index + 1
+            relation = ctx.services().for_part(part_id)
+            host_pin = (
+                f"{owner}.{relation.host_pins[0]}"
+                if relation is not None and relation.host_pins
+                else owner
+            )
+            if seat_index > 0:
+                # The first shunt keeps the owner pin's own escape direction
+                # (the 543B/C baseline). A later shunt on the *same* host pin
+                # may not share that origin: it takes a perpendicular seat at
+                # the same interval, so the connection stays one straight
+                # orthogonal run. Two perpendicular seats exist; a third shunt
+                # has no seat and is refused by name instead of overlapping.
+                if seat_index > 2:
+                    return GrammarFailure(
+                        category=FAILURE_LAYOUT_UNSAT,
+                        subject=part_id,
+                        detail=(
+                            f"{part_id} is shunt {seat_index + 1} on service pin "
+                            f"{host_pin} at {_point_text(anchor)}; the pin's own "
+                            "escape direction and its two perpendicular seats "
+                            f"at {distance:g} units are taken, so there is no "
+                            "legal orthogonal seat left. Two shunts on one host "
+                            "pin may not share an origin"
+                        ),
+                        action=(
+                            "remove the duplicate service branch or move the "
+                            "parts that occupy the perpendicular seats; the "
+                            "compiler will not draw overlapping shunts"
+                        ),
+                    )
+                shared_try = _pin_local(ctx, part_id, slot.pin_shared, poses)
+                chosen = None
+                for seat in (
+                    (direction[1], -direction[0]),
+                    (-direction[1], direction[0]),
+                ):
+                    nominal_root = (
+                        anchor[0]
+                        + seat[0] * _snap(distance, ctx.budget.grid, 0.0),
+                        anchor[1]
+                        + seat[1] * _snap(distance, ctx.budget.grid, 0.0),
+                    )
+                    candidate_root = _dodge_foreign_pins(
+                        ctx, part_id, slot, anchor, nominal_root, poses, origins,
+                    )
+                    if (
+                        abs(candidate_root[0] - nominal_root[0]) > 1e-6
+                        or abs(candidate_root[1] - nominal_root[1]) > 1e-6
+                    ):
+                        # The straight 30-unit run passes another pin; dodging
+                        # it would make the service run no longer straight or
+                        # no longer 30, which is not a legal seat.
+                        continue
+                    candidate_origin = (
+                        candidate_root
+                        if shared_try is None
+                        else (
+                            candidate_root[0] - shared_try[0],
+                            candidate_root[1] - shared_try[1],
+                        )
+                    )
+                    candidate_box = _part_box(
+                        ctx.profile(part_id), poses[part_id], candidate_origin
+                    )
+                    if all(
+                        not _overlaps(
+                            candidate_box,
+                            _part_box(
+                                ctx.profile(other), poses[other], origins[other]
+                            ),
+                        )
+                        for other in origins if other != part_id
+                    ):
+                        chosen = seat
+                        break
+                if chosen is None:
+                    return GrammarFailure(
+                        category=FAILURE_LAYOUT_UNSAT,
+                        subject=part_id,
+                        detail=(
+                            f"{part_id} is shunt {seat_index + 1} on service pin "
+                            f"{host_pin} at {_point_text(anchor)}; neither "
+                            f"perpendicular seat at {distance:g} units is legal "
+                            "(the straight run crosses another pin, or the part "
+                            "would land on one already placed), so the "
+                            "orthogonal service run has no legal place. The "
+                            "compiler refuses rather than sharing the first "
+                            "shunt's origin"
+                        ),
+                        action=(
+                            "move the neighbouring branch that occupies the "
+                            "perpendicular seats, or drop the duplicate "
+                            "service branch"
+                        ),
+                    )
+                direction = chosen
+        else:
+            distance = max(lane + step * index, floor)
         root = (
             anchor[0] + direction[0] * _snap(distance, ctx.budget.grid, 0.0),
             anchor[1] + direction[1] * _snap(distance, ctx.budget.grid, 0.0),
@@ -6657,6 +6926,348 @@ def _stated_part_text_side(ctx: Any, part_id: str) -> str:
     return side if isinstance(side, str) else ""
 
 
+def _native_text_placement(ctx: Any) -> bool:
+    """Does this context ask for the host's attribute API (`native-attr`, 053S)?
+
+    Same guard as :func:`_stated_part_text_side`: a fixture context may carry no
+    ``presentation``, and a missing field is the historical reading — the key was
+    not stated, so nothing about the drawing changes.
+    """
+    return (
+        getattr(getattr(ctx, "presentation", None), "text_placement", "")
+        == TEXT_PLACEMENT_NATIVE
+    )
+
+
+def _native_label_dedupe(
+    labels: list[LayoutLabel],
+    segments: Sequence[LayoutSegment],
+    flag_nets: set[str],
+) -> str:
+    """One name per **continuous** conductor run under `native-attr` (053T).
+
+    On this host a label's name is printed by the wire it rides (029:
+    ``sch.place_netlabel`` has no usable primitive), so a net whose conductors
+    meet at a shared vertex or at a T printed the same name once per label — the
+    CH343's `D+`/`D-` came out twice, and every one of those rows is ink the page
+    has to hold. With ``textPlacement: native-attr`` the host draws the name
+    itself (an attribute row at the label's box), and one row is enough: the
+    netlist merges by name across the whole project, not per conductor.
+
+    **A net is not a run.** Two conductors of one net that share no vertex, and
+    where no vertex of one lies on the other, are two nets in the editor's
+    geometric reading until something joins them — the Type-C's reversible `D+`
+    pins are the measured case. They each keep one name, and this pass draws
+    **no wire between them**: joining them here would be the short the drawing
+    must not make (岳's R1 forbids it in the flesh; the plan must not do it by
+    construction either).
+
+    A label whose anchor lies on **no** conductor of its net is left exactly as
+    it was: nothing here can say which run names it, and dropping it would take
+    a name away from a pin that has no other. A net the drawing states with a
+    **flag** is left alone too — the flag names it, and no attribute row moves.
+
+    The survivors are marked ``text_mode="native"``, which is what the
+    readability gate reads to model the row the host prints (at this box,
+    horizontal) instead of the row a wire's midpoint would print. The return is
+    the note this pass owes the page; it is empty when nothing was dropped.
+    """
+    def same(a: tuple[float, float], b: tuple[float, float]) -> bool:
+        return abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6
+
+    def on_run(point, start, stop) -> bool:
+        if abs(start[0] - stop[0]) < 1e-9:  # vertical
+            return abs(point[0] - start[0]) < 1e-6 and (
+                min(start[1], stop[1]) - 1e-6 <= point[1]
+                <= max(start[1], stop[1]) + 1e-6
+            )
+        if abs(start[1] - stop[1]) < 1e-9:  # horizontal
+            return abs(point[1] - start[1]) < 1e-6 and (
+                min(start[0], stop[0]) - 1e-6 <= point[0]
+                <= max(start[0], stop[0]) + 1e-6
+            )
+        return False
+
+    def runs_of(segment: LayoutSegment) -> list[tuple[tuple[float, float],
+                                                      tuple[float, float]]]:
+        pts = [(float(p[0]), float(p[1])) for p in segment.points]
+        return list(zip(pts, pts[1:]))
+
+    def joined(a: LayoutSegment, b: LayoutSegment) -> bool:
+        """Do these two meet — at a shared vertex, or with a vertex on the other?"""
+        for point in a.points:
+            point = (float(point[0]), float(point[1]))
+            for start, stop in runs_of(b):
+                if same(point, start) or same(point, stop) or on_run(point, start, stop):
+                    return True
+        for point in b.points:
+            point = (float(point[0]), float(point[1]))
+            for start, stop in runs_of(a):
+                if same(point, start) or same(point, stop) or on_run(point, start, stop):
+                    return True
+        return False
+
+    wanted = {
+        str(label.net) for label in labels
+        if label.net and str(label.net) not in flag_nets
+    }
+    if not wanted:
+        return ""
+    indices_by_net: dict[str, list[int]] = {}
+    for index, segment in enumerate(segments):
+        if segment.net in wanted and len(segment.points) >= 2:
+            indices_by_net.setdefault(str(segment.net), []).append(index)
+    parent = list(range(len(segments)))
+
+    def find(item: int) -> int:
+        while parent[item] != item:
+            parent[item] = parent[parent[item]]
+            item = parent[item]
+        return item
+
+    for net, members in indices_by_net.items():
+        for position, left in enumerate(members):
+            for right in members[position + 1:]:
+                if joined(segments[left], segments[right]):
+                    a, b = find(left), find(right)
+                    if a != b:
+                        parent[b] = a
+
+    dropped: list[LayoutLabel] = []
+    kept_by_component: dict[tuple[str, int], LayoutLabel] = {}
+    survivors: list[LayoutLabel] = []
+    for label in labels:
+        net = str(label.net)
+        if not net or net in flag_nets:
+            survivors.append(label)
+            continue
+        anchor = (float(label.x), float(label.y))
+        home = None
+        for index in indices_by_net.get(net, ()):
+            if any(on_run(anchor, start, stop) for start, stop in runs_of(segments[index])):
+                home = find(index)
+                break
+        if home is None:
+            # No conductor of this net reaches the label: nothing can say which
+            # run it names, so it keeps the reading it came with.
+            survivors.append(label)
+            continue
+        key = (net, home)
+        if key in kept_by_component:
+            dropped.append(label)
+            continue
+        kept_by_component[key] = label
+        label.text_mode = TEXT_MODE_NATIVE
+        survivors.append(label)
+    if not dropped:
+        return ""
+    labels[:] = survivors
+    nets = sorted({str(item.net) for item in dropped})
+    return (
+        f"{len(dropped)} label(s) of {len(nets)} net(s) were dropped because their "
+        "net is named once per continuous conductor run under "
+        f"`textPlacement: native-attr` ({', '.join(nets[:6])}"
+        f"{', …' if len(nets) > 6 else ''}): the host prints the remaining label's "
+        "name with its attribute API, the conductors are untouched, and no wire was "
+        "added to join runs that do not meet"
+    )
+
+
+def _native_label_sides(ctx: Any) -> dict[str, tuple[float, float]]:
+    """Net -> the module's stated reading side, under the 543D opt-in only.
+
+    The 543D page states ``serviceLayout`` as its explicit construction opt-in
+    and gives a module's cross-module pair a side through that module's own
+    ``presentation.sidePreferences`` (USB's ``load: right``, the CH343's
+    ``load: left``). A net whose ``portRoles`` entry names such a role is a net
+    the document has said which way it reads; for those the visible name is put
+    on that side (see :func:`_native_label_visibility`).
+
+    Nothing is returned for a document that does not state ``serviceLayout``, so
+    a page that only states ``textPlacement`` keeps 053V's own keeper rule byte
+    for byte. The sides are the presentation's own vocabulary; a role with no
+    stated side, or a side this table does not know, says nothing.
+    """
+    presentation = getattr(ctx, "presentation", None)
+    if presentation is None or presentation.service_layout is None:
+        return {}
+    vectors = {
+        "left": (-1.0, 0.0),
+        "right": (1.0, 0.0),
+        "top": (0.0, 1.0),
+        "up": (0.0, 1.0),
+        "bottom": (0.0, -1.0),
+        "down": (0.0, -1.0),
+    }
+    out: dict[str, tuple[float, float]] = {}
+    for net_id, role in presentation.port_roles.items():
+        vector = vectors.get(presentation.side_for(role))
+        if vector is not None:
+            out[str(net_id)] = vector
+    return out
+
+
+def _native_label_visibility(
+    labels: list[LayoutLabel],
+    segments: Sequence[LayoutSegment],
+    flag_nets: set[str],
+    sides: Mapping[str, tuple[float, float]] | None = None,
+) -> str:
+    """One **visible** name per net per module view under `native-attr` (053V).
+
+    `_native_label_dedupe` already kept one label per **continuous** run; a net
+    whose runs do not meet (the Type-C's reversible `D+`/`D-` pins) therefore
+    still carried one name per run, and two implemented rows 8.5 units apart is
+    the L5 duplicate the page cannot hold. This pass keeps the names and the
+    conductors — it hides the extra **text**:
+
+    * every label the dedupe marked (:data:`TEXT_MODE_NATIVE`) is a candidate;
+      a flag-covered net is untouched, exactly as there;
+    * one candidate per net stays visible, the rest become
+      :data:`TEXT_MODE_NATIVE_HIDDEN`. The label stays in the plan, so the wire
+      it rides still carries the net's name into the editor's netlist and
+      same-named runs still merge across the project — nothing is cleared,
+      deleted, or joined (053U measured that `valueVisible: false` on a wire's
+      own `Name` row changes no byte of the netlist);
+    * **which one stays visible** is the label whose box centre is **farthest
+      from the pin its run leaves** — that is the longer, clearer stub. The
+      5-unit stub beside a reversible pin is the position nobody can read;
+      leaving *that* one printed while hiding the long one would keep the worse
+      text. The pin is measured off the drawings this plan has: the carrier run
+      starts at the pin and the label's anchor is its far end, so the pin is the
+      run's vertex farthest from that anchor. Ties keep the original order (the
+      first label wins), so the pass is deterministic on the same input.
+
+    543D adds one **opt-in** reading on top of that rule, and only for a net the
+    document has given a side: with ``serviceLayout`` stated (the explicit
+    construction opt-in) and the net's ``portRoles`` role given a side by this
+    module's ``sidePreferences`` (``_native_label_sides``), the name that stays
+    visible is the one whose box centre lies **toward that side**. The USB
+    receptacle's reversible ``D+``/``D-`` pins are the measured case: the
+    053V rule kept the long carrier on the far side of the symbol, so the name
+    the page's own port printed was the hidden one; with the module stating
+    ``load: right`` the near pin's name stays printed and the duplicate on the
+    far side is hidden instead. No name is deleted, no net is dropped, and no
+    two *different* nets are touched — the choice is only among the labels of
+    one net whose runs do not meet. A document without ``serviceLayout`` keeps
+    the farthest-from-pin answer exactly.
+
+    Labels the dedupe left alone (no conductor of their net reaches them, or a
+    flag names the net) are not candidates: this pass may not make a naming
+    decision about a label whose run it cannot see.
+
+    The return is the note the page owes; empty when nothing was hidden.
+    """
+    candidates: dict[str, list[LayoutLabel]] = {}
+    for label in labels:
+        net = str(label.net)
+        if not net or net in flag_nets or label.text_mode != TEXT_MODE_NATIVE:
+            continue
+        candidates.setdefault(net, []).append(label)
+    if not candidates:
+        return ""
+
+    def runs_of(segment: LayoutSegment) -> list[tuple[tuple[float, float],
+                                                      tuple[float, float]]]:
+        pts = [(float(p[0]), float(p[1])) for p in segment.points]
+        return list(zip(pts, pts[1:]))
+
+    def on_run(point, start, stop) -> bool:
+        if abs(start[0] - stop[0]) < 1e-9:
+            return abs(point[0] - start[0]) < 1e-6 and (
+                min(start[1], stop[1]) - 1e-6 <= point[1]
+                <= max(start[1], stop[1]) + 1e-6
+            )
+        if abs(start[1] - stop[1]) < 1e-9:
+            return abs(point[1] - start[1]) < 1e-6 and (
+                min(start[0], stop[0]) - 1e-6 <= point[0]
+                <= max(start[0], stop[0]) + 1e-6
+            )
+        return False
+
+    def pin_of(label: LayoutLabel) -> tuple[float, float]:
+        """The pin this label's carrier run leaves (its end away from the anchor)."""
+        anchor = (float(label.x), float(label.y))
+        pin = anchor
+        reach = -1.0
+        for segment in segments:
+            if str(segment.net) != str(label.net) or len(segment.points) < 2:
+                continue
+            runs = runs_of(segment)
+            if not any(on_run(anchor, start, stop) for start, stop in runs):
+                continue
+            for point in runs[0] + runs[-1]:
+                away = math.dist(point, anchor)
+                if away > reach:
+                    reach, pin = away, point
+        return pin
+
+    def pin_distance(label: LayoutLabel) -> float:
+        """How far this label's box sits from the pin its carrier run leaves."""
+        pin = pin_of(label)
+        centre = (
+            (label.bbox[0] + label.bbox[2]) / 2.0,
+            (label.bbox[1] + label.bbox[3]) / 2.0,
+        )
+        return math.hypot(centre[0] - pin[0], centre[1] - pin[1])
+
+    def stated_side_key(label: LayoutLabel) -> float:
+        """How far this box's centre lies toward the net's declared side."""
+        side = (sides or {}).get(str(label.net))
+        if side is None:
+            return pin_distance(label)
+        centre_x = (label.bbox[0] + label.bbox[2]) / 2.0
+        centre_y = (label.bbox[1] + label.bbox[3]) / 2.0
+        return centre_x * side[0] + centre_y * side[1]
+
+    def toward_side(label: LayoutLabel) -> bool:
+        """Is this box centre on the declared side **of its own pin**?"""
+        side = (sides or {}).get(str(label.net))
+        if side is None:
+            return False
+        pin = pin_of(label)
+        centre_x = (label.bbox[0] + label.bbox[2]) / 2.0
+        centre_y = (label.bbox[1] + label.bbox[3]) / 2.0
+        return (
+            (centre_x - pin[0]) * side[0] + (centre_y - pin[1]) * side[1]
+        ) > 0.0
+
+    hidden: list[LayoutLabel] = []
+    for net in sorted(candidates):
+        group = candidates[net]
+        if len(group) < 2:
+            continue
+        toward = [label for label in group if toward_side(label)]
+        if toward:
+            # 543D-2: with the core flipped, several duplicate runs can all lie
+            # on the stated side; the name stays at the **nearest** one (the
+            # service pin's own row) instead of the far carrier's end, which is
+            # also what keeps D+ above D- on both islands.
+            keeper = min(toward, key=pin_distance)
+        else:
+            # `max` keeps the **first** of equal keys, so a tie is the original order.
+            keeper = max(group, key=stated_side_key)
+        for label in group:
+            if label is keeper:
+                continue
+            label.text_mode = TEXT_MODE_NATIVE_HIDDEN
+            hidden.append(label)
+    if not hidden:
+        return ""
+    nets = sorted({str(item.net) for item in hidden})
+    return (
+        f"{len(hidden)} label(s) of {len(nets)} net(s) were kept but hidden under "
+        "`textPlacement: native-attr` because the net is printed once per module "
+        f"view ({', '.join(nets[:6])}{', …' if len(nets) > 6 else ''}): their runs "
+        "do not meet, so their conductors and their names stay exactly as drawn — "
+        "the extra text is what is suppressed, with `valueVisible: false` on that "
+        "wire's own `Name` row, and the visible name is the one nearest its own "
+        "pin among the runs on the net's declared side when the document states "
+        "one (`serviceLayout` + the module's `sidePreferences`), otherwise the "
+        "one farthest from its pin (053V)"
+    )
+
+
 def _part_texts(
     ctx: _Context, placed: _Placement, occupied: list[Box], walls: list[Box]
 ) -> list[LayoutText]:
@@ -6697,7 +7308,12 @@ def _part_texts(
         declared = _declared_rows(
             ctx, part_id, profile, placed.poses[part_id], placed.origins[part_id]
         )
-        if declared:
+        stated_side = _stated_part_text_side(ctx, part_id)
+        # 053S: under `textPlacement: native-attr` a stated side is the whole
+        # point — the landing moves the host's own rows there, so the declared
+        # anchors must not win. Without the switch (and for every part the
+        # document does not name) the declared rows stay exactly what they were.
+        if declared and not (_native_text_placement(ctx) and stated_side):
             for kind, text, item in declared:
                 occupied.append(item)
                 walls.append(item)
@@ -6721,7 +7337,8 @@ def _part_texts(
         # rung there is blocked the historical ladder runs unchanged, so a
         # stated side can never draw worse than no statement at all — and a
         # document that states none takes exactly the path it always took.
-        stated_side = _stated_part_text_side(ctx, part_id)
+        # 053S: the side was read above, because under `native-attr` it also
+        # decides whether the symbol's declared anchors are used at all.
         if stated_side:
             for rung in range(1, TEXT_ESCALATION_STEPS + 1):
                 boxes = _line_boxes(
@@ -9614,7 +10231,7 @@ def _build_one_variant(
                 part_id, _, token = member.partition(".")
                 label = _label_for(
                     ctx, net_id, part_id, token, point, placed, occupied,
-                    segments, _flag_ink_rows(ctx, symbols),
+                    segments, _service_label_avoid(ctx, symbols, router),
                 )
                 labels.append(label)
                 solids.append(label.bbox)
@@ -9638,7 +10255,7 @@ def _build_one_variant(
                     part_id, _, token = member.partition(".")
                     label = _label_for(
                         ctx, net_id, part_id, token, point, placed, occupied,
-                        segments, _flag_ink_rows(ctx, symbols),
+                        segments, _service_label_avoid(ctx, symbols, router),
                     )
                     labels.append(label)
                     solids.append(label.bbox)
@@ -9851,6 +10468,30 @@ def _build_one_variant(
     )
     if failure is not None:
         return None, failure, []
+
+    # 053T: under `textPlacement: native-attr` a **continuous conductor run** is
+    # named once. The filter runs here, before the plan is assembled, so the
+    # readability gate and `geometry_sha256` both read the drawing that lands:
+    # the dropped labels are not ink on that page, and a row measured from one
+    # would be a row nobody prints. A net is not a run — two conductors that only
+    # share a name stay two, and neither gets connected to the other.
+    if _native_text_placement(ctx):
+        note = _native_label_dedupe(
+            labels, segments, {item.net for item in symbols},
+        )
+        if note:
+            notes.append(note)
+        # 053V: after the continuous-run filter, a net stated by **disconnected**
+        # runs in this module view keeps one printed name; the others stay in the
+        # plan (their conductors keep the net) and are hidden, so two rows 8.5
+        # units apart never reach the page. Same spot, same reason: the label set
+        # is the drawing the gate and the digest read.
+        note = _native_label_visibility(
+            labels, segments, {item.net for item in symbols},
+            sides=_native_label_sides(ctx),
+        )
+        if note:
+            notes.append(note)
 
     junctions = _junctions(segments)
     plan_notes = [
@@ -10550,6 +11191,7 @@ def _flag_anchor(
     crossings: list[str] | None = None,
     near: Callable[[Sequence[tuple[float, float]]], str | None] | None = None,
     limit: float = FLAG_LEAD_LIMIT,
+    strict: bool = False,
 ) -> tuple[tuple[float, float], tuple[tuple[float, float], ...] | None, float]:
     """Where a flag's anchor goes, the lead that reaches it, and which way it hangs.
 
@@ -10652,6 +11294,17 @@ def _flag_anchor(
                 point[0] + direction[0] * length,
                 point[1] + direction[1] * length,
             ))
+            if strict and (
+                _key(corner) in blocked
+                or _reserved_hits(router, point, corner)
+            ):
+                # 543C: when the presentation states a service interval, a
+                # flag lead's turn may not stand on a foreign connection or
+                # cross a lane reserved for another net. This is the corner
+                # that used to land exactly on the served shunt's return pad:
+                # `_span_free` guards a run's interior, and the corner is an
+                # endpoint it deliberately did not ask about.
+                continue
             if _close(length, 0.0):
                 # 069 sec.8's last resort is "no lead at all" — but 175/B-2's
                 # preference must not be what pushes a flag off the page: a rung it
@@ -10766,6 +11419,56 @@ def _flag_box(
         max(glyph[2], text[2]) + margin,
         max(glyph[3], text[3]) + margin,
     )
+
+
+def _flag_wire_ruler(
+    ctx: _Context,
+    net_id: str,
+    profile: SymbolProfile,
+    router: _Router,
+) -> Callable[[tuple[float, float], float], bool]:
+    """Is this candidate flag far enough from every wire already drawn? (053W续二)
+
+    The gate's ruler, not a second one: `readability._flag_body_offence` is the
+    function `readability._check_flag_body_on_wire` reports with and
+    `pagecompiler` both detects and re-checks a moved flag with. Until this
+    batch the module ladder asked its own question instead — :func:`_flag_room`,
+    which measures a *box* against a run and knows nothing of the 5-unit
+    clearance or of the lead exemption — and the two answers came apart exactly
+    where a page is decided: on v45 the usb_c `R1.2` ground hung where the room
+    model was happy and the gate refused it at 1 unit, so the page compiled to
+    no candidate at all.
+
+    Every run counts, `router.own_edges` included: a flag's own trunk is not a
+    lead and is not exempt (the gate says the same). Only a run that *is* this
+    flag's lead — an endpoint on the anchor, heading away from the glyph, the
+    rest still a full clearance off it — passes, and that decision is
+    :func:`readability._flag_lead_exempt`'s, called through the one function.
+
+    An unmeasurable glyph is not refused here either: `flag_glyph_box` returns
+    None when the profile has no body, and neither the gate nor this ruler
+    invents a box for it (:func:`readability._flag_glyph_box`).
+
+    Non-native drawings get the permissive answer, so not one of their
+    candidates changes: the gate still reports what it always reported about
+    them, and 053W's own rule says the check is a fact about the drawing, not a
+    layout option.
+    """
+    if not _native_text_placement(ctx):
+        return lambda anchor, rotation: True
+
+    def clear(anchor: tuple[float, float], rotation: float) -> bool:
+        glyph = flag_glyph_box(profile, rotation=rotation, anchor=anchor)
+        if glyph is None:
+            return True
+        for start, end in (*router.edges, *router.own_edges):
+            if readability._flag_body_offence(
+                net_id, anchor, [start, end], glyph
+            ) is not None:
+                return False
+        return True
+
+    return clear
 
 
 def _flag_room(
@@ -11296,6 +11999,7 @@ def _rail_flag_seat(
             page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
         )
     room = _flag_room(router, solids, inner, blocked)
+    ruler = _flag_wire_ruler(ctx, net_id, profile, router)
     crossings: list[str] = []
     for hang in (natural, -natural):
         def fits(anchor: tuple[float, float], _hang: float = hang) -> bool:
@@ -11303,12 +12007,13 @@ def _rail_flag_seat(
             return room(
                 _flag_box(profile, rotation, anchor, net_id, margin=0.0),
                 _flag_box(profile, rotation, anchor, net_id),
-            )
+            ) and ruler(anchor, rotation)
 
         anchor, lead, placed_hang = _flag_anchor(
             router, point, (0.0, hang), blocked,
             leads=(FLAG_JOG,), fits=fits, up=natural > 0.0, boxes=bodies,
             crossings=crossings, limit=ctx.budget.flag_lead_limit,
+            strict=_service_channels(ctx),
         )
         if lead is not None:
             return (
@@ -11417,7 +12122,16 @@ def _seat_wire_flags(
         for start, end in zip(lead, lead[1:]):
             cells |= _lattice_nodes(router, start, end)
         cells.add(_key(anchor))
-        box = _flag_box(profile, rotation, anchor, net_id, margin=0.0)
+        # 053W续二: the boxes this pass reserves have to be the ones the *gate*
+        # grades, not a smaller one. A wire routed against the glyph alone came
+        # back 1 unit off it (the router's own epsilon past a wall) and the gate
+        # reported a flag 1 unit from its own trunk — a native page then had no
+        # legal candidate at all. Native mode reserves the clearance with it; a
+        # non-native drawing keeps the box it always had, byte for byte.
+        box = _flag_box(
+            profile, rotation, anchor, net_id,
+            margin=FLAG_CLEARANCE if _native_text_placement(ctx) else 0.0,
+        )
         cells |= _nodes_in_box(router, box)
         if not _take_lane(taken, cells, tips, {_key(point)}, net_id):
             continue
@@ -11436,7 +12150,7 @@ def _lead_lane_reservations(
     net_order: Sequence[str],
     router: _Router,
     occupied: Sequence[Box],
-    solids: Sequence[Box],
+    solids: list[Box],
     bodies: Sequence[Box] | None,
     ordinary_seats: set[tuple[str, str]] | None = None,
 ) -> list[Box]:
@@ -11495,6 +12209,17 @@ def _lead_lane_reservations(
                 tips.add(_key(point))
     taken: dict[tuple[float, float], str] = {}
     router.reserved = taken
+    #: 543C: the measured name boxes this pass makes permanent obstacles. They
+    #: are appended to `router.boxes` immediately (so the flag seats decided
+    #: below see them) and folded into `router.flag_walls` afterwards, which is
+    #: the list every later `router.boxes` rebuild carries.
+    service_walls: list[Box] = []
+    #: 543C: a uniquely served shunt's return pad and its short return lane are
+    #: promised to the return net before any label or flag lane is taken. The
+    #: label wall above keeps a conductor out of the name box; this keeps
+    #: another net (measured: +5V) off the shunt's own return pad, which is what
+    #: turned "route around the text" into a GND/+5V short.
+    _reserve_service_returns(ctx, placed, router, taken, tips)
     #: The strict question: while the lanes are being decided, a flag's box may
     #: not swallow a lane another flag already holds (`_flag_room`). Cleared
     #: again below, so the placement asks the original question.
@@ -11522,6 +12247,7 @@ def _lead_lane_reservations(
         if expression.style == "label":
             sub_plan, sub_failure = _reserve_label_stubs(
                 ctx, placed, net_id, expression, router, occupied, tips, taken,
+                service_walls,
             )
             if sub_failure is not None:
                 return plan, sub_failure
@@ -11581,10 +12307,118 @@ def _lead_lane_reservations(
     router.flag_walls = _seat_wire_flags(
         ctx, placed, expressions, net_order, router, solids, bodies, tips, taken,
     )
+    #: 543C: the **ground** flag seats decided above, kept separately from the
+    #: label walls appended below. The main label pass avoids these boxes,
+    #: because a ground flag's seat is chosen before the labels are printed and
+    #: the label must not land on the flag that is already promised. Rails are
+    #: not included: their seats are not what the service interval moved.
+    gnd_boxes: list[Box] = []
+    for (flag_net, _member), (flag_anchor, flag_rotation, _lead) in (
+        router.flag_seats.items()
+    ):
+        flag_spec = ctx.circuit.net(flag_net)
+        if flag_spec is None or flag_spec.cls != "gnd":
+            continue
+        flag_profile, _ref = _flag_plan(ctx, flag_net, "gnd")
+        if flag_profile is None:
+            continue
+        gnd_boxes.append(
+            _flag_box(flag_profile, flag_rotation, flag_anchor, flag_net)
+        )
+    router.service_flag_boxes = gnd_boxes
+    router.flag_walls.extend(service_walls)
     router.reserved_exempt = ""
     router.reserve_strict = False
     return plan, None
 
+
+
+def _reserve_service_returns(
+    ctx: _Context,
+    placed: _Placement,
+    router: _Router,
+    taken: dict[tuple[float, float], str],
+    tips: set[tuple[float, float]],
+) -> None:
+    """543C: promise a served shunt's return pad and short return lane to its net.
+
+    A uniquely served shunt has a **return** terminal on the ground (543A's
+    ``return_pin``). When the service interval is stated, the label wall above
+    can send a neighbouring net around the label, and on the CH343 island the
+    +5V flag then routed to a point that happened to be C3's return pad — a
+    GND/+5V short in the plan even though every wire was individually legal.
+    The return pad is known before any wire, so it (and the first step of the
+    lane leaving it, away from the service pin) is reserved for the return net.
+    A foreign wire then treats it as a wall; the owning net may still use it.
+
+    Only relations the 543A analysis resolved to one host pin are used, and only
+    when the presentation states `serviceLayout` — the old drawing keeps its
+    lanes and its bytes.
+    """
+    if not _service_channels(ctx):
+        return
+    for relation in ctx.services().services:
+        if relation.status != STATUS_SERVED or not relation.has_unique_host_pin:
+            continue
+        if not relation.return_pin or not relation.service_pin:
+            continue
+        net = ctx.circuit.net_of_pin(f"{relation.part_id}.{relation.return_pin}")
+        if net is None:
+            continue
+        return_point = _pin_point(
+            ctx, relation.part_id, relation.return_pin, placed.poses, placed.origins
+        )
+        service_point = _pin_point(
+            ctx, relation.part_id, relation.service_pin, placed.poses, placed.origins
+        )
+        if return_point is None or service_point is None:
+            continue
+        dx = return_point[0] - service_point[0]
+        dy = return_point[1] - service_point[1]
+        length = math.hypot(dx, dy)
+        if length == 0.0:
+            continue
+        direction = (dx / length, dy / length)
+        far = _rounded((
+            return_point[0] + direction[0] * FLAG_LEAD,
+            return_point[1] + direction[1] * FLAG_LEAD,
+        ))
+        cells = _lattice_nodes(router, return_point, far)
+        _take_lane(taken, cells, tips, {_key(return_point)}, net)
+
+
+def _service_label_avoid(
+    ctx: _Context, symbols: Sequence[LayoutPowerSymbol], router: _Router
+) -> list[Box]:
+    """The boxes a label must not print on: flag glyphs/names + promised seats."""
+    rows = list(_flag_ink_rows(ctx, symbols))
+    if _service_channels(ctx):
+        rows.extend(getattr(router, "service_flag_boxes", ()))
+    return rows
+
+
+def _reserve_service_label_box(
+    ctx: _Context, router: _Router, box: Box, service_walls: list[Box]
+) -> None:
+    """543C: the real label name box is a wall when a service interval is stated.
+
+    The routing pass already promises each label's *stub* lane
+    (:func:`_reserve_label_stubs`), but not the box the name is printed in. On
+    the CH343 island with `serviceLayout.pinGap` stated, the shorter shunt moves
+    C3's GND return into the column that the D+ label's name box occupies, and
+    the wire is routed through the text. The name box is decided **before** any
+    wire (labels are placed in the same early pass), so the honest fix is to
+    make the measured box an obstacle for every wire, this net's own included.
+
+    Only when the presentation states `serviceLayout`: every old document keeps
+    the drawing it had, and the wall is not a new spec key or a scoring weight.
+    """
+    if not _service_channels(ctx):
+        return
+    if box not in router.boxes:
+        router.boxes.append(box)
+    if box not in service_walls:
+        service_walls.append(box)
 
 
 def _reserve_label_stubs(
@@ -11596,6 +12430,7 @@ def _reserve_label_stubs(
     occupied: Sequence[Box],
     tips: set[tuple[float, float]],
     taken: dict[tuple[float, float], str],
+    service_walls: list[Box] | None = None,
 ) -> tuple[dict[tuple[str, tuple[float, float]],
                tuple[tuple[float, float], tuple[float, float],
                      list[tuple[float, float]]]], GrammarFailure | None]:
@@ -11649,6 +12484,7 @@ def _reserve_label_stubs(
         label = _label_for(
             ctx, net_id, part_id, token, point, placed, list(occupied)
         )
+        _reserve_service_label_box(ctx, router, label.bbox, service_walls)
         direction = _label_stub_lane(label, point)
         if direction[0] == 0.0:
             # 534 r17: the carrier pass has always drawn the run **horizontally**
@@ -11668,7 +12504,16 @@ def _reserve_label_stubs(
             continue
         chosen = None
         reasons: list[str] = []
-        for candidate_direction, path in _local_label_paths(point, direction, router.grid):
+        # 053T: under `native-attr` the name is an attribute row at the label's own
+        # box, so the only carrier shape that buys anything is a **straight** run
+        # out of the pin. The bent shapes exist to move a wire's midpoint row into
+        # another band; with no midpoint row there is nothing for them to buy, and
+        # a bent conductor is a different drawing than the one stated.
+        native = _native_text_placement(ctx)
+        paths = _local_label_paths(point, direction, router.grid)
+        if native:
+            paths = [item for item in paths if len(item[1]) == 2]
+        for candidate_direction, path in paths:
             far = path[-1]
             if not _label_fits(ctx, net_id, far):
                 reasons.append(f"the name at {_point_text(far)} leaves the page's margin")
@@ -11683,6 +12528,14 @@ def _reserve_label_stubs(
                     f"the carrier to {_point_text(far)} is refused: {vertical}"
                 )
                 continue
+            # 053T: this pass reserves a **conductor lane**, and under
+            # `native-attr` the name is not printed along that conductor at all —
+            # the host prints the label's own attribute row at the label's box, so
+            # the row measured here is not ink on the page. The label box is
+            # measured where the page is graded (`readability`, on the real
+            # boxes); the lane keeps the historical row so the same lane serves
+            # both readings. What the native path does change here is the shape:
+            # only straight carriers are offered (see the caller).
             row = textmetrics.wire_name_box([list(p) for p in path], net_id)
             if row is None:
                 reasons.append(f"the path to {_point_text(far)} prints no name row")
@@ -12034,6 +12887,7 @@ def _flag_pin_lead(
     family = flag_glyph_kind(profile)
     natural = family != FLAG_GLYPH_KIND_GND
     room = _flag_room(router, solids, inner, blocked)
+    ruler = _flag_wire_ruler(ctx, net_id, profile, router)
     part_id, _, token = member.partition(".")
     escape = _pin_direction(
         ctx, part_id, token, placed.poses,
@@ -12044,7 +12898,7 @@ def _flag_pin_lead(
         return room(
             _flag_box(profile, rotation, anchor, net_id, margin=0.0),
             _flag_box(profile, rotation, anchor, net_id),
-        )
+        ) and ruler(anchor, rotation)
 
     crossings: list[str] = []
     for direction in [
@@ -12057,6 +12911,7 @@ def _flag_pin_lead(
     ]:
         anchor, lead, hang = _flag_anchor(
             router, point, direction, blocked,
+            strict=_service_channels(ctx),
             # 069 sec.1's band is 40-60 and :data:`SIBLING_LEAD` is its
             # middle, so 40 is the **second** rung of a far pad's own ladder:
             # a shape that fits it without giving up the 50 is drawn 岳's 40

@@ -53,6 +53,7 @@ from ..core.changeplan import (
     DRAW_MODULE_KIND,
     DRAW_VALUE_KEY,
     ChangePlan,
+    PlanAttributeMove,
     PlanChange,
     PlanDrawBaseline,
     PlanDrawFlag,
@@ -70,12 +71,14 @@ from ..core.geometry import transform_point
 from ..core import textmetrics
 from ..core.layoutplan import (
     DOWNGRADE_NOTE_PREFIX,
+    TEXT_MODE_NATIVE,
+    TEXT_MODE_NATIVE_HIDDEN,
     LayoutPart,
     LayoutPlan,
     label_wire_indices,
 )
 from ..core.model import is_ground_net
-from ..core.presentationspec import PresentationSpec
+from ..core.presentationspec import PresentationSpec, TEXT_PLACEMENT_NATIVE
 from ..core.symbolprofile import (
     SymbolProfile, SymbolPose, flag_glyph_box, pose_box, role_siblings,
 )
@@ -188,6 +191,18 @@ LABEL_STUB_LENGTH = 2 * DRAW_GRID
 #: (`evidence/534g/`) was drawn with 60; the tests that pin the ladder's first
 #: rung stay at 40 until the key exists.
 LABEL_STUB_MIN = 8 * DRAW_GRID
+
+#: 053J: the step from the ladder's head to the **second column**'s rung — the
+#: deeper stand-off a pin takes when its neighbour already owns the head's x
+#: band. Twelve lattice steps (40 -> 100 at the 40 floor this batch measured),
+#: wider than a two-character name plus its gap, so two adjacent rows print in
+#: two visibly different bands instead of one wall of text. It is a pitch, not a
+#: length: the rung is the head plus this, and the two-column lead is offered
+#: only at :data:`LABEL_STUB_MIN` (40) — a document that states any other floor
+#: keeps its old ladder, because no page has measured that a deeper column helps
+#: there.
+LABEL_STUB_COLUMN_PITCH = 12 * DRAW_GRID
+
 LABEL_STUB_LENGTHS_STRAIGHT: tuple[float, ...] = (
     8 * DRAW_GRID, 10 * DRAW_GRID, 12 * DRAW_GRID,
     16 * DRAW_GRID, 20 * DRAW_GRID, 24 * DRAW_GRID,
@@ -999,6 +1014,7 @@ def module_plan(
     label_stubs: bool = False,
     module_label: str = "",
     keep_names: bool = False,
+    page_box: tuple[float, float, float, float] | None = None,
 ) -> ChangePlan:
     """One compiled drawing, as the plan a human authorises (054 §四.1).
 
@@ -1039,6 +1055,15 @@ def module_plan(
     symbol whose geometry differs from the one the layout was compiled against
     (refused with both hashes). Both are silent failures in the editor — the
     drawing simply comes out with its pins somewhere else.
+
+    ``page_box`` is the sheet this plan is going to land on. The compiled drawing
+    knows its own bounds but not the stub this pass adds, so 543F landed a page
+    whose CC name stub ran five units off the left edge (`(-5, 440)` on
+    `0,0,1170,825`: `draw lint` L10, host DRC `OBJECTOUTSIDESHEET`). Given the
+    sheet, a stub run that would leave it is not a candidate — the ladder moves to
+    the next direction/side that stays on the paper — and a label with no such run
+    refuses the plan by name instead of drawing off the sheet. ``None`` keeps the
+    pre-543F behaviour exactly (the ladder never reads a page).
     """
     if not isinstance(layout, LayoutPlan):
         raise DrawPlanError(f"layout must be a LayoutPlan, got {type(layout).__name__}")
@@ -1314,12 +1339,43 @@ def module_plan(
         )
         from .drawlint import L5_DUPLICATE_NET_GAP
 
-        carried = carrier_wire is not None
+        # 053T: a `native` label's name is printed by the host at the label's own
+        # **box** (the attribute row the plan moves), so that box is the ink this
+        # pass measures — not the midpoint box a wire would print. Every other
+        # label keeps the wire-midpoint row it has always been measured by.
+        # 053V: `native-hidden` prints **nothing** (the row is still on the wire,
+        # with `valueVisible: false`), so it is ink nowhere: no box, no carrier,
+        # no owner collision — only its conductor and its straight stub are still
+        # held to the drawing's rules.
+        mode = getattr(label, "text_mode", "")
+        native = mode == TEXT_MODE_NATIVE
+        hidden = mode == TEXT_MODE_NATIVE_HIDDEN
         carrier_row = (
-            None if carrier_wire is None else textmetrics.wire_name_box(
-                [tuple(point) for point in carrier_wire.points], str(label.net)
+            None if carrier_wire is None or hidden else (
+                tuple(float(value) for value in label.bbox) if native
+                else textmetrics.wire_name_box(
+                    [tuple(point) for point in carrier_wire.points], str(label.net)
+                )
             )
         )
+        # The sentence every downgrade below owes: on this host a label has no
+        # primitive (029). Under `native-attr` that is no longer a shortfall —
+        # the wire carries the name and the host's own attribute row prints it
+        # where the label box reserved the room — so the text says *that* rather
+        # than claiming the V4 attribute API is unusable (053T).
+        host_sentence = (
+            "the planned wire carries the net's name (`sch.place_wire` net=…) and "
+            "`textPlacement: native-attr` moves that attribute row's text to the "
+            f"label box ({label.bbox[0]:g}, {label.bbox[1]:g})-"
+            f"({label.bbox[2]:g}, {label.bbox[3]:g})"
+            if native else
+            "the planned wire carries the net's name (`sch.place_wire` net=…) and "
+            "`textPlacement: native-attr` hides that attribute row's text "
+            "(`valueVisible: false`) because this module view prints the net once"
+            if hidden else
+            "this host cannot place one (`sch.place_netlabel` is measured unusable, 029)"
+        )
+        carried = carrier_wire is not None
         # 534 stub-l5-selection: **riding a wire is a carrier choice too**, and it is
         # the choice that produced the two rows this page's gate refuses. A net's
         # name is one statement, so a wire whose own name row would print closer than
@@ -1358,8 +1414,7 @@ def module_plan(
         # the net's *first* label flip the answer for the rest of them.
         bare = label.net not in planned_conductor_nets
         if (label_stubs or bare) and not ride:
-            stub, blockers = _place_label_stub(
-                label, built, stub_bodies, stub_pins,
+            stub_args = dict(
                 # 534 r19 put every layout label box on this list; **r24 narrows it
                 # to every *other* one**. A label's own `bbox` is the plan's
                 # reservation of where a netlabel would go, and this host cannot
@@ -1372,6 +1427,15 @@ def module_plan(
                 label_boxes=_hard_ink_boxes(
                     layout, profiles, built, subject=label,
                 ),
+            )
+            if page_box is not None:
+                # 543F-2: the sheet is an *extra* fact. A caller that states none
+                # must see the pre-543F call surface exactly — a wrapper or probe
+                # around `_place_label_stub` with the old five parameters still
+                # works, and the keyword appears only when a page was stated.
+                stub_args["page_box"] = page_box
+            stub, blockers = _place_label_stub(
+                label, built, stub_bodies, stub_pins, **stub_args,
             )
             if stub is None and carried and carrier_row is not None:
                 # The wire was the only carrier left. Keep it, and state the pair the
@@ -1391,8 +1455,7 @@ def module_plan(
                 )
                 built.downgrades.append(
                     f"net {label.net}: the compiler drew a net label at "
-                    f"({label.x:g}, {label.y:g}), and this host cannot place one "
-                    f"(`sch.place_netlabel` is measured unusable, 029) — a planned wire "
+                    f"({label.x:g}, {label.y:g}) — {host_sentence} — a planned wire "
                     f"of {label.net} runs through that point and carries the name "
                     "(`sch.place_wire` net=…); no stub was drawn because every rung "
                     "printed its name on another carrier of this net"
@@ -1430,8 +1493,7 @@ def module_plan(
             ))
             built.downgrades.append(
                 f"net {label.net}: the compiler drew a net label at "
-                f"({label.x:g}, {label.y:g}), and this host cannot place one "
-                "(`sch.place_netlabel` is measured unusable, 029); no planned wire of "
+                f"({label.x:g}, {label.y:g}) — {host_sentence}; no planned wire of "
                 f"{label.net} reaches that point, so a {length:g}-unit stub "
                 f"{drawn} carries the "
                 "name instead — without it the pin would sit on an unnamed net and the "
@@ -1448,8 +1510,7 @@ def module_plan(
         # the sentence must not promise a stub the plan does not draw.
         built.downgrades.append(
             f"net {label.net}: the compiler drew a net label at "
-            f"({label.x:g}, {label.y:g}), and this host cannot place one "
-            "(`sch.place_netlabel` is measured unusable, 029) — "
+            f"({label.x:g}, {label.y:g}) — {host_sentence} — "
             + (
                 f"a planned wire of {label.net} runs through that point, and the net is "
                 "named on that conductor (`sch.place_wire` net=…), so the netlist "
@@ -1468,6 +1529,16 @@ def module_plan(
     # vertex the page keeps.
     _drop_covered_runs(built)
     _cut_at_flag_attachments(built, pin_at)
+    # 053S: the document asked for `native-attr`, so the text boxes the layout
+    # reserved become the page's own attribute positions. Read **after** the two
+    # passes above, because they drop and split wires: the carrier of a label is
+    # found on the list this plan will actually land, never on the indices the
+    # layout had before those passes.
+    attribute_moves = (
+        _native_attribute_moves(layout, built, presentation, book)
+        if getattr(presentation, "text_placement", "") == TEXT_PLACEMENT_NATIVE
+        else []
+    )
     if layout.junctions:
         built.notes.append(
             f"{len(layout.junctions)} junction(s) are expected where the drawing tees; "
@@ -1558,9 +1629,136 @@ def module_plan(
             draw_notes=built.notes,
             baseline_findings=[str(item) for item in baseline_findings],
             draw_keep_names=bool(keep_names),
+            attribute_moves=attribute_moves,
         ),
         preconditions=_preconditions(built, baseline, baseline_findings),
         expected_postcondition=_postconditions(built, islands),
+    )
+
+
+def _native_attribute_moves(
+    layout: LayoutPlan,
+    built: "_Built",
+    presentation: PresentationSpec,
+    book: Mapping[str, SymbolProfile],
+) -> list[PlanAttributeMove]:
+    """The `attributeMoves` a `native-attr` page states (053S).
+
+    Two kinds, both targets the layout already reserved:
+
+    * a part's ``reference``/``value`` row — but only where the compiler **did
+      not** simply read the symbol's own anchors. A part whose profile declares
+      its text rows and whose side the document does not state is already drawn
+      by the host where the layout says; a move to that same point would be a
+      write nobody asked for. A stated side (053d) or a profile with no declared
+      rows puts the row on the compiler's own ladder, and that is the row that
+      has to be written.
+    * a label's net name — the wire the plan lands as the label (`is_label_wire`)
+      that the label's anchor lies on. The target is the label box's centre,
+      which is where the compiler reserved room for the name.
+
+    053V adds the third kind: a label the compiler marked
+    `text_mode="native-hidden"` (a duplicate name of a net whose runs do not
+    meet) states a **version-2** move with `to.valueVisible: false` and no pose —
+    the row stays where the host put it, and only its visibility changes. Its
+    carrier is resolved exactly like a visible label's, so the row addressed is
+    the wire's own `Name` attribute; the wire's net, the label and the conductors
+    are untouched, which is what keeps the netlist byte-identical (053U).
+
+    Ambiguity is a refusal, never a guess: a label whose anchor is on no label
+    wire, on two of them, or two labels landing on one wire cannot say which
+    attribute row the plan means. This pass does **not** call `createNetLabel`
+    or bend anything; the caller keeps the plan and the page untouched.
+    """
+    stated = presentation.part_texts
+    symbol_of = {part.part_id: part.symbol_ref for part in layout.parts}
+    moves: list[PlanAttributeMove] = []
+    for text in layout.texts:
+        if text.kind not in ("reference", "value") or not text.part_id:
+            continue
+        profile = book.get(symbol_of.get(text.part_id, ""))
+        declares_rows = bool(profile is not None and profile.texts)
+        if declares_rows and text.part_id not in stated:
+            continue
+        if text.x is None or text.y is None:
+            x = (text.bbox[0] + text.bbox[2]) / 2.0
+            y = (text.bbox[1] + text.bbox[3]) / 2.0
+        else:
+            x, y = float(text.x), float(text.y)
+        moves.append(PlanAttributeMove(
+            owner_kind="part", spec_id=text.part_id, role=text.kind, x=x, y=y,
+        ))
+    claimed: dict[int, str] = {}
+    for label in layout.labels:
+        # A net carried by a flag has no label primitive on this host (the plan
+        # says so in its own downgrades), so there is no name row to move.
+        if any(flag.net == label.net for flag in built.flags):
+            continue
+        anchor = (label.x, label.y)
+        hits = [
+            index for index, wire in enumerate(built.wires)
+            if is_label_wire(wire)
+            and wire.net == label.net
+            and _on_polyline(anchor, wire.points)
+        ]
+        if len(hits) != 1:
+            found = (
+                "no label wire of that net passes through it"
+                if not hits else
+                "it lies on " + ", ".join(f"wire[{index}]" for index in hits)
+            )
+            raise DrawPlanError(
+                f"net {label.net}: the label at ({label.x:g}, {label.y:g}) cannot be "
+                f"moved by native text placement — {found}. `textPlacement: "
+                "native-attr` moves a net name only when exactly one label wire "
+                "carries it, so this plan is refused rather than one carrier being "
+                "picked (053S: native label ambiguity)"
+            )
+        index = hits[0]
+        if index in claimed:
+            raise DrawPlanError(
+                f"net {label.net}: the label at ({label.x:g}, {label.y:g}) and the "
+                f"label of net {claimed[index]!r} both land on wire[{index}] — two "
+                "names on one conductor cannot say which attribute row "
+                "`textPlacement: native-attr` moves, so the plan is refused "
+                "(053S: native label ambiguity)"
+            )
+        claimed[index] = str(label.net)
+        if _label_is_hidden(label):
+            moves.append(PlanAttributeMove(
+                owner_kind="wire", wire_index=index, role="net",
+                move_version=2, value_visible=False,
+            ))
+            continue
+        moves.append(PlanAttributeMove(
+            owner_kind="wire", wire_index=index, role="net",
+            x=(label.bbox[0] + label.bbox[2]) / 2.0,
+            y=(label.bbox[1] + label.bbox[3]) / 2.0,
+        ))
+    return moves
+
+
+def _label_is_hidden(label: Any) -> bool:
+    """Does this label keep its net but print **no** text (053V)?
+
+    `text_mode="native-hidden"` is the duplicate name of a net whose runs do not
+    meet: the label stays in the plan (its wire keeps the net, and the editor's
+    project-wide netlist merges same-named runs), while a version-2 move sets
+    `valueVisible: false` on that wire's own `Name` row. Nothing is deleted and
+    no wire is added across the runs.
+    """
+    return getattr(label, "text_mode", "") == TEXT_MODE_NATIVE_HIDDEN
+
+
+def _label_prints_native_text(label: Any) -> bool:
+    """Is this label's name an **attribute row** rather than a wire-midpoint row?
+
+    True for both 053T's visible `native` and 053V's `native-hidden`: the row lives
+    at the label's own box (or is suppressed there), so the conductor's midpoint
+    row is never the thing the host prints.
+    """
+    return getattr(label, "text_mode", "") in (
+        TEXT_MODE_NATIVE, TEXT_MODE_NATIVE_HIDDEN,
     )
 
 
@@ -1596,7 +1794,13 @@ def _label_stub_candidates(
        the same length along the rest of the compass, then the
        :data:`LABEL_STUB_LENGTHS` rungs in all four directions. A drawing whose
        stub was free before lands on exactly the point 057 gave it (099d's
-       zero-movement rule);
+       zero-movement rule). 053J: on the page path, where the document states
+       exactly this batch's floor (:data:`LABEL_STUB_MIN`, 40) and a centred row
+       and the side is horizontal, that first loop opens with two **column
+       leads** instead — the head and the head plus
+       :data:`LABEL_STUB_COLUMN_PITCH`, alternated by the pin's own row so
+       neighbours print in two x bands — and then repeats the old ladder
+       unchanged. Any other stated floor keeps the old ladder point for point;
     2. **bent, towards the label** (099f) — one perpendicular step out
        (:data:`LABEL_STUB_STEPS`) and then the same length ladder along the
        preferred side, for the case a straight run cannot get out at all: 099e's
@@ -1623,6 +1827,7 @@ def _label_stub_candidates(
     else:
         preferred, reach = (0.0, 1.0), LABEL_STUB_LENGTH
     straight = getattr(label, "stub", "auto") == "straight"
+    lead: list[float] = []
     if straight:
         lengths = list(LABEL_STUB_LENGTHS_STRAIGHT)
     else:
@@ -1658,14 +1863,52 @@ def _label_stub_candidates(
                      DRAW_GRID * 12, DRAW_GRID * 16):
             if rung not in lengths:
                 lengths.append(rung)
+        # 053J: **two columns**, taken alternately down a page. A column of
+        # labels that all leave their pins by the same rung prints every name in
+        # one x band, so six rows on a 10-unit pitch read as one wall of text
+        # (the CH343's left side, measured 2026-11-03: six 40-unit stubs, all
+        # names in the same band). A pin whose row is even on the printed row
+        # pitch takes the deeper rung first, the next one takes the head, so
+        # neighbours print in two bands. The switch is the pin's own row on the
+        # printed row pitch — no net name, no part, no hard-coded coordinate is
+        # read — and it is offered only where the document states exactly this
+        # batch's floor (:data:`LABEL_STUB_MIN`, 40) and a centred row, only on
+        # the page path, only on a horizontal side, and only when the deep rung
+        # is one the ladder does not already have. Any other stated floor (10,
+        # 30, 60, 80 …) keeps its old candidates in their old order: the ladder
+        # head is the whole of that document's statement, and 053J measured a
+        # second column at 40 only. Every old candidate stays, in its old order,
+        # right after the two leads.
+        if (
+            near_stagger
+            and stub_min == LABEL_STUB_MIN
+            and _label_row_model(label) == "centered"
+            and preferred[1] == 0.0
+        ):
+            deep = shortest + LABEL_STUB_COLUMN_PITCH
+            # 053J/lint: the deep rung may not leave the sheet. The page's origin
+            # is x = 0, so a left-hand column whose pin is closer to it than the
+            # depth itself has no room for a second column — H3's pins at x = 60
+            # would put the far end at -40 (`evidence/534j/lint.json`, L10) — and
+            # the whole ladder stays exactly as it was. Nothing here names a
+            # part, a net or a coordinate: only the room between the anchor and
+            # the origin. A right-hand side is unchanged.
+            if deep not in lengths and (preferred[0] > 0.0 or x >= deep):
+                head = lengths[0]
+                lead = (
+                    [deep, head]
+                    if not int(round(y / textmetrics.WIRE_NAME_ROW)) % 2
+                    else [head, deep]
+                )
     directions = [preferred] + [
         item for item in _LABEL_STUB_DIRECTIONS if item != preferred
     ]
     anchor = (x, y)
     out: list[_StubRun] = []
     # The label's own side, straight — 057's rung, and the *first* candidate, so
-    # a drawing whose stub was free lands on exactly the point 057 gave it.
-    for length in lengths:
+    # a drawing whose stub was free lands on exactly the point 057 gave it. 053J
+    # puts the two column leads in front (empty off the page path).
+    for length in lead + [rung for rung in lengths if rung not in lead]:
         far = (round(x + preferred[0] * length, 6),
                round(y + preferred[1] * length, 6))
         out.append(_StubRun(
@@ -1779,6 +2022,16 @@ def _label_stub_candidates(
                             ),
                             family=f"near stagger {_direction_text(stepped)}",
                         ))
+    if _label_prints_native_text(label):
+        # 053T: under `textPlacement: native-attr` the host prints the name at the
+        # label's own box, not along the wire — so the bend that was there to buy
+        # the *wire's midpoint row* a band is buying nothing, and a bent stub is a
+        # different conductor than the drawing stated. Only straight runs are
+        # offered; a pin with no free straight run is refused by the caller, never
+        # bent into place. 053V: a `native-hidden` label is the same shape — its
+        # row is the wire's own `Name` attribute (hidden, not absent), so its
+        # conductor is still held to the straight-stub rule and its clearance.
+        return [run for run in out if len(run.points) == 2]
     return out
 
 
@@ -2243,7 +2496,7 @@ def _hard_ink_boxes(
     """
     out: list[tuple[str, tuple[float, float, float, float]]] = [
         (f"the layout label box of net {other.net}", tuple(other.bbox))
-        for other in layout.labels if other is not subject
+        for other in layout.labels if other is not subject and not _label_is_hidden(other)
     ]
     for text in layout.texts:
         if text.bbox:
@@ -2319,6 +2572,7 @@ def _place_label_stub(
     bodies: Mapping[str, tuple[float, float, float, float]],
     pins: Sequence[tuple[str, str, tuple[float, float]]],
     label_boxes: Sequence[tuple[str, tuple[float, float, float, float]]] = (),
+    page_box: tuple[float, float, float, float] | None = None,
 ) -> tuple[tuple[tuple[float, float], ...] | None, list[str]]:
     """The first free stub run (anchor first), or ``(None, blockers)``.
 
@@ -2361,6 +2615,22 @@ def _place_label_stub(
             reason = _label_stub_blocked(label, head, tail, built, bodies, pins)
             if reason is not None:
                 break
+        if reason is None and page_box is not None:
+            # 543F: the sheet is a bound like any other. A run off the paper is a
+            # lint L10 / host DRC `OBJECTOUTSIDESHEET` on the landed page, so it
+            # is not a candidate — the ladder moves on to a direction that stays.
+            outside = [
+                (float(x), float(y)) for x, y in run.points
+                if not (
+                    page_box[0] - 1e-6 <= float(x) <= page_box[2] + 1e-6
+                    and page_box[1] - 1e-6 <= float(y) <= page_box[3] + 1e-6
+                )
+            ]
+            if outside:
+                x, y = outside[0]
+                reason = (
+                    f"it leaves the sheet {_box_text(page_box)} at ({x:g}, {y:g})"
+                )
         if reason is None:
             clear.append(run)
         elif run.family not in seen_shape:
@@ -2451,7 +2721,7 @@ def _place_label_stub(
         keeps the pre-534 choice and the note names the row it overlaps
         (tier 3), so the short is stated rather than hidden.
         """
-        if box is not None:
+        if box is not None and not _label_is_hidden(label):
             direction = (
                 "horizontal" if _stub_row_is_horizontal(run) else "vertical"
             )

@@ -277,10 +277,11 @@ def test_the_attached_module_sits_on_the_named_side_of_its_host():
     page = compile_chain(attached_chain({"to": "rc", "side": "bottom", "gap": 10})).pages[0]
     modules = page_modules(page)
     host, attached = modules["rc"], modules["div"]
-    # Below the host (y grows upwards), and no closer than the page's own module
-    # gap: the document's 10 is a lower bound, the page's floor is the contract.
+    # Below the host (y grows upwards) at the document's own 10 units: an attach
+    # pair states its clear space, so the page's 40-unit module gap does not
+    # widen it. The lattice rounds outward, never inward (053K).
     separation = host.frame[1] - attached.frame[3]
-    assert separation >= PAGE.module_gap - 1e-6, separation
+    assert 10 - 1e-6 <= separation < 10 + PAGE.grid + 1e-6, separation
     assert attached.frame[3] < host.frame[3]
     # Centred on the host's horizontal span (within one lattice step).
     centre = (host.frame[0] + host.frame[2]) / 2
@@ -301,14 +302,20 @@ def test_every_side_places_the_module_on_that_side(side):
     page = compile_chain(attached_chain({"to": "rc", "side": side})).pages[0]
     modules = page_modules(page)
     host, attached = modules["rc"], modules["div"]
+    # The default gap (10) is what the document asked for; the lattice may add
+    # at most one step outward and never takes one away (053K).
     if side == "bottom":
-        assert attached.frame[3] <= host.frame[1] - PAGE.module_gap + 1e-6
+        assert attached.frame[3] <= host.frame[1] - 10 + 1e-6
+        assert attached.frame[3] >= host.frame[1] - 10 - PAGE.grid - 1e-6
     elif side == "top":
-        assert attached.frame[1] >= host.frame[3] + PAGE.module_gap - 1e-6
+        assert attached.frame[1] >= host.frame[3] + 10 - 1e-6
+        assert attached.frame[1] <= host.frame[3] + 10 + PAGE.grid + 1e-6
     elif side == "left":
-        assert attached.frame[2] <= host.frame[0] - PAGE.module_gap + 1e-6
+        assert attached.frame[2] <= host.frame[0] - 10 + 1e-6
+        assert attached.frame[2] >= host.frame[0] - 10 - PAGE.grid - 1e-6
     else:
-        assert attached.frame[0] >= host.frame[2] + PAGE.module_gap - 1e-6
+        assert attached.frame[0] >= host.frame[2] + 10 - 1e-6
+        assert attached.frame[0] <= host.frame[2] + 10 + PAGE.grid + 1e-6
 
 
 def test_attach_adds_no_wire_between_the_two_modules():

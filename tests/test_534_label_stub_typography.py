@@ -643,10 +643,14 @@ def test_strict_a_touching_row_is_legal():
 
     536：首档从 10 抬到 40（``LABEL_STUB_MIN``），naive 跟着换；行仍以锚点居中，
     上边界还是 y=5，所以「压边界」这一刀的位置与判据都没变，只换了桩长。
+
+    053J：40 楼层上相邻引脚分两列（40/100），**偶数行先深**——本用例的标签在 y=0
+    （偶数行），严格路径的首档是 100，naive 跟着换；行仍在 y=±5，上边界 y=5 与
+    「相切不是穿」的判据完全不变。
     """
     label = declared(net="CTS", text="CTS", x=0.0, y=0.0,
                         bbox=(10.0, -5.0, 30.0, 5.0))
-    naive = ((0.0, 0.0), (40.0, 0.0))
+    naive = ((0.0, 0.0), (100.0, 0.0))
     row = _row(naive, "CTS")
     touching = PlanDrawWire(net="VCC", points=[(row[0] - 20.0, row[3]),
                                                (row[2] + 20.0, row[3])])

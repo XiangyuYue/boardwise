@@ -250,6 +250,10 @@ class _Router:
         #: not foreign. Filled by `drawcompiler._lead_lane_reservations`, and part
         #: of `drawcompiler`'s `router.boxes` from that point on.
         self.flag_walls: list[Box] = []
+        #: 543C: the flag seats decided before the labels (see `_lead_lane_reservations`).
+        #: Labels avoid these boxes; `flag_walls` also carries the label name walls
+        #: after that pass, so the two readings stay separate.
+        self.service_flag_boxes: list[Box] = []
         #: The net being placed right now: its own reservations do not block it.
         self.reserved_exempt: str = ""
         #: 145a: set while the **reservation pass** is deciding the lanes, so its

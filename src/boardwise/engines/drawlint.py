@@ -1540,12 +1540,20 @@ def check_wire_multiname(sheet: Sheet) -> list[LintFinding]:
             if len(group) <= 1:
                 continue
             first = group[0]
+            # 053Y: each member's **own** text, not the first one repeated.  The
+            # group is keyed by ``box.net``, and on P27 the two boxes on wire
+            # ``eaf8f170`` (parent ``Net`` = RXD) read `CTS` and `RXD`; printing
+            # ``first.text`` twice reported "CTS, CTS" and made the finding look
+            # like a mis-grouped CTS while the real defect was a CTS text row
+            # printed on the RXD conductor.
+            texts = ", ".join(box.text for box in group[:3])
             out.append(
                 LintFinding(
                     "L5-wire-multiname",
                     "WARN",
-                    f"wire {primitive[:8]} carries {len(group)} labels of one "
-                    f"net ({', '.join(first.text for _ in [0] * min(len(group), 3))}"
+                    f"wire {primitive[:8]} (parent net "
+                    f"{wire_net or 'unnamed'}) carries {len(group)} labels of one "
+                    f"net ({texts}"
                     f"{'…' if len(group) > 3 else ''}) — the host DRC reports "
                     "导线有多个网络名 for this wire; one continuous conductor "
                     "reads better with one name",

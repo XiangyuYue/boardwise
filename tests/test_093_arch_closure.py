@@ -958,11 +958,17 @@ def test_the_gate_stops_the_run_at_exit_2_when_it_blocks():
         "the three gates: draw apply, edit apply --insert, edit apply --move"
     )
     for gate in (
-        "_render_draw_apply", "_render_edit_apply_insert", "_render_edit_apply_move",
+        "_draw_apply_flow", "_render_edit_apply_insert", "_render_edit_apply_move",
     ):
-        # One gate's own body: from its `def` to the next one at column zero.
+        # One gate's own body: from its `def` (sync or async) to the next
+        # column-zero `def`.
         newline = chr(10)
-        body = source.split(f"{newline}def {gate}(", 1)[1].split(f"{newline}def ", 1)[0]
+        marker = next(
+            f"{newline}{prefix}def {gate}("
+            for prefix in ("async ", "")
+            if f"{newline}{prefix}def {gate}(" in source
+        )
+        body = source.split(marker, 1)[1].split(f"{newline}def ", 1)[0]
         graded = body.index("_grade_new_findings(")
         blocked = body.index('return done(2, "failed", "new_findings")')
         assert graded < blocked, gate

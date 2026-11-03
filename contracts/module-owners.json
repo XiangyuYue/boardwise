@@ -88,6 +88,7 @@
     "engines/islandlayout.py": "draw",
     "engines/islandproposal.py": "draw",
     "engines/layout.py": "draw",
+    "engines/layoutroles.py": "draw",
     "engines/liveevidence.py": "review",
     "engines/moveblock.py": "draw",
     "engines/pagecompiler.py": "draw",

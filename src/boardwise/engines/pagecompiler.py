@@ -115,6 +115,8 @@ from boardwise.core.layoutplan import (
     LayoutSegment,
     LayoutSource,
     LayoutText,
+    TEXT_MODE_NATIVE,
+    TEXT_MODE_NATIVE_HIDDEN,
 )
 from boardwise.core.pagelayoutplan import (
     PAGE_PORT_FLAG,
@@ -131,6 +133,7 @@ from boardwise.core.presentationspec import (
     PresentationModule,
     PresentationPath,
     PresentationSpec,
+    TEXT_PLACEMENT_NATIVE,
     UserLock,
     main_path_wire,
 )
@@ -1150,6 +1153,14 @@ def _module_view(
             pid: side for pid, side in presentation_spec.part_texts.items()
             if pid in part_ids
         },
+        # 053S: the page switch is a property of the page's landing, not of a
+        # module's circuit, so it travels to every module's sub-spec unchanged.
+        text_placement=presentation_spec.text_placement,
+        # 543B: the service interval is a page-level construction statement, like
+        # `textPlacement`. A slice that dropped it would draw the page's shunt at
+        # the old ladder distance while a standalone compile used the stated
+        # interval — the page and the module would disagree about one document.
+        service_layout=presentation_spec.service_layout,
         label_policy=presentation_spec.label_policy,
         side_preferences=presentation_spec.sides_for_module(module),
         # Module locks only: a page lock is measured on a page the module
@@ -1407,9 +1418,11 @@ class _Assembled:
 class _Attachment:
     """One module the page must place beside its host instead of on its own (053c).
 
-    ``gap`` is the document's requested clear space; the page's own module gap is
-    a floor the checker enforces on every pair of frames, so the placement keeps
-    ``max(gap, module_gap)`` and says so in the page notes.
+    ``gap`` is the document's requested clear space. The pair it names is exempt
+    from the page's module gap (053K): the document already says how close the
+    two frames belong, so the placement keeps ``gap`` and no floor is applied —
+    every *other* pair of frames keeps the page's gap, which is why the host is
+    arranged with its attached side reserved.
     """
 
     module: str
@@ -1449,24 +1462,25 @@ def _frame_gap(left: Box, right: Box) -> float:
 
 
 def _attach_shift(
-    host: Box, module: Box, side: str, gap: float, grid: float, floor: float
+    host: Box, module: Box, side: str, gap: float, grid: float
 ) -> tuple[float, float]:
     """Module-local translation putting ``module``'s frame on ``side`` of ``host``.
 
     y grows upwards, so "below" is the host's ``y0`` and the attached frame's top
     edge (``y2``) lands ``separation`` under it. ``separation`` is the document's
-    ``gap`` raised to the page's module-gap floor: two *frames* are what
-    `readability.check_page` measures, and a page may not place them closer than
-    its own module gap — a document asking for 10 on a 40-unit-gap page gets the
-    40 it is allowed, not a page the checker refuses twice (once for the gap, once
-    for the flags the narrower gap would overlap).
+    own ``gap``: an attach pair states its clear space, and that is the space the
+    page keeps (053K) — a document asking for 10 gets 10 even on a page whose
+    module gap is 40, because the checker exempts this one pair and no other
+    (`readability._check_frame_separation` reads the same relation). Area overlap
+    is still refused, and the separation below only ever grows to clear the
+    lattice, never shrinks.
 
     The coordinates are snapped to the compilation lattice, then the axis that
     carries the separation is re-checked: rounding a frame coordinate can move
     the two frames a step *closer*, and the fix is one lattice step further away,
     never a narrower gap.
     """
-    separation = max(float(gap), float(floor))
+    separation = float(gap)
     if side == "bottom":
         dx = (host[0] + host[2]) / 2 - (module[0] + module[2]) / 2
         dy = host[1] - separation - module[3]
@@ -1520,8 +1534,7 @@ def _attached_placement(
         host = by_id[attach.host]
         module = by_id[attach.module]
         shift = _attach_shift(
-            host.frame, module.frame, attach.side, attach.gap,
-            ctx.budget.grid, ctx.budget.module_gap,
+            host.frame, module.frame, attach.side, attach.gap, ctx.budget.grid,
         )
         shifts[attach.module] = shift
         hosts[attach.module] = attach.host
@@ -1561,6 +1574,12 @@ def _settle_attached(
     frame closer than the page's module gap to a module the grid placed (the
     neighbour has to move, not the attached module's stated side). Both name the
     attached module, its host and the module it collides with.
+
+    053K: the host is *not* one of those neighbours. The attach pair states its
+    own clear space, so the page's module gap does not police it — the pair is
+    admitted however close the document asked to put it, as long as the two
+    frames do not share area. Area overlap stays a refusal, reported against the
+    host like any other collision; every other module keeps the page gap.
     """
     page = ctx.budget.page_box
     assert page is not None  # `_check_budget` refuses a page without one
@@ -1609,6 +1628,27 @@ def _settle_attached(
         for other in sorted(placed_frames):
             if other == name:
                 continue
+            if other == host:
+                # The attach pair states its own gap, so only area overlap is
+                # refused here — the same strict test the grid uses elsewhere.
+                if not _overlaps(frame, placed_frames[other]):
+                    continue
+                return GrammarFailure(
+                    category=FAILURE_LAYOUT_UNSAT,
+                    subject=f"modules[{name}] + modules[{host}]",
+                    detail=(
+                        f"module {name!r} is attached to {host!r} on its "
+                        f"{sides[name]!r} side, and that placement puts its frame "
+                        f"{_box_text(frame)} on the host's own frame "
+                        f"{_box_text(placed_frames[other])} — the pair states its "
+                        "own gap, but two frames still cannot share canvas"
+                    ),
+                    action=(
+                        "attach the module on another side, or state a gap and a "
+                        "module drawing that do not overlap — the frames are not "
+                        "untangled silently"
+                    ),
+                )
             gap = _frame_gap(frame, placed_frames[other])
             if gap <= ctx.budget.module_gap - 1e-6:
                 return GrammarFailure(
@@ -1701,6 +1741,28 @@ def _assemble(
         return None, wired, [], None, ""
     drawn = wired
 
+    # 053W: a native-mode page must not deliver a flag with a conductor drawn
+    # through its glyph. The whole page is assembled here, so this is the first
+    # point at which the question "is any wire through this flag" can be asked
+    # about the *final* drawing; a flag that cannot be placed legally refuses the
+    # page rather than being left on the wire (`_relocate_native_flags`).
+    relocation_notes: list[str] = []
+    frames = dict(placed_frames)
+    moved = _relocate_native_flags(ctx, drawn, frames, by_id)
+    if isinstance(moved, GrammarFailure):
+        return None, moved, [], None, ""
+    relocation_notes = moved
+    placed_frames = frames
+
+    # 053Z: a visible `native` name is printed at its box, so the box must stand
+    # on its own carrier's axis. Same place in the pipeline, same reason: the
+    # page exists here, and the gate below plus `_native_attribute_moves` must
+    # measure the box this pass leaves — not an earlier reservation.
+    reseated, failure = _reseat_native_labels(ctx, drawn)
+    if failure is not None:
+        return None, failure, [], None, FAILURE_LAYOUT_UNSAT
+    relocation_notes = relocation_notes + list(reseated or ())
+
     merged = LayoutPlan(
         source=LayoutSource(
             circuit_sha256=ctx.circuit.sha256(),
@@ -1719,6 +1781,7 @@ def _assemble(
             "document, not in the drawing the editor sees",
             "the page states each net that spans modules the same way at every "
             "end: a label, a flag, or one whole wire on a main-path edge",
+            *relocation_notes,
         ],
     )
     page = PageLayoutPlan(
@@ -1749,9 +1812,10 @@ def _assemble(
             *[
                 f"module {attach.module} is attached to {attach.host} on its "
                 f"{attach.side} side: the page places it beside the host's placed "
-                f"frame, keeping {max(attach.gap, ctx.budget.module_gap):g} canvas "
-                f"units of clear space (attach.gap {attach.gap:g}, page module gap "
-                f"{ctx.budget.module_gap:g})"
+                f"frame, keeping the document's {attach.gap:g} canvas units of "
+                f"clear space (attach pair exempt from the page's module gap of "
+                f"{ctx.budget.module_gap:g}; every other pair keeps it, and an "
+                "overlap is still refused)"
                 for attach in attachments
             ],
         ],
@@ -1795,6 +1859,10 @@ def _copy_plan(plan: LayoutPlan) -> LayoutPlan:
                 net=item.net, text=item.text, bbox=item.bbox, x=item.x, y=item.y,
                 rotation=item.rotation, part_id=item.part_id, stub=item.stub,
                 stub_min=item.stub_min, row_model=item.row_model,
+                # 053T: a module's label text mode travels with the copy — dropping
+                # it here made a native page silently read as the old wire-name
+                # drawing, which is the one thing the switch must not degrade to.
+                text_mode=item.text_mode,
             )
             for item in plan.labels
         ],
@@ -2017,14 +2085,39 @@ def _port(
 
     if style == PAGE_PORT_LABEL:
         if labels:
-            anchor = _extreme_anchor([(item.x, item.y) for item in labels], direction)
+            # 543D-2: the page states the net at a label the reader can **see**.
+            # A module may hold a hidden duplicate (`native-hidden`, 053V) at the
+            # extreme point the port used to pick; naming the port there left the
+            # printed statement nowhere. Visible labels are preferred; a module
+            # with no visible one keeps the old choice.
+            shown = [
+                item for item in labels
+                if item.text_mode != TEXT_MODE_NATIVE_HIDDEN
+            ]
+            pool = shown or labels
+            anchor = _extreme_anchor([(item.x, item.y) for item in pool], direction)
+            # 053X: the label this port names is the module's statement of the net,
+            # so under `native-attr` the host must print **its** row at that box.
+            # A label the module already marked keeps its reading — including
+            # `native-hidden`, which this page may not turn visible.
+            chosen = next(
+                item for item in pool
+                if _round((item.x, item.y)) == _round(anchor)
+            )
+            _native_text_mode(ctx, chosen)
             return PagePort(
                 module=module.id, net=net_id, kind=PAGE_PORT_LABEL,
                 x=anchor[0], y=anchor[1],
             ), None
         if symbols:
             _drop_statements(plan, net_id)
-        label = _add_label(plan, net_id, point, direction, occupied)
+        label, failure = _add_label(
+            plan, net_id, point, direction, occupied,
+            native=_native_text_placement(ctx),
+        )
+        if failure is not None:
+            return None, failure
+        assert label is not None
         return PagePort(
             module=module.id, net=net_id, kind=PAGE_PORT_LABEL,
             x=label.x, y=label.y,
@@ -2053,21 +2146,180 @@ def _add_label(
     point: tuple[float, float],
     preferred: tuple[float, float],
     occupied: list[Box],
-) -> LayoutLabel:
+    *,
+    native: bool = False,
+) -> tuple[LayoutLabel | None, GrammarFailure | None]:
     """State a net with a label at `point`, and put it in the drawing.
 
     The label is appended to the module's own plan, because that is what the page
     lands: the port table is the page's record, and the *drawing* has to carry the
     label or the name is a fact of the document and not of the page.
+
+    ``native`` (053X) is the page's statement, not a decision taken here: the
+    label the page invents is the *only* name this net has at this end, so under
+    `native-attr` the host must print it at the box just reserved
+    (:data:`~boardwise.core.layoutplan.TEXT_MODE_NATIVE`) rather than at the
+    midpoint of a conductor that may not even run that way — the cross-module
+    `V3` came back as a folded name row exactly because this label was left
+    unmarked.
+
+    053Z: a **native** box is chosen by :func:`_native_label_seat` instead of
+    :func:`_label_box` — the seat ladder asks that the box stand on the anchor's
+    own row or column (so one straight stub reaches its centre) and keep
+    :data:`readability.NATIVE_LABEL_CARRIER_LIMIT` clear of every other net's
+    conductor. No legal seat is a refusal (`layout-unsat`): the old fallback
+    would have kept a box the host prints 40 units off its lead, which is the
+    P27 defect this batch exists to stop, not a shorter stub. The historical
+    path (`native=False`) is untouched, byte for byte.
     """
-    box = _label_box(net_id, point, preferred, occupied)
+    if native:
+        box = _native_label_seat(
+            net_id, point, preferred, occupied, _plan_wires(plan),
+        )
+        if box is None:
+            return None, GrammarFailure(
+                category=FAILURE_LAYOUT_UNSAT,
+                subject=net_id,
+                detail=(
+                    f"net {net_id!r} is named by a label at "
+                    f"({point[0]:g}, {point[1]:g}), and none of the fixed seats "
+                    f"({', '.join(f'{ring:g}x' for ring in _NATIVE_LABEL_SEATS)}) "
+                    "around that anchor can hold the text: every candidate either "
+                    f"overlaps a reserved box, stands under "
+                    f"{readability.NATIVE_LABEL_CARRIER_LIMIT:g} units from another "
+                    "net's conductor, or would need a stub that crosses one"
+                ),
+                action=(
+                    "give this net room at the port (the label's own lead needs a "
+                    "free side), or state the net with a flag/report the run — "
+                    "`native-attr` refuses to print a name on another net's wire, "
+                    "and does not fall back to a box off its own carrier"
+                ),
+            )
+    else:
+        box = _label_box(net_id, point, preferred, occupied)
     occupied.append(box)
     label = LayoutLabel(
         net=net_id, text=net_id, bbox=box, x=point[0], y=point[1],
+        text_mode=TEXT_MODE_NATIVE if native else "",
     )
     plan.labels.append(label)
     _note_name_rows(plan, occupied)
-    return label
+    return label, None
+
+
+def _reseat_native_labels(
+    ctx: _Context, plan: LayoutPlan
+) -> tuple[list[str] | None, GrammarFailure | None]:
+    """Re-seat a **visible native** label whose box left its anchor's axis (053Z).
+
+    The whole page is assembled at this point, so this is the first place the
+    question "is this printed name on its own carrier" can be asked about the
+    geometry that will be written — the same position in the pipeline as 053W's
+    flag relocation, and for the same reason. A box on the anchor's row or
+    column is left exactly where it is (`drawapply._label_stub` lands the run
+    that reaches it); a box off the axis is moved to the first legal seat of
+    :func:`_native_label_seat`, and a label with no legal seat refuses the page:
+    the name would otherwise be printed on another net's conductor, which is what
+    P27's `CTS`/`RI` did. The chosen box is the one the readability gate measures
+    and the one `_native_attribute_moves` targets, because both read
+    `LayoutLabel.bbox` afterwards — one position, not three.
+    """
+    if not _native_text_placement(ctx):
+        return [], None
+    notes: list[str] = []
+    wires = _plan_wires(plan)
+    occupied: list[Box] = [
+        tuple(float(value) for value in item.bbox) for item in plan.texts
+    ]
+    occupied.extend(
+        tuple(float(value) for value in label.bbox) for label in plan.labels
+    )
+    for index, label in enumerate(plan.labels):
+        if getattr(label, "text_mode", "") != TEXT_MODE_NATIVE or not label.net:
+            continue
+        box = tuple(float(value) for value in label.bbox)
+        anchor = (float(label.x), float(label.y))
+        centre = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+        if (
+            abs(centre[0] - anchor[0]) <= readability.TOL
+            or abs(centre[1] - anchor[1]) <= readability.TOL
+        ):
+            continue
+        dx, dy = centre[0] - anchor[0], centre[1] - anchor[1]
+        if abs(dx) >= abs(dy):
+            preferred = (1.0 if dx > 0 else -1.0, 0.0)
+        else:
+            preferred = (0.0, 1.0 if dy > 0 else -1.0)
+        if box in occupied:
+            occupied.remove(box)
+        seat = _native_label_seat(label.net, anchor, preferred, occupied, wires)
+        if seat is None:
+            return None, GrammarFailure(
+                category=FAILURE_LAYOUT_UNSAT,
+                subject=f"labels[{index}]",
+                detail=(
+                    f"net {label.net!r}'s name was reserved at "
+                    f"{_box_text(box)} with its anchor at ({anchor[0]:g}, "
+                    f"{anchor[1]:g}) — a box on neither the anchor's row nor its "
+                    "column, so no straight stub reaches it — and none of the "
+                    "fixed seats around the anchor is legal either"
+                ),
+                action=(
+                    "give the net room at this end (a free side for its own lead) "
+                    "or state it another way; a printed name may not be left off "
+                    "its carrier, and the off-carrier box is not kept as a fallback"
+                ),
+            )
+        occupied.append(seat)
+        label.bbox = seat
+        notes.append(
+            f"net {label.net!r}: label box {_box_text(box)} was off its carrier "
+            f"and is re-seated at {_box_text(seat)}"
+        )
+    return notes, None
+
+
+def _plan_wires(
+    plan: LayoutPlan,
+) -> list[tuple[str, tuple[tuple[float, float], ...]]]:
+    """``(net, points)`` for every run in `plan` — what a seat must clear."""
+    return [
+        (
+            str(segment.net or ""),
+            tuple((float(point[0]), float(point[1])) for point in segment.points),
+        )
+        for segment in plan.segments
+        if len(segment.points) >= 2
+    ]
+
+
+def _native_text_placement(ctx: _Context) -> bool:
+    """Does this page ask for the host's attribute API (053X)?
+
+    The same reading `drawcompiler._native_text_placement` makes, and the same
+    guard: a spec that states nothing is the historical drawing, and nothing
+    about it may change.
+    """
+    return (
+        getattr(getattr(ctx, "presentation", None), "text_placement", "")
+        == TEXT_PLACEMENT_NATIVE
+    )
+
+
+def _native_text_mode(ctx: _Context, label: LayoutLabel) -> None:
+    """Mark a label the page **re-states** as its own visible name (053X).
+
+    Only an unstated mode is filled in. A label the module already read as
+    `native` is that run's one visible name and stays it; a `native-hidden` label
+    is a duplicate the module chose to keep for the netlist and suppress on the
+    canvas (053V), and making it visible here would print the net twice.
+    """
+    if not _native_text_placement(ctx):
+        return
+    if label.text_mode in (TEXT_MODE_NATIVE, TEXT_MODE_NATIVE_HIDDEN):
+        return
+    label.text_mode = TEXT_MODE_NATIVE
 
 
 def _note_name_rows(plan: LayoutPlan, occupied: list[Box]) -> None:
@@ -2941,6 +3193,7 @@ def _merge(
                 x=label.x + dx, y=label.y + dy, rotation=label.rotation,
                 part_id=label.part_id, stub=label.stub,
                 stub_min=label.stub_min, row_model=label.row_model,
+                text_mode=label.text_mode,
             ))
         for symbol in item.plan.power_symbols:
             drawn.symbols.append(LayoutPowerSymbol(
@@ -3848,6 +4101,76 @@ def _label_box(
     )
 
 
+#: 053Z: the fixed seat ladder a **visible native** label's box is re-chosen
+#: from — the near seat (box flush with the anchor, one text gap out) and the
+#: second column rung, so neighbouring rows print in two x bands instead of one
+#: wall. Nothing else is tried: a candidate that is not on the ladder is not a
+#: smaller move, it is a different design.
+_NATIVE_LABEL_SEATS = (1.0, 2.0)
+
+
+def _native_label_seat(
+    net_id: str,
+    anchor: tuple[float, float],
+    preferred: tuple[float, float],
+    occupied: Sequence[Box],
+    wires: Sequence[tuple[str, tuple[tuple[float, float], ...]]],
+) -> Box | None:
+    """The first legal box for a **visible native** label, or ``None`` (053Z).
+
+    Under `textPlacement: native-attr` the box *is* the printed row, so a box the
+    compiler reserved off its own lead prints the name on a neighbour's
+    conductor — P27's `CTS` (40 units) and `RI` (55). Three things are asked of a
+    candidate, and all three are the same statement read three ways:
+
+    1. it keeps the box's own size and horizontal reading — the text is unchanged,
+       so :func:`drawcompiler.font_text_box` is the only box this can be;
+    2. its **centre** stands on the anchor's row or column, so one straight,
+       axis-aligned stub reaches it (:func:`drawapply._label_stub` lands exactly
+       that run, and `readability._check_native_label_carriers` measures it);
+    3. it stands at least :data:`readability.NATIVE_LABEL_CARRIER_LIMIT` units
+       from every conductor of another net — the artifact the row would otherwise
+       be printed on — and the stub that reaches it crosses none of them.
+
+    ``None`` is the measured answer "no seat on this ladder is legal": the caller
+    refuses the page (`layout-unsat`) rather than keeping the off-carrier box, so
+    a name is never printed on a wire it does not name.
+    """
+    if not net_id:
+        return None
+    gap_limit = readability.NATIVE_LABEL_CARRIER_LIMIT
+    half_x = drawcompiler.text_width(net_id) / 2.0 + drawcompiler.TEXT_GAP
+    half_y = drawcompiler.TEXT_SIZE / 2.0 + drawcompiler.TEXT_GAP
+    foreign = [
+        (name, points) for name, points in wires if name and name != net_id
+    ]
+    for ring in _NATIVE_LABEL_SEATS:
+        for direction in _directions(preferred):
+            offset = (
+                (direction[0] * half_x, 0.0) if direction[0] != 0.0
+                else (0.0, direction[1] * half_y)
+            )
+            candidate = drawcompiler.font_text_box(
+                net_id,
+                x=anchor[0] + offset[0] * ring,
+                y=anchor[1] + offset[1] * ring,
+            )
+            if any(_overlaps(candidate, box) for box in occupied):
+                continue
+            centre = (
+                (candidate[0] + candidate[2]) / 2.0,
+                (candidate[1] + candidate[3]) / 2.0,
+            )
+            if any(
+                readability._box_run_gap(candidate, points) < gap_limit
+                or readability._run_on_polyline(anchor, centre, points)
+                for _name, points in foreign
+            ):
+                continue
+            return candidate
+    return None
+
+
 def _directions(preferred: tuple[float, float]) -> list[tuple[float, float]]:
     """The preferred direction first, then the rest of the compass."""
     all_directions = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)]
@@ -3910,3 +4233,347 @@ def _overlaps(left: Box, right: Box) -> bool:
 
 def _point_text(point: tuple[float, float]) -> str:
     return f"({point[0]:g}, {point[1]:g})"
+
+
+# ------------------------------------------- 053W: native flags off the wires
+
+#: How far, in grid steps, a native-mode flag may be walked to find a position
+#: whose glyph no conductor is drawn through. Twenty steps is one module gap: a
+#: flag that cannot clear a wire within it has no *near* position, and a page
+#: that moved it further would be drawing a lead the reader cannot follow. The
+#: bound is a stop line, not a target — the search tries the nearest step first.
+FLAG_RELOCATION_GRID_STEPS = 20
+
+#: The directions one step is tried in, in this fixed order. Page coordinates
+#: grow down and right; the first two move the flag *away from* the reader's
+#: trunk in the two vertical senses, the last two sideways. Fixed so two runs of
+#: one page try the same positions in the same sequence.
+_FLAG_STEP_DIRECTIONS: tuple[tuple[float, float], ...] = (
+    (0.0, -1.0), (0.0, 1.0), (-1.0, 0.0), (1.0, 0.0),
+)
+
+
+def _box_holds(box: Box, point: tuple[float, float]) -> bool:
+    """Is `point` inside `box` (boundary included, `readability.TOL` slack)?"""
+    return (
+        box[0] - readability.TOL <= point[0] <= box[2] + readability.TOL
+        and box[1] - readability.TOL <= point[1] <= box[3] + readability.TOL
+    )
+
+
+def _box_union(one: Box, other: Box) -> Box:
+    return (
+        min(one[0], other[0]), min(one[1], other[1]),
+        max(one[2], other[2]), max(one[3], other[3]),
+    )
+
+
+def _points_box(points: Sequence[tuple[float, float]]) -> Box:
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _collinear(
+    a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]
+) -> bool:
+    """Do `a`, `b`, `c` continue one straight line (053W's lead extension)?"""
+    return (
+        abs((b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]))
+        <= readability.TOL
+        and (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) > 0
+    )
+
+
+def _relocate_native_flags(
+    ctx: _Context,
+    drawn: _Drawn,
+    frames: dict[str, Box],
+    by_id: Mapping[str, _Assembled],
+) -> list[str] | GrammarFailure:
+    """Move a native-mode flag whose glyph a conductor is drawn through (053W).
+
+    Runs **before** the merged plan is handed to `readability.check`, on the
+    whole page drawing, because that is the only place the question can be asked:
+    `pagecompiler._add_flag` records a module's own glyph in that module's
+    occupied set, and a page-level flag is only one of the 17 — the trunk that
+    runs through it belongs to the module drawing the page placed. A module-local
+    search cannot see it.
+
+    What is preserved: the `symbolRef`, the net and the **upright posture** (the
+    rotation is never turned to dodge — a flag read sideways is a different
+    defect). What changes: the anchor, and therefore the lead — the old anchor is
+    reached from the candidate with a straight run of the same net, by *extending*
+    the lead that already ends there when the run continues it, and by adding one
+    two-point segment otherwise. Nothing is left dangling and no foreign net is
+    used, because every candidate is validated against the page's own geometry
+    (wires, parts, texts, the other flags' glyphs, the sheet, the module frames).
+
+    No candidate -> :class:`GrammarFailure`: the page is refused rather than
+    delivered with the glyph on the wire or with the flag deleted. Non-native
+    pages never call this at all, so their drawing is byte-identical.
+    """
+    page_box = ctx.budget.page_box
+    if page_box is None:
+        return []
+    if ctx.presentation.text_placement != "native-attr":
+        # A spec that never asked for native placement is a different drawing:
+        # 053W must not move a single flag of it (the checker still reports the
+        # collision — that is a fact about the drawing, not a layout option).
+        return []
+    grid = ctx.budget.grid if ctx.budget.grid else 5.0
+    book = ctx.book
+    profile_map = dict(book)
+    notes: list[str] = []
+
+    for index, symbol in enumerate(drawn.symbols):
+        profile = book.get(symbol.symbol_ref)
+        if profile is None or profile.body is None:
+            # An unmeasurable flag is not moved: the checker will not pretend it
+            # has a box either (`readability._flag_glyph_box`).
+            continue
+        glyph = _glyph_box(profile, symbol.rotation, (symbol.x, symbol.y))
+        if glyph is None:
+            continue
+        crossed: list[tuple[int, float]] = []
+        for wire_index, segment in enumerate(drawn.segments):
+            offence = readability._flag_body_offence(
+                symbol.net, (symbol.x, symbol.y), list(segment.points), glyph
+            )
+            if offence is not None:
+                crossed.append((wire_index, offence[0]))
+        if not crossed:
+            continue
+        module_id = next(
+            (
+                name for name, frame in frames.items()
+                if _box_holds(frame, (symbol.x, symbol.y))
+            ),
+            "",
+        )
+        if not module_id:
+            return GrammarFailure(
+                category=FAILURE_LAYOUT_UNSAT,
+                subject=symbol.net,
+                detail=(
+                    f"flag powerSymbols[{index}] ({symbol.net}, "
+                    f"{symbol.symbol_ref}) at ({symbol.x:g}, {symbol.y:g}) has a "
+                    "conductor drawn through its glyph and lies in no module "
+                    "frame, so the page cannot say whose place it is to move"
+                ),
+                action=(
+                    "place the flag inside its module's frame, or state the flag "
+                    "on a module that owns that point"
+                ),
+            )
+
+        static: list[tuple[str, Box]] = []
+        for part in drawn.parts:
+            part_profile = book.get(part.symbol_ref)
+            if part_profile is None:
+                continue
+            static.append((f"parts[{part.part_id}]", _part_extent(part_profile, part)))
+        for text in drawn.texts:
+            static.append(("texts", text.bbox))
+        for label in drawn.labels:
+            static.append(("labels", label.bbox))
+
+        old = (symbol.x, symbol.y)
+        placed = None
+        for step in range(1, FLAG_RELOCATION_GRID_STEPS + 1):
+            for dx, dy in _FLAG_STEP_DIRECTIONS:
+                candidate = (old[0] + dx * grid * step, old[1] + dy * grid * step)
+                got = _flag_candidate(
+                    ctx, drawn, frames, static, index, symbol, profile,
+                    module_id, candidate, page_box,
+                )
+                if got is not None:
+                    placed = got
+                    break
+            if placed is not None:
+                break
+        if placed is None:
+            return GrammarFailure(
+                category=FAILURE_LAYOUT_UNSAT,
+                subject=symbol.net,
+                detail=(
+                    f"flag powerSymbols[{index}] ({symbol.net}, "
+                    f"{symbol.symbol_ref}) at ({symbol.x:g}, {symbol.y:g}) has "
+                    f"segments {[wire_index for wire_index, _gap in crossed]} "
+                    f"inside the {readability.FLAG_BODY_CLEARANCE:g}-unit clearance "
+                    f"of its glyph {_box_text(glyph)}, and no position within "
+                    f"{FLAG_RELOCATION_GRID_STEPS} grid steps of "
+                    f"{grid:g} units clears every wire, part, text, flag and the "
+                    "sheet — the page is refused rather than delivered with the "
+                    "glyph on the conductor"
+                ),
+                action=(
+                    "give the flag room (a wider module gap or a shorter lead), "
+                    "or state the net with a label instead of a flag — the one "
+                    "thing this compiler will not do is delete the flag, clear "
+                    "its net, or leave it printed on the wire"
+                ),
+            )
+
+        candidate, lead_index, lead_points, new_frame = placed
+        distance = math.hypot(candidate[0] - old[0], candidate[1] - old[1])
+        symbol.x, symbol.y = candidate
+        if lead_index is None:
+            drawn.segments.append(LayoutSegment(net=symbol.net, points=[old, candidate]))
+            lead_note = (
+                f"added a {math.hypot(candidate[0] - old[0], candidate[1] - old[1]):g}"
+                "-unit straight lead from the old anchor"
+            )
+        else:
+            before = list(drawn.segments[lead_index].points)
+            drawn.segments[lead_index].points = lead_points
+            lead_note = (
+                f"extended the existing lead {before} to {lead_points}"
+            )
+        frames[module_id] = new_frame
+        for port in drawn.ports.get(module_id, ()):  # type: ignore[union-attr]
+            if (
+                port.net == symbol.net
+                and port.kind == PAGE_PORT_FLAG
+                and abs(port.x - old[0]) <= readability.TOL
+                and abs(port.y - old[1]) <= readability.TOL
+            ):
+                port.x, port.y = candidate
+        notes.append(
+            f"053W: flag powerSymbols[{index}] ({symbol.net}, "
+            f"{symbol.symbol_ref}) was {min(gap for _index, gap in crossed):g} "
+            f"units from segments "
+            f"{[wire_index for wire_index, _gap in crossed]}; moved from "
+            f"({old[0]:g}, {old[1]:g}) to ({candidate[0]:g}, {candidate[1]:g}) "
+            f"({distance:g} units, {distance / grid:g} grid steps), rotation "
+            f"{symbol.rotation:g} kept upright; {lead_note}; module "
+            f"{module_id} frame -> {_box_text(new_frame)}"
+        )
+    return notes
+
+
+def _flag_candidate(
+    ctx: _Context,
+    drawn: _Drawn,
+    frames: Mapping[str, Box],
+    static: Sequence[tuple[str, Box]],
+    index: int,
+    symbol: LayoutPowerSymbol,
+    profile: Any,
+    module_id: str,
+    candidate: tuple[float, float],
+    page_box: Box,
+) -> tuple[tuple[float, float], int | None, list[tuple[float, float]], Box] | None:
+    """The lead (and the frame) a move to `candidate` would produce, or ``None``.
+
+    A position is legal only when **everything** the page draws is clear of the
+    glyph and the run to it: the glyph inside the sheet, no part, no text, no
+    other flag's glyph and no conductor through it; the new anchor on no foreign
+    net's wire and on no ink; and the extended/added lead crossing neither. The
+    frame check is the module's own: the frame is expanded to hold the new glyph
+    and the moving lead, and that expansion may not reach into another module.
+    """
+    old = (symbol.x, symbol.y)
+    glyph = _glyph_box(profile, symbol.rotation, candidate)
+    if glyph is None:
+        return None
+    if not (
+        page_box[0] <= glyph[0] and page_box[1] <= glyph[1]
+        and glyph[2] <= page_box[2] and glyph[3] <= page_box[3]
+    ):
+        return None
+    for _name, box in static:
+        if readability._overlap(glyph, box):
+            return None
+    for other_index, other in enumerate(drawn.symbols):
+        if other_index == index:
+            continue
+        other_profile = ctx.book.get(other.symbol_ref)
+        if other_profile is None:
+            continue
+        other_glyph = _glyph_box(
+            other_profile, other.rotation, (other.x, other.y)
+        )
+        if other_glyph is not None and readability._overlap(glyph, other_glyph):
+            return None
+        if _box_holds(other_glyph or glyph, candidate):
+            return None
+    # The lead: extend the one that already ends at the old anchor, else add one.
+    leads = [
+        wire_index for wire_index, segment in enumerate(drawn.segments)
+        if segment.net == symbol.net
+        and len(segment.points) <= 3
+        and (
+            readability._same_point(segment.points[-1], old)
+            or readability._same_point(segment.points[0], old)
+        )
+    ]
+    lead_index = leads[0] if len(leads) == 1 else None
+
+    # The anchor may not land on a foreign net's conductor (that is a short, not
+    # a placement), and no run may come inside a flag's clearance of the new
+    # glyph — the **same** ruler `readability._check_flag_body_on_wire` applies to
+    # the finished page, so a candidate this search accepts cannot be a collision
+    # the gate then reports. The flag's own lead is validated as the run that will
+    # replace it (`lead_points` below), not as the one still pointing at the old
+    # anchor.
+    for wire_index, segment in enumerate(drawn.segments):
+        if lead_index is not None and wire_index == lead_index:
+            continue
+        if segment.net != symbol.net and readability._on_polyline(
+            candidate, list(segment.points)
+        ):
+            return None
+        if readability._flag_body_offence(
+            symbol.net, candidate, list(segment.points), glyph
+        ) is not None:
+            return None
+
+    if len(leads) == 1:
+        points = list(drawn.segments[lead_index].points)
+        if readability._same_point(points[-1], old):
+            if _collinear(points[-2], old, candidate):
+                lead_points = points[:-1] + [candidate]
+            else:
+                lead_points = points + [candidate]
+        else:
+            if _collinear(points[1], old, candidate):
+                lead_points = [candidate] + points[1:]
+            else:
+                lead_points = [candidate] + points
+    else:
+        lead_index = None
+        lead_points = [old, candidate]
+    added = lead_points
+    if readability._flag_body_offence(
+        symbol.net, candidate, lead_points, glyph
+    ) is not None:
+        return None
+    for _name, box in static:
+        if readability._first_box_crossing(added, box) is not None:
+            return None
+    for other_index, other in enumerate(drawn.symbols):
+        if other_index == index:
+            continue
+        other_profile = ctx.book.get(other.symbol_ref)
+        if other_profile is None:
+            continue
+        other_glyph = _glyph_box(
+            other_profile, other.rotation, (other.x, other.y)
+        )
+        if other_glyph is not None and readability._first_box_crossing(added, other_glyph) is not None:
+            return None
+
+    frame = frames[module_id]
+    new_frame = _box_union(_box_union(frame, glyph), _points_box(lead_points))
+    for name, other_frame in frames.items():
+        if name == module_id:
+            continue
+        if readability._overlap(new_frame, other_frame):
+            return None
+    if not (
+        page_box[0] <= new_frame[0] and page_box[1] <= new_frame[1]
+        and new_frame[2] <= page_box[2] and new_frame[3] <= page_box[3]
+    ):
+        return None
+    return candidate, lead_index, lead_points, new_frame

@@ -269,8 +269,8 @@ def _kinds(result) -> list[str]:
 # ------------------------------------------------ the contract and its shape
 
 
-def test_the_hard_kinds_are_the_thirteen_the_contract_names():
-    """The vocabulary itself: thirteen constraints, one kind each, fixed order.
+def test_the_hard_kinds_are_the_fifteen_the_contract_names():
+    """The vocabulary itself: fifteen constraints, one kind each, fixed order.
 
     147 added `wire-on-pin-line` and `text-on-wire` — the two classes 岳 caught by
     eye on a page every gate called clean (`outputs/147/FINDINGS.md`): a wire
@@ -283,7 +283,11 @@ def test_the_hard_kinds_are_the_thirteen_the_contract_names():
     added `name-row-vertical`, the same addition one axis down: a wire's name row
     printed along a *vertical* run is rotated a quarter turn by the host, and no
     box test can see it — the row is 10 wide by 9.336 tall, not taller than wide
-    (`tests/test_534_horizontal_wire_names.py`).
+    (`tests/test_534_horizontal_wire_names.py`). 053Z added
+    `native-label-off-carrier`: under `textPlacement: native-attr` the host prints
+    a net's name at the label's box, so a box reserved 40–55 units off its own
+    lead is a name printed on a neighbour's conductor — P27's `CTS`/`RI`
+    (`tests/test_534z_label_carriers.py`).
     """
     assert HARD_KINDS == (
         "netlist-partition-mismatch",
@@ -291,9 +295,11 @@ def test_the_hard_kinds_are_the_thirteen_the_contract_names():
         "undeclared-junction",
         "wire-through-body",
         "wire-on-pin-line",
+        "flag-body-on-wire",
         "text-overlap",
         "text-on-wire",
         "name-row-vertical",
+        "native-label-off-carrier",
         "pin-text-press",
         "out-of-page",
         "user-lock-violated",

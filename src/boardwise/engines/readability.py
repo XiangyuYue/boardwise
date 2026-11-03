@@ -173,9 +173,17 @@ from typing import Any, Callable
 
 from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.geometry import transform_point
-from boardwise.core.layoutplan import LayoutPlan, label_wire_indices
+from boardwise.core.layoutplan import (
+    TEXT_MODE_NATIVE,
+    LayoutPlan,
+    label_wire_indices,
+)
 from boardwise.core.pagelayoutplan import PageLayoutPlan
-from boardwise.core.presentationspec import PresentationSpec, main_path_wire
+from boardwise.core.presentationspec import (
+    TEXT_PLACEMENT_NATIVE,
+    PresentationSpec,
+    main_path_wire,
+)
 from boardwise.core.symbolprofile import (
     FLAG_GLYPH_KIND_GND,
     PIN_LINE_OVERLAP,
@@ -199,12 +207,14 @@ from boardwise.core.textmetrics import (
 __all__ = [
     "CHECKER_NAME",
     "DEFAULT_GRID",
+    "FLAG_BODY_CLEARANCE",
     "HARD_KINDS",
     "KIND_DANGLING_WIRE_END",
     "KIND_GEOMETRY_OUTSIDE_FRAMES",
     "KIND_MAIN_PATH_EDGE_NOT_WIRED",
     "KIND_MODULE_FRAME_OVERFLOW",
     "KIND_NAME_ROW_VERTICAL",
+    "KIND_NATIVE_LABEL_OFF_CARRIER",
     "KIND_PIN_TEXT_PRESSED",
     "KIND_MODULE_FRAME_OVERLAP",
     "KIND_MODULE_PART_UNASSIGNED",
@@ -222,6 +232,7 @@ __all__ = [
     "PAGE_CHECKER_NAME",
     "PAGE_KINDS",
     "PAGE_MODULE_GAP",
+    "NATIVE_LABEL_CARRIER_LIMIT",
     "PRECISION",
     "TOL",
     "UNMEASURED",
@@ -296,15 +307,57 @@ KIND_REQUIRED_PIN_NOT_CONNECTED = "required-pin-not-connected"
 #: ``wire-through-body`` tests a *box*, which a wire lying **along** a pin bar or
 #: a flag's glyph never enters, and ``text-overlap`` never looked at a conductor
 #: at all. See `outputs/147/FINDINGS.md`.
+#: 053W: a conductor drawn **through the measured glyph of a flag**. 147 put a
+#: flag's glyph in `_drawn_extents`, so `wire-through-body` can already see a box
+#: crossing — but that check answers a *part*'s question and skips a symbol the
+#: placed-part table has no owner for only by accident. The flag is the one
+#: symbol on the page whose own artwork the reader uses to name a rail, so a wire
+#: printed across its pennant is its own sentence: reported with the flag's net,
+#: its `symbolRef`, the box that was measured and the wire's net, so a gate can
+#: say *which* flag and *which* conductor disagreed.
+KIND_FLAG_BODY_ON_WIRE = "flag-body-on-wire"
+
+#: 053Z: a **visible ``native`` label's text box** standing more than one
+#: 10-unit lattice step away from the conductor that carries its name.
+#:
+#: Under `textPlacement: native-attr` the host prints the net name where the
+#: attribute move puts it, which is the label box's centre — so a box reserved
+#: 40–55 units off its own 5-unit lead is a name the page *prints on a
+#: neighbour's wire*, not a name at all. P27 (`test V4`) measured exactly that:
+#: `CTS` at (150, 480) with its carrier `110,485 → 110,480` (40 units) and `RI`
+#: at (165, 460) with `105,460 → 110,460` (55), both of which `check_wire_
+#: multiname` then reported as a *second* `RXD`/`DSR` name. The distance is
+#: measured **box to polyline** (all runs, not the anchor and not the
+#: lineGroup), so an attribute move that parks the row on another conductor can
+#: never again be called a success. A hidden label prints nothing and is not
+#: judged; a label with no carrier ink at all is not this sentence.
+KIND_NATIVE_LABEL_OFF_CARRIER = "native-label-off-carrier"
+
+#: 053Z's limit, in canvas units: one 10-unit lattice step. Stated here because
+#: this check is the one that measures it, and the page compiler's re-seat
+#: (`pagecompiler._native_label_seat`) reads the same number rather than
+#: growing a second ruler.
+NATIVE_LABEL_CARRIER_LIMIT = 10.0
+
+#: How much clear space a flag's glyph keeps from any conductor that is not its
+#: own lead, in canvas units (053W 续, 岳's ruling). It is **not a second
+#: tolerance**: :data:`boardwise.engines.drawcompiler.FLAG_CLEARANCE` is the same
+#: 5 — the distance at which grazing already reads as touching at the host's
+#: stroke width — and this module states it under its own name because this check
+#: is the one that measures it.
+FLAG_BODY_CLEARANCE = 5.0
+
 HARD_KINDS: tuple[str, ...] = (
     KIND_NETLIST_PARTITION,
     KIND_DANGLING_WIRE_END,
     KIND_UNDECLARED_JUNCTION,
     KIND_WIRE_THROUGH_BODY,
     KIND_WIRE_ON_PIN_LINE,
+    KIND_FLAG_BODY_ON_WIRE,
     KIND_TEXT_OVERLAP,
     KIND_TEXT_ON_WIRE,
     KIND_NAME_ROW_VERTICAL,
+    KIND_NATIVE_LABEL_OFF_CARRIER,
     KIND_PIN_TEXT_PRESSED,
     KIND_OUT_OF_PAGE,
     KIND_USER_LOCK_VIOLATED,
@@ -880,9 +933,17 @@ def check(
     violations.extend(_check_junctions(layout_plan))
     violations.extend(_check_bodies(layout_plan, placed, profile_map))
     violations.extend(_check_wire_on_pin_line(layout_plan, placed, profile_map))
+    # 053W's clearance rule belongs to the native text model: a page that did not
+    # ask for `textPlacement: "native-attr"` keeps the old layout byte-for-byte,
+    # glyph contact included. The specialised audit still measures any plan.
+    if presentation_spec.text_placement == TEXT_PLACEMENT_NATIVE:
+        violations.extend(_check_flag_body_on_wire(layout_plan, profile_map))
     violations.extend(_check_text(layout_plan, placed, profile_map))
     violations.extend(_check_text_on_wire(layout_plan, profile_map))
     violations.extend(_check_named_wire_rows(layout_plan))
+    violations.extend(
+        _check_native_label_carriers(layout_plan, placed, profile_map)
+    )
     violations.extend(
         _check_page(layout_plan, placed, page, keep, profile_map)
     )
@@ -1747,13 +1808,82 @@ def _named_wire_rows(layout_plan: LayoutPlan) -> list[tuple[str, Box, str, str]]
     stopped modelling them would report a page nobody will see.
     """
     carriers = label_wire_indices(layout_plan)
+    native = _native_label_rows(layout_plan)
+    hidden = _native_hidden_wires(layout_plan)
     out: list[tuple[str, Box, str, str]] = []
     for index, segment in enumerate(layout_plan.segments):
         if index not in carriers or not segment.net:
             continue
-        box = wire_name_box(list(segment.points), segment.net)
+        # 053T: under `native-attr` the name is not printed along the wire at all
+        # — the host draws the label's own attribute row at the **label's box**,
+        # which the plan already measured. Modelling a midpoint row there would
+        # be a ghost: a text nobody prints, measured against real ink.
+        box = native.get(index)
+        if box is None:
+            if index in hidden:
+                # 053V: this carrier's label is kept for the netlist and its text
+                # is suppressed (`valueVisible: false`), so the page prints **no**
+                # row here — modelling a midpoint row would be the same ghost, and
+                # hiding the attribute would not remove what the gate measured.
+                continue
+            box = wire_name_box(list(segment.points), segment.net)
         if box is not None:
             out.append((f"segments[{index}]", box, "", segment.net))
+    return out
+
+
+def _native_label_rows(layout_plan: LayoutPlan) -> dict[int, Box]:
+    """``segment index -> the label box the host prints its name at`` (053T).
+
+    A label marked ``text_mode="native"`` names its net with the host's attribute
+    API, at the box the layout reserved (``LayoutLabel.bbox``) — horizontal,
+    whether the carrier runs that way or not. The segment that carries it is the
+    one its anchor lies on, the same reading `label_wire_indices` uses, so the
+    row is attached to a conductor the page has.
+    """
+    marks = [label for label in layout_plan.labels
+             if getattr(label, "text_mode", "") == "native" and label.net]
+    if not marks:
+        return {}
+    out: dict[int, Box] = {}
+    for index, segment in enumerate(layout_plan.segments):
+        if not segment.net or len(segment.points) < 2:
+            continue
+        for label in marks:
+            if label.net != segment.net:
+                continue
+            anchor = (float(label.x), float(label.y))
+            if _on_polyline(anchor, [tuple(point) for point in segment.points]):
+                out[index] = tuple(float(value) for value in label.bbox)
+                break
+    return out
+
+
+def _native_hidden_wires(layout_plan: LayoutPlan) -> set[int]:
+    """``segment indices whose label the plan hides`` (053V).
+
+    A label marked ``text_mode="native-hidden"`` is a duplicate name the plan
+    keeps on its own disconnected run: the conductor still states the net (the
+    editor's netlist merges same-named runs across the project) and the plan
+    hides only that wire's ``Name`` row with a version-2 ``valueVisible: false``
+    move. No text is printed there, so the page has no row to measure — the same
+    argument 053T makes for a visible attribute row, read the other way.
+    """
+    marks = [label for label in layout_plan.labels
+             if getattr(label, "text_mode", "") == "native-hidden" and label.net]
+    if not marks:
+        return set()
+    out: set[int] = set()
+    for index, segment in enumerate(layout_plan.segments):
+        if not segment.net or len(segment.points) < 2:
+            continue
+        for label in marks:
+            if label.net != segment.net:
+                continue
+            anchor = (float(label.x), float(label.y))
+            if _on_polyline(anchor, [tuple(point) for point in segment.points]):
+                out.add(index)
+                break
     return out
 
 
@@ -1779,8 +1909,21 @@ def _check_named_wire_rows(layout_plan: LayoutPlan) -> list[HardViolation]:
     """
     out: list[HardViolation] = []
     carriers = label_wire_indices(layout_plan)
+    native = _native_label_rows(layout_plan)
+    hidden = _native_hidden_wires(layout_plan)
     for index, segment in enumerate(layout_plan.segments):
         if index not in carriers or not segment.net:
+            continue
+        if index in native:
+            # 053T: a `native` name is an attribute row at the label's box, printed
+            # horizontally by the host whatever direction the conductor runs. The
+            # direction of the run is not a fact about that row, so it is not
+            # judged here — the row's own box is what `_named_wire_rows` measures.
+            continue
+        if index in hidden:
+            # 053V: a hidden label prints nothing, so there is no row here whose
+            # direction could be wrong (053U: the attribute row is still there,
+            # with `valueVisible: false`).
             continue
         row = wire_name_row(list(segment.points), segment.net)
         if row is None or row.horizontal:
@@ -1797,6 +1940,149 @@ def _check_named_wire_rows(layout_plan: LayoutPlan) -> list[HardViolation]:
             "run to be named on",
         ))
     return out
+
+
+def native_label_carrier_gap(
+    layout_plan: LayoutPlan,
+    label: Any,
+    placed: list[_PlacedPart],
+    profile_map: Mapping[str, SymbolProfile],
+) -> tuple[float, str] | None:
+    """How far a visible label's box stands from the ink that carries its name.
+
+    ``None`` when there is no carrier ink at all (a label whose net has no
+    conductor: a different sentence, and one this rule must not swallow — a
+    fabricated gap would read as a placement defect).
+
+    The carrier is the ink the label's own **anchor** sits on, asked of the
+    geometry rather than of a name: every run of the plan that reaches the
+    anchor (own net first, then an unnamed lead — the page's merged plan keeps
+    the pin leads that way), and every pin's drawn line whose tip *is* the
+    anchor. A same-net run anywhere on the page is the fallback, because a run
+    that states the net is the net's carrier even when the row was parked away
+    from it. The measurement is :func:`_box_run_gap` against **every** run of
+    that ink, so a name row that has drifted onto a neighbour's conductor is
+    reported at the distance it actually drifted.
+    """
+    if getattr(label, "text_mode", "") != TEXT_MODE_NATIVE or not label.net:
+        return None
+    anchor = (float(label.x), float(label.y))
+    box = tuple(float(value) for value in label.bbox)
+    gap: float | None = None
+    carrier = ""
+    named: list[tuple[str, str, tuple[tuple[float, float], ...]]] = []
+    for index, segment in enumerate(layout_plan.segments):
+        if len(segment.points) < 2:
+            continue
+        named.append((
+            f"segments[{index}]",
+            str(segment.net or ""),
+            tuple((float(point[0]), float(point[1])) for point in segment.points),
+        ))
+    # 1. the runs the anchor stands on, the label's own net first.
+    for name, net, points in named:
+        if net and net != label.net:
+            continue
+        if not _on_polyline(anchor, points):
+            continue
+        distance = _box_run_gap(box, points)
+        if gap is None or distance < gap:
+            gap, carrier = distance, f"{name} ({net or 'unnamed'})"
+    # 2. a pin's own drawn lead whose tip is the anchor.
+    for name, (tip, inner) in _pin_lines(placed, profile_map):
+        if not _same_point(tip, anchor):
+            continue
+        distance = _box_run_gap(box, [tip, inner])
+        if gap is None or distance < gap:
+            gap, carrier = distance, name
+    # 3. any other run of the same net (the row parked away from its conductor).
+    if gap is None:
+        for name, net, points in named:
+            if net != label.net:
+                continue
+            distance = _box_run_gap(box, points)
+            if gap is None or distance < gap:
+                gap, carrier = distance, f"{name} ({net})"
+    if gap is None:
+        return None
+    return gap, carrier
+
+
+def _check_native_label_carriers(
+    layout_plan: LayoutPlan,
+    placed: list[_PlacedPart],
+    profile_map: Mapping[str, SymbolProfile],
+) -> list[HardViolation]:
+    """A printed `native` name must live on its own conductor (053Z).
+
+    ``native-attr`` moves a net's name to the label's box centre, so the box is
+    where the row is printed — and a box reserved off its carrier prints the name
+    on whatever ink is there. P27 parsed clean and was still wrong for exactly
+    this reason: `CTS` 40 units and `RI` 55 from their 5-unit leads, and `_assign_
+    annotation_nets` then read those rows as a second `RXD`/`DSR` name (see
+    :data:`KIND_NATIVE_LABEL_OFF_CARRIER`).
+
+    What is judged is the **stub**, because that is what carries the name out of
+    its pin: a label is legal when the box centre is reachable from the anchor by
+    one straight, axis-aligned run that no other net's conductor crosses. A
+    compiler that reserves boxes on that same axis (`pagecompiler._label_box`,
+    and the new re-seat) satisfies it by construction; a box nudged off the axis
+    is a row the host prints beside its own lead, and the evidence quotes the
+    measured box-to-carrier distance so the drift is a number, not an opinion.
+    """
+    visible = [
+        label for label in layout_plan.labels
+        if getattr(label, "text_mode", "") == TEXT_MODE_NATIVE and label.net
+    ]
+    if not visible:
+        return []
+    out: list[HardViolation] = []
+    for position, label in enumerate(layout_plan.labels):
+        measured = native_label_carrier_gap(layout_plan, label, placed, profile_map)
+        if measured is None:
+            continue
+        gap, carrier = measured
+        if gap <= NATIVE_LABEL_CARRIER_LIMIT + TOL:
+            continue
+        box = tuple(float(value) for value in label.bbox)
+        anchor = (float(label.x), float(label.y))
+        centre = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+        dx, dy = centre[0] - anchor[0], centre[1] - anchor[1]
+        if abs(dx) <= TOL or abs(dy) <= TOL:
+            # The box stands on the anchor's own row or column: the page reserved
+            # that axis, and the straight stub `drawapply._label_stub` lands on it
+            # reaches the box centre. Which direction and which rung the landing
+            # then picks is the landing's question (099d/099f re-chooses a stub a
+            # foreign conductor blocks) and is not re-judged here.
+            continue
+        name = f"labels[{position}]"
+        out.append(HardViolation(
+            KIND_NATIVE_LABEL_OFF_CARRIER,
+            (name,),
+            f"{name} net {label.net!r} {_box_text(box)} stands {gap:g} units from "
+            f"its carrier {carrier}, and its centre ({centre[0]:g}, "
+            f"{centre[1]:g}) is on neither the anchor's row nor its column, so no "
+            f"straight stub reaches it from ({anchor[0]:g}, {anchor[1]:g}) — under "
+            "`textPlacement: native-attr` the host prints the name at this box, so "
+            "the row lands off its own conductor and on whatever ink is there; a "
+            "name is not moved by moving its text",
+        ))
+    return out
+
+
+def _run_on_polyline(
+    start: tuple[float, float],
+    stop: tuple[float, float],
+    points: Sequence[tuple[float, float]],
+) -> bool:
+    """Does any run of `points` cross or lie on the straight run start-stop?"""
+    for edge_start, edge_stop in _edges(points):
+        if _proper_crossing(start, stop, edge_start, edge_stop) is not None:
+            return True
+        if _on_segment(edge_start, start, stop) or _on_segment(edge_stop, start, stop):
+            return True
+    return False
+
 
 
 def _text_boxes(
@@ -1852,6 +2138,10 @@ def _text_boxes(
     boxes.extend(
         (f"labels[{index}]", item.bbox, item.part_id, item.text)
         for index, item in enumerate(layout_plan.labels)
+        # 053V: a hidden name prints nothing, so its reservation is not ink — the
+        # box stays in the plan (the label is real: it names its wire) but it may
+        # neither be reported over another text nor be dodged as if it were drawn.
+        if getattr(item, "text_mode", "") != "native-hidden"
     )
     for index, symbol in enumerate(layout_plan.power_symbols):
         glyph = _flag_glyph_box(profile_map, symbol)
@@ -2777,6 +3067,73 @@ def _box_gap(a: Box, b: Box) -> float:
     return math.hypot(dx, dy)
 
 
+def _point_box_gap(point: tuple[float, float], box: Box) -> float:
+    """Distance from a point to a box's edge, 0 when the point is inside it."""
+    dx = max(box[0] - point[0], point[0] - box[2], 0.0)
+    dy = max(box[1] - point[1], point[1] - box[3], 0.0)
+    return math.hypot(dx, dy)
+
+
+def _point_run_gap(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    stop: tuple[float, float],
+) -> float:
+    """Distance from a point to the *finite* run ``start``-``stop``."""
+    dx, dy = stop[0] - start[0], stop[1] - start[1]
+    length = dx * dx + dy * dy
+    if length <= TOL:
+        return math.hypot(point[0] - start[0], point[1] - start[1])
+    t = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length
+    t = max(0.0, min(1.0, t))
+    return math.hypot(point[0] - (start[0] + t * dx), point[1] - (start[1] + t * dy))
+
+
+def _box_run_gap(box: Box, points: Sequence[tuple[float, float]]) -> float:
+    """Distance from a box to a polyline: 0 when any run enters the box.
+
+    The closest pair between an axis-aligned box and a segment is always
+    attained at one of two places: a segment endpoint projected onto the box,
+    or a box corner projected onto the segment (a segment parallel to an edge
+    can be slid until an endpoint takes over). So those two families of
+    distances are the whole answer, and no clipping is needed.
+    """
+    corners = (
+        (box[0], box[1]), (box[0], box[3]), (box[2], box[1]), (box[2], box[3]),
+    )
+    runs = list(_edges(points))
+    best = math.inf
+    for start, stop in runs:
+        if _on_segment(corners[0], start, stop) or _run_crosses_box(box, start, stop):
+            return 0.0
+        for corner in corners:
+            best = min(best, _point_run_gap(corner, start, stop))
+        for point in (start, stop):
+            best = min(best, _point_box_gap(point, box))
+    return 0.0 if math.isinf(best) else best
+
+
+def _run_crosses_box(
+    box: Box,
+    start: tuple[float, float],
+    stop: tuple[float, float],
+) -> bool:
+    """Does the segment ``start``-``stop`` touch the box at all?"""
+    if _inside(start, box) or _inside(stop, box):
+        return True
+    for edge in (
+        ((box[0], box[1]), (box[2], box[1])),
+        ((box[2], box[1]), (box[2], box[3])),
+        ((box[2], box[3]), (box[0], box[3])),
+        ((box[0], box[3]), (box[0], box[1])),
+    ):
+        if _proper_crossing(start, stop, edge[0], edge[1]) is not None:
+            return True
+        if _on_segment(edge[0], start, stop):
+            return True
+    return False
+
+
 def _outside(box: Box, page: Box) -> str:
     """Which bounds of `page` the box leaves, in one phrase ("" when none)."""
     parts = []
@@ -2921,7 +3278,9 @@ def check_page(
 
     violations: list[HardViolation] = []
     violations.extend(_check_frames_on_the_page(frames, page_layout.page_box))
-    violations.extend(_check_frame_separation(frames, module_gap))
+    violations.extend(_check_frame_separation(
+        frames, module_gap, _attached_pairs(presentation_spec),
+    ))
     violations.extend(_check_geometry_framed(
         plan, placed, frames, membership,
         _nets_by_module(circuit_spec, presentation_spec),
@@ -3061,34 +3420,70 @@ def _check_frames_on_the_page(
     return out
 
 
+def _attached_pairs(presentation_spec: PresentationSpec) -> dict[str, str]:
+    """``attached module id -> host id``, the relation the document states (053K).
+
+    A reader, not a policy: `attach` already says which module belongs to which
+    host (:class:`~boardwise.core.presentationspec.ModuleAttach`), and the check
+    below asks whether that pair may sit closer than the page's own gap. The
+    parser has already refused an open relation (unknown host, self, chain, two
+    modules on one host), so this mapping is a subset of the frames.
+    """
+    return {
+        module.id: module.attach.to
+        for module in presentation_spec.modules
+        if module.attach is not None
+    }
+
+
 def _check_frame_separation(
-    frames: Mapping[str, Box], module_gap: float
+    frames: Mapping[str, Box],
+    module_gap: float,
+    attached: Mapping[str, str] | None = None,
 ) -> list[HardViolation]:
-    """Frames must not overlap, and must keep the page's clear space."""
+    """Frames must not overlap, and must keep the page's clear space.
+
+    ``attached`` is the document's attach relation (053K): a pair it names states
+    its **own** clear space (``attach.gap``), so the page's module gap does not
+    apply to that pair — two frames 10 apart are the page saying "this block
+    belongs to that IC", not a misplacement. An empty mapping is the old
+    behaviour, pair for pair. What the exemption never covers is area overlap:
+    a rigid body still cannot share canvas with another, so an attach pair that
+    overlaps keeps the same finding any other pair would get.
+    """
+    attached = {} if attached is None else attached
     names = sorted(frames)
     out = []
     for index, left in enumerate(names):
         for right in names[index + 1:]:
             gap = _box_gap(frames[left], frames[right])
+            overlap = _overlap(frames[left], frames[right])
+            if overlap:
+                out.append(HardViolation(
+                    kind=KIND_MODULE_FRAME_OVERLAP,
+                    objects=(
+                        f"pageLayout.modules[{left}]",
+                        f"pageLayout.modules[{right}]",
+                    ),
+                    evidence=(
+                        f"the two frames overlap ({_box_text(frames[left])} and "
+                        f"{_box_text(frames[right])}) — each frame is a rigid body "
+                        "on the page, and two bodies cannot share canvas"
+                    ),
+                ))
+                continue
+            if attached.get(left) == right or attached.get(right) == left:
+                continue
             if gap > module_gap - TOL:
                 continue
-            overlap = _overlap(frames[left], frames[right])
             out.append(HardViolation(
                 kind=KIND_MODULE_FRAME_OVERLAP,
                 objects=(f"pageLayout.modules[{left}]", f"pageLayout.modules[{right}]"),
                 evidence=(
-                    (
-                        f"the two frames overlap ({_box_text(frames[left])} and "
-                        f"{_box_text(frames[right])}) — each frame is a rigid body "
-                        "on the page, and two bodies cannot share canvas"
-                    )
-                    if overlap
-                    else (
-                        f"the frames are {gap:g} canvas units apart, and the page's "
-                        f"module gap is {module_gap:g} — the clear space is what "
-                        "keeps two modules' annotations (a flag's stem, a label's "
-                        "box) off each other"
-                    )
+                    f"the frames are {gap:g} canvas units apart, and the page's "
+                    f"module gap is {module_gap:g} — the clear space is what "
+                    "keeps two modules' annotations (a flag's stem, a label's "
+                    "box) off each other"
                 ),
             ))
     return out
@@ -3704,3 +4099,188 @@ def _frame_bounds(frames: Iterable[Box]) -> Box:
         min(box[0] for box in boxes), min(box[1] for box in boxes),
         max(box[2] for box in boxes), max(box[3] for box in boxes),
     )
+
+
+# ------------------------------------------------- 4c. a wire through a flag
+
+
+def _point_segment_gap(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> float:
+    """Distance from a point to one straight run (0 when it lies on it)."""
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    length2 = dx * dx + dy * dy
+    if length2 <= TOL * TOL:
+        return math.hypot(point[0] - start[0], point[1] - start[1])
+    t = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length2
+    t = min(1.0, max(0.0, t))
+    return math.hypot(point[0] - (start[0] + t * dx), point[1] - (start[1] + t * dy))
+
+
+def _edge_box_gap(
+    start: tuple[float, float], end: tuple[float, float], box: Box
+) -> float:
+    """Distance between one straight run and a box, 0 when they meet."""
+    if _clip_to_box(start, end, box) is not None:
+        return 0.0
+    corners = (
+        (box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3]),
+    )
+    best = min(_point_segment_gap(corner, start, end) for corner in corners)
+    for index in range(4):
+        a, b = corners[index], corners[(index + 1) % 4]
+        best = min(best, _point_segment_gap(start, a, b), _point_segment_gap(end, a, b))
+    return best
+
+
+def _polyline_box_gap(points: Sequence[tuple[float, float]], box: Box) -> float:
+    """How far a whole run stays from a box: the worst of its sub-edges."""
+    if not points:
+        return 0.0
+    if len(points) == 1:
+        return _edge_box_gap(points[0], points[0], box)
+    return min(_edge_box_gap(start, end, box) for start, end in _edges(points))
+
+
+def _polyline_box_nearest(
+    points: Sequence[tuple[float, float]], box: Box
+) -> tuple[float, tuple[float, float]]:
+    """The run's smallest gap to `box` and a point on that sub-edge."""
+    if not points:
+        return 0.0, (box[0], box[1])
+    edges = _edges(list(points)) or [(points[0], points[0])]
+    best: tuple[float, tuple[float, float]] | None = None
+    for start, end in edges:
+        gap = _edge_box_gap(start, end, box)
+        if best is None or gap < best[0]:
+            best = (gap, ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0))
+    return best if best is not None else (0.0, (box[0], box[1]))
+
+
+def _flag_lead_exempt(
+    net: str,
+    anchor: tuple[float, float],
+    points: Sequence[tuple[float, float]],
+    glyph: Box,
+    clearance: float = FLAG_BODY_CLEARANCE,
+) -> bool:
+    """Is this run the flag's **own lead** leaving the anchor into open space?
+
+    The one exemption of this check, and it is narrow on purpose: same net, an
+    endpoint exactly on the anchor, the first step pointing **away** from the
+    glyph, and the rest of the run at least `clearance` from the box. A lead that
+    heads outward and then runs back along the artwork fails the last clause and
+    is reported like any other conductor; a same-net trunk that merely passes
+    near the anchor is not an endpoint there and is reported too.
+    """
+    if not net or not points:
+        return False
+    points = list(points)
+    if len(points) < 2:
+        return False
+    if _same_point(points[0], anchor):
+        rest, step = points[1:], (points[0], points[1])
+    elif _same_point(points[-1], anchor):
+        rest, step = points[:-1], (points[-1], points[-2])
+    else:
+        return False
+    centre = ((glyph[0] + glyph[2]) / 2.0, (glyph[1] + glyph[3]) / 2.0)
+    outward = (anchor[0] - centre[0], anchor[1] - centre[1])
+    heading = (step[1][0] - step[0][0], step[1][1] - step[0][1])
+    if outward[0] * heading[0] + outward[1] * heading[1] <= 0:
+        return False
+    return _polyline_box_gap(rest, glyph) >= clearance
+
+
+def _flag_body_offence(
+    net: str,
+    anchor: tuple[float, float],
+    points: Sequence[tuple[float, float]],
+    glyph: Box,
+    clearance: float = FLAG_BODY_CLEARANCE,
+) -> tuple[float, tuple[float, float]] | None:
+    """The gap and a contact point when a run is too close to a flag, else None.
+
+    The **single** decision this batch adds: `_check_flag_body_on_wire` reports
+    it and `pagecompiler` both detects collisions and re-checks a candidate move
+    with it, so a page can never be clear for the compiler and colliding for the
+    gate.
+    """
+    if _flag_lead_exempt(net, anchor, points, glyph, clearance):
+        return None
+    gap, near = _polyline_box_nearest(points, glyph)
+    if gap >= clearance:
+        return None
+    return gap, near
+
+
+def _check_flag_body_on_wire(
+    layout_plan: LayoutPlan,
+    profile_map: Mapping[str, SymbolProfile],
+) -> list[HardViolation]:
+    """Constraint 4c: no wire may be drawn **through a flag's own glyph** (053W).
+
+    A flag is the one symbol whose whole meaning is its artwork: the reader takes
+    `GND` from the bars, and a conductor printed across them reads as that
+    conductor's net. 岳 saw it on a landed page every gate called clean (P20: the
+    GND glyph pressed into the RXD / +5V wires), which is the class this check
+    exists for.
+
+    The ruler is the glyph box `core.symbolprofile.flag_glyph_box` measures —
+    the one the compiler reserves, the page frames cover and the SVG preview
+    draws — measured as **clear space**, not as a strict interior crossing. 岳
+    rejected the first cut of this check for exactly that: on P20 the GND glyph's
+    outline was pressed against a wire, every gate said "0 crossings", and the
+    landed page showed a conductor through the flag. At the host's stroke width
+    the outline is where the reader sees the wire. So a run has to keep
+    :data:`FLAG_BODY_CLEARANCE` units from the glyph, and the violation reports
+    the gap it actually leaves:
+
+    * a **lead** that leaves the anchor away from the glyph is exempt — it is the
+      flag's own connection, same net, with an endpoint on the anchor, and 5
+      units of it are by construction beside the box it serves; the rest of that
+      run must still stay a full clearance from the glyph;
+    * a wire along an edge, a corner touch, or a run 2 units off the box is
+      **reported** with the gap it leaves;
+    * a flag whose profile or body is unknown is **left out**, not treated as a
+      zero-area box: an unmeasurable glyph is not a measured clean one
+      (:func:`_flag_glyph_box` makes the same choice for the text half).
+
+    The flag's **own** trunk is not exempt. `drawcompiler._flag_room` already
+    refuses to thread a flag's glyph with a conductor of the flag's own net, and
+    a reader cannot tell the two nets apart on the page: reported with both nets
+    so a gate can point at the drawing, not at the reader.
+    """
+    out: list[HardViolation] = []
+    for index, symbol in enumerate(layout_plan.power_symbols):
+        glyph = _flag_glyph_box(profile_map, symbol)
+        if glyph is None:
+            continue
+        anchor = (symbol.x, symbol.y)
+        for wire_index, segment in enumerate(layout_plan.segments):
+            offence = _flag_body_offence(
+                symbol.net, anchor, list(segment.points), glyph
+            )
+            if offence is None:
+                continue
+            gap, hit = offence
+            own = bool(segment.net) and segment.net == symbol.net
+            out.append(HardViolation(
+                KIND_FLAG_BODY_ON_WIRE,
+                (f"powerSymbols[{index}]", f"segments[{wire_index}]"),
+                f"segments[{wire_index}] (net {segment.net or 'unnamed'}) passes "
+                f"{gap:g} units from the glyph of the {symbol.net or 'unnamed'} "
+                f"flag powerSymbols[{index}] ({symbol.symbol_ref}, rotation "
+                f"{symbol.rotation:g}, box {_box_text(glyph)}) near "
+                f"({hit[0]:g}, {hit[1]:g}) — inside the "
+                f"{FLAG_BODY_CLEARANCE:g}-unit clearance a flag's artwork needs, "
+                "which is what the reader sees as a conductor across it"
+                + (
+                    "; this is the flag's own net, which `_flag_room` already "
+                    "refuses to thread"
+                    if own else ""
+                ),
+            ))
+    return out

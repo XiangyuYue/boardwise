@@ -836,6 +836,64 @@ ACTIONS: tuple[Action, ...] = (
         risk="read",
     ),
     Action(
+        name="sch.list_attributes",
+        summary=(
+            "Read-only: every ISCH_PrimitiveAttribute of a page, or of one owner "
+            "primitive, field by field (sch_PrimitiveAttribute.getAll). Built for "
+            "053P — a createNetLabel that answered undefined while two name texts "
+            "appeared in the render can only be told apart from canvas decoration "
+            "by reading the attribute namespace itself."
+        ),
+        params=("pageUuid", "parentPrimitiveId"),
+        returns=(
+            "{pageUuid, parentPrimitiveId, count, attributes: [{primitiveId, "
+            "parentPrimitiveId, key, value, x, y, rotation, alignMode, fillColor, "
+            "keyVisible, valueVisible}], readErrors}"
+        ),
+        params_schema=(
+            "pageUuid: required, the page the attributes belong to (the focused "
+            "page must match — PAGE_MISMATCH otherwise); parentPrimitiveId: "
+            "optional non-empty id, forwarded as the one argument of "
+            "getAll(parentPrimitiveId) — omitted means the bare getAll()"
+        ),
+        risk="read",
+    ),
+    Action(
+        name="sch.move_attribute",
+        summary=(
+            "Move ONE existing attribute's text position (x/y/rotation/alignMode) or "
+            "its ValueVisible flag, after re-reading the page's own attribute list "
+            "and proving the id, its parent and its current key/value. Built for "
+            "053Q: the 053P reader could see an attribute and not place it. 053U "
+            "adds valueVisible (strict boolean) so a duplicated net name — a "
+            "reversible Type-C pin that keeps its own NET — can be hidden without "
+            "clearing the wire's net, deleting the ATTR or drawing across pins. "
+            "Any identity mismatch, a missing ValueVisible read port, or a "
+            "read-back that cannot confirm the requested fields, is an error "
+            "naming the mismatched fields — never a silent success."
+        ),
+        params=(
+            "pageUuid", "primitiveId", "parentPrimitiveId", "expectedKey",
+            "expectedValue", "x", "y", "rotation", "alignMode", "valueVisible",
+        ),
+        returns=(
+            "{pageUuid, primitiveId, parentPrimitiveId, key, value, before, "
+            "requested, returned, after, applied, mismatched, readErrors?, "
+            "modifyError?, readbackError?}"
+        ),
+        params_schema=(
+            "pageUuid/primitiveId/parentPrimitiveId/expectedKey/expectedValue: "
+            "required (expectedValue may be an empty string, but must be a string); "
+            "x/y/rotation: finite numbers; alignMode: ESCH_PrimitiveTextAlignMode "
+            "(1..9); valueVisible: strict boolean; at least one of the five. "
+            "key/value/keyVisible/font fields are refused, not forwarded. A "
+            "valueVisible request is refused before the write unless the host can "
+            "read getState_ValueVisible back. applied is decided by a fresh "
+            "sch_PrimitiveAttribute.get(primitiveId) read-back"
+        ),
+        risk="write",
+    ),
+    Action(
         name="pcb.geometry",
         summary=(
             "Read-only: the **measured** rendered bounding box of PCB primitives "

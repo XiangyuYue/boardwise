@@ -120,6 +120,7 @@ __all__ = [
     "PATH_STEP_PART",
     "PRESENTATION_SPEC_KIND",
     "PRESENTATION_SPEC_VERSION",
+    "SERVICE_LAYOUT_KEYS",
     "SIDES",
     "_FLOW_EDGE_KEYS",
     "DirectWiringObligation",
@@ -131,6 +132,7 @@ __all__ = [
     "PresentationPath",
     "PresentationSpec",
     "PresentationSpecError",
+    "ServiceLayout",
     "UserLock",
     "main_path_wire",
     "presentation_sha256",
@@ -188,6 +190,10 @@ LABEL_ROW_MODELS: tuple[str, ...] = (
 #: other schema here is — a key nobody reads is an intent nobody honours.
 GND_CLUSTERING_KEYS: tuple[str, ...] = ("radius",)
 
+#: The one key `serviceLayout` carries (543B): the distance a uniquely served
+#: shunt keeps from the host pin it serves. Closed like every other object here.
+SERVICE_LAYOUT_KEYS: tuple[str, ...] = ("pinGap",)
+
 #: The four sides a preference may name. Preferences are defaults; a user lock
 #: wins over them (053 sec.2: "默认可被锁定覆盖").
 SIDES: tuple[str, ...] = ("left", "right", "top", "bottom")
@@ -198,6 +204,14 @@ SIDES: tuple[str, ...] = ("left", "right", "top", "bottom")
 #: part's text is one **block** — the reference and the value move *together* —
 #: so this names a side, never a place per line.
 PART_TEXT_SIDES: tuple[str, ...] = ("above", "below", "left", "right")
+
+#: The one non-default value of the top-level `textPlacement` switch (053S).
+#: ``native-attr`` says "place this drawing's text with the host's attribute API
+#: where the layout put it, instead of trusting the host's own anchors". Absent
+#: means the historical reading — the key is not written at all and no plan
+#: carries `attributeMoves`.
+TEXT_PLACEMENT_NATIVE = "native-attr"
+TEXT_PLACEMENTS: tuple[str, ...] = (TEXT_PLACEMENT_NATIVE,)
 
 #: The book's defaults: an input enters from the left, an output leaves to the
 #: right, a rail is above and ground below. Defaults, not rules — 052 sec.6 says
@@ -224,6 +238,7 @@ _TOP_KEYS = (
     "moduleColumns",
     "flagLeadLimit",
     "gndClustering",
+    "serviceLayout",
     "mainPaths",
     "feedbackPaths",
     "portRoles",
@@ -234,6 +249,7 @@ _TOP_KEYS = (
     "sidePreferences",
     "userLocks",
     "partTexts",
+    "textPlacement",
 )
 _MODULE_KEYS = (
     "id", "parts", "role", "grammarRef", "presentation", "branchOrder", "core",
@@ -241,9 +257,11 @@ _MODULE_KEYS = (
 )
 #: The sides a module may be attached to its host on (053c), and the two nested
 #: defaults. `bottom` is the decoupling row's side — a block of capacitors under
-#: the IC is what a reader expects — and 10 units is a visible but close gap
-#: (the page's own module-gap floor still applies when it is larger; see
-#: `pagecompiler._attach_shift`).
+#: the IC is what a reader expects — and 10 units is a visible but close gap.
+#: An attach pair is placed at that declared `gap` and is **exempt** from the
+#: page's own module gap; every other pair of frames keeps it, and two frames
+#: that share area are still refused (053K; see
+#: `pagecompiler._attach_shift` and `readability._check_frame_separation`).
 ATTACH_SIDES: tuple[str, ...] = ("bottom", "top", "left", "right")
 ATTACH_SIDE_DEFAULT = "bottom"
 ATTACH_GAP_DEFAULT = 10.0
@@ -487,6 +505,29 @@ class UserLock:
         return self.scope == LOCK_SCOPE_PAGE
 
 
+@dataclass(frozen=True)
+class ServiceLayout:
+    """How close a uniquely served shunt sits to its host's supply pin (543B).
+
+    This is a **construction interval**, not a coordinate: the compiler still
+    decides the side and the pose from the symbol, the relations and the net
+    partition. ``pin_gap`` is the distance the shunt's service pin keeps from
+    the host pin it serves, and it is read only when
+
+    * the presentation states the key (an absent key keeps every old document's
+      bytes, digest and drawing), and
+    * the 543A service relation for that part is resolved, the host is the
+      branch's owner, the served net is the branch's shared net, and the host
+      has **exactly one** pin on it.
+
+    An ambiguous relation, several hosts or several equivalent host pins are
+    left alone: this key states a distance, not a licence to guess.
+    """
+
+    #: The service pin's distance from the host pin, in canvas units (> 0).
+    pin_gap: float
+
+
 @dataclass
 class PresentationSpec:
     """The whole presentation intent, in normal form."""
@@ -528,6 +569,13 @@ class PresentationSpec:
     #: A positive value switches `drawcompiler`'s neighbourhood split on and is
     #: what `gndClustering` writes.
     gnd_cluster_radius: float = 0.0
+    #: 543B's construction interval for a **uniquely served** shunt: ``None``
+    #: (every document written before this key, and the default) keeps the
+    #: compiler's branch ladder exactly as it was. A stated value asks the
+    #: branch that 543A resolved to place its service pin ``pin_gap`` away from
+    #: the one host pin it serves; it is not written unless stated, so old
+    #: digests and drawings do not move.
+    service_layout: "ServiceLayout | None" = None
     main_paths: list[PresentationPath] = field(default_factory=list)
     feedback_paths: list[PresentationPath] = field(default_factory=list)
     #: net id -> one of :data:`PORT_DIRECTIONS`. The same vocabulary the
@@ -553,6 +601,14 @@ class PresentationSpec:
     #: worse than the one this key did not exist for. Empty = the historical
     #: reading, and the key is then not written at all.
     part_texts: dict[str, str] = field(default_factory=dict)
+    #: How the drawing's text gets onto the canvas (053S). ``""`` — the default
+    #: and the only reading before this key existed — leaves every text where the
+    #: host draws it. :data:`TEXT_PLACEMENT_NATIVE` asks the landing to move each
+    #: reference/value and each label wire's name to the box the layout reserved,
+    #: through the host's attribute API (`attributeMoves`). A host or connector
+    #: without that API refuses before writing a part, so stating it can never
+    #: silently fall back to a drawing nobody asked for.
+    text_placement: str = ""
     spec_version: int = PRESENTATION_SPEC_VERSION
 
     # ------------------------------------------------------------ derived
@@ -705,6 +761,13 @@ class PresentationSpec:
                 if self.gnd_cluster_radius
                 else {}
             ),
+            # 543B: written only when stated, like every opt-in switch above —
+            # an old document keeps its bytes, digest and drawing.
+            **(
+                {"serviceLayout": {"pinGap": self.service_layout.pin_gap}}
+                if self.service_layout is not None
+                else {}
+            ),
             "mainPaths": [_path_json(path) for path in self.main_paths],
             "feedbackPaths": [_path_json(path) for path in self.feedback_paths],
             "portRoles": dict(self.port_roles),
@@ -758,6 +821,14 @@ class PresentationSpec:
                 if self.part_texts
                 else {}
             ),
+            # 053S: written only when stated, for the same reason every switch
+            # above is — an old document keeps its digest, and with it every plan
+            # compiled from it.
+            **(
+                {"textPlacement": self.text_placement}
+                if self.text_placement
+                else {}
+            ),
         }
 
     @classmethod
@@ -783,6 +854,7 @@ class PresentationSpec:
             module_columns=_module_columns(root),
             flag_lead_limit=_flag_lead_limit(root),
             gnd_cluster_radius=_gnd_clustering(root),
+            service_layout=_service_layout(root),
             main_paths=_paths_from(root, "mainPaths"),
             feedback_paths=_paths_from(root, "feedbackPaths"),
             port_roles=_port_roles(root),
@@ -793,6 +865,7 @@ class PresentationSpec:
             side_preferences=_side_preferences(root),
             user_locks=_locks_from(root),
             part_texts=_part_texts_from(root, modules),
+            text_placement=_text_placement(root),
         )
 
     def dump(self, path: str | Path) -> None:
@@ -1293,6 +1366,28 @@ def _part_texts_from(
     return out
 
 
+def _text_placement(root: dict[str, Any]) -> str:
+    """The stated text-placement mode, or ``""`` (053S).
+
+    Closed vocabulary on purpose: the value is a promise about **how** the page
+    is written (the host's attribute API, `attributeMoves`), and a typo that was
+    silently read as "default" would produce a drawing that looks fine and puts
+    every text somewhere nobody declared. ``None``/absent is the historical
+    reading and stays the only way to say nothing.
+    """
+    value = root.get("textPlacement")
+    if value is None:
+        return ""
+    if not isinstance(value, str) or value not in TEXT_PLACEMENTS:
+        raise PresentationSpecError(
+            f"$.textPlacement is {value!r}; expected "
+            f"{', '.join(repr(item) for item in TEXT_PLACEMENTS)} — the switch "
+            "names how text lands, and an unknown mode is refused rather than "
+            "read as the default"
+        )
+    return value
+
+
 def _module_columns(root: dict[str, Any]) -> int:
     """The stated module-column count, or ``0`` (auto-search)."""
     value = root.get("moduleColumns")
@@ -1357,6 +1452,35 @@ def _gnd_clustering(root: dict[str, Any]) -> float:
             f"units, got {radius!r}"
         )
     return float(radius)
+
+
+def _service_layout(root: dict[str, Any]) -> ServiceLayout | None:
+    """The stated service interval, or ``None`` when the document states none.
+
+    A missing key is the historical reading and must stay a missing key: it is
+    not written by :meth:`PresentationSpec.to_jsonable`, so every document
+    compiled before 543B keeps its digest and its drawing. When stated, the
+    object is closed and ``pinGap`` has to be a positive finite number of canvas
+    units — a zero or negative gap would place the shunt on or through the host
+    pin it serves, and a `NaN` would make the branch-distance comparison false.
+    """
+    value = root.get("serviceLayout")
+    if value is None:
+        return None
+    body = _object(value, "serviceLayout")
+    _check_keys(body, SERVICE_LAYOUT_KEYS, "serviceLayout")
+    gap = body.get("pinGap")
+    if (
+        isinstance(gap, bool)
+        or not isinstance(gap, (int, float))
+        or not math.isfinite(gap)
+        or gap <= 0
+    ):
+        raise PresentationSpecError(
+            "$.serviceLayout.pinGap must be a positive, finite number of canvas "
+            f"units, got {gap!r}"
+        )
+    return ServiceLayout(pin_gap=float(gap))
 
 
 def _paths_from(root: dict[str, Any], key: str) -> list[PresentationPath]:

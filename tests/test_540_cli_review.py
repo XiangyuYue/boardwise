@@ -71,7 +71,7 @@ def test_owner_manifest_covers_review_commands():
     )
     assert data["batch"] == "540B6"
     assert data["modules"]["commands/review.py"] == "review"
-    assert len(data["modules"]) == 142
+    assert len(data["modules"]) == 143
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

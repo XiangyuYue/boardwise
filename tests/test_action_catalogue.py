@@ -214,6 +214,45 @@ def test_page_addressed_placements_declare_pageuuid():
         )
 
 
+def test_the_attribute_reader_is_read_only_and_page_addressed():
+    """053P: `sch.list_attributes` must stay a read, and must name its page.
+
+    The attribute namespace also carries `createNetLabel` / `modify` / `delete`,
+    so the entry that reads it is exactly the place where a write could slip in.
+    `pageUuid` is required in the handler because `guardPage` alone treats a
+    missing uuid as an unguarded interactive probe; without the parameter in the
+    catalogue a caller cannot see that the guard exists.
+    """
+    action = next(a for a in ACTIONS if a.name == "sch.list_attributes")
+    assert action.owner == "connector"
+    assert action.risk == "read", "the attribute enumeration must not change content"
+    assert action.params == ("pageUuid", "parentPrimitiveId")
+    assert "readErrors" in action.returns, "unreadable fields must be reportable, not null"
+
+
+def test_the_attribute_mover_is_write_but_pose_only():
+    """053Q/053U: `sch.move_attribute` stays inside position + one visibility bit.
+
+    The action exists to place a net name that is an attribute, and the whole
+    point of the slice is that it cannot become a general attribute editor: the
+    catalogue must not advertise `key` / `value` / `keyVisible` as writable, or a
+    caller will pass them and read a `BAD_REQUEST` as an accident rather than
+    as the boundary. 053U admits exactly one more member — `valueVisible` — so a
+    duplicated net name can be hidden without clearing the wire's net.
+    """
+    action = next(a for a in ACTIONS if a.name == "sch.move_attribute")
+    assert action.owner == "connector"
+    assert action.risk == "write", "moving text is a design write"
+    for required in ("pageUuid", "primitiveId", "parentPrimitiveId", "expectedKey", "expectedValue"):
+        assert required in action.params, f"{required} is part of the identity check"
+    assert "valueVisible" in action.params, "053U: hiding one ATTR is a stated capability"
+    for forbidden in ("key", "value", "keyVisible", "fontSize", "color"):
+        assert forbidden not in action.params, (
+            f"{forbidden} must not be advertised — the mover writes x/y/rotation/alignMode/valueVisible"
+        )
+    assert "mismatched" in action.returns, "an unconfirmed move must be reportable"
+
+
 def test_doc_open_is_risk_write_like_doc_focus():
     """#44: `doc.open` was filed as `read` next to the other focus movers.
 

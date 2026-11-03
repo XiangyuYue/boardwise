@@ -4703,6 +4703,569 @@ export const schPlaceNetlabel: ActionHandler = async (params, eda) => {
   );
 };
 
+// --------------------------------------------------------------------------
+// 053P: attribute enumeration (read-only)
+// --------------------------------------------------------------------------
+
+/**
+ * The `ISCH_PrimitiveAttribute` fields `sch.list_attributes` reads back, as
+ * `[getState_* name, wire name]` pairs.
+ *
+ * `PrimitiveId` comes first on purpose: when a later field fails, the error
+ * line has to name the attribute it belongs to, and an array index does not
+ * survive a reordering of the host's answer.
+ */
+const ATTRIBUTE_FIELDS: ReadonlyArray<readonly [string, string]> = [
+  ['PrimitiveId', 'primitiveId'],
+  ['ParentPrimitiveId', 'parentPrimitiveId'],
+  ['Key', 'key'],
+  ['Value', 'value'],
+  ['X', 'x'],
+  ['Y', 'y'],
+  ['Rotation', 'rotation'],
+  ['AlignMode', 'alignMode'],
+  ['FillColor', 'fillColor'],
+  ['KeyVisible', 'keyVisible'],
+  ['ValueVisible', 'valueVisible'],
+];
+
+/**
+ * One `getState_*` field, with the three outcomes kept apart.
+ *
+ * :func:`getState` collapses "the accessor is absent" and "the call threw" into
+ * one `undefined`, which is right for a dump that only wants values and wrong
+ * here: `sch.list_attributes` must not let a field it could not read look like
+ * a field the host said was null. So an absent accessor and a throwing one both
+ * come back as `error`, and the caller records which attribute lost the field.
+ */
+async function readAttributeField(
+  obj: any,
+  name: string,
+): Promise<{ value?: unknown; error?: string }> {
+  let fn: any;
+  try {
+    fn = obj?.[`getState_${name}`];
+  } catch (error) {
+    return { error: `read getState_${name}: ${String((error as Error)?.message ?? error)}` };
+  }
+  if (typeof fn !== 'function') return { error: `getState_${name} is not present on this host` };
+  try {
+    return { value: await settle(fn.call(obj)) };
+  } catch (error) {
+    return { error: `call getState_${name}: ${String((error as Error)?.message ?? error)}` };
+  }
+}
+
+/**
+ * `sch.list_attributes` — every `ISCH_PrimitiveAttribute` of a page, read-only.
+ *
+ * 053P needs it because `createNetLabel` returned `undefined` while two V3
+ * texts appeared in the render: whether those texts are NET attributes living
+ * on a primitive (addressable by `parentPrimitiveId`) or decoration the canvas
+ * drew on its own is not answerable from a picture. This action enumerates the
+ * attribute namespace itself — `sch_PrimitiveAttribute.getAll()` for the whole
+ * page, `getAll(parentPrimitiveId)` for one owner.
+ *
+ * Boundary, stated because the namespace also carries writes:
+ *
+ * - **Read-only.** `createNetLabel`, `modify` and `delete` are never reached,
+ *   and no arbitrary code path exists here.
+ * - **`pageUuid` is required** and checked with :func:`guardPage`. `guardPage`
+ *   itself treats a missing uuid as "interactive probe, no guard", which is the
+ *   opposite of what a caller reading a page needs: an unaddressed read would
+ *   silently describe whichever page is in front. The emptiness check is
+ *   therefore done here, *before* the guard.
+ * - `sch_PrimitiveNetLabel` is **not** consulted. The attribute namespace and
+ *   the net-label namespace are different objects on this host, and a missing
+ *   net-label API says nothing about whether attributes exist.
+ * - A host without `sch_PrimitiveAttribute.getAll` answers `NOT_IMPLEMENTED`
+ *   naming the path, and a non-array answer is an error rather than an empty
+ *   list: "no attributes" is a reading, and a host that answered nothing has
+ *   not taken it.
+ */
+export const schListAttributes: ActionHandler = async (params, eda) => {
+  const pageUuid = typeof params?.pageUuid === 'string' ? params.pageUuid.trim() : '';
+  if (!pageUuid) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      'sch.list_attributes needs params.pageUuid — the page whose attributes are read',
+    );
+  }
+  const rawParent = params?.parentPrimitiveId;
+  let parentPrimitiveId: string | undefined;
+  if (rawParent !== undefined && rawParent !== null) {
+    if (typeof rawParent !== 'string' || !rawParent.trim()) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        'params.parentPrimitiveId must be a non-empty string when given',
+        { parentPrimitiveIdType: typeof rawParent },
+      );
+    }
+    parentPrimitiveId = rawParent.trim();
+  }
+
+  await guardPage(eda, pageUuid);
+
+  const nsRead = readMember(eda, 'sch_PrimitiveAttribute');
+  const ns = nsRead.value;
+  if (nsRead.error !== undefined || !ns || typeof ns !== 'object') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      `sch_PrimitiveAttribute is not available (${nsRead.error ?? 'absent'})`,
+      { path: 'sch_PrimitiveAttribute' },
+    );
+  }
+  const fnRead = readMember(ns, 'getAll');
+  const getAll = fnRead.value;
+  if (typeof getAll !== 'function') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      `sch_PrimitiveAttribute.getAll is not available (${fnRead.error ?? 'not a function'})`,
+      { path: 'sch_PrimitiveAttribute.getAll' },
+    );
+  }
+
+  let raw: unknown;
+  try {
+    // A parent goes in as the single argument the declaration names; with none
+    // the call is the bare `getAll()`, not `getAll(undefined)`.
+    raw = await settle(
+      parentPrimitiveId === undefined ? getAll.call(ns) : getAll.call(ns, parentPrimitiveId),
+    );
+  } catch (error) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `sch_PrimitiveAttribute.getAll(${parentPrimitiveId ?? ''}) threw: `
+        + `${String((error as Error)?.message ?? error)}`,
+      { pageUuid, parentPrimitiveId: parentPrimitiveId ?? null },
+    );
+  }
+  if (!Array.isArray(raw)) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `sch_PrimitiveAttribute.getAll answered `
+        + `${raw === undefined ? 'undefined' : typeof raw} instead of an array — `
+        + 'the attribute list is unknown, not empty',
+      { pageUuid, parentPrimitiveId: parentPrimitiveId ?? null },
+    );
+  }
+
+  const attributes: Record<string, unknown>[] = [];
+  const readErrors: string[] = [];
+  let index = 0;
+  for (const item of raw) {
+    const label = `attribute[${index}]`;
+    index += 1;
+    const row: Record<string, unknown> = {};
+    for (const [state, wire] of ATTRIBUTE_FIELDS) {
+      const field = await readAttributeField(item, state);
+      if (field.error !== undefined) {
+        const owner = typeof row.primitiveId === 'string' && row.primitiveId
+          ? row.primitiveId
+          : label;
+        readErrors.push(`${owner}: ${field.error}`);
+        continue;
+      }
+      row[wire] = field.value ?? null;
+    }
+    attributes.push(row);
+  }
+
+  return {
+    pageUuid,
+    parentPrimitiveId: parentPrimitiveId ?? null,
+    count: attributes.length,
+    attributes,
+    readErrors,
+  };
+};
+
+// --------------------------------------------------------------------------
+// 053Q: constrained attribute move (one vertical slice)
+// --------------------------------------------------------------------------
+
+/** The pose properties `sch.move_attribute` may write (053Q). */
+const ATTRIBUTE_MOVE_FIELDS = ['x', 'y', 'rotation', 'alignMode'] as const;
+
+/**
+ * The one visibility property 053U adds: `ValueVisible` only, strict boolean.
+ *
+ * It is a *separate* list because it is the one field whose **false** is a
+ * legitimate request, and because the write must be refused unless the host can
+ * read it back (`getState_ValueVisible` on the fresh `get()`), which the pose
+ * fields do not need. `KeyVisible` and every other visibility key stay out.
+ */
+const ATTRIBUTE_MOVE_FLAGS = ['valueVisible'] as const;
+
+/** `ESCH_PrimitiveTextAlignMode` (1..9), read from the type package. */
+const ATTRIBUTE_ALIGN_MODES = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+/** A required string parameter, refused rather than coerced. */
+function requiredString(
+  params: Record<string, unknown>,
+  name: string,
+  { allowEmpty = false }: { allowEmpty?: boolean } = {},
+): string {
+  const raw = params?.[name];
+  if (typeof raw !== 'string') {
+    throw new ActionError('BAD_REQUEST', `params.${name} must be a string`, { param: name });
+  }
+  const value = allowEmpty ? raw : raw.trim();
+  if (!allowEmpty && !value) {
+    throw new ActionError('BAD_REQUEST', `params.${name} must be a non-empty string`, { param: name });
+  }
+  return value;
+}
+
+/** The `getState_*` name a requested move field is read back through. */
+const MOVE_FIELD_STATE: Record<string, string> = {
+  x: 'X', y: 'Y', rotation: 'Rotation', alignMode: 'AlignMode',
+  valueVisible: 'ValueVisible',
+};
+
+/**
+ * `sch.move_attribute` — move one existing attribute, after proving which one it is.
+ *
+ * The gap 053P left: the attribute namespace could be *read* but not moved, so a
+ * net name that is an attribute (R900's `Designator` / `Name`, the wire's two
+ * `V3` texts) could be seen and not placed. This is the narrowest write that
+ * closes it — it moves **text position only**, on an attribute the caller has
+ * already identified.
+ *
+ * Why the identity check is not optional: `primitiveId` alone is not enough on
+ * this host. A stale id from an earlier read, an id copied from another page, or
+ * a caller that picked `Value` (a data key with no text position) instead of
+ * `Name` all produce a `modify` that either does nothing or moves the wrong
+ * label. So the handler re-reads the **page's own** `getAll()` and refuses —
+ * zero writes — unless the id, its `parentPrimitiveId` and its current
+ * `key` / `value` all match what the caller said it expected.
+ *
+ * The write surface is a closed allowlist: `x` / `y` / `rotation` (finite
+ * numbers), `alignMode` (a declared `ESCH_PrimitiveTextAlignMode` value) and —
+ * since 053U — `valueVisible` (strict boolean), which is how a *duplicate* net
+ * name (a Type-C reversible pin's own NET is kept, its second text is not
+ * shown) is hidden. `ValueVisible` is the only visibility this action writes;
+ * `key` / `value` / `keyVisible` / font fields stay refused, nothing from
+ * `params` is forwarded, and no fallback to `sch.modify_primitive`, text
+ * overwriting or deletion exists. A `valueVisible` request is refused **before
+ * the write** when the host cannot read `getState_ValueVisible` back, because a
+ * hide nobody can confirm is not a write this action will make.
+ *
+ * `applied` is **not** the host's answer. `modify` may return `undefined` and
+ * land anyway (measured 2026-09-13 for components), so the result is decided by
+ * a fresh `get(primitiveId)` read of exactly the requested fields; a field that
+ * does not read back equal lands in `mismatched` and the call is an error, never
+ * a silent `applied: false`.
+ */
+export const schMoveAttribute: ActionHandler = async (params, eda) => {
+  const pageUuid = requiredString(params, 'pageUuid');
+  const primitiveId = requiredString(params, 'primitiveId');
+  const parentPrimitiveId = requiredString(params, 'parentPrimitiveId');
+  const expectedKey = requiredString(params, 'expectedKey');
+  // An empty value is legitimate (the frame's `Color` / `Group ID` attributes
+  // are empty strings); only the type is strict.
+  const expectedValue = requiredString(params, 'expectedValue', { allowEmpty: true });
+
+  const allowed = new Set<string>([
+    'pageUuid', 'primitiveId', 'parentPrimitiveId', 'expectedKey', 'expectedValue',
+    ...ATTRIBUTE_MOVE_FIELDS, ...ATTRIBUTE_MOVE_FLAGS,
+  ]);
+  const unexpected = Object.keys(params ?? {}).filter((key) => !allowed.has(key));
+  if (unexpected.length) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `sch.move_attribute writes only ${[...ATTRIBUTE_MOVE_FIELDS, ...ATTRIBUTE_MOVE_FLAGS].join(' / ')} `
+        + `— refusing ${unexpected.join(', ')}; key/value/keyVisible/font fields are not forwarded`,
+      { unexpected },
+    );
+  }
+
+  const requested: Record<string, number | boolean> = {};
+  for (const field of ATTRIBUTE_MOVE_FIELDS) {
+    if (!(field in (params ?? {}))) continue;
+    const raw = (params as Record<string, unknown>)[field];
+    if (field === 'alignMode') {
+      if (typeof raw !== 'number' || !ATTRIBUTE_ALIGN_MODES.has(raw)) {
+        throw new ActionError(
+          'BAD_REQUEST',
+          'params.alignMode must be an ESCH_PrimitiveTextAlignMode value (1..9)',
+          { alignMode: raw === undefined ? null : raw },
+        );
+      }
+      requested.alignMode = raw;
+      continue;
+    }
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+      throw new ActionError('BAD_REQUEST', `params.${field} must be a finite number`, {
+        param: field,
+      });
+    }
+    requested[field] = raw;
+  }
+  for (const flag of ATTRIBUTE_MOVE_FLAGS) {
+    if (!(flag in (params ?? {}))) continue;
+    const raw = (params as Record<string, unknown>)[flag];
+    // Strict: `0` / `'false'` / `null` are not "hide". The one boolean is the
+    // whole request, so a coerced string would be a visibility the caller did
+    // not ask for.
+    if (typeof raw !== 'boolean') {
+      throw new ActionError('BAD_REQUEST', `params.${flag} must be a boolean`, {
+        param: flag,
+        value: raw === undefined ? null : raw,
+      });
+    }
+    requested[flag] = raw;
+  }
+  if (Object.keys(requested).length === 0) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      'sch.move_attribute needs at least one of '
+        + `${[...ATTRIBUTE_MOVE_FIELDS, ...ATTRIBUTE_MOVE_FLAGS].join(' / ')}`,
+    );
+  }
+
+  await guardPage(eda, pageUuid);
+
+  const nsRead = readMember(eda, 'sch_PrimitiveAttribute');
+  const ns = nsRead.value;
+  if (nsRead.error !== undefined || !ns || typeof ns !== 'object') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      `sch_PrimitiveAttribute is not available (${nsRead.error ?? 'absent'})`,
+      { path: 'sch_PrimitiveAttribute' },
+    );
+  }
+  const getAllRead = readMember(ns, 'getAll');
+  const modifyRead = readMember(ns, 'modify');
+  const getRead = readMember(ns, 'get');
+  for (const [name, member, path] of [
+    ['getAll', getAllRead, 'sch_PrimitiveAttribute.getAll'],
+    ['modify', modifyRead, 'sch_PrimitiveAttribute.modify'],
+    ['get', getRead, 'sch_PrimitiveAttribute.get'],
+  ] as const) {
+    if (typeof member.value !== 'function') {
+      // `modify` and `get` are resolved *before* the write on purpose: a host
+      // missing the read-back cannot be asked to confirm a write it just took.
+      throw new ActionError(
+        'NOT_IMPLEMENTED',
+        `${path} is not available (${member.error ?? `not a function: ${name}`})`,
+        { path },
+      );
+    }
+  }
+  const getAll = getAllRead.value as (...args: any[]) => unknown;
+  const modify = modifyRead.value as (id: string, property: unknown) => unknown;
+  const get = getRead.value as (id: string) => unknown;
+
+  let listed: unknown;
+  try {
+    // The **page's own** list, not `getAll(parentPrimitiveId)`: the id has to be
+    // located in the page before its parent is trusted as an identity.
+    listed = await settle(getAll.call(ns));
+  } catch (error) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `sch_PrimitiveAttribute.getAll() threw: ${String((error as Error)?.message ?? error)}`,
+      { pageUuid, primitiveId },
+    );
+  }
+  if (!Array.isArray(listed)) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `sch_PrimitiveAttribute.getAll answered `
+        + `${listed === undefined ? 'undefined' : typeof listed} instead of an array — `
+        + 'the attribute list is unknown, nothing was written',
+      { pageUuid, primitiveId },
+    );
+  }
+
+  let target: any;
+  const idReadErrors: string[] = [];
+  for (const item of listed) {
+    const id = await readAttributeField(item, 'PrimitiveId');
+    if (id.error !== undefined) {
+      idReadErrors.push(id.error);
+      continue;
+    }
+    if (String(id.value ?? '') === primitiveId) {
+      target = item;
+      break;
+    }
+  }
+  if (!target) {
+    if (idReadErrors.length) {
+      throw new ActionError(
+        'CONNECTOR_ERROR',
+        `attribute ${primitiveId} was not found, but ${idReadErrors.length} attribute id(s) `
+          + 'could not be read — absence cannot be claimed; nothing was written',
+        { pageUuid, primitiveId, readErrors: idReadErrors },
+      );
+    }
+    throw new ActionError(
+      'NOT_FOUND',
+      `attribute ${primitiveId} is not on page ${pageUuid} — nothing was written`,
+      { pageUuid, primitiveId },
+    );
+  }
+
+  const before: Record<string, unknown> = { primitiveId };
+  const readErrors: string[] = [];
+  // One entry per identity field, plus the four move fields for the answer —
+  // and `valueVisible` only when this call asks for it, so a 053Q call keeps
+  // exactly the answer it always got.
+  const identityFields: Array<[string, string]> = [
+    ['parentPrimitiveId', 'ParentPrimitiveId'],
+    ['key', 'Key'],
+    ['value', 'Value'],
+  ];
+  const poseFields: Array<[string, string]> = [
+    ['x', 'X'], ['y', 'Y'], ['rotation', 'Rotation'], ['alignMode', 'AlignMode'],
+  ];
+  const flagFields: Array<[string, string]> = ATTRIBUTE_MOVE_FLAGS
+    .filter((flag) => flag in requested)
+    .map((flag) => [flag, MOVE_FIELD_STATE[flag]]);
+  for (const [wire, state] of [...identityFields, ...poseFields, ...flagFields]) {
+    const field = await readAttributeField(target, state);
+    if (field.error !== undefined) {
+      readErrors.push(`${wire}: ${field.error}`);
+      continue;
+    }
+    before[wire] = field.value ?? null;
+  }
+
+  const identityMismatches: Array<{ field: string; expected: string; actual: unknown }> = [];
+  if (!('parentPrimitiveId' in before)) {
+    identityMismatches.push({ field: 'parentPrimitiveId', expected: parentPrimitiveId, actual: null });
+  } else if (before.parentPrimitiveId !== parentPrimitiveId) {
+    identityMismatches.push({
+      field: 'parentPrimitiveId', expected: parentPrimitiveId, actual: before.parentPrimitiveId,
+    });
+  }
+  if (!('key' in before)) {
+    identityMismatches.push({ field: 'key', expected: expectedKey, actual: null });
+  } else if (before.key !== expectedKey) {
+    identityMismatches.push({ field: 'key', expected: expectedKey, actual: before.key });
+  }
+  if (!('value' in before)) {
+    identityMismatches.push({ field: 'value', expected: expectedValue, actual: null });
+  } else if (before.value !== expectedValue) {
+    identityMismatches.push({ field: 'value', expected: expectedValue, actual: before.value });
+  }
+  if (identityMismatches.length) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `attribute ${primitiveId} is not the one this call described `
+        + `(${identityMismatches.map((m) => `${m.field}: expected ${JSON.stringify(m.expected)}, `
+          + `found ${JSON.stringify(m.actual)}`).join('; ')}) — nothing was written`,
+      { pageUuid, primitiveId, expected: { parentPrimitiveId, key: expectedKey, value: expectedValue }, before, mismatched: identityMismatches, readErrors },
+    );
+  }
+
+  // 053U: a visibility write is only made when the host can read it back. The
+  // port is probed on the pre-write object, so a host that cannot answer
+  // `getState_ValueVisible` is refused here — **zero writes** — instead of
+  // taking a hide nobody can confirm afterwards.
+  if ('valueVisible' in requested && !('valueVisible' in before)) {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      `attribute ${primitiveId} cannot be hidden: the host has no readable `
+        + `getState_ValueVisible (${readErrors.filter((line) => line.startsWith('valueVisible:')).join('; ') || 'field absent'}) `
+        + '— nothing was written',
+      { pageUuid, primitiveId, readErrors },
+    );
+  }
+
+  let returned: any;
+  let modifyError = '';
+  try {
+    returned = await settle(modify.call(ns, primitiveId, requested));
+  } catch (error) {
+    // A throw is not a "did not happen" either: the read-back below decides.
+    modifyError = `${(error as Error)?.name ?? 'Error'}: ${String((error as Error)?.message ?? error)}`;
+  }
+
+  let fresh: any;
+  let readbackError = '';
+  try {
+    fresh = await settle(get.call(ns, primitiveId));
+  } catch (error) {
+    readbackError = `${(error as Error)?.name ?? 'Error'}: ${String((error as Error)?.message ?? error)}`;
+    fresh = undefined;
+  }
+
+  const after: Record<string, unknown> = {};
+  const mismatched: Array<{ field: string; expected: unknown; actual: unknown; error?: string }> = [];
+  for (const field of Object.keys(requested)) {
+    const expected = requested[field];
+    if (!fresh) {
+      mismatched.push({
+        field,
+        expected,
+        actual: null,
+        error: readbackError || 'get() answered nothing — the move cannot be confirmed',
+      });
+      continue;
+    }
+    const read = await readAttributeField(fresh, MOVE_FIELD_STATE[field]);
+    if (read.error !== undefined) {
+      mismatched.push({ field, expected, actual: null, error: read.error });
+      continue;
+    }
+    after[field] = read.value ?? null;
+    if (!Object.is(read.value, expected)) {
+      mismatched.push({ field, expected, actual: read.value ?? null });
+    }
+  }
+
+  const applied = Boolean(fresh) && mismatched.length === 0;
+  // Only the *kind* of the host's answer crosses the wire: the returned object
+  // is an editor primitive (method-based, possibly exotic), not JSON.
+  let returnedKind: string | null = null;
+  try {
+    returnedKind = returned == null ? null : typeof returned;
+  } catch {
+    returnedKind = 'unreadable';
+  }
+  const result = {
+    pageUuid,
+    primitiveId,
+    parentPrimitiveId,
+    key: expectedKey,
+    value: expectedValue,
+    before,
+    requested,
+    returned: returnedKind,
+    after,
+    applied,
+    mismatched,
+    ...(readErrors.length ? { readErrors } : {}),
+    ...(modifyError ? { modifyError } : {}),
+    ...(readbackError ? { readbackError } : {}),
+  };
+  if (!applied) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `attribute ${primitiveId} did not take the requested move `
+        + `(${mismatched.map((m) => `${m.field}: expected ${JSON.stringify(m.expected)}, `
+          + `read back ${JSON.stringify(m.actual)}`).join('; ')})`
+        + (modifyError ? `; modify reported ${modifyError}` : ''),
+      result,
+    );
+  }
+  return {
+    ...result,
+    ...(returned == null
+      ? {
+        note: 'modify returned undefined, but a fresh get() read back every requested field '
+          + '— the move landed anyway',
+      }
+      : {}),
+    ...(modifyError
+      ? { note: 'modify threw, but a fresh get() confirms the requested fields — not a failure' }
+      : {}),
+  };
+};
+
 /** `createNetFlag` accepts exactly these kinds. */
 const NET_FLAG_KINDS = new Set(['Power', 'Ground', 'AnalogGround', 'ProtectGround']);
 
@@ -8912,6 +9475,14 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'canvas.highlight': bind(canvasHighlight),
     'sch.netlist': bind(schNetlist),
     'sch.geometry': bind(schGeometry),
+    // 053P: the attribute namespace read as data — every ISCH_PrimitiveAttribute
+    // of a page (or of one owner), field by field. Read-only, `pageUuid`
+    // required; the namespace's createNetLabel/modify/delete are never reached.
+    'sch.list_attributes': bind(schListAttributes),
+    // 053Q: move ONE attribute's text position, after re-reading the page and
+    // proving id + parent + current key/value. Write; `pageUuid` is required and
+    // the only writable properties are x / y / rotation / alignMode.
+    'sch.move_attribute': bind(schMoveAttribute),
     // 174: the PCB twin of `sch.geometry`'s measured half — the rendered box of
     // a PCB primitive, which is what 172's silk width reads instead of guessing
     // it from the font size. Read-only: `getPrimitivesBBox` measures, it does

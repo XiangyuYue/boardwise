@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,6 +65,7 @@ __all__ = [
     "ATTACHMENT_KINDS",
     "PATCH_PIN_KIND",
     "PlanAttachment",
+    "PlanAttributeMove",
     "PlanChange",
     "PlanConnection",
     "PlanDrawBaseline",
@@ -505,6 +507,66 @@ class PlanDrawWire:
 
 
 @dataclass
+class PlanAttributeMove:
+    """One attribute's **text position**, addressed by what the plan places (053R).
+
+    The owner is never an editor id: a plan is written before the page exists, so
+    ``owner`` names either a part **this plan places** (``spec_id``) or a wire of
+    ``draw_wires`` (``wire_index``), and apply resolves that to the id the host
+    actually returned. ``role`` says which attribute of the owner moves, in the
+    caller's vocabulary rather than the host's:
+
+    * part ``reference`` — the ``Designator`` text (whose *value* is read back
+      from the page, because the host may rename a kept name mid-run);
+    * part ``value`` — the ``Name`` text, and only when the parent carries
+      **exactly one** visible, positioned one (a second candidate is refused, not
+      picked);
+    * wire ``net`` — the ``Name`` attribute whose value is the wire's net.
+
+    ``to`` is the same closed surface as `sch.move_attribute`: x / y / rotation /
+    alignMode, at least one, ``None`` for "not requested" so the serializer can
+    omit what the plan does not claim.
+
+    053U adds a second, **explicit** version rather than widening the first:
+    ``move_version`` defaults to 1, which is what a move built in code carries
+    (``1`` keeps exactly the fields above); a plan row must state
+    ``moveVersion`` explicitly and the reader does not fill it in. Only version
+    2 may carry ``ValueVisible`` on a wire's ``net`` attribute, which is how a
+    reversible Type-C pin keeps its own NET while the duplicate text is not
+    shown. Version 2
+    rows stay wire/``net``: part visibility is a different contract (532) and is
+    refused here, and hiding never clears a wire's net, deletes an ATTR or draws
+    a cross-pin wire.
+    """
+
+    owner_kind: str = "part"
+    spec_id: str = ""
+    wire_index: int = 0
+    role: str = ""
+    x: float | None = None
+    y: float | None = None
+    rotation: float | None = None
+    align_mode: int | None = None
+    #: The row's contract version. 1 is 053R's (pose only); 2 adds ``value_visible``.
+    move_version: int = 1
+    #: ``to.valueVisible`` for a version-2 wire/net row; ``None`` = not requested.
+    value_visible: bool | None = None
+
+    def to_fields(self) -> dict[str, float | int | bool]:
+        """Only the fields this row actually requests."""
+        fields: dict[str, float | int | bool] = {}
+        for name, value in (
+            ("x", self.x), ("y", self.y), ("rotation", self.rotation),
+            ("alignMode", self.align_mode),
+        ):
+            if value is not None:
+                fields[name] = value
+        if self.value_visible is not None:
+            fields["valueVisible"] = self.value_visible
+        return fields
+
+
+@dataclass
 class PlanDrawFlag:
     """One rail flag placed on a pin (a real library component, 029-d).
 
@@ -660,6 +722,12 @@ class PlanChange:
     #: that performed one without saying so would be a plan whose drawing is not
     #: what was authorised.
     draw_downgrades: list[str] = field(default_factory=list)
+    #: 053R: attribute **text** positions the plan asks for, addressed by spec id
+    #: / wire index and resolved by apply to the ids the host returned. Empty
+    #: means the plan claims none — and then `attributeMoves` is absent from the
+    #: JSON, no attribute call is made, and the document is byte-identical to the
+    #: one this build wrote before the field existed.
+    attribute_moves: list[PlanAttributeMove] = field(default_factory=list)
     #: Free-form lines about the drawing that are not postconditions: which
     #: junctions the editor will draw itself, which texts it annotates, what the
     #: compiler's own notes said.
@@ -937,6 +1005,27 @@ class ChangePlan:
                     {"pin": item.pin, "mates": list(item.mates)}
                     for item in self.change.islands
                 ],
+                # 053R: written only when the plan asks for at least one move, so
+                # a plan that asks for none keeps the exact document it had.
+                **(
+                    {
+                        "attributeMoves": [
+                            {
+                                "moveVersion": item.move_version,
+                                "owner": (
+                                    {"kind": "part", "specId": item.spec_id}
+                                    if item.owner_kind == "part"
+                                    else {"kind": "wire", "index": int(item.wire_index)}
+                                ),
+                                "role": item.role,
+                                "to": item.to_fields(),
+                            }
+                            for item in self.change.attribute_moves
+                        ]
+                    }
+                    if self.change.attribute_moves
+                    else {}
+                ),
                 "baseline": {
                     "pageUuid": self.change.draw_baseline.page_uuid,
                     "components": list(self.change.draw_baseline.components),
@@ -1811,6 +1900,7 @@ def _draw_change_from(change: dict[str, Any]) -> PlanChange:
     _draw_name_conflicts(wires, flags)
     islands = _draw_islands_from(change.get("islands"), parts)
     baseline = _draw_baseline_from(change.get("baseline"))
+    attribute_moves = _draw_attribute_moves_from(change.get("attributeMoves"), parts, wires)
     return PlanChange(
         kind=DRAW_MODULE_KIND,
         candidate=candidate,
@@ -1827,7 +1917,195 @@ def _draw_change_from(change: dict[str, Any]) -> PlanChange:
         draw_notes=_string_list(change, "notes"),
         baseline_findings=_string_list(change, "baselineFindings"),
         draw_keep_names=bool(change.get("keepNames")),
+        attribute_moves=attribute_moves,
     )
+
+
+#: The only keys an `attributeMoves` row may carry (053R).
+_ATTRIBUTE_MOVE_KEYS = frozenset({"moveVersion", "owner", "role", "to"})
+#: The only keys `to` may carry — the same closed surface as `sch.move_attribute`.
+#: Version 1 (053R) is pose only; 053U's version 2 adds `valueVisible`, and only
+#: for a wire's `net` row.
+_ATTRIBUTE_TO_KEYS = frozenset({"x", "y", "rotation", "alignMode"})
+_ATTRIBUTE_TO_KEYS_V2 = _ATTRIBUTE_TO_KEYS | {"valueVisible"}
+#: The row versions this build reads. A version it does not know is refused, not
+#: guessed at: `to`'s surface differs per version, so half-reading one would be a
+#: contract nobody stated.
+_ATTRIBUTE_MOVE_VERSIONS = frozenset({1, 2})
+#: `role` per owner kind: a part's reference/value, a wire's net.
+_ATTRIBUTE_ROLES = {"part": frozenset({"reference", "value"}), "wire": frozenset({"net"})}
+
+
+def _draw_attribute_moves_from(
+    value: Any, parts: Sequence[PlanDrawPart], wires: Sequence[PlanDrawWire]
+) -> list[PlanAttributeMove]:
+    """Read `attributeMoves` (053R) — absent means none, anything odd is refused.
+
+    The list is optional and **absent** when the plan asks for no move; that is
+    what keeps every plan written before this batch byte-identical. When it is
+    present every row is checked for the reasons the shared contract gives: the
+    owner must be a part this plan places or a wire of this plan's `draw_wires`
+    (an arbitrary `primitiveId` cannot be named), `role` must belong to that
+    owner kind, and `to` is the closed pose surface — no `key`, `value`,
+    font, colour or extra key can be smuggled in, because every row is rejected
+    by name rather than forwarded to the host. 053U adds `moveVersion: 2`, whose
+    only extra member is `to.valueVisible` and only on a wire's `net` row: a
+    second copy of a net name can be hidden without clearing the wire's net or
+    touching any part's visibility.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ChangePlanError(
+            f"change.attributeMoves must be a list of moves, got {type(value).__name__}"
+        )
+    spec_ids = {part.spec_id for part in parts}
+    moves: list[PlanAttributeMove] = []
+    for index, item in enumerate(value):
+        spot = f"change.attributeMoves[{index}]"
+        if not isinstance(item, dict):
+            raise ChangePlanError(
+                f"{spot} must be an object, got {type(item).__name__}"
+            )
+        extra = sorted(set(item) - _ATTRIBUTE_MOVE_KEYS)
+        if extra:
+            raise ChangePlanError(
+                f"{spot} carries {', '.join(extra)} — a move states moveVersion/owner/"
+                "role/to only; key/value/visibility/font/colour and any primitiveId "
+                "are not writable through this plan"
+            )
+        if "moveVersion" not in item:
+            raise ChangePlanError(
+                f"{spot} has no moveVersion — every row states its version "
+                f"({', '.join(str(number) for number in sorted(_ATTRIBUTE_MOVE_VERSIONS))}); "
+                "only a plan built in code defaults to 1"
+            )
+        version = item["moveVersion"]
+        if (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or version not in _ATTRIBUTE_MOVE_VERSIONS
+        ):
+            raise ChangePlanError(
+                f"{spot}.moveVersion is {version!r}, this build reads "
+                f"{', '.join(str(number) for number in sorted(_ATTRIBUTE_MOVE_VERSIONS))}"
+            )
+        owner = item.get("owner")
+        if not isinstance(owner, dict):
+            raise ChangePlanError(f"{spot}.owner must be an object")
+        kind = owner.get("kind")
+        role = item.get("role")
+        if kind == "part":
+            extra = sorted(set(owner) - {"kind", "specId"})
+            if extra:
+                raise ChangePlanError(
+                    f"{spot}.owner carries {', '.join(extra)} — a part owner is "
+                    "kind/specId only"
+                )
+            spec_id = owner.get("specId")
+            if not isinstance(spec_id, str) or not spec_id:
+                raise ChangePlanError(f"{spot}.owner.specId must be a non-empty string")
+            if spec_id not in spec_ids:
+                raise ChangePlanError(
+                    f"{spot}.owner.specId is {spec_id!r}, which this plan does not "
+                    f"place (places: {', '.join(sorted(spec_ids)) or 'nothing'})"
+                )
+            if role not in _ATTRIBUTE_ROLES["part"]:
+                raise ChangePlanError(
+                    f"{spot}.role is {role!r}; a part owner moves 'reference' or 'value'"
+                )
+        elif kind == "wire":
+            extra = sorted(set(owner) - {"kind", "index"})
+            if extra:
+                raise ChangePlanError(
+                    f"{spot}.owner carries {', '.join(extra)} — a wire owner is "
+                    "kind/index only"
+                )
+            wire_index = owner.get("index")
+            if isinstance(wire_index, bool) or not isinstance(wire_index, int):
+                raise ChangePlanError(f"{spot}.owner.index must be an integer")
+            if wire_index < 0 or wire_index >= len(wires):
+                raise ChangePlanError(
+                    f"{spot}.owner.index is {wire_index}, outside this plan's "
+                    f"{len(wires)} wire(s)"
+                )
+            if role not in _ATTRIBUTE_ROLES["wire"]:
+                raise ChangePlanError(
+                    f"{spot}.role is {role!r}; a wire owner moves 'net'"
+                )
+        else:
+            raise ChangePlanError(
+                f"{spot}.owner.kind is {kind!r}; a move names 'part' or 'wire'"
+            )
+        to = item.get("to")
+        allowed_to = _ATTRIBUTE_TO_KEYS_V2 if version == 2 else _ATTRIBUTE_TO_KEYS
+        if not isinstance(to, dict) or not to:
+            raise ChangePlanError(
+                f"{spot}.to must be an object with at least one of "
+                f"{', '.join(sorted(allowed_to))}"
+            )
+        extra = sorted(set(to) - allowed_to)
+        if extra:
+            if "valueVisible" in extra and version != 2:
+                raise ChangePlanError(
+                    f"{spot}.to carries valueVisible; a visibility write needs "
+                    "moveVersion 2 — version 1 is pose only (053U)"
+                )
+            raise ChangePlanError(
+                f"{spot}.to carries {', '.join(extra)}; only "
+                f"{', '.join(sorted(allowed_to))} may be written by version {version}"
+            )
+        pose: dict[str, float | int] = {}
+        visible: bool | None = None
+        for key, raw in to.items():
+            if key == "valueVisible":
+                if not isinstance(raw, bool):
+                    raise ChangePlanError(
+                        f"{spot}.to.valueVisible is {raw!r}; it must be a boolean"
+                    )
+                if kind != "wire" or role != "net":
+                    raise ChangePlanError(
+                        f"{spot}.to.valueVisible is wire/'net' only; this row is "
+                        f"{kind}/{role!r} — a part's visibility belongs to 532's "
+                        "contract, not to an attribute move"
+                    )
+                visible = raw
+                continue
+            if key == "alignMode":
+                if isinstance(raw, bool) or not isinstance(raw, int) or not 1 <= raw <= 9:
+                    raise ChangePlanError(
+                        f"{spot}.to.alignMode is {raw!r}; expected an "
+                        "ESCH_PrimitiveTextAlignMode value (1..9)"
+                    )
+                pose["align_mode"] = raw
+                continue
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise ChangePlanError(
+                    f"{spot}.to.{key} must be a finite number, got {raw!r}"
+                )
+            number = float(raw)
+            if not math.isfinite(number):
+                raise ChangePlanError(f"{spot}.to.{key} must be finite, got {raw!r}")
+            pose[key] = number
+        if kind == "part":
+            moves.append(
+                PlanAttributeMove(
+                    owner_kind="part", spec_id=spec_id, role=role,
+                    move_version=version, value_visible=visible, **pose
+                )
+            )
+        else:
+            moves.append(
+                PlanAttributeMove(
+                    owner_kind="wire",
+                    wire_index=wire_index,
+                    role=role,
+                    move_version=version,
+                    value_visible=visible,
+                    **pose,
+                )
+            )
+    return moves
 
 
 def _draw_name_conflicts(

@@ -139,7 +139,7 @@ _SEGMENT_KEYS = ("net", "points")
 _JUNCTION_KEYS = ("net", "x", "y")
 _LABEL_KEYS = (
     "net", "text", "partId", "x", "y", "rotation", "bbox", "stub",
-    "stubMin", "rowModel",
+    "stubMin", "rowModel", "textMode",
 )
 _POWER_KEYS = ("symbolRef", "symbolHash", "net", "x", "y", "rotation")
 _TEXT_KEYS = ("kind", "text", "partId", "x", "y", "rotation", "bbox")
@@ -247,6 +247,17 @@ class LayoutJunction:
     y: float = 0.0
 
 
+#: 053T/053V: the two `LayoutLabel.text_mode` values a `native-attr` page states.
+#:
+#: `TEXT_MODE_NATIVE` is the run's **one visible** name: the host prints it with
+#: the attribute API at the label box (053T). `TEXT_MODE_NATIVE_HIDDEN` is a
+#: duplicate name the plan keeps on its own conductor (so the netlist still
+#: merges by name and nothing is re-wired) but hides with a version-2
+#: ``valueVisible: false`` move (053V). Empty stays the historical reading.
+TEXT_MODE_NATIVE = "native"
+TEXT_MODE_NATIVE_HIDDEN = "native-hidden"
+
+
 @dataclass
 class LayoutLabel:
     """A net label: text that *means* a net, with the box it occupies.
@@ -283,6 +294,16 @@ class LayoutLabel:
     #: 053f: ``anchored`` (historical: the measured row above the anchor) or
     #: ``centered`` (534 r25). Only the non-default is written.
     row_model: str = "anchored"
+    #: 053T: ``native`` when this label is the **one** name a continuous run of
+    #: conductors carries under ``textPlacement: native-attr`` — the host prints
+    #: the name with its attribute API at this box, not at the wire's midpoint.
+    #: 053V adds ``native-hidden`` (:data:`TEXT_MODE_NATIVE_HIDDEN`): a second,
+    #: **disconnected** run of the same net in the same module view keeps the
+    #: label for the netlist but states the host should not show its text.
+    #: Empty is the historical reading (a label whose name rides the wire) and is
+    #: never written, so a plan compiled without the switch keeps its bytes and
+    #: its geometry digest.
+    text_mode: str = ""
 
 
 @dataclass
@@ -583,6 +604,8 @@ class LayoutPlan:
             body["stubMin"] = item.stub_min
         if item.row_model != "anchored":
             body["rowModel"] = item.row_model
+        if item.text_mode:
+            body["textMode"] = item.text_mode
         return body
 
     def geometry_json(self) -> str:
@@ -844,6 +867,7 @@ def _labels_from(value: Any) -> list[LayoutLabel]:
             row_model=(
                 _text(body.get("rowModel"), f"{spot}.rowModel") or "anchored"
             ),
+            text_mode=_text(body.get("textMode"), f"{spot}.textMode"),
         ))
     return out
 
