@@ -14,6 +14,21 @@ TS 里不重算任何审查结论（任务书 045 §1）。
 `package.json` 与 `dsh-plugin/package.json` 一起改成 `0.6.0`，不再单独维护 `0.1.x` 线。
 `0.1.3` 是 `0.1.x` 的最后一版；现有安装可继续使用，升级时按本版 tarball 重装。
 
+**DSH 内核兼容（2026-11-03 改）**：`@deepseek-ai/dsh-session` 与
+`@deepseek-ai/dsh-session-projection` 的 peer 范围从精确 `0.2.1-rc.1` 放宽到
+`>=0.2.1-rc.1 <0.3.0-0`。原因不是「想放宽」，而是 **0.2.1-rc.3 起 DSH 在启动时校验
+插件的精确版本要求**，pin 在 rc.1 的插件会被整包跳过：
+
+```text
+dsh: skipping profile bundle "boardwise-dsh": Error: Plugin boardwise-dsh@0.6.0 is
+incompatible with dsh 0.2.1-rc.3: requirements {"@deepseek-ai/dsh-session":"0.2.1-rc.1", ...}
+```
+
+表现就是「profile 里装了、`why` 也查得到，但模型没有任何 `boardwise_*` 工具」。
+放宽后 `dsh --profile <p> --dump-config` 会列出 `# == boardwise-dsh` / `tool-boardwise`。
+API 面已对照 rc.3 核过：`defineTool`、`ctx.tools.register(ToolDefinition)`、
+`appendPluginRecord` / `pluginRecordOf`、`SessionProjectionRegistry` 都在。
+
 ## 工具面
 
 | 工具 | 包装的命令 | 关键参数 | timeoutMs |

@@ -118,7 +118,7 @@ export interface BoardwiseRun {
 /** What one finished CLI call looks like. */
 export interface CliResult {
   readonly cli: BoardwiseCli
-  /** The command as it was spawned, for the model to see. */
+  /** The redacted command shown to the model; the spawned argv is unchanged. */
   readonly commandLine: string
   /** Process exit code, or `null` when the child was killed before exiting. */
   readonly code: number | null
@@ -159,7 +159,7 @@ export async function runBoardwise(
   const argv = [...cli.prefix, ...run.argv]
   const out = new BoundedCapture(STDOUT_HEAD_BYTES, STDOUT_TAIL_BYTES)
   const err = new BoundedCapture(STDERR_HEAD_BYTES, STDERR_TAIL_BYTES)
-  const commandLine = formatCommandLine(cli.command, argv)
+  const commandLine = redactSecrets(formatCommandLine(cli.command, argv))
   let timedOut = false
   let aborted = false
 

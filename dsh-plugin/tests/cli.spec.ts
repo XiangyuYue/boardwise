@@ -299,6 +299,33 @@ describe('stream hygiene', () => {
     expect(result.stderr).toContain('secret: ***')
   })
 
+  it('redacts token-shaped values from the displayed command line', async () => {
+    const cli = { command: 'C:/tools/boardwise.exe', prefix: [] as string[], via: 'env' as const }
+    installSpawn(child => {
+      child.err('E:/tmp/token=abc.epro2: not an archive\n')
+      child.finish(2)
+    })
+    const result = await runBoardwise(
+      { argv: ['checkup', '--file', 'E:/tmp/token=abc.epro2'], timeoutMs: 5_000 },
+      cli,
+    )
+    expect(result.commandLine).toContain('token=***')
+    expect(result.commandLine).not.toContain('token=abc')
+    expect(result.stderr).toContain('token=***')
+    expect(result.stderr).not.toContain('token=abc')
+  })
+
+  it('redacts secrets from a failed spawn\'s displayed command line', async () => {
+    const cli = { command: 'C:/tools/boardwise.exe', prefix: [] as string[], via: 'env' as const }
+    installSpawn(child => child.failToStart(new Error('spawn ENOENT')))
+    const pending = runBoardwise(
+      { argv: ['checkup', '--file', 'E:/tmp/token=abc.epro2'], timeoutMs: 5_000 },
+      cli,
+    )
+    await expect(pending).rejects.toThrow('token=***')
+    await expect(pending).rejects.not.toThrow('token=abc')
+  })
+
   it('redactSecrets leaves ordinary output alone', () => {
     const text = 'boardwise doctor: 4/8 项通过\n  paired connector: b8b4a348\n'
     expect(redactSecrets(text)).toBe(text)

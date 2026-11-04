@@ -52,6 +52,14 @@
   提交检查已完成：全量 9279 passed/25 skipped/2 既有环境红，connector、dsh、Rust、draw smoke 全过。
   下一步仅修 CC1 水平承载线，再三关与清页；不宣称 CH343 总目标完成。
   任务书 `tasks/543_semantic_layout.md`，不与其他算法/迁移批并行。
+- **审查线测试反馈（2026-11-04）**：544P 堵住 DSH `commandLine` 凭据泄露；
+  544 修 checkup/arch 写盘异常，545 加同目录 OS 互斥与串行 rerun 提示。主代理邻域
+  **226 passed**；connector **576 passed** + typecheck；DSH **129 passed / 1 skipped** +
+  typecheck/build；Rust **111 passed / 4 ignored** + fmt/clippy；文档/同步哨兵 **57 passed**。
+  全量两轮均 **9301 passed**：首轮 25 skipped / 1 个 MSYS `0xC0000022`，次轮 23 skipped /
+  3 个过滤 `sh` 后的钩链环境失败。**没有业务回归红，但也不记为全量全绿**；按纪律不跑第三轮。
+  在线 C 组 9 条与真实 500+ 器件样本仍未覆盖。任务书 `tasks/544_checkup_output_errors.md`、
+  `tasks/545_checkup_output_lock.md`。
 
 ## 038Q 原生 CBB（独立方向，2026-11-03 起）
 

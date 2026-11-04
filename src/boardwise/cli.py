@@ -2602,6 +2602,30 @@ def _write_checkup_report(out_dir: Path, report: dict) -> Path:
     return path
 
 
+def _checkup_output_error(out_dir: Path, exc: OSError) -> int:
+    """544 T-E02: the report could not be written — say it, don't traceback.
+
+    Called **only** from `_cmd_checkup`'s own write block, so the triage / finalize
+    consumers of :func:`_write_checkup_report` keep raising and keep their contract:
+    this is a sentence for the one command whose whole product is those files, not a
+    global mapping of `OSError` to an exit code.
+
+    The failure can land on **any** of the five writes, so the sentence says only
+    what is true of all of them: this run is not a complete delivery, and whatever
+    already landed stays. Naming one file — "没有产出 report.json" — would be a lie
+    whenever `report.json` itself succeeded and `board-report.md` did not.
+    """
+    target = getattr(exc, "filename", None) or str(out_dir)
+    print(
+        f"boardwise checkup: 报告写不进 {out_dir}（{exc.strerror or exc}：{target}）——"
+        "这个 --out 目录现在不可写（权限 / 只读 / 被别的进程占着），或磁盘已满；"
+        "已经写出的文件留在盘上，本次审查产物未完整写出，不能当作完整交付；"
+        "修好它的权限或换一个可写目录再跑",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def _write_architecture(out_dir: Path, markdown: str) -> Path:
     """Write ``architecture.md`` beside the report (044 M1).
 
@@ -6499,7 +6523,286 @@ def _cmd_review_read(args: argparse.Namespace) -> int:
     return REVIEW_READ_OK
 
 
+# --- 545: one `checkup` per `--out`, and what a rerun is allowed to promise ---
+
+#: The lock carrier's name inside `--out`. Hidden, because it is not a report:
+#: it is the body of the OS lock (byte 0) plus the holder's self-report (byte 1+),
+#: and it is meant to stay on disk between runs — see :class:`_CheckupOutLock`.
+_CHECKUP_LOCK_FILE = ".checkup.lock"
+
+
+def _checkup_out_preflight(args: argparse.Namespace) -> tuple[int | None, Path]:
+    """The two `--out` refusals, before anything is read or written.
+
+    545 lifted these out of `_cmd_checkup`'s body **verbatim** (544 T-E03's
+    messages are unchanged) because the same pair now has to run before the
+    output lock is taken: an invocation the command refuses must not create a
+    lock carrier, and an `--out` that is a regular file must never be treated as
+    an output location at all. Both the wrapper and the body call it, so the two
+    cannot drift and `_cmd_checkup_run` stays safe on its own.
+    """
+    if args.file and (args.project or args.instance):
+        print(
+            "boardwise checkup: --file is the offline fallback and takes no "
+            "--project/--instance (give one or the other)",
+            file=sys.stderr,
+        )
+        return 2, Path(args.out)
+
+    out_dir = Path(args.out)
+    # 544 T-E03: `--out` is the **directory** every artifact of this command is
+    # written into, and a regular file there is not an output location at all —
+    # before this check the run died on `mkdir` inside `_write_checkup_report`
+    # with a traceback, after reading sidecars out of a path that is not a
+    # directory. Refused here, before a single byte is read or written, so the
+    # file the caller named keeps its bytes and no half `report.json` can appear.
+    if out_dir.exists() and not out_dir.is_dir():
+        print(
+            f"boardwise checkup: --out {out_dir} 是个文件，不是目录——这里要的是输出目录"
+            "（report.json / report.md 等都写进它）；换一个目录，或先把该文件改名，"
+            "本次一个字节都没写",
+            file=sys.stderr,
+        )
+        return 2, out_dir
+    return None, out_dir
+
+
+class CheckupOutLockBusy(RuntimeError):
+    """Another process holds this `--out`; ``holder`` is its own self-report."""
+
+    def __init__(self, out_dir: Path, holder: str) -> None:
+        super().__init__(f"{out_dir} 正被另一个 checkup 使用")
+        self.out_dir = out_dir
+        self.holder = holder
+
+
+class _CheckupOutLock:
+    """A held lock: the OS lock lives as long as ``handle`` is open."""
+
+    def __init__(self, carrier: Path, handle, holder: str) -> None:  # noqa: ANN001
+        self.carrier = carrier
+        self._handle = handle
+        self.holder = holder
+
+    def release(self) -> None:
+        if self._handle is None:
+            return
+        handle, self._handle = self._handle, None
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        finally:
+            # Closing the handle releases the lock on both platforms anyway; the
+            # explicit unlock above is what makes a *held* handle's state testable.
+            handle.close()
+
+
+def _checkup_lock_carrier(out_dir: Path) -> Path:
+    """``<out>/.checkup.lock`` — the lock's body, one per output directory.
+
+    Keyed by the directory it sits in, so `out`, `out/` and `out/../out` are the
+    same lock by construction (the filesystem resolves them), and two different
+    `--out`s never block each other.
+    """
+    return out_dir / _CHECKUP_LOCK_FILE
+
+
+#: The errnos that mean "someone else holds it", and **only** those: anything
+#: else (`ENOTSUP`, `EIO`, `EBADF`, a deadlock-free failure of the call itself)
+#: is a broken lock, not a race, and must reach the caller as an error.
+def _checkup_lock_contention_errnos() -> frozenset[int]:
+    import errno
+
+    names = ("EACCES", "EAGAIN", "EWOULDBLOCK", "EDEADLK", "EDEADLOCK")
+    return frozenset(getattr(errno, name) for name in names if hasattr(errno, name))
+
+
+def _checkup_lock_try(handle) -> bool:  # noqa: ANN001 — a binary file object
+    """Exclusive, non-blocking OS lock on **byte 0** of ``handle``.
+
+    Byte 0 only: Windows range locks are mandatory, so everything the holder
+    wants a loser to be able to read lives from byte 1 on
+    (:func:`_checkup_lock_holder`).
+
+    Returns ``False`` for a **competition** (``EACCES``/``EAGAIN``/``EWOULDBLOCK``/
+    ``EDEADLK`` — measured on Windows: ``msvcrt.locking`` reports ``EACCES``) and
+    re-raises every other ``OSError``: reporting ``ENOTSUP``/``EIO`` as "another
+    checkup holds this directory" would be a lie, and swallowing it would be the
+    fail-open this batch is forbidden from having. The caller (:func:`_cmd_checkup`)
+    turns the two cases into two different refusals.
+    """
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            if exc.errno in _checkup_lock_contention_errnos():
+                return False
+            raise
+        return True
+    import fcntl
+
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno in _checkup_lock_contention_errnos():
+            return False
+        raise
+    return True
+
+
+def _checkup_lock_holder(handle) -> str:  # noqa: ANN001
+    """The holder's self-report, read from byte 1 — best effort, never fatal."""
+    try:
+        handle.seek(1)
+        raw = handle.read(4096)
+    except OSError:
+        return ""
+    return raw.decode("utf-8", "replace").split("\n")[0].strip()
+
+
+def _checkup_lock_acquire(out_dir: Path) -> _CheckupOutLock:
+    """Take the one lock for ``out_dir``, or raise :class:`CheckupOutLockBusy`.
+
+    The carrier is created if absent and **left on disk** when the lock is
+    released: it is the lock's body, not the lock. Ownership is the OS lock on
+    byte 0 (`msvcrt` on Windows, `fcntl` elsewhere), so a process that dies —
+    crash, Ctrl-C, kill — has that lock released by the kernel and the next run
+    acquires the same carrier. That is why this is deliberately *not* a
+    "file exists = someone is running" mutex, which a crash would turn into a
+    permanent refusal.
+    """
+    carrier = _checkup_lock_carrier(out_dir)
+    carrier.parent.mkdir(parents=True, exist_ok=True)
+    # Unbuffered: the loser must read byte 1 with one system call, never a
+    # buffered block that starts at the locked byte 0.
+    try:
+        handle = open(carrier, "r+b", buffering=0)
+    except FileNotFoundError:
+        handle = open(carrier, "w+b", buffering=0)
+    try:
+        if handle.seek(0, os.SEEK_END) == 0:
+            handle.write(b"0")
+        if not _checkup_lock_try(handle):
+            raise CheckupOutLockBusy(out_dir, _checkup_lock_holder(handle))
+        holder = f"pid={os.getpid()} since={int(time.time() * 1000)}"
+        # Overwrites the previous holder's note in place, from byte 1: the byte
+        # the lock sits on stays untouched and the newline keeps a stale, longer
+        # note's tail out of the reading side.
+        handle.seek(1)
+        handle.write((holder + "\n").encode("utf-8"))
+        return _CheckupOutLock(carrier, handle, holder)
+    except BaseException:
+        handle.close()
+        raise
+
+
+def _checkup_report_stamp(out_dir: Path) -> tuple[int, int] | None:
+    """``(mtime_ns, size)`` of the previous ``report.json``, or None."""
+    try:
+        info = (out_dir / "report.json").stat()
+    except OSError:
+        return None
+    return (info.st_mtime_ns, info.st_size)
+
+
+def _checkup_lock_busy_sentence(busy: CheckupOutLockBusy) -> str:
+    """The refusal for a second concurrent run — what stopped, and what to do."""
+    holder = f"（占用者自报：{busy.holder}）" if busy.holder else ""
+    return (
+        f"boardwise checkup: --out {busy.out_dir} 正被另一个 boardwise checkup 使用{holder}"
+        "——同一个输出目录同时只允许一个 checkup 运行，后到者在这里就停下："
+        "没有读模型、没有连 daemon、没有写任何报告文件；等那一轮跑完再用同一个 --out 重跑"
+        "（进程退出即释放锁，锁文件留在原地也不构成占用），或换一个 --out"
+    )
+
+
+def _checkup_lock_failure_sentence(out_dir: Path, exc: OSError) -> str:
+    """The lock could not be built at all — refuse, and say it is not a race."""
+    return (
+        "boardwise checkup: 无法建立同目录互斥保护（"
+        f"{type(exc).__name__}: {exc}；载体 {_checkup_lock_carrier(out_dir)}）——"
+        f"没法确认另一个 checkup 是否正在写 {out_dir}，所以本次未启动审查："
+        "没有读模型、没有连 daemon、没有写任何报告文件；"
+        "确认该目录与锁文件的权限 / 占用 / 磁盘后重跑，或换一个 --out"
+    )
+
+
+def _checkup_rerun_sentence(out_dir: Path) -> str:
+    """What a rerun into a directory that already has a report actually does."""
+    return (
+        f"  rerun: {out_dir / 'report.json'} 是上一轮留下的——本次已重算并覆盖机器生成物"
+        "（report.json / report.md / board-report.md，以及 review-summary.md 的机器段）；"
+        "人工内容按既有合并规则处理，不是原样全留：review-summary.md 的「分析」「建议」"
+        "与 1/3/4 节按 key 保留，warning-triage.json 的已分诊判定并入，"
+        "design-intent.md 已填时只读合并（有设计意图合同时以合同为源）；"
+        "上面 review-summary / design-intent 两行写的是本轮实际动作"
+    )
+
+
 def _cmd_checkup(args: argparse.Namespace) -> int:
+    """``boardwise checkup``, wrapped in 545's one-run-per-``--out`` rule.
+
+    Everything the command *does* — reading a model, asking the daemon, writing
+    five reports — stays in :func:`_cmd_checkup_run`, unindented; this wrapper
+    only decides whether the invocation may start, and what a rerun may say.
+
+    * Two invocations naming the same ``--out`` are serialised: the second is
+      refused with exit 2 **before** it reads a model or writes a report, so
+      neither can half-overwrite the other's ``report.json`` /
+      ``review-summary.md``. The lock carrier itself
+      (``<out>/.checkup.lock``) is created/opened — that is all the directory
+      sees before the refusal.
+    * If the lock cannot be **built** (carrier unwritable, the lock call fails),
+      the run is refused for the same reason it is refused when the directory is
+      held: no mutual exclusion, no review. This wrapper never runs the body
+      unprotected.
+    * A sequential rerun is unchanged and stays legal: machine artifacts are
+      regenerated, human content is merged by the existing rules — and when the
+      previous ``report.json`` was actually replaced, the console says so
+      (:func:`_checkup_rerun_sentence`) instead of promising "nothing changed".
+    * The lock is released on **every** return path, exception included: the
+      ``try/finally`` around the body is what keeps 544's write-error exit from
+      leaving the directory refused for the next run.
+    * The refusal pair runs first: no lock carrier for arguments the command
+      already refuses (``--file`` + ``--project``, ``--out`` a regular file).
+    """
+    refusal, out_dir = _checkup_out_preflight(args)
+    if refusal is not None:
+        return refusal
+    previous = _checkup_report_stamp(out_dir)
+    try:
+        lock = _checkup_lock_acquire(out_dir)
+    except CheckupOutLockBusy as busy:
+        print(_checkup_lock_busy_sentence(busy), file=sys.stderr)
+        return 2
+    except OSError as exc:  # noqa: BLE001 — the carrier, not the review
+        # Fail **closed**: mutual exclusion is this batch's contract, so a lock
+        # that cannot be built is a refusal, not permission to run unprotected.
+        print(_checkup_lock_failure_sentence(out_dir, exc), file=sys.stderr)
+        return 2
+    try:
+        exit_code = _cmd_checkup_run(args)
+    finally:
+        lock.release()
+    current = _checkup_report_stamp(out_dir)
+    if exit_code != 2 and previous is not None and current is not None and current != previous:
+        print(_checkup_rerun_sentence(out_dir))
+    return exit_code
+
+
+def _cmd_checkup_run(args: argparse.Namespace) -> int:
     """``boardwise checkup`` — one command, an honest tier ladder, an exit code.
 
     Exit codes follow ``review``'s vocabulary:
@@ -6523,15 +6826,14 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     section at `{checked: false, reason}` and adds no counts, so exit 0 can never
     be read as "the editor's checks passed" when they never ran.
     """
-    if args.file and (args.project or args.instance):
-        print(
-            "boardwise checkup: --file is the offline fallback and takes no "
-            "--project/--instance (give one or the other)",
-            file=sys.stderr,
-        )
-        return 2
-
-    out_dir = Path(args.out)
+    # 545: the two refusals live in `_checkup_out_preflight` because the wrapper
+    # runs the identical pair **before** taking the output lock (a refused
+    # invocation must leave no lock carrier behind). They are still run here, in
+    # the same order with the same messages 544 gave them, so this function
+    # remains safe when called on its own.
+    refusal, out_dir = _checkup_out_preflight(args)
+    if refusal is not None:
+        return refusal
     notes: list[str] = []
     attempts: list[dict] = []
     parse_stats = ParseStats()
@@ -7529,30 +7831,38 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             "—— 本次不打印它的结论行；report.json 的其余读数照出",
             file=sys.stderr,
         )
-    report_path = _write_checkup_report(out_dir, report)
-    report_md_path = _write_checkup_markdown(out_dir, report)
-    # The summary is written after report/report.md but from the text the plan
-    # decided *before* they landed — one derivation, and the old delivery it was
-    # merged against is the one that was on disk at that moment.
-    if summary_text is not None:
-        # One line on purpose: `tests/test_069d_doc_claims.py` pins the call's
-        # spelling (`_write_review_summary(out_dir`), the machine-verifiable half
-        # of the SOP's "the file this command writes" claim.
-        review_summary_path = _write_review_summary(out_dir, report, chains, text=summary_text)
-        print(f"  review-summary: {review_summary_path}（骨架 {len(chains)} 条，收尾必须补全）")
-    else:
-        assert summary_issue is not None, "plan returned neither text nor a reason"
-        print(
-            f"  review-summary: {out_dir / REVIEW_SUMMARY_FILE}"
-            f"（未更新，旧文件保留：{summary_issue['code']}）"
+    # 544 T-E02: these five writes are this command's **product**, and a directory
+    # that refuses them is "the input cannot be used", not a crash the caller has to
+    # read a traceback to understand. The `try` is deliberately this block and not
+    # `_write_checkup_report`: `triage` / `finalize` write the same file and keep
+    # raising, because their contract is "mutate a report that already exists".
+    try:
+        report_path = _write_checkup_report(out_dir, report)
+        report_md_path = _write_checkup_markdown(out_dir, report)
+        # The summary is written after report/report.md but from the text the plan
+        # decided *before* they landed — one derivation, and the old delivery it was
+        # merged against is the one that was on disk at that moment.
+        if summary_text is not None:
+            # One line on purpose: `tests/test_069d_doc_claims.py` pins the call's
+            # spelling (`_write_review_summary(out_dir`), the machine-verifiable half
+            # of the SOP's "the file this command writes" claim.
+            review_summary_path = _write_review_summary(out_dir, report, chains, text=summary_text)
+            print(f"  review-summary: {review_summary_path}（骨架 {len(chains)} 条，收尾必须补全）")
+        else:
+            assert summary_issue is not None, "plan returned neither text nor a reason"
+            print(
+                f"  review-summary: {out_dir / REVIEW_SUMMARY_FILE}"
+                f"（未更新，旧文件保留：{summary_issue['code']}）"
+            )
+        board_report_path = _write_board_report(out_dir, report)
+        print(f"  board-report: {board_report_path}（{(board_report.get('verdict') or {}).get('line', '')}）")
+        architecture_path = (
+            _write_architecture(out_dir, architecture.markdown)
+            if architecture is not None
+            else None
         )
-    board_report_path = _write_board_report(out_dir, report)
-    print(f"  board-report: {board_report_path}（{(board_report.get('verdict') or {}).get('line', '')}）")
-    architecture_path = (
-        _write_architecture(out_dir, architecture.markdown)
-        if architecture is not None
-        else None
-    )
+    except OSError as exc:
+        return _checkup_output_error(out_dir, exc)
     # 090 A1: with a contract in hand the Markdown is its **view** (JSON is the
     # source) and is rewritten every run; without one, 053 §2.2's create-once
     # template is what happens — `_write_design_intent` returns None when an
@@ -19536,6 +19846,27 @@ def _architecture_shelf_evidence(args: argparse.Namespace):
     return library, note
 
 
+def _arch_output_error(out_path: Path, exc: OSError) -> int:
+    """544 T-A06: the skeleton could not be written — one sentence, exit 2.
+
+    Called **only** from `_cmd_arch`'s own output boundary (the parent `mkdir` and
+    the skeleton / `design-intent.md` writes), so `_regenerate_intent`'s existing
+    tolerance and every other command keep raising as before.
+
+    Whatever landed before the failure stays on disk, so the sentence claims only
+    that: this run has no complete skeleton — never "nothing was written".
+    """
+    target = getattr(exc, "filename", None) or str(out_path)
+    print(
+        f"boardwise arch: 骨架写不进 {out_path}（{exc.strerror or exc}：{target}）——"
+        "这个 --out 现在写不了（权限 / 只读 / 被占用），或它所在的目录建不出来；"
+        "已经写出的文件留在盘上，本次骨架没有完整产出；"
+        "修好权限或换一个文件路径再跑",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def _cmd_arch(args: argparse.Namespace) -> int:
     """``boardwise arch`` — the architecture skeleton, offline and deterministic.
 
@@ -19573,8 +19904,23 @@ def _cmd_arch(args: argparse.Namespace) -> int:
         print(f"note: {note}", file=sys.stderr)
     notes: list[str] = []
     out_path = Path(args.out) if args.out else None
+    # 544 T-A06: `--out` names a **file** here (the skeleton itself, with
+    # `design-intent.md` beside it), so a directory is a usage error. Without this,
+    # `write_text` below raised through `main` — after the parent `mkdir` had run and
+    # after the shelf/intent readers had been started for nothing.
+    if out_path is not None and out_path.is_dir():
+        print(
+            f"boardwise arch: --out {out_path} 是个目录——这里要的是文件路径"
+            "（骨架 Markdown 写到这个文件，design-intent.md 写到它旁边）；"
+            f"给一个文件名，例如 {out_path / 'architecture.md'}，本次一个字节都没写",
+            file=sys.stderr,
+        )
+        return 2
     if out_path is not None:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return _arch_output_error(out_path, exc)
     contract_path = (
         _resolve_cli_path(args.intent) if getattr(args, "intent", "") else None
     )
@@ -19596,14 +19942,20 @@ def _cmd_arch(args: argparse.Namespace) -> int:
     for item in notes:
         print(f"note: {item}", file=sys.stderr)
     if out_path is not None:
-        out_path.write_text(result.markdown, encoding="utf-8")
-        if md_view:
-            # The contract is the source, so this file is a view and is rewritten
-            # every run (the no-contract path below keeps 053 §2.2's create-once).
-            _write_design_intent_view(out_path.parent, md_view)
-            intent_path = None
-        else:
-            intent_path = _write_design_intent(out_path.parent, result.intent_markdown)
+        # 544 T-A06: the sibling of checkup's write block — a `--out` that cannot
+        # receive the skeleton is "the input cannot be used", not a crash. Scoped to
+        # these three writes: `_regenerate_intent` above keeps its own contract.
+        try:
+            out_path.write_text(result.markdown, encoding="utf-8")
+            if md_view:
+                # The contract is the source, so this file is a view and is rewritten
+                # every run (the no-contract path below keeps 053 §2.2's create-once).
+                _write_design_intent_view(out_path.parent, md_view)
+                intent_path = None
+            else:
+                intent_path = _write_design_intent(out_path.parent, result.intent_markdown)
+        except OSError as exc:
+            return _arch_output_error(out_path, exc)
         print(f"architecture: {out_path}")
         print(
             f"  {len(result.section['boards'])} 板 / {totals['rails']} 轨 / "

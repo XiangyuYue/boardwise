@@ -89,7 +89,7 @@ export async function runBoardwise(run, cli = resolveCli()) {
     const argv = [...cli.prefix, ...run.argv];
     const out = new BoundedCapture(STDOUT_HEAD_BYTES, STDOUT_TAIL_BYTES);
     const err = new BoundedCapture(STDERR_HEAD_BYTES, STDERR_TAIL_BYTES);
-    const commandLine = formatCommandLine(cli.command, argv);
+    const commandLine = redactSecrets(formatCommandLine(cli.command, argv));
     let timedOut = false;
     let aborted = false;
     const finish = (code, signal) => ({

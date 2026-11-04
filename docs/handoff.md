@@ -84,9 +84,14 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   `{schema:"boardwise.footprint-declared/1",footprint,libraryId}`：`value` 先 trim，只有
   命中且该标题非空才返回标题 + 原始库 id，空标题/未命中都保留 raw text、`libraryId` 为空；
   普通名称 trim 后不解析。
+- **2026-11-04 测试反馈**：544P 已堵住 DSH `commandLine` 正常返回与
+  spawn 异常的凭据形状泄露；544 已把 checkup/arch 写盘失败统一为局部 exit 2 人话；545 已为
+  同一 `--out` 加 OS 互斥（锁失败关闭）与串行 `rerun:` 提示。专项 8+13 条、主代理邻域
+  213/226 passed；DSH 129 passed / 1 skipped。任务书 `tasks/544_checkup_output_errors.md`、
+  `tasks/545_checkup_output_lock.md`，证据 `.tmp_544/`、`.tmp_545/`。
 - **审查线下一步**：eprj3 在线容器、真实 NO_CONNECT、`down` 与 envelope marker（信封字段
   缺省形态）、缺省 `yAxisDirection`、旋转几何样本；多板 + 库组合另需样本。语义网表函数层
-  暂缓，等专门排期。
+  暂缓，等专门排期。官方格式一致性差分与 041 排在本轮实测缺陷之后。
 - **原生 CBB 已排为独立方向（038Q，11-03 调研/任务书完成）**：仓库当前**没有**原生 CBB
   实现；`core/blocks.py` 的 `BlockSymbol` 是绘图模板域，不是宿主原生块。type 17 只是线索，
   **待证实**，不得写成事实。**需真实 CBB 样本**才开阶段 A（离线只读），先读后写；
