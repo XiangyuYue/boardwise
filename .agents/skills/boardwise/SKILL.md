@@ -6,10 +6,10 @@ whenToUse: 用户提到立创 EDA / EasyEDA / 原理图审查 / 网表 / boardwi
 
 # boardwise（立创 EDA Pro 的 AI harness）
 
-> **本文件是该项目的唯一权威 skill。** 用户级目录里那份 `easyeda-agent` skill
+> **本文件是该项目通用 SOP 的唯一权威 skill**（绘制线专项裁决另见 `boardwise-draw` skill，见 §3）。用户级目录里那份 `easyeda-agent` skill
 > （`~/.claude/skills/easyeda-agent/`，作者 zhoushoujianwork，v1.4.8）属于**另一个项目**：
 > 它的 CLI 叫 `easyeda`、门禁叫 `easyeda update --check`、connector 版本号体系也不同。
-> 本仓库一律只用 `boardwise` CLI；两处说法冲突时以本文件为准。
+> 本仓库一律只用 `boardwise` CLI；通用纪律有分歧时以本文件为准，绘制裁决以加载的 `boardwise-draw` skill 为准。
 > 事实来源：本仓库 `docs/`、`tasks/`、`outputs/`（真机校准宿主：立创 EDA Pro **3.2.186**）。
 
 ## 1. 何时加载 · 先做什么
@@ -112,9 +112,9 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
   → 回读 → 保存 → 出图）；画完一页先过 **`boardwise draw lint --page …`**（机器闸：
   压线/重叠/出界/同名导线段，P1 的 48E/20W/21I 基线就是它量的）再交付；
   **`boardwise draw propose`** 把意图合同提成 PresentationSpec 草稿（链的入口）。
-  SOP（实测符号库工序、apply 执行序、支路顺序三来源、旗标画法）全在 `docs/draw.md`。
-  **铁律**：`--profiles` 必须先在真机上量（编辑器不给库符号几何读口）；拿没量过的
-  profile 去落图，引脚回读必然点名不符。
+  SOP（实测符号库工序、apply 执行序、支路顺序三来源、旗标画法）全在 `docs/draw.md`；
+  分岛/成对支路/两道闸的裁决规则在 `boardwise-draw` skill（绘制线任务必须加载，派单入口 `tasks/draw-line.md`）。
+  **铁律**：`--profiles` 必须先在真机上量（编辑器不给库符号几何读口）；拿没量过的 profile 去落图，引脚回读必然点名不符。
 - **改图**：edit plan/apply（预览 → 授权 → 回读 → 复查），SOP 见 `docs/review-sop.md`。
 - **PCB 审查**：DRC 闭环已出货（`drc.ruleset` 段 + 规则集元审查
   `blocklib/drc_ruleset_reference.json`）；按模块/器件的后续路线在

@@ -46,12 +46,29 @@
   分批；`R4 stub` 仍冻结，未经岳裁不复活。算法与迁移不同批，shared/全量/真机串行。
 - **非阻塞**：R6 的 `L2b`/`L2c`；`529` 去耦分类空白带；`527C2` 跨视图 note 按几何分两句。
 - **存量打磨**：岳跑测试用例 → 反馈 → 修复，循环。
-- **543 构造式布局（2026-11-03 暂停）**：agent 负责语义分岛，解释器负责几何。
-  543A–543F-2 已在工作树完成服务关系、30 去耦、通道/方向、同址拒绝和最终 ChangePlan
-  页框保护；P31 lint 0E/0W/0I、逐脚 58/58，但 CC1 竖排未验收，实验页未清理。
-  提交检查已完成：全量 9279 passed/25 skipped/2 既有环境红，connector、dsh、Rust、draw smoke 全过。
-  下一步仅修 CC1 水平承载线，再三关与清页；不宣称 CH343 总目标完成。
-  任务书 `tasks/543_semantic_layout.md`，不与其他算法/迁移批并行。
+- **543J 并联去耦双端共旗返修（2026-11-05 工作树）**：岳发现 P36 的 +5V 共旗而
+  GND 不共旗；根因是所有 branch 的 other_net 被写死 `SHARE_ALONE`，未进入距离判断。
+  现仅同一 owner/shared_net/other_net 的并联支路开放回流端共簇，CC 等异信号端仍独立。
+  新页 **P37=`6087631c7d711217`**：C5/C6 的 GND 合法绕行距离 90≤100，共一面旗；
+  19 旗、lint 0E/0W/0I、网表分区与几何逐脚均 55/55+3 NC、逐岛视觉通过。旧 P36 已删，
+  Board2 仅 P1；DRC 仅规格 NC 与库属性 WARN。聚焦 **43 passed**，两处变异均先红后
+  字节还原。首轮全量另抓到一个 native 哈希合同钉；对照证明非 native 两页不变，
+  合同测试 **21 passed**、主代理原失败用例复跑通过。最终全量 **9390 passed /
+  25 skipped / 2 既有环境红**；connector 576、dsh 129+1、Rust 111+4、draw smoke
+  与 doc-claims 39 均过。证据 `evidence/543j/`。不做 git 写，持久化未重开验证，
+  第二拓扑未做。
+- **543K/L 成对姿态、文字与 D± 等长（2026-11-05 工作树）**：岳指出 P37 的 USB
+  电阻竖放、B6/B7=60/55。现信号型成对二端支路横向且 shared pin 朝宿主，成对文字
+  联合选同侧；两网 localLabelObligation 按几何配对、共同长度同时验两脚。新页
+  **P38=`0ec4dc022ef38563`**：R7/R8 横向且文字都在左，CC 各130直连，D± 为
+  **40/40、60/60、40/40**；C9/C10 共地、R7/R8 独立地旗，USB 去耦竖直和 CH343
+  横向未回退。19 旗、lint 0E/0W/0I、两种逐脚均55/55+3 NC、逐岛视觉通过；旧 P37
+  已删，Board2 仅 P1；DRC 仅规格 NC 与库属性 WARN。子代理聚焦 29+30、主代理
+  8+10、两处主代理变异均先红后字节还原。543M 首轮全量暴露 auto/V45 兼容回归，
+  已补 `stub=straight` 门；auto 与 V45 恢复，P38 重编译逐字节不变。子代理聚焦71、
+  主代理35、auto 门独立变异先红后还原。最终全量 **9496 passed / 25 skipped /
+  2 既有环境红**；connector 576、dsh 129+1、Rust 111+4、draw smoke 与 doc-claims 39
+  均过，证据 `evidence/543kl/`。不做 git 写，持久化未重开验证，第二拓扑未做。
 - **审查线测试反馈（2026-11-04）**：544P 堵住 DSH `commandLine` 凭据泄露；
   544 修 checkup/arch 写盘异常，545 加同目录 OS 互斥与串行 rerun 提示。主代理邻域
   **226 passed**；connector **576 passed** + typecheck；DSH **129 passed / 1 skipped** +

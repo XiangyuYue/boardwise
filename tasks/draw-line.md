@@ -2,6 +2,12 @@
 
 > 这是 draw 线的任务路由。画图交付仍受 `AGENTS.md` 的三关、
 > `docs/schematic-style-spec.md` 与画法宪法约束；解耦不改变任何算法验收锚。
+>
+> **开工前必须加载 `boardwise-draw` skill**
+> （`.agents/skills/boardwise-draw/SKILL.md`；`.kimi-code/skills/boardwise-draw/SKILL.md`
+> 是它的逐字节副本）。分岛/合岛的提交条件、成对支路一致性、机器闸与视觉闸互不替代
+> 的裁决都以它为准；漏加载等于没有验收口径。通用 SOP、R1–R3 与真机纪律仍以
+> `boardwise` skill 为唯一权威。
 
 ## 1. 业务边界
 

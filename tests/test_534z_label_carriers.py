@@ -289,39 +289,32 @@ def test_the_historical_label_box_path_is_unchanged():
 
 
 def test_the_move_target_the_gate_and_the_stub_read_one_box(circuit, profiles):
+    """The one position the three readers share is now refused when it is off-carrier.
+
+    543H-6: this page reserves `CTS`'s row 58 units out of a **10-unit** stub
+    (`(205, 730) -> (215, 730)`, with `C4`'s body 6 units further on), so the row
+    cannot be put on the conductor it is supposed to name. The landing pass now
+    says that by name instead of writing the reservation and calling it a move
+    (`drawapply._native_stub_row`'s band rule). What this test still pins is the
+    half that was true: the **page** layer's gate accepts the box (one straight,
+    axis-aligned run reaches it), so the disagreement is the plan layer's to
+    catch — and it is caught with the measured numbers, not a silent `ok`.
+    """
     result = _compile(V46, circuit, profiles)
     assert result.pages, [f.detail[:200] for f in result.failures]
     plan = result.pages[0].plan
     checked = readability._profile_map(profiles)
     placed = readability._placed_parts(plan, checked)
     lcsc = {part.id: (part.lcsc or "C1") for part in circuit.parts}
-    built = drawapply.module_plan(
-        plan, circuit, PresentationSpec.load(V46), profiles,
-        lcsc_by_part=lcsc, label_stubs=True,
-    )
-    moves = {
-        (round(move.x, 6), round(move.y, 6))
-        for move in built.change.attribute_moves
-        if move.role == "net" and move.move_version != 2
-    }
-    rows = {
-        tuple(round(float(value), 6) for value in box)
-        for box in readability._native_label_rows(plan).values()
-    }
-    for label in plan.labels:
-        if label.text_mode != TEXT_MODE_NATIVE or not label.net:
-            continue
-        if any(symbol.net == label.net for symbol in plan.power_symbols):
-            continue
-        box = tuple(round(float(value), 6) for value in label.bbox)
-        if box not in rows:
-            # A label whose anchor is on no named run has no carrier row to print
-            # (053T/053X: the module's own name inside its island). Nothing to
-            # compare against — the gate has already judged its carrier above.
-            continue
-        centre = (round((box[0] + box[2]) / 2.0, 6), round((box[1] + box[3]) / 2.0, 6))
-        assert centre in moves, (label.net, centre)
-    assert rows, "the accepted page lost every native carrier row"
+    with pytest.raises(drawapply.DrawPlanError) as refused:
+        drawapply.module_plan(
+            plan, circuit, PresentationSpec.load(V46), profiles,
+            lcsc_by_part=lcsc, label_stubs=True,
+        )
+    message = str(refused.value)
+    assert "net CTS" in message
+    assert "no seat on that stub is legal" in message
+    assert "band a name may overhang" in message
     assert readability._check_native_label_carriers(plan, placed, checked) == []
 
 

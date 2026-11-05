@@ -261,7 +261,16 @@ def test_uart_names_are_horizontal_and_do_not_overlap():
             )
 
 
-def test_every_net_prints_once_per_module_view():
+def test_every_net_prints_once_per_continuous_run():
+    """543I contract upgrade: a net is not a module view.
+
+    543D pinned "one visible name per net per module", and the withdrawn P32
+    showed the cost: the USB receptacle's reversible `D+`/`D-` have two
+    non-continuous runs, so suppressing the second name left a 60/55-unit wire
+    with no name at all. Under `native-attr` + `serviceLayout` the rule is **one
+    name per continuous run**: a run never prints twice, and a run is never left
+    unnamed.
+    """
     page = _page()
     groups: dict[tuple[str, str], list] = {}
     for label in page.plan.labels:
@@ -270,20 +279,22 @@ def test_every_net_prints_once_per_module_view():
         )
     for (module, net), group in groups.items():
         printed = [label for label in group if _visible(label)]
-        assert len(printed) == 1, (
-            f"{module}/{net} prints {len(printed)} names, expected one: "
-            f"{[label.bbox for label in group]}"
+        assert printed, f"{module}/{net} prints no name at all"
+        anchors = {(round(label.x, 6), round(label.y, 6)) for label in printed}
+        assert len(anchors) == len(printed), (
+            f"{module}/{net}: two visible names on one anchor"
         )
         assert len(group) - len(printed) == sum(
             1 for label in group if not _visible(label)
         )
-    # The four reversible Type-C pins keep their own carrier wires: one visible
-    # name per net per module does not delete the runs that carry the net.
+    # The four reversible Type-C pins keep their own carrier wires **and their
+    # own names**: A6/B6 and A7/B7 are separate runs, so suppressing either
+    # would leave a bare wire (P32's withdrawal, 543I).
     for net in ("D+", "D-"):
         usb = _labels(page, net, "usb_c")
         assert len(usb) == 2
-        assert sum(1 for label in usb if _visible(label)) == 1
-        assert sum(1 for label in usb if not _visible(label)) == 1
+        assert all(_visible(label) for label in usb)
+        assert len({(label.x, label.y) for label in usb}) == 2
 
 
 def test_d_pair_faces_across_the_module_gap():
@@ -299,20 +310,21 @@ def test_d_pair_faces_across_the_module_gap():
             printed = [
                 label for label in _labels(page, net, module.id) if _visible(label)
             ]
-            assert len(printed) == 1, (
-                f"{module.id}/{net} prints {len(printed)} names, expected one"
-            )
-            visible[(module.id, net)] = printed[0]
+            # 543I contract upgrade: the module's **port** name is one printed
+            # label among the run's names (the reversible pins keep their own).
             port = next(
                 item for item in module.ports if item.net == net
             )
-            ports[(module.id, net)] = port
-            # The name the reader sees at the boundary is the name the page
-            # states at its port — not a hidden duplicate elsewhere.
-            assert (printed[0].x, printed[0].y) == (port.x, port.y), (
-                f"{module.id}/{net}: printed at {printed[0].x},{printed[0].y}, "
-                f"the page states the port at {port.x},{port.y}"
+            at_port = [
+                label for label in printed
+                if (label.x, label.y) == (port.x, port.y)
+            ]
+            assert len(at_port) == 1, (
+                f"{module.id}/{net} prints {len(at_port)} names at its port, "
+                f"expected one; printed at {[(l.x, l.y) for l in printed]}"
             )
+            visible[(module.id, net)] = at_port[0]
+            ports[(module.id, net)] = port
 
     for net in ("D+", "D-"):
         usb_box = visible[("usb_c", net)].bbox
@@ -331,11 +343,21 @@ def test_d_pair_faces_across_the_module_gap():
                     segment.points, usb.frame[2], ch343.frame[0],
                 ), f"{net} has a conductor across the island gap"
 
-    # The pair reads in the same vertical order at both ends: D+ above D-.
-    for module in (usb, ch343):
-        assert (
-            visible[(module.id, "D+")].y - visible[(module.id, "D-")].y
-        ) > 0, f"{module.id}: D+ is not above D-"
+    # 543I contract upgrade: the receptacle has **two** runs per net, and the
+    # mirrored pins make the pair's vertical order flip between the A and B
+    # sides — that is the connector's own geometry, not a reading defect. What
+    # must hold is that each run stack keeps its two names apart and that the
+    # CH343 end (one run, one pair) reads D+ above D-.
+    assert (
+        visible[("ch343", "D+")].y - visible[("ch343", "D-")].y
+    ) > 0, "ch343: D+ is not above D-"
+    for net in ("D+", "D-"):
+        usb_rows = sorted(
+            label.y for label in _labels(page, net, "usb_c") if _visible(label)
+        )
+        assert len(usb_rows) == 2 and usb_rows[0] != usb_rows[1], (
+            f"usb_c/{net}: the two reversible runs do not sit on two rows"
+        )
 
     # 543D hard direction: the printed box must lie **beyond its own service
     # pin**, not merely somewhere inside its island. The USB name is right of
@@ -402,14 +424,51 @@ def test_the_change_plan_carries_straight_stubs_and_attr_targets():
         )
         index = carrying[0]
         wire = wires[index]
-        # 543D's stub is straight: one orthogonal run.
-        assert len(wire["points"]) == 2, wire
-        (x1, y1), (x2, y2) = wire["points"]
-        assert (x1 == x2) != (y1 == y2), f"{label.net} stub is not orthogonal: {wire}"
-        assert move_wire_target(by_wire, index) == (
-            round((label.bbox[0] + label.bbox[2]) / 2.0, 6),
-            round((label.bbox[1] + label.bbox[3]) / 2.0, 6),
-        ), f"{label.net}'s attribute row does not land on its reserved box"
+        # 543D's stub is straight: one horizontal run. 543I may keep the label's
+        # anchor as a **vertex** of a grown carrier, so the run is a collinear
+        # polyline — still exactly one straight run, just with an extra point.
+        points = wire["points"]
+        ys = {round(point[1], 6) for point in points}
+        assert len(points) >= 2 and len(ys) == 1, (
+            f"{label.net} stub is not one straight horizontal run: {wire}"
+        )
+        xs = sorted({round(point[0], 6) for point in points})
+        x1, x2 = xs[0], xs[-1]
+        # 543H-2: the row the plan states is the **carrier's**, and this page shows
+        # both halves of it. Where the drawn stub reaches the reserved box, the
+        # target is that box's centre, byte for byte (`TXD`, `D+`, `D-` …). Where
+        # it does not — `U1.RXD` reserves its box 96 units out and the landing pass
+        # draws a 40-unit stub — the target is a seat on the stub, because a row
+        # left at the reservation prints beside `C3`'s designator and on no
+        # conductor of its own (`evidence/543g_skill_trial/README.md` sec.6.2).
+        low, high = sorted((x1, x2))
+        target = move_wire_target(by_wire, index)
+        centre_x = (label.bbox[0] + label.bbox[2]) / 2.0
+        if "name stub" not in str(wire.get("purpose", "")):
+            # 543I: a label riding a planned conductor prints at its own box when
+            # the run holds the box; a run that held a **different** box may have
+            # grown, and a box wider than its run is re-seated inside it. Both are
+            # legal — the row must be on the carrier either way.
+            assert low - 1e-9 <= target[0] <= high + 1e-9, (
+                f"{label.net}'s attribute row {target} is not on its carrier "
+                f"{wire['points']}"
+            )
+            assert abs(target[1] - min(ys)) <= 1e-9
+            if low <= centre_x <= high:
+                assert target == (
+                    round(centre_x, 6),
+                    round((label.bbox[1] + label.bbox[3]) / 2.0, 6),
+                ), f"{label.net}'s attribute row does not land on its reserved box"
+            continue
+        assert (
+            low - 1e-9 <= target[0] <= high + 1e-9
+            and abs(target[1] - min(ys)) <= 1e-9
+        ), f"{label.net}'s attribute row {target} is not on its stub {wire['points']}"
+        if low <= centre_x <= high:
+            assert target == (
+                round(centre_x, 6),
+                round((label.bbox[1] + label.bbox[3]) / 2.0, 6),
+            ), f"{label.net}'s attribute row does not land on its reserved box"
 
     # 543D hard direction in the landing plan too: the stub runs away from the
     # service pin toward the module's stated side, and the ATTR target lies on
@@ -433,7 +492,7 @@ def test_the_change_plan_carries_straight_stubs_and_attr_targets():
                 for p in wire["points"]
             )
         )
-        (x1, _y1), (x2, _y2) = wires[index]["points"]
+        (x1, _y1), (x2, _y2) = wires[index]["points"][0], wires[index]["points"][-1]
         target_x = by_wire[index]["to"]["x"]
         if key[0] == "usb_c":
             assert max(x1, x2) > point[0], (
@@ -452,24 +511,16 @@ def test_the_change_plan_carries_straight_stubs_and_attr_targets():
                 f"{key}: ATTR x={target_x:g} is not left of pin x={point[0]:g}"
             )
 
-    # The hidden duplicates keep their conductors and hide only their own text.
+    # 543I contract upgrade: the USB pair's two runs each print their own name
+    # (P32 was withdrawn for hiding one of them); nothing is suppressed here.
     for module in ("usb_c",):
         for net in ("D+", "D-"):
             hidden = [
                 label for label in _labels(page, net, module) if not _visible(label)
             ]
-            assert len(hidden) == 1
-            index = next(
-                index for index, wire in enumerate(wires)
-                if wire.get("net") == net
-                and any(
-                    abs(point[0] - hidden[0].x) < 1e-6
-                    and abs(point[1] - hidden[0].y) < 1e-6
-                    for point in wire["points"]
-                )
+            assert hidden == [], (
+                f"{module}/{net} still suppresses {[(l.x, l.y) for l in hidden]}"
             )
-            move = by_wire[index]
-            assert move["to"] == {"valueVisible": False}, move
 
 
 def move_wire_target(by_wire, index):

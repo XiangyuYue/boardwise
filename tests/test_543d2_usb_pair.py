@@ -106,21 +106,27 @@ def test_the_receptacle_is_turned_so_its_data_pins_leave_right():
             label for label in d543._labels(page, net, "usb_c")
             if d543._visible(label)
         ]
-        assert len(printed) == 1
-        box = printed[0].bbox
-        centre_x = (box[0] + box[2]) / 2.0
-        assert centre_x > d543._pin(page.plan, member)[0], (
-            f"{net} box centre {centre_x:g} is not right of {member}"
-        )
-    # The pair keeps its natural order (D+ above D-).
-    d_plus = [
+        # 543I contract upgrade: both reversible runs print their own name, and
+        # every one of them leaves its pin toward the stated side (right).
+        assert len(printed) == 2, [(l.x, l.y) for l in printed]
+        pin_x = d543._pin(page.plan, member)[0]
+        for label in printed:
+            box = label.bbox
+            centre_x = (box[0] + box[2]) / 2.0
+            assert centre_x > pin_x, (
+                f"{net} box centre {centre_x:g} is not right of {member}"
+            )
+    # The pair keeps its natural order on the pins' own row: D+ above D-.
+    a6 = d543._pin(page.plan, "USB1.A6")
+    a7 = d543._pin(page.plan, "USB1.A7")
+    d_plus = next(
         label for label in d543._labels(page, "D+", "usb_c")
-        if d543._visible(label)
-    ][0]
-    d_minus = [
+        if d543._visible(label) and abs(label.y - a6[1]) <= 1e-6
+    )
+    d_minus = next(
         label for label in d543._labels(page, "D-", "usb_c")
-        if d543._visible(label)
-    ][0]
+        if d543._visible(label) and abs(label.y - a7[1]) <= 1e-6
+    )
     assert d_plus.y > d_minus.y
 
 
@@ -153,7 +159,8 @@ def test_the_landing_plan_runs_each_stub_toward_its_partner():
             )
         )
         seen.add(key)
-        (x1, _y1), (x2, _y2) = wires[index]["points"]
+        points = wires[index]["points"]
+        x1, x2 = points[0][0], points[-1][0]
         target_x = moves[index]["to"]["x"]
         pin_x = service[key][0]
         if key[0] == "usb_c":

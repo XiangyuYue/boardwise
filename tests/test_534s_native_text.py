@@ -221,7 +221,13 @@ def test_a_native_plan_moves_the_stated_rows_and_keeps_the_unnamed_anchor(
         if text.part_id != "R1":
             continue
         move = part_moves[("R1", text.kind)]
-        assert (move.x, move.y) == (text.x, text.y)
+        # 543I-6I/K: a part's `reference`/`value` ATTR move targets the row's
+        # **lower-left** corner — `textmetrics.host_row_box`'s own contract, and
+        # the box `drawlint`/`readability` measure the landed page with. It used to
+        # target `text.x/text.y`, which the layout sets to the reserved box's
+        # *centre*, so the printed ink and the write disagreed by half a row (and
+        # on a rotated symbol the derived ink covered the part's own pad).
+        assert (move.x, move.y) == (text.bbox[0], text.bbox[1])
         assert move.rotation is None and move.align_mode is None
 
 

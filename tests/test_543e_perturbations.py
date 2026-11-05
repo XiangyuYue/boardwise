@@ -163,7 +163,11 @@ def _assert_clean(page, circuit, book, caps: tuple[str, ...]) -> None:
         assert service["same_row"] and service["straight"], (cap, service)
 
     # D+/D- keep the direction the 543D-2 split bought: right of the USB
-    # service pin, left of the CH343 pin, D+ above D- on both islands.
+    # service pin, left of the CH343 pin. 543I contract upgrade: the receptacle's
+    # two reversible runs **each** print their own name (P32 was withdrawn for
+    # hiding one), so the USB side shows two rows and both leave the pin toward
+    # the stated side; the natural order holds on the pins' own row and at the
+    # CH343 end (the connector's B row is mirrored by construction).
     for net, usb_pin, ch_pin in (
         ("D+", "USB1.A6", "U1.5"), ("D-", "USB1.A7", "U1.6"),
     ):
@@ -176,23 +180,26 @@ def _assert_clean(page, circuit, book, caps: tuple[str, ...]) -> None:
             if label.part_id == "USB1"
         ]
         ch = [label for label in printed if label.part_id == "U1"]
-        assert len(usb) == 1 and len(ch) == 1, (net, len(usb), len(ch))
-        usb_centre = (usb[0].bbox[0] + usb[0].bbox[2]) / 2.0
+        assert len(usb) == 2 and len(ch) == 1, (net, len(usb), len(ch))
+        for label in usb:
+            centre = (label.bbox[0] + label.bbox[2]) / 2.0
+            assert centre > _pin(plan, usb_pin, book)[0], (net, label.bbox)
         ch_centre = (ch[0].bbox[0] + ch[0].bbox[2]) / 2.0
-        assert usb_centre > _pin(plan, usb_pin, book)[0], (net, usb[0].bbox)
         assert ch_centre < _pin(plan, ch_pin, book)[0], (net, ch[0].bbox)
     printed_p = [l for l in plan.labels if l.net == "D+" and d543._visible(l)]
     printed_m = [l for l in plan.labels if l.net == "D-" and d543._visible(l)]
-    for module in ("usb_c", "ch343"):
-        plus = next(
-            l for l in printed_p
-            if d543._module_of(page, l.part_id) == module
-        )
-        minus = next(
-            l for l in printed_m
-            if d543._module_of(page, l.part_id) == module
-        )
-        assert plus.y > minus.y, module
+    a6 = _pin(plan, "USB1.A6", book)
+    a7 = _pin(plan, "USB1.A7", book)
+    plus = next(l for l in printed_p if abs(l.y - a6[1]) <= 1e-6)
+    minus = next(l for l in printed_m if abs(l.y - a7[1]) <= 1e-6)
+    assert plus.y > minus.y, "usb_c: the A-row pair is not D+ above D-"
+    ch_plus = next(
+        l for l in printed_p if d543._module_of(page, l.part_id) == "ch343"
+    )
+    ch_minus = next(
+        l for l in printed_m if d543._module_of(page, l.part_id) == "ch343"
+    )
+    assert ch_plus.y > ch_minus.y, "ch343"
 
     # UART names stay horizontal and disjoint.
     uart = [label for label in plan.labels if label.net in d543.UART]
@@ -229,9 +236,43 @@ def test_baseline_recompiles_to_the_543d2_digest():
         _circuit(), _presentation(), _book()
     )
     page = _first_page(result)
-    expected = json.loads(
-        (ROOT / "evidence/543d2/compile/result.json").read_text(encoding="utf-8")
-    )["pages"][0]["geometrySha256"]
+    # 543I contract upgrade: the baseline still recompiles byte for byte, but the
+    # explicit path now prints a name on every non-continuous run (P32 was
+    # withdrawn for the opposite rule), so the digest moved from the value
+    # `evidence/543d2/compile/result.json` recorded (84694e2d…) to this one.
+    # 543I-6: the seat question is now asked **strictly** on a page that states
+    # `localLabelObligations` (`_flag_pins`), because a local-label carrier is a
+    # conductor the page draws *after* the flags — the loose question was letting
+    # `+5V` stand on `D+`'s carrier, which is what had made the mirrored
+    # receptacle pose illegal and the page fall back to `rotation=180` (D+ below
+    # D-). With the carrier reserved the mirror pose is drawn again, and the page
+    # digest is this one. The straight-stub claim this file makes is unchanged.
+    # 543I-6I: the printed row's anchor and the ATTR move are now **one**
+    # convention (`textmetrics.host_row_box`'s own: the move's X/Y is the row's
+    # lower-left), so 543I-4A's ink box moved from the reserve's centre to its
+    # lower-left corner and one supply run took the room that changed
+    # (`tests/test_543i_power_text_clearance.py` measures the same rows and is
+    # green). The page digest moved with that obstacle; the straight-stub claim
+    # this file makes is unchanged.
+    # 543I-6K: the candidate that printed a local name **centred on its own
+    # carrier end** is now refused (`_riding_label_failure` — the "骑脚" row), so
+    # the legal **mirrored** candidate this compiler already had wins: the page is
+    # back to the natural order the mirror pose buys (D+ above D−), and the digest
+    # is that candidate's. The two statements above still hold — the strict seat
+    # question on `localLabelObligations` pages and the lower-left anchor shared
+    # by the ATTR move and 543I-4A's ink are what made this page legal at all.
+    # 543I (LED) contract upgrade: this baseline states `directWiringObligations`
+    # for `LED_A`, so the tap stub and its printed name are gone and the
+    # indicator island's frame narrowed; the page digest moved with that
+    # statement. Everything this file perturbs — and the digest it is compared
+    # against — is otherwise unchanged.
+    # 543L/543M contract upgrade: this baseline states `stub: straight` and the
+    # mirrored `D+`/`D-` pair, so the joint length is this document's own
+    # statement — `B6`/`B7` are both drawn at 60 and the page digest moved with
+    # it. Verified, not assumed: the same document with `stub: auto` keeps the
+    # pre-543L page (`tests/test_543l_paired_carriers.py`'s negative control) and
+    # `tests/test_543f2_changeplan_bounds.py` pins that pre-fix digest.
+    expected = "2ec6b700d997839830148b3c53a9abe3fe7debebed4986ce0d05cd67cc5ca095"
     assert page.page_geometry_sha256() == expected
     _assert_clean(page, _circuit(), _book(), ("C3", "C4"))
 

@@ -32,8 +32,31 @@ PAGE_BOX = (0.0, 0.0, 1170.0, 825.0)
 #: stub policy stated as `auto`: the reservation this batch adds must not move a
 #: drawing that never asked for the straight stub (`v42` states `stubMin` but no
 #: `stub`, so this is also its shape).
+#: 543I contract upgrade: this payload states `serviceLayout` and `native-attr`,
+#: so the reversible `D+`/`D-` runs now each print their own name (P32 was
+#: withdrawn for the opposite rule) and the digest moved with that statement.
+#: 543I-6I/J: the digest moved twice more, and each move is classified here —
+#: (a) 543I-6I put the part-row ATTR target and the 543I-4A ink on one anchor
+#: (`textmetrics.host_row_box`'s lower-left), so a supply run took the room that
+#: changed; (b) 543I-6J keeps a carrier's name box on the carrier's **own side**
+#: instead of printing it centred over the far end (`D+`'s second run ended at
+#: `x = 265` with its row at `258..272`). The straight-stub question this test
+#: pins is unchanged, and that is checked, not assumed: on this payload every
+#: label still states `stub='auto'` (27 of 27), so nothing here is the straight
+#: policy leaking into a document that did not ask for it.
+#: 543I-6K: a candidate that prints a local name **centred on its own
+#: carrier end** is now refused (`_riding_label_failure`), so this payload
+#: lands the sibling page it already had (`D+`/`D-` off their anchors); the
+#: stub field is still `auto` on every label (27/27, probe in
+#: `evidence/543i6k`).
+#: 543I (LED) contract upgrade: this payload states `directWiringObligations` for
+#: `LED_A`, so its tap stub and printed name are gone and the indicator island's
+#: frame narrowed; the page digest moved with that statement. What this test
+#: pins — a document that states no straight stub is untouched by the straight-
+#: stub policy — is unchanged, and the stub fields are still `auto` on every
+#: label.
 _BASELINE_WITHOUT_STRAIGHT_STUB = (
-    "0288b7db96d846cf168111070d2d6816f9d6f334121de6292a6d1c22dd272651"
+    "3320ee054d49281a64464030901c3f7fba0fc84ccc3b0749a418c76c607a7d7e"
 )
 
 MODULES = [

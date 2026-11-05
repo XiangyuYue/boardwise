@@ -985,3 +985,169 @@ def test_the_boundary_doc_names_the_multi_board_guards_without_hiding_the_gap():
             "tasks/shared-platform.md no longer carries the multi-board negative "
             f"control example {token!r}"
         )
+
+
+# ============================ 绘制线专项 skill（分岛裁决与路由，2026-11-04）
+#: 绘制线专项 skill 的**两份同步副本**，规矩同 :data:`SOP_COPIES`：一份文件放两个地方
+#: （kimi 读 `.kimi-code/`，dsh 扫 `.agents/skills`），复制用 `cp`、不许手抄。
+DRAW_SOP_COPIES: tuple[str, ...] = (
+    ".kimi-code/skills/boardwise-draw/SKILL.md",
+    ".agents/skills/boardwise-draw/SKILL.md",
+)
+
+
+def _frontmatter(document: str) -> dict[str, str]:
+    """frontmatter 的顶层 `<key>: <value>` 对（本仓库用的是扁平形态，不解析 YAML）。"""
+    lines = document.splitlines()
+    assert lines and lines[0] == "---", "the file does not open with frontmatter"
+    block: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return block
+        key, sep, value = line.partition(":")
+        assert sep, f"frontmatter line without a colon: {line!r}"
+        block[key.strip()] = value.strip()
+    raise AssertionError("the frontmatter is not closed by a second `---`")
+
+
+def test_the_draw_skill_ships_as_two_byte_identical_copies():
+    """护绘制线专项 skill 的两个入口：必须都在场、逐字节相同。
+
+    失效时的样子：只写 `.kimi-code/skills/boardwise-draw/`——kimi 会话看得到，
+    dsh 的 skill 根是 `.agents/skills`，它的绘制会话会退回总 SOP，分岛提交条件、
+    成对支路一致性、机器闸/视觉闸的分工整套静默消失。
+    """
+    reference = REPO / DRAW_SOP_COPIES[0]
+    assert reference.is_file(), f"the draw skill is missing: {DRAW_SOP_COPIES[0]}"
+    expected = reference.read_bytes()
+    for relative in DRAW_SOP_COPIES[1:]:
+        path = REPO / relative
+        assert path.is_file(), (
+            f"the draw skill copy at {relative} is missing — dsh scans "
+            "`.agents/skills`, so this entry would be invisible there"
+        )
+        assert path.read_bytes() == expected, (
+            f"{relative} drifted from {DRAW_SOP_COPIES[0]} — the two are one file "
+            "in two places; re-copy it (`cp`), never re-edit one side"
+        )
+
+
+def test_the_draw_skill_declares_its_name_and_its_trigger_surface():
+    """护 skill 的可发现性：frontmatter 名字必须是 `boardwise-draw`，触发面要覆盖
+    原理图绘制 / PresentationSpec / 分岛 / 布局布线 / draw 编译与画回编辑器。
+
+    失效时的样子：名字抄成 `boardwise`（两个 skill 抢一个名字，加载哪个看运气），
+    或描述只写「画图」——分岛、旗标、视觉自审的调用就落不到这个 skill 上。
+    """
+    skill = (REPO / DRAW_SOP_COPIES[0]).read_text(encoding="utf-8")
+    front = _frontmatter(skill)
+    assert front.get("name") == "boardwise-draw", (
+        "the draw skill's frontmatter name must be `boardwise-draw`, got "
+        f"{front.get('name')!r}"
+    )
+    for key in ("description", "whenToUse"):
+        assert front.get(key), f"the draw skill frontmatter lost `{key}`"
+    surface = front["description"] + "\n" + front["whenToUse"]
+    for token in ("原理图", "PresentationSpec", "分岛", "布局布线", "draw compile"):
+        assert token in surface, (
+            f"the draw skill's trigger surface lost {token!r} — a caller asking "
+            "for that job would not load this skill"
+        )
+
+
+def test_the_draw_skill_keeps_its_ruling_rules():
+    """护本批立下的裁决规则本身：语义归属、拆岛前三条、成对一致性、两道闸分工、
+    修复优先级、责任边界与反例。只钉语义关键词，不做全文等值（排版不是契约）。
+
+    失效时的样子：规则被压成「机器闸全过即可交付」（`E` 被删），或把「编译能过」
+    重新当成拆岛的合法理由（`B` 被删），或不再说明哪些关系是已有合同、哪些要派单
+    （于是有人以为解释器已经自动保证成对支路）。
+    """
+    skill = (REPO / DRAW_SOP_COPIES[0]).read_text(encoding="utf-8")
+    for token in (
+        "语义归属优先",
+        "功能理由",
+        "预期图形结果",
+        "等节距",
+        "不自动语义分岛",
+        "agent-adjusted",
+        "机器全绿不改变判废结论",
+        "没实现的约束",
+        "每条不连续导线都要有可见去向",
+        "导线终点的合法绕行距离",
+        "禁止用焊盘欧氏距离",
+    ):
+        assert token in skill, f"the draw skill lost its ruling {token!r}"
+
+
+def test_the_draw_skill_mentions_only_real_commands():
+    """同 :func:`test_skill_md_mentions_only_real_commands` 的尺子对准绘制线 skill：
+    文档指向的命令必须是 CLI 真注册过的（正反两向），不许写出想象中的子命令。"""
+    skill = (REPO / DRAW_SOP_COPIES[0]).read_text(encoding="utf-8")
+    tops, tree = _cli_commands()
+    known = set(tops)
+    for parent, subs in tree.items():
+        known.update(f"{parent} {sub}" for sub in subs)
+    mentioned, unknown_tops = _mentioned_commands(skill)
+    stale = sorted(m for m in mentioned if m not in known)
+    assert stale == [], (
+        "the draw skill names commands the CLI no longer has: " + ", ".join(stale)
+    )
+    assert sorted(unknown_tops) == [], (
+        "the draw skill mentions `boardwise <word>` for commands the CLI never "
+        "registered: " + ", ".join(sorted(unknown_tops))
+    )
+
+
+def test_the_draw_skill_pointers_resolve():
+    """路由层的指针必须落地：skill 里点到的 `docs/*.md` / `tasks/*.md` 都得在。"""
+    skill = (REPO / DRAW_SOP_COPIES[0]).read_text(encoding="utf-8")
+    missing = [
+        ref
+        for ref in sorted(set(re.findall(r"(?:docs|tasks)/[A-Za-z0-9._-]+\.md", skill)))
+        if not (REPO / ref).is_file()
+    ]
+    assert missing == [], (
+        "the draw skill points at files that do not exist: " + ", ".join(missing)
+    )
+
+
+def test_the_general_sop_and_the_agents_route_still_lead_to_the_draw_skill():
+    """护路由：总 SOP 的两份副本与 `AGENTS.md` 都必须把绘制线指向 `boardwise-draw`，
+    同时**保留** `boardwise` 作为通用 SOP / 真机纪律的权威入口。
+
+    失效时的样子：新 skill 建好了但没人路由（等于没写），或者为了加路由把总 SOP 的
+    权威指针删掉，于是通用 R1–R3 失去唯一出处。
+    """
+    for relative in SOP_COPIES:
+        skill = (REPO / relative).read_text(encoding="utf-8")
+        assert "boardwise-draw" in skill, (
+            f"{relative} no longer routes the drawing line to the boardwise-draw skill"
+        )
+        assert "绘制线任务必须加载" in skill, (
+            f"{relative} lost the hard requirement that draw-line tasks load the "
+            "draw skill"
+        )
+        assert "docs/draw.md" in skill, (
+            f"{relative} stopped pointing at the drawing manual"
+        )
+
+    agents = (REPO / "AGENTS.md").read_text(encoding="utf-8")
+    assert "绘制线任务开工前必须加载" in agents, (
+        "AGENTS.md lost the hard routing requirement for draw-line tasks"
+    )
+    for relative in DRAW_SOP_COPIES:
+        assert relative in agents, f"AGENTS.md does not name the draw skill entry {relative}"
+    for relative in SOP_COPIES:
+        assert relative in agents, (
+            f"AGENTS.md dropped the general SOP entry {relative} — boardwise must "
+            "stay the authority for R1–R3 and the live-editor discipline"
+        )
+
+    draw_line = (REPO / "tasks" / "draw-line.md").read_text(encoding="utf-8")
+    assert "boardwise-draw" in draw_line, (
+        "tasks/draw-line.md does not require loading the boardwise-draw skill"
+    )
+    assert "开工前必须加载" in draw_line, (
+        "tasks/draw-line.md lost the hard loading requirement"
+    )

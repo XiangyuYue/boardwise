@@ -392,6 +392,164 @@ P29 与参考页不动，不替换交付页。离线 LayoutPlan 没有这根桩�
 使用另一份已授权、可公开留证的相似电路，验证角色识别与构造规则不是 CH343 特判。
 没有第二样本前不得宣称通用自动布局完成。
 
+### 543H：skill 引导的 CC 同侧与标签同步修复（当前）
+
+岳 2026-11-04 批准修复完成后再交付。冷启动 skill 验证已把两只 CC 下拉保留在 `usb_c`，
+但 30 个候选均出现支路绕体和文字错贴，故未落画布；基线规格与判废证据在
+`evidence/543g_skill_trial/`。本批不得退回独立无约束 `cc` 岛，不得用参考坐标或手工微调
+掩盖解释器缺口。
+
+- **H1 附属支路同侧**：只修核心符号已镜像/旋转时，二端 shunt 的座位仍按核心局部引脚
+  逃逸侧确定，使 CC1/CC2 不再分处连接器两侧后绕体；成对支路须同向、对齐，缺合法座位要
+  明确拒绝。生产域限 `drawcompiler.py` 实际落位/位姿代码与新增 `test_543h*` 聚焦测试。
+- **H2 标签同步**：只修最终 ChangePlan 桩长/方向与页级 native ATTR 名字盒不一致；最终桩
+  改变后名字必须重新贴最终锚点并避让，RXD 不得贴到 C3。生产域限实际生成最终桩或 ATTR
+  的文件与新增聚焦测试；不与 H1 同批混改。
+- **H3 验收**：沿用 `evidence/543g_skill_trial/spec_v1.json`，离线 compile 与主代理视觉通过
+  后才可在 `test V4` 新建 P32 落图；完成 lint、独立逐脚、宿主 DRC 和渲染目检。保留
+  P29/P30/P31 与 Board2 P1，不做 git 写。缺省输入与旧 v42 字节/行为不变，最终串行跑规定测试线。
+
+#### 543H-1…H-4 结果
+
+- H1 先修符号系/页面系引脚方向不一致，再在 `native-attr + serviceLayout` 显式路径按
+  同角色/同符号/异锚点成组分 lane；R1/R2 同列同姿态，CC1/CC2 各 2 点直连，镜像候选
+  同样成立。H2 在最终桩生成后重落可见 native 名字行，RXD 从 C3 旁回到自己的桩；
+  hidden 与旧路径不变。H3B 给显式 `partTexts` 增加 6/4/2 收紧档，最终规格只声明
+  C1 文字向右，C1/C2 不再与 R1 面对面。未写相应能力的 v42 四候选 page/SVG 逐字节不变。
+- 独立审查后的 H5/H6 收尾：符号系关系翻转也统一受同一显式开关控制，反激 119/551a
+  三条回归复绿；同 pad 的分组按最大只数累计 lane span，同/异符号均不共址。短桩名字
+  必须留在 carrier 行带内，重落后的实际行进入后续 ink 与 duplicate-carrier 记账；
+  无合法座位具名拒绝，不写回 LayoutLabel.bbox、不改 layout digest。最终 P32 规格
+  page 与已验收候选逐字节一致，证据 `evidence/543h5b/`、`evidence/543h6/`。
+- H4 真机页 **P32=`8b33fa321b2f564d`**：自动候选经空页 plan/apply 落地，无 userLocks、
+  参考坐标或 agent 几何微调；`draw lint` **0E/0W/0I**，独立几何与宿主网表逐脚
+  **55/55 连接 + 3/3 NC**，主代理逐岛目检 `evidence/543h4/render.png` 通过。
+  DRC 本页仅 3 个规格 NC 与 3 个电阻库属性 WARN；旧 P30 越界项仍属旧页。
+- 最终检查：全量 **9347 passed / 25 skipped / 2 failed**，仅 pytest 槽位 ACL 与 MSYS
+  POSIX 安装器两条既有环境红（日志 `evidence/543h4/final_pytest.log`）；connector
+  **576 passed** + typecheck，dsh-plugin **129 passed / 1 skipped** + typecheck/build，
+  Rust **111 passed / 4 ignored** + fmt/clippy，draw smoke 3 候选/6 产物、8 页/16 产物、
+  replay lint 全过，doc-claims **39 passed**，CLI 合同与 `git diff --check` 通过。
+  主代理两次独立变异均先红后按 sha256 字节还原。
+- 最终规格与证据：`evidence/543h3b/spec_h3b.json`、`evidence/543h1b/`、
+  `evidence/543h2/`、`evidence/543h3b/`、`evidence/543h4/`。P29/P30/P31 与 Board2 P1
+  未改未删；P32 持久化为 `saved_unverified`，第二拓扑仍未覆盖。工作树未提交。
+
+### 543I：可见连接与旗标策略返修（当前）
+
+岳复审撤回 P32 的交付结论：D+/D− 的 A6/A7 文字脱离 5 单位短桩，B6/B7 隐藏名字后留下
+60/55 单位裸线；R10/R11 被距离聚簇共用 GND；C13/C14 的 +5V 因高扇出逐脚放旗而 GND
+却聚簇。上述问题证明 lint、宿主网表和此前逐脚脚本不能代替视觉连接审查，P32 不再算通过。
+
+- **I1 可见连接**：每条不连续导线必须有清楚可见、贴着自己载体的名字/去向；隐藏重复名
+  不得留下无解释长裸桩，同名不等于同一条连续导线。补离线/真机回归与 lint 或等效机器闸。
+- **I2 旗标策略**：GND 与 power 使用同一套“支路语义优先 + 导线终点合法绕行距离”规则；
+  成对独立支路默认各自本地旗，不强制共享。不得使用焊盘欧氏距离或线上任意点最近距离，
+  不得让 power 高扇出与 gnd 聚簇继续各说一套。无路可绕记不可达，不共簇。
+- **I3 审查与重验**：把上述判据纳入 `boardwise-draw`、独立逐脚/视觉检查和测试，先在 P32
+  证明会红，再生成新页；主代理逐岛目检，尤其逐段核对可逆脚、成对支路和每一面旗。
+  验收前保留旧页；新页三关通过后，按岳 2026-11-04 的明确授权删除旧 P29/P30/P31/P32，
+  Board2 P1 用户参考页始终不动。不做 git 写，不用参考坐标或手改图掩盖解释器缺口。
+
+#### 543I-1…I-5 结果
+
+- I1 让每条不连续 native 导线各自可见贴名：A6/A7 载名线延长到 40，B6/B7 不再隐藏，
+  `native_carrier_problems` 对旧 P32 报 4 条缺陷，对新 plan 报 0。I2 以 `flaggroups.py`
+  统一地/电源分组：shared_net 干线端可候选共簇，other_net 返回端默认本地旗，距离为
+  导线终点的 Router 合法正交路径；支路信号走廊先预留，最终 audit 17 次 0 拒。
+- I4 真机又修两类问题：native 部件行按宿主实际墨迹参与布线避让，消除 C21 穿线；
+  半格旗只在局部尝试相邻整格并重查全部障碍，不移动其它图元。缺省/v42 字节不变。
+- I5 独立审查收尾：删除 `BW_D` 调试输出；中间 run 延伸改为插入远点，跨弯/回折/
+  斜线具名拒绝；跨末段双轴半格不再硬贴成斜线；最终分组审计增加拒绝反例。
+  `tests/test_543i_edge_guards.py` **10 passed**，P34 page/plan 与已验收版逐字节一致。
+- 全量后的 I6 收口：严格处理 local-label 载体与轨旗最终座位，恢复 USB 镜像自然顺序和
+  v46/v47；旗引线障碍纳入先前旗盒，恢复 C3/C4 各 30 直连。part ATTR 与真实墨迹统一
+  使用 `text.bbox` 左下角，骑脚候选在排名阶段拒绝；`flaggroups.py` 已登记 owner=draw。
+  LED_A 的规格内直连不再生成多余 T 桩/名字，单 run 脱线也会被 `native_carrier_problems`
+  拒绝。最终 **P36=`92d1b55ee5b38511`**：D± 六段 40/60/40/40/55/40 且 D+ 在 D-上；
+  CC 直连，R7/R8 各自本地 GND，LED_A 一根直连无多余名；lint **0E/0W/0I**、
+  独立逐脚 **55/55 + 3/3 NC**、主代理逐岛目检 `evidence/543i8/apply.png` 通过。
+- 岳授权的旧页清理已完成：P29/P30/P31/P32/P33/P34/P35 均 `deleted=true`，Board1
+  只剩 P36，Board2 P1=`30560d9c0a52a6d2` 未动。清理后 DRC 只剩 3 个规格 NC 与
+  3 个电阻库属性 WARN。持久化 `saved_unverified`，第二拓扑未覆盖，工作树未提交。
+  证据 `evidence/543i1/`、`evidence/543i2d/`、`evidence/543i4b/`、`evidence/543i5/`、
+  `evidence/543i6*/`、`evidence/543i_led/`、`evidence/543i8/`。最终全量 **9387 passed /
+  25 skipped / 2 failed**，仅 pytest 槽位 ACL 与 MSYS POSIX 安装器两条既有环境红
+  （`evidence/543i8/final_pytest.log`）；connector **576 passed** + typecheck，
+  dsh-plugin **129 passed / 1 skipped** + typecheck/build，Rust **111 passed / 4 ignored**
+  + fmt/clippy，draw smoke 3 候选/6 产物、8 页/16 产物、replay lint 全过，
+  doc-claims **39 passed**，CLI 合同与 `git diff --check` 通过。
+
+### 543J：并联去耦回流端共旗（当前）
+
+岳在 P36 指出 C9/C10 的 +5V 已合并而 GND 仍各自一面旗。实查不是绕行距离超限：
+`_flag_share_keys` 把所有 branch 的 `other_net` 一律写成 `SHARE_ALONE`，GND 两端点
+根本没有进入 Router 距离比较；shared_net 端则为 `SHARE_CHAIN`，所以 +5V 能合并。
+这是 543I 把“独立支路默认本地旗”过度泛化成“所有支路回流端禁止共旗”，P36 撤回。
+
+- 只给同一 `owner/shared_net/other_net` 的多个 branch 一个结构化并联回流共旗键；
+  是否合并仍由导线终点的合法正交绕行距离、reach、全对约束与最终视觉共同决定。
+  异信号端的 CC1/CC2 继续各自地旗，V3/VCC 两组去耦也不强行共地。不改距离算法、
+  opt-in 路径、PresentationSpec、CLI 或其它几何策略。
+- 离线真实 CH343：C1/C2 的 GND pairCost **90≤100**，+5V **100≤100**；R1/R2、
+  C3/C4 不共簇；分组 audit **17 次 / 0 拒绝**。主代理聚焦复跑 **43 passed**。
+  两个独立变异（共旗键退化、并联数量门槛退化）均使对应测试变红，随后 cp 还原且
+  sha256 与原文件一致。子代理在 45 步停止；其合同外审计测试改动仅把具体网名断言
+  泛化为“实际被墙切断的网”，主代理审过后保留，无生产文件越域。
+- 首轮全量为 **9389 passed / 25 skipped / 3 failed**：除两条既有环境红外，
+  `test_543h3b_stated_text_lane` 的 native 页哈希改变。独立对照证明禁用新并联规则后
+  native 精确恢复 `8ac928…`，两个非 native 页 `d1fd62…` / `5f0f67…` 均不变；故这是
+  有意共地的合同升级，不是旧路径回归。测试更新 native 哈希并分别钉死两个非 native
+  全页哈希，子代理聚焦 **21 passed**、主代理原失败用例复跑通过。第二轮全量
+  **9390 passed / 25 skipped / 2 failed**，仅剩上述两条既有环境红，未跑第三轮。
+- 新页 **P37=`6087631c7d711217`**：11 器件、49 计划导线、19 旗（GND 11/+5V 6/
+  VCC 2）。C5/C6 上下分别共用 +5V/GND，R1/R2 各自地旗，D± 和 CC 形态不回退。
+  `draw lint` **0E/0W/0I**；宿主网表分区 **55/55 + 3/3 NC**，导线几何独立逐脚
+  **55/55 + 3/3 NC、48 岛一致**；主代理全页及 USB/去耦/CH343 局部渲染逐岛目检通过。
+  清理后 DRC 只有 3 个电阻库属性 WARN 和 3 个规格 NC（`passed=false` 是 WARN 导致）。
+- 旧 P36 已按既定授权删除并有回执；Board1 只有 P37，Board2 只有用户 P1。建页时
+  曾因参考页焦点误建 Board2 空页 P2=`79574dac85d0359a`，核对 `primitives=[]`
+  后已按本次新建 UUID 撤销，未写电路图元；随后先打开 P36 再在 Board1 建 P37。
+- 持久化仍 `saved_unverified`，第二拓扑未覆盖，不做 git 写。证据 `evidence/543j/`；
+  最终全量与其它测试线读数见该批 README 和日志。
+
+### 543K/L：成对支路姿态、文字与 D± 联合等长（当前）
+
+岳在 P37 指出两处成对图形不一致：CH343 电容横放而 USB 的 R1/R2 竖放；A6/A7 和
+芯片侧虽为 40/40，B6/B7 却是 60/55。实查分别是 branch 沿 other_net 方向转身、
+local-label 逐脚独立选档造成，不是电路需要的不对称，P37 撤回。
+
+- **543K 信号型成对二端支路**：只在既有 `_pair_bands`（native-attr + serviceLayout）
+  下，针对同 owner/role/symbol、异 shared_net 的两端 signal 支路，且宿主共享脚出脚
+  方向统一为水平时，身体沿水平连接摆放。电源去耦不强制旋转，C1/C2 保持竖直，
+  CH343 C3/C4 保持横向。bay 由内向外落位，避免 CC 被去耦挤出去后绕线。
+- **成对文字同侧**：同结构 pair 共用第一组两边都合法的 `(side,rung)`，显式
+  `partTexts` 优先；无共同座位才回旧阶梯。两种 USB connector pose 都在模块编译层
+  实际生成并验证 R1/R2 横向、文字同侧、CC 各一条 2 点直连。初审退回的一左一右文字
+  与弱化 seen 覆盖已补齐；子代理聚焦 **29 passed**，主代理关键复跑 **8 passed**。
+- **543L 联合等长**：恰好两网的 localLabelObligation 才配对；按同 part、同出脚方向、
+  相对 body 中心镜像对侧且最近的几何关系配对，不读网名/位号。共同长度同时试两脚、
+  两条导体与名字行，第一组两者都合法的档位才落格，伙伴回放同一决定；无共同解即
+  具名拒绝。子代理聚焦 **30 passed**，主代理联合/镜像/旗标复跑 **10 passed**。
+  主代理另做两处变异：关闭横向规则、关闭联合选档均使测试变红，随后 cp 还原，
+  drawcompiler sha256=`661215161388f307df7ead77e3ac5e681c1c0cffa1f73a308dfeb63e59174ae2`。
+- 新页 **P38=`0ec4dc022ef38563`**：R7/R8 横向且位号/值都在左，CC 各 130 水平
+  直连；D± 为 **40/40、60/60、40/40**，可见贴名。C9/C10 共地、R7/R8 各自地旗、
+  USB 去耦竖直与 CH343 电容横向均未回退。11 器件、49 计划导线、19 旗；
+  `draw lint` **0E/0W/0I**；网表分区与导线几何均 **55/55 + 3/3 NC、48 岛一致**；
+  主代理全页及 USB/去耦/CH343 局部渲染目检通过。DRC 仅 3 个规格 NC 与 3 个库属性
+  WARN。旧 P37 已删除，Board2 只有用户 P1。持久化 `saved_unverified`，第二拓扑未做。
+- **543M 全量兼容修复**：首轮 **9449 passed / 25 skipped / 8 failed / 5 errors**。
+  联合选档只看 native-attr，漏了 `labelPolicy.stub=straight`，导致 auto/V45 被改且
+  地旗无解。现仅在明说 straight 时联合，auto 恢复逐脚旧阶梯；V45/534x/534w 与
+  543f2 原哈希不动。straight 的 543e/native 哈希和 D±60 属合同升级；flag-grid 的
+  最近合法格点改由直接正向几何钉，未删碰撞/拒绝覆盖。子代理聚焦 **71 passed**、
+  主代理 V45/auto/格点复跑 **35 passed**；重编译 P38 与验收版逐字节相同。
+  主代理删除 straight 门的变异使 auto 测试变红，cp 还原后 drawcompiler sha256=
+  `0451d93a7c8a49b1ca1708bfb7dda2ef3e5e6d250059146c043313c397d68a4d`。
+  第二轮全量 **9496 passed / 25 skipped / 2 failed**，仅剩两条既有环境红，未跑第三轮。
+- 证据 `evidence/543kl/`；最终全量与其它测试线读数见该批 README 和日志。不做 git 写。
+
 ## 3. 总验收与兼容口径
 
 - 总验收不是单一 `ok=True`：自动基线、离线硬违反、逐脚连通、渲染视觉和真机门禁各自有证据。

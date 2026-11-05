@@ -72,6 +72,7 @@
     "engines/drawlint.py": "draw",
     "engines/drc.py": "review",
     "engines/evidence.py": "review",
+    "engines/flaggroups.py": "draw",
     "engines/generate.py": "draw",
     "engines/grammar/__init__.py": "draw",
     "engines/grammar/base.py": "draw",

@@ -680,6 +680,88 @@ vertically. It is therefore an experiment, not a completed replacement for
 P29. A generic second topology, the second same-pin decoupling layout, and
 close/reopen persistence remain unverified. Evidence: `evidence/543f2/`.
 
+### Paired shunts and final printed rows (543H)
+
+- **A branch follows its pad's page escape.** When a pin-derived order is still
+  in the symbol frame, the placement and the independent grammar checker read
+  the same pose-aware relation. With both `native-attr` and `serviceLayout`,
+  interchangeable same-role/same-symbol branches with distinct anchors share a
+  lane and keep their anchor pitch; paired shunts therefore need not take one
+  ladder rung each and route back around the core. One pad, including one pad
+  shared across symbol groups, reserves distinct consecutive lanes. The same
+  opt-in also gates the pose-aware relation reading at every checker. Either key
+  alone keeps the old ladder, as does a document with neither.
+- **Visible native names follow the final stub.** The landing pass records a
+  name row only for the exact carrier points it measured. A reservation the
+  final stub does not reach is re-seated within the carrier's name band, subject
+  to sheet bounds, text/part ink and foreign conductors; no legal seat is a
+  named refusal. The final row, not the abandoned reservation, feeds later
+  label avoidance and duplicate-carrier accounting. Hidden names and documents
+  without `native-attr` are unchanged.
+- **An explicit `partTexts` side gets a bounded tightening before falling back.**
+  Under `native-attr`, after all ordinary rungs fail, the stated side tries
+  standoffs 6/4/2 and takes the widest collision-free one; 2 is the floor. It
+  never shrinks text, and an unstated side or a non-native document keeps the
+  old ladder.
+
+The automatic P32 landing initially passed the machine gates, but visual review
+withdrew it: short native-name carriers and hidden duplicate names left the
+reversible D+/D− runs visually disconnected, and the Euclidean GND clustering
+merged independent branches. It is not an accepted page. Evidence:
+`evidence/543h1b/`, `evidence/543h2/`, `evidence/543h3b/`, `evidence/543h4/`.
+
+### Visible carriers and route-aware flags (543I)
+
+- **Every discontinuous run gets a visible name on its own carrier.** Under the
+  explicit `native-attr + serviceLayout` path, repeated names on one continuous
+  run may be deduplicated, but separate reversible-pin runs each print. A short
+  carrier grows through legal rungs until it covers the name row. The final
+  `native_carrier_problems` gate rejects detached rows and unnamed runs.
+- **Ground and power use one grouping rule.** A branch's shared-net pad belongs
+  to the host trunk; an independent branch's return pad keeps a local flag.
+  Parallel branches with the same owner, shared net and return net may also
+  share the return flag (543J): their common return is a candidate, not an
+  unconditional `SHARE_ALONE`. Branches on different signal nets, such as CC1
+  and CC2, stay independent. Grouping uses the shortest legal orthogonal route
+  between lead endpoints, with obstacles and foreign wires included and no
+  route meaning infinity. It never uses pad Euclidean distance or arbitrary
+  nearest points on wires. The finished wiring is audited against the same
+  groups.
+- **Paired signal shunts share pose and text direction (543K).** Under the same
+  explicit pair-band opt-in, interchangeable two-terminal signal branches on a
+  horizontal owner pad sit horizontally, with the shared pin facing the owner.
+  Supply decoupling keeps its functional orientation. Pair text uses the first
+  side/rung that fits both members; an explicit `partTexts` statement wins.
+  Both connector poses are exercised at module compile level.
+- **Two-net local-label obligations choose carriers jointly (543L), only for
+  `labelPolicy.stub=straight`.** Pins are paired by placed geometry, not net
+  names. One length is checked against both conductors and both name rows before
+  either is committed, and the partner replays that decision. No common legal
+  length is a named refusal, never two accidental lengths. An `auto` document
+  keeps the old per-pin ladder byte for byte (543M's V45/auto regression gate).
+- **Reservations preserve signal and text corridors.** Branch host-to-input
+  corridors are keep-outs for flags only, and native part rows are modelled at
+  the host's actual printed ink, not only at their centred reservations.
+- **Off-grid flags move only locally.** A half-grid anchor tries adjacent grid
+  points and re-checks its flag box, lead, text, foreign conductors and sheet;
+  no safe candidate is a named refusal rather than a global layout change.
+
+P38=`0ec4dc022ef38563` is the accepted automatic landing. Its six D± runs are
+40/60/40/40/60/40 with visible attached names: each D+/D− pair is equal while
+the A/B fan-out groups may differ. R7/R8 are horizontal, their reference and
+value rows are both on the left, CC1/CC2 are straight 130-unit runs, and their
+GND flags stay separate. LED_A is one unnamed direct conductor inside its
+island, not a detached T-stub. The C9/C10 decoupling pair shares both a +5V
+flag and a GND flag. The page has 11 parts, 49 planned wires and 19 flags.
+`draw lint` is **0E/0W/0I**; independent geometry and host-netlist partition
+checking are each **55/55 connections + 3/3 NC**, and the main agent visually
+accepted every island. P37 was withdrawn for the inconsistent branch poses and
+the 60/55 pair, and has been deleted after P38 passed. Board1 now has only P38
+and Board2 retains only the user's P1. DRC contains only the three specified
+NC pins and three library-attribute warnings on P38. Persistence remains
+`saved_unverified`; a second topology is not covered. Evidence:
+`evidence/543j/`, `evidence/543kl/`.
+
 ## Flag and naming rules on compiled pages (060–074)
 
 After 057 landed pages, xianyuyijinban ruled five drawing conventions on the

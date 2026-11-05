@@ -162,14 +162,21 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
     不是通用自动布局；`draw lint` 0E/0W/0I，清理失败实验页后全工程 DRC 通过，
     独立逐脚 **55/55 连接 + 3/3 NC = 58/58**。证据 `evidence/534ab/`、
     `evidence/534ac/`，任务账 `tasks/534b_v4_layout.md` 续十一/053AD；关闭重开持久化未验。
-  - **543 当前暂停点（2026-11-03）**：见 `tasks/543_semantic_layout.md`。分工为
-    **agent 语义分岛，解释器做几何布局、布线、文字和连通校验**。543A–543E-2 已验证
-    去耦服务关系、30 单位紧凑落位、标签/GND 硬通道、USB/CC 重排与 D+/D− 相对、
-    同址去耦拒绝和扰动；543F-2 给最终 ChangePlan 补页框检查。
-    P31=`add2db5ffcc5799b` 为 lint 0E/0W/0I、逐脚 58/58，但 **CC1 仍竖排，未最终验收**。
-    Board1 另有失败 P30=`cc334404179f440c` 与实验 P31，P29 未替换；下一步修 CC1 水平承载线，
-    再做三关和清页，不能称 CH343 自动布局总目标完成。提交检查为全量 9279 passed/25 skipped/
-    2 既有环境红，connector 576、dsh 127+1、Rust 111+4、draw smoke 全过。
+  - **543I–L 当前交付页为 P38（2026-11-05，工作树）**：543I/J 完成可见连接、真实墨迹、
+    支路走廊、格点与并联去耦双端共旗；543K/L 修正岳指出的成对姿态与桩长不一致。
+    信号型成对二端支路横向且 shared pin 朝宿主，成对文字联合选同侧；电源去耦不一律
+    旋转。两网 localLabelObligation 按几何配对，共同长度同时验两脚，伙伴回放同一决定。
+    P38=`0ec4dc022ef38563`：R7/R8 横向且文字都在左，CC 各 130 水平直连；D± 为
+    **40/40、60/60、40/40** 且可见贴名。C9/C10 共地、R7/R8 独立地旗、USB 去耦竖直与
+    CH343 电容横向未回退。11 器件、49 计划导线、19 旗；lint **0E/0W/0I**，网表分区与
+    导线几何均 **55/55 + 3/3 NC**，主代理逐岛目检通过。旧 P37 已删，Board2 仅 P1；
+    DRC 仅 3 个规格 NC + 3 个库属性 WARN。持久化 `saved_unverified`，第二拓扑未做。
+    543M 已补上联合等长的 `stub=straight` 门：auto/V45 恢复旧逐脚逻辑，straight 的
+    P38 重编译与验收版逐字节相同；主代理 V45/auto/格点复跑 **35 passed**，独立
+    删除门时 auto 负控制变红并已还原。最终 drawcompiler sha256=`0451d93a…`。
+    证据 `evidence/543j/`、`evidence/543kl/`；543J 全量 **9390 passed / 25 skipped /
+    2 既有环境红**，543K/L/M 最终全量 **9496 passed / 25 skipped / 2 既有环境红**；
+    connector 576、dsh 129+1、Rust 111+4、draw smoke 与 doc-claims 39 均过。
 - **合并记录**：worktree `E:/boardwise-wt-layout` 分支 `534b-layout` 已合并 main
   （`b74ee91`）；本批（053C–053F）直接在 main 提交（`263929e`），全量
   **8980 passed / 23 skipped / 2 failed**（两条环境红：pytest-slots ACL、

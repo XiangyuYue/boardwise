@@ -234,6 +234,14 @@ LABEL_WIRE_PURPOSES: tuple[str, ...] = (
     "the wire that carries this net's label",  # 530D: an island's boundary label
 )
 
+#: 543I: the lengths a `native` carrier that is shorter than its own printed row
+#: is grown to, in lattice order. The same ladder a 534 straight stub walks
+#: (:data:`LABEL_STUB_LENGTHS_STRAIGHT`), so a grown carrier is the length this
+#: compiler already draws for a name: the first rung that covers the row plus
+#: :data:`~boardwise.engines.drawcompiler.TEXT_GAP` is 40 on the measured P32
+#: `A6`/`A7` shape (5-unit lead, 14-unit row).
+NATIVE_CARRIER_LENGTHS: tuple[float, ...] = LABEL_STUB_LENGTHS_STRAIGHT
+
 #: The four runs a stub can leave its anchor along, before the preferred one.
 _LABEL_STUB_DIRECTIONS: tuple[tuple[float, float], ...] = (
     (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0),
@@ -773,6 +781,30 @@ class _Built:
         tuple[str, str, tuple[float, float, float, float]]
     ] = field(default_factory=list)
 
+    #: 543H-2 — where a visible ``native`` label's row is printed **after** its
+    #: final stub was chosen, ``id(label) -> (the stub's own points, the row box)``.
+    #: The layout's ``label.bbox`` is the reservation the compiler made, and a
+    #: stub that the landing pass re-casts (``stubMin``, the page frame, the
+    #: carrier ladder) can end short of it: the page's reserved box for `U1.RXD`
+    #: stood 96 units out while the drawn stub was 40, so the row printed at
+    #: `x = 539`, beside `C3`'s designator, on no conductor at all
+    #: (`evidence/543g_skill_trial/README.md` sec.6.2). :func:`_native_stub_row`
+    #: puts the row back on the stub the plan actually lands, and
+    #: :func:`_native_attribute_moves` reads it from here. Keyed by the stub's
+    #: points as well, because the two passes between them may drop or split a
+    #: wire: a row is only used for the carrier whose geometry it was measured on.
+    native_stub_rows: dict[
+        int,
+        tuple[tuple[tuple[float, float], ...], tuple[float, float, float, float]],
+    ] = field(default_factory=dict)
+    #: 543I: the box a visible `native` label's row was moved to when its carrier
+    #: run was **already long enough** but the reserved box stood outside it. The
+    #: carrier is the plan's (it may have grown for another label), so the row
+    #: moves in by the smallest shift that puts it inside; the layout's box is
+    #: left untouched, exactly as for a re-seated stub row above.
+    native_carrier_rows: dict[int, tuple[float, float, float, float]] = (
+        field(default_factory=dict)
+    )
 
 
 def islands_from_circuit(
@@ -1434,6 +1466,8 @@ def module_plan(
                 # around `_place_label_stub` with the old five parameters still
                 # works, and the keyword appears only when a page was stated.
                 stub_args["page_box"] = page_box
+            stub_rows_before = len(built.label_stub_rows)
+            carriers_before = len(built.name_carriers)
             stub, blockers = _place_label_stub(
                 label, built, stub_bodies, stub_pins, **stub_args,
             )
@@ -1491,6 +1525,49 @@ def module_plan(
                 from_pin=pin_at(anchor),
                 purpose="name stub (057: stands in for a label this host cannot place)",
             ))
+            # 543H-2: the row a **visible native** label prints is only decided now.
+            # The layout reserved `label.bbox` before this pass existed, and the stub
+            # this plan draws is what actually carries the name — a stub re-cast by
+            # `stubMin`, the page frame or the carrier ladder can end short of the
+            # reservation, and the attribute row would then print where the stub is
+            # not (measured: `U1.RXD` at `x = 539` beside `C3`'s designator, on a
+            # 40-unit stub that ends at 595). The row is put back on the stub here,
+            # once, and both the plan's own sentence and `attributeMoves` read it.
+            if native:
+                row_ink = list(stub_args["label_boxes"])
+                own = designator_of.get(label.part_id, label.part_id)
+                row_ink.extend(
+                    (f"the drawn body of {part_id}", body)
+                    for part_id, body in stub_bodies.items() if part_id != own
+                )
+                row, row_note = _native_stub_row(
+                    label, stub, row_ink, page_box, built.wires,
+                )
+                if row is not None:
+                    built.native_stub_rows[id(label)] = (
+                        tuple(
+                            (float(point[0]), float(point[1]))
+                            for point in (anchor, *stub[1:])
+                        ),
+                        row,
+                    )
+                    host_sentence = f"{host_sentence}{row_note}"
+                    # 543H-6: the row the plan will print is the one the labels
+                    # after this one must keep off, and it is the one the
+                    # duplicate-carrier floor has to measure. Both books were
+                    # written by `_place_label_stub` a moment ago with the row the
+                    # **host** would print on the run (its midpoint), so a
+                    # re-seated name was in neither: the next label could print on
+                    # it, and two carriers of one net were compared on a row
+                    # nobody prints. The entries this label just added are the
+                    # ones rewritten — every other label keeps exactly the entry
+                    # it had.
+                    for index in range(stub_rows_before, len(built.label_stub_rows)):
+                        what, _old = built.label_stub_rows[index]
+                        built.label_stub_rows[index] = (what, row)
+                    for index in range(carriers_before, len(built.name_carriers)):
+                        net, identity, _old = built.name_carriers[index]
+                        built.name_carriers[index] = (net, identity, row)
             built.downgrades.append(
                 f"net {label.net}: the compiler drew a net label at "
                 f"({label.x:g}, {label.y:g}) — {host_sentence}; no planned wire of "
@@ -1529,6 +1606,33 @@ def module_plan(
     # vertex the page keeps.
     _drop_covered_runs(built)
     _cut_at_flag_attachments(built, pin_at)
+    # 543I: the explicit path's visible names are settled on the geometry the
+    # plan will actually land (the carrier pass above may have moved the wires,
+    # and `attributeMoves` is written from the boxes this pass leaves). A page
+    # that states only `native-attr` — or none of the two keys — is untouched.
+    if native_carrier_settings(presentation):
+        carrier_problems = _native_carrier_cover(
+            built, layout, profiles, stub_bodies, stub_pins, page_box,
+        )
+        carrier_problems.extend(
+            native_carrier_problems(
+                layout.labels, built.wires, page_box,
+                {
+                    **built.native_carrier_rows,
+                    **{
+                        key: value[1]
+                        for key, value in built.native_stub_rows.items()
+                    },
+                },
+            )
+        )
+        if carrier_problems:
+            raise DrawPlanError(
+                "543I: every visible `native` name must print on the conductor "
+                "that carries it, and every non-continuous run of a named net "
+                "must carry one visible name. Refused: "
+                + "; ".join(carrier_problems)
+            )
     # 053S: the document asked for `native-attr`, so the text boxes the layout
     # reserved become the page's own attribute positions. Read **after** the two
     # passes above, because they drop and split wires: the carrier of a label is
@@ -1636,6 +1740,790 @@ def module_plan(
     )
 
 
+def _native_stub_row(
+    label: Any,
+    stub: Sequence[Any],
+    ink: Sequence[tuple[str, tuple[float, float, float, float]]],
+    page_box: tuple[float, float, float, float] | None,
+    wires: Sequence[PlanDrawWire],
+) -> tuple[tuple[float, float, float, float] | None, str]:
+    """Where a visible `native` label's row prints, once its stub is drawn (543H-2).
+
+    ``label.bbox`` is the box the compiler reserved for the name, and the passing
+    assumes the stub reaches it. It need not: a stub re-cast at landing
+    (``labelPolicy.stubMin``, `--page-box`, or a carrier ladder whose first free
+    rung is shorter than the reserved reach) stops where it stops, and an
+    attribute row moved to the reservation then prints **off its own conductor** —
+    on whatever ink is there. The measured case is `U1.RXD`: reserved centre
+    ``x = 539``, drawn 40-unit stub ``(635, 740) -> (595, 740)``, so the row read
+    as `RXD C3` beside `C3`'s designator while every other left-going name (TXD,
+    D+, D-) printed on its own stub.
+
+    The rule here is the carrier's, not the box's: **a visible native row must
+    print on the stub the plan lands.** The box keeps its own size and its row
+    (a horizontal name stays horizontal), and only its centre moves; the seats
+    tried are the stub's last run, from the standoff the compiler's first rung
+    asks for outwards, nearest the reserved centre first — the row moves as
+    little as the stub allows. A seat is legal when the box
+
+    * stands inside the stated sheet (543F: a row off the paper is a lint L10 /
+      host `OBJECTOUTSIDESHEET`),
+    * overlaps no other ink — another label's reservation, a part's
+      reference/value row, a flag's name row, or another part's drawn body
+      (:func:`_hard_ink_boxes` plus the bodies this plan places), and
+    * is crossed by no conductor of **another** net (a name printed on a
+      foreign wire is the 053Z defect, one layer down).
+
+    A box already **on** the run is left alone and answered with ``(None, "")``:
+    "on" is the row's band, not its centre — a row that overhangs the conductor's
+    end by at most one glyph row (:data:`textmetrics.WIRE_NAME_ROW`) is the shape
+    the host itself draws, and this pass does not move a drawing it has nothing to
+    say about. What it does re-seat is a name parked beside its stub, with more
+    than a row of empty paper between box and conductor. No seat at all is a named
+    ``DrawPlanError`` — every candidate's measured blocker is in the sentence,
+    never a quiet `ok`.
+
+    The second return value is the clause the plan's own downgrade grows for a
+    re-seated row, so the sentence and the move cannot disagree.
+    """
+    from .drawcompiler import LABEL_STRAIGHT_STANDOFF, TEXT_GAP
+
+    points = [(float(point[0]), float(point[1])) for point in stub]
+    if len(points) < 2:
+        return None, ""
+    near, tip = points[-2], points[-1]
+    box = tuple(float(value) for value in label.bbox)
+    width, height = box[2] - box[0], box[3] - box[1]
+    centre = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+    horizontal = abs(tip[1] - near[1]) <= 1e-9
+    if horizontal:
+        low, high = sorted((near[0], tip[0]))
+        on_line = abs(centre[1] - near[1]) <= 1e-6
+        clear = max(low - box[2], box[0] - high, 0.0)
+    else:
+        low, high = sorted((near[1], tip[1]))
+        on_line = abs(centre[0] - near[0]) <= 1e-6
+        clear = max(low - box[3], box[1] - high, 0.0)
+    # "On the carrier" is the row's **band**, not its centre: the host prints a
+    # wire's name from the run's midpoint start-anchored, so a row that overhangs
+    # the run's end by less than one glyph row is the host's own drawing and is
+    # left exactly as it is (534 r25 / 053Z's measured rows). A row whose gap to
+    # the run is wider than that band is a name parked beside its stub — the
+    # `RXD`/`C3` shape, 44 units of empty paper between box and conductor.
+    #
+    # A box on a **different side** of the pin than the run the plan drew is not
+    # this pass's question: the two disagree about which way the name leaves the
+    # pin, and turning the name in place would be re-deciding the label, not
+    # landing it (the page layer's `_reseat_native_labels` owns that axis). Only
+    # a box on the stub's own line, stranded past the stub's end, is re-seated.
+    if not on_line or clear <= textmetrics.WIRE_NAME_ROW:
+        return None, ""
+    length = high - low
+    half = (width if horizontal else height) / 2.0
+    standoff = (
+        LABEL_STRAIGHT_STANDOFF
+        if getattr(label, "stub", "") == "straight" else 0.0
+    )
+    inner = half + TEXT_GAP + standoff
+    outer = length - half
+    reserved = centre[0] if horizontal else centre[1]
+    if horizontal:
+        sign = 1.0 if tip[0] > near[0] else -1.0
+    else:
+        sign = 1.0 if tip[1] > near[1] else -1.0
+    near_along = near[0] if horizontal else near[1]
+    if outer < inner:
+        # the run is shorter than the name: the name prints from the stub's own
+        # end outwards (the host's short-wire row overhangs its run the same way),
+        # and the seats march out to the stated reservation — the farthest the
+        # compiler's own drawing put it — so a row the run cannot contain lands
+        # no farther than where the page reserved it.
+        stop = max(inner, abs(reserved - near_along))
+        seats = [inner]
+        reach = inner + DRAW_GRID
+        while reach < stop - 1e-9:
+            seats.append(reach)
+            reach += DRAW_GRID
+        seats.append(stop)
+    else:
+        seats = [inner]
+        reach = inner + DRAW_GRID
+        while reach < outer - 1e-9:
+            seats.append(reach)
+            reach += DRAW_GRID
+        seats.append(outer)
+    ordered = sorted(
+        (near_along + sign * seat for seat in seats),
+        key=lambda seat: abs(seat - reserved),
+    )
+    blockers: list[str] = []
+    for seat in ordered:
+        candidate = (
+            (seat - width / 2.0, near[1] - height / 2.0,
+             seat + width / 2.0, near[1] + height / 2.0)
+            if horizontal else
+            (near[0] - width / 2.0, seat - height / 2.0,
+             near[0] + width / 2.0, seat + height / 2.0)
+        )
+        if page_box is not None and (
+            candidate[0] < float(page_box[0]) - 1e-9
+            or candidate[1] < float(page_box[1]) - 1e-9
+            or candidate[2] > float(page_box[2]) + 1e-9
+            or candidate[3] > float(page_box[3]) + 1e-9
+        ):
+            blockers.append(
+                f"at {_box_text(candidate)} it leaves the sheet "
+                f"{_box_text(tuple(float(value) for value in page_box))}"
+            )
+            continue
+        # 543H-6: **every** seat is asked the same question the reservation was,
+        # and the answer is the carrier's, not the ladder's. The short-run ladder
+        # marches out to the reserved reach, and a reach of 96 over a 30-unit stub
+        # would otherwise "re-seat" the name 54 units past its own conductor with
+        # a sentence promising it was put back on the stub. A name may hang off a
+        # stub's end — the host's own short-wire row does — but by no more than
+        # the glyph row :data:`textmetrics.WIRE_NAME_ROW`, so a seat wider than
+        # that is not a seat at all.
+        off = (
+            max(low - candidate[2], candidate[0] - high, 0.0) if horizontal
+            else max(low - candidate[3], candidate[1] - high, 0.0)
+        )
+        if off > textmetrics.WIRE_NAME_ROW + 1e-9:
+            band = (
+                f"x {low:g}..{high:g} at y {near[1]:g}" if horizontal
+                else f"y {low:g}..{high:g} at x {near[0]:g}"
+            )
+            blockers.append(
+                f"at {_box_text(candidate)} it prints {off:g} units off the stub's "
+                f"own row ({band}), wider than the "
+                f"{textmetrics.WIRE_NAME_ROW:g}-unit band a name may overhang its "
+                "carrier by"
+            )
+            continue
+        clash = next(
+            (
+                f"{what} {_box_text(other)}"
+                for what, other in ink
+                if min(candidate[2], other[2]) - max(candidate[0], other[0]) > 0.0
+                and min(candidate[3], other[3]) - max(candidate[1], other[1]) > 0.0
+            ),
+            None,
+        )
+        if clash is not None:
+            blockers.append(f"at {_box_text(candidate)} it lands on {clash}")
+            continue
+        cut = None
+        for wire in wires:
+            if str(wire.net) == str(label.net):
+                continue
+            for head, tail in zip(wire.points, wire.points[1:]):
+                chord = _segment_box_chord(
+                    (float(head[0]), float(head[1])),
+                    (float(tail[0]), float(tail[1])),
+                    candidate,
+                )
+                if chord > 0.0:
+                    cut = (
+                        f"net {wire.net}'s conductor "
+                        f"{_point_pair(head, tail)} runs {chord:.3g} units inside it"
+                    )
+                    break
+            if cut is not None:
+                break
+        if cut is not None:
+            blockers.append(f"at {_box_text(candidate)} {cut}")
+            continue
+        drawn = " → ".join(
+            f"({point[0]:g}, {point[1]:g})" for point in points
+        )
+        note = (
+            f" — that box stands off the {length:g}-unit stub this plan draws "
+            f"({drawn}), so the name would print on no conductor of its own; the "
+            f"printed row is re-seated onto the stub at {_box_text(candidate)} "
+            "(same size, same row) and that is the position the plan's attribute "
+            "move states (543H-2)"
+        )
+        return candidate, note
+    raise DrawPlanError(
+        f"net {label.net}: the label at ({float(label.x):g}, {float(label.y):g}) "
+        f"reserved its name row at {_box_text(box)}, which the {length:g}-unit stub "
+        f"this plan draws does not reach, and no seat on that stub is legal — "
+        "the row would print off its own conductor, on another net's ink or off "
+        "the sheet. Every seat tried: " + "; ".join(blockers)
+    )
+
+
+def native_carrier_settings(presentation: Any) -> bool:
+    """543I: is the explicit visible-carrier construction stated?
+
+    Both halves are the document's own statements: ``textPlacement:
+    native-attr`` says the host prints the name (so a box is ink), and
+    ``serviceLayout`` is the explicit construction opt-in the 543D/543H passes
+    already read. A page that states only one — or neither — keeps the bytes it
+    had.
+    """
+    return (
+        getattr(presentation, "text_placement", "") == TEXT_PLACEMENT_NATIVE
+        and getattr(presentation, "service_layout", None) is not None
+    )
+
+
+def _visible_native_label(label: Any) -> bool:
+    return bool(
+        getattr(label, "text_mode", "") == TEXT_MODE_NATIVE
+        and getattr(label, "net", "")
+    )
+
+
+def _run_touch(first: tuple[Any, Any], second: tuple[Any, Any]) -> bool:
+    """Do two axis-aligned runs meet (touch, overlap or cross)?"""
+    (a, b), (c, d) = first, second
+    a = (float(a[0]), float(a[1]))
+    b = (float(b[0]), float(b[1]))
+    c = (float(c[0]), float(c[1]))
+    d = (float(d[0]), float(d[1]))
+    first_vertical = abs(a[0] - b[0]) <= 1e-9
+    second_vertical = abs(c[0] - d[0]) <= 1e-9
+    if first_vertical and second_vertical:
+        if abs(a[0] - c[0]) > 1e-6:
+            return False
+        low, high = sorted((a[1], b[1]))
+        other_low, other_high = sorted((c[1], d[1]))
+        return min(high, other_high) - max(low, other_low) >= -1e-6
+    first_horizontal = abs(a[1] - b[1]) <= 1e-9
+    second_horizontal = abs(c[1] - d[1]) <= 1e-9
+    if first_horizontal and second_horizontal:
+        if abs(a[1] - c[1]) > 1e-6:
+            return False
+        low, high = sorted((a[0], b[0]))
+        other_low, other_high = sorted((c[0], d[0]))
+        return min(high, other_high) - max(low, other_low) >= -1e-6
+    if first_horizontal:
+        horizontal, vertical = (a, b), (c, d)
+    else:
+        horizontal, vertical = (c, d), (a, b)
+    low, high = sorted((horizontal[0][0], horizontal[1][0]))
+    return (
+        low - 1e-6 <= vertical[0][0] <= high + 1e-6
+        and min(vertical[0][1], vertical[1][1]) - 1e-6
+        <= horizontal[0][1]
+        <= max(vertical[0][1], vertical[1][1]) + 1e-6
+    )
+
+
+def _native_carrier_run(
+    label: Any, wires: Sequence[Any]
+) -> tuple[int, int, tuple[float, float], tuple[float, float]] | None:
+    """The wire and run whose line carries this label's anchor.
+
+    One label names one conductor, and the run that matters is the one pointing
+    at the label's own box: a label at an L-shaped carrier's corner has two runs
+    through its anchor, and only the run on the box's side can print the name.
+    The return is ``(wire index, run index, head, tail)`` as floats.
+    """
+    anchor = (float(label.x), float(label.y))
+    box = tuple(float(value) for value in label.bbox)
+    centre = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+    best: tuple[tuple[float, float], int, int, tuple[float, float], tuple[float, float]] | None = None
+    for index, wire in enumerate(wires):
+        if str(getattr(wire, "net", "")) != str(label.net):
+            continue
+        points = [(float(point[0]), float(point[1])) for point in wire.points]
+        for run_index, (head, tail) in enumerate(zip(points, points[1:])):
+            if not _on_polyline(anchor, [head, tail]):
+                continue
+            vx, vy = tail[0] - head[0], tail[1] - head[1]
+            length = math.hypot(vx, vy)
+            if length <= 1e-9:
+                continue
+            toward = (
+                vx * (centre[0] - anchor[0]) + vy * (centre[1] - anchor[1])
+            ) / length
+            # The run that **holds the row** is the carrier; direction only breaks
+            # the tie between two collinear runs that both leave the anchor (the
+            # grown carrier keeps the old endpoint as a vertex, so both runs
+            # point the same way and score the same).
+            horizontal = abs(vy) <= 1e-9
+            axis = 0 if horizontal else 1
+            low, high = sorted((head[axis], tail[axis]))
+            holds = (
+                1.0 if low - 1e-6 <= centre[axis] <= high + 1e-6 else 0.0
+            )
+            key = (holds, toward)
+            if best is None or key > best[0]:
+                best = (key, index, run_index, head, tail)
+    if best is None:
+        return None
+    _score, index, run_index, head, tail = best
+    return index, run_index, head, tail
+
+
+def _native_carrier_leg_hits(
+    start: tuple[float, float],
+    stop: tuple[float, float],
+    wires: Sequence[Any],
+    bodies: Mapping[str, tuple[float, float, float, float]],
+    pins: Sequence[tuple[str, str, tuple[float, float]]],
+    ink: Sequence[tuple[str, tuple[float, float, float, float]]],
+    ignore_wire: int,
+) -> str | None:
+    """Why a straight leg is not free, or ``None`` (543I).
+
+    A leg may not touch another conductor (a T joins two nets in this host's
+    netlist, and two runs of one reversible net must stay apart), print through
+    a part's body or a text row, land on a pin, or leave the page. Touching a
+    text box's edge is not a hit — the chord measures interior ink.
+    """
+    for index, wire in enumerate(wires):
+        if index == ignore_wire or len(wire.points) < 2:
+            continue
+        points = [(float(point[0]), float(point[1])) for point in wire.points]
+        for head, tail in zip(points, points[1:]):
+            if _run_touch((start, stop), (head, tail)):
+                return (
+                    f"net {wire.net}'s run ({head[0]:g}, {head[1]:g})-"
+                    f"({tail[0]:g}, {tail[1]:g}) is on it"
+                )
+    for what, box in ink:
+        if _segment_box_chord(start, stop, box) > 1e-6:
+            return f"it prints through {what}"
+    for designator, box in bodies.items():
+        if _segment_box_chord(start, stop, box) > 1e-6:
+            return f"it crosses the drawn body of {designator}"
+    for designator, number, point in pins:
+        spot = (float(point[0]), float(point[1]))
+        if abs(spot[0] - start[0]) < 1e-6 and abs(spot[1] - start[1]) < 1e-6:
+            continue
+        if _on_polyline(spot, [start, stop]):
+            return f"it lands on pin {designator}.{number}"
+    return None
+
+
+def _native_printed_row(
+    label: Any, built: "_Built"
+) -> tuple[float, float, float, float]:
+    """The box a visible native label's row actually prints in (543I).
+
+    `543H-2` re-seats a row onto the stub the plan drew, and that box is what
+    `attributeMoves` states; the layout's reservation is paper nobody writes on
+    for those labels. The gate has to read the same box, or it would judge a name
+    against a position no reader sees.
+    """
+    laid = built.native_stub_rows.get(id(label))
+    if laid is not None:
+        return tuple(float(value) for value in laid[1])
+    settled = built.native_carrier_rows.get(id(label))
+    if settled is not None:
+        return tuple(float(value) for value in settled)
+    return tuple(float(value) for value in label.bbox)
+
+
+def _native_wire_components(
+    wires: Sequence[Any],
+) -> dict[str, list[list[int]]]:
+    """Per net, the connected groups of its plan wires (543I).
+
+    Two wires are one run when any of their straight runs meet — a shared
+    vertex, a collinear overlap or a T. That is the geometric reading the host
+    itself has until something joins them, and it is the unit 543I names.
+    """
+    by_net: dict[str, list[int]] = {}
+    for index, wire in enumerate(wires):
+        if len(wire.points) >= 2:
+            by_net.setdefault(str(wire.net), []).append(index)
+    out: dict[str, list[list[int]]] = {}
+    for net, members in by_net.items():
+        parent = {index: index for index in members}
+
+        def find(item: int) -> int:
+            while parent[item] != item:
+                parent[item] = parent[parent[item]]
+                item = parent[item]
+            return item
+
+        runs = {
+            index: [
+                (float(head[0]), float(head[1]), float(tail[0]), float(tail[1]))
+                for head, tail in zip(wires[index].points, wires[index].points[1:])
+            ]
+            for index in members
+        }
+        for position, left in enumerate(members):
+            for right in members[position + 1:]:
+                if any(
+                    _run_touch(((a, b), (c, d)), ((e, f), (g, h)))
+                    for a, b, c, d in runs[left]
+                    for e, f, g, h in runs[right]
+                ):
+                    a, b = find(left), find(right)
+                    if a != b:
+                        parent[b] = a
+        groups: dict[int, list[int]] = {}
+        for index in members:
+            groups.setdefault(find(index), []).append(index)
+        out[net] = [sorted(group) for group in groups.values()]
+    return out
+
+
+def _native_split_nets(wires: Sequence[Any]) -> set[str]:
+    """Nets whose plan wires are **not** one continuous run."""
+    return {
+        net for net, groups in _native_wire_components(wires).items()
+        if len(groups) > 1
+    }
+
+
+def _native_carrier_cover(
+    built: "_Built",
+    layout: LayoutPlan,
+    profiles: Mapping[str, SymbolProfile],
+    stub_bodies: Mapping[str, tuple[float, float, float, float]],
+    stub_pins: Sequence[tuple[str, str, tuple[float, float]]],
+    page_box: tuple[float, float, float, float] | None,
+) -> list[str]:
+    """Make every visible native name print **on** its own carrier run (543I).
+
+    The page's reserved box is a name placed *beside* a stub tip, and the host
+    prints the attribute row where the plan moves it. On a 5-unit lead the row
+    therefore stands in open paper with no conductor under it (P32's `A6`/`A7`),
+    while a 60/55-unit lead whose row was suppressed reads as a bare wire
+    (`B6`/`B7`). Both are the same defect at two layers: the row and the run it
+    claims do not touch.
+
+    The rule here is the plan's final geometry, and it repairs in the order the
+    drawing reads:
+
+    * a run **long enough** to hold the row moves the row onto itself — the
+      smallest shift that puts the box inside the run, so the name keeps its
+      side and its reading;
+    * a run **shorter than its own name** grows along the same axis to the first
+      ladder length (:data:`NATIVE_CARRIER_LENGTHS`) whose extra leg is clear,
+      which is what turns a 5-unit nub into the 40-unit carrier 534's own stubs
+      use;
+    * neither is legal: the names are returned as problems for the caller's
+      refusal, never quietly left off their conductor.
+
+    Only the explicit path calls this (:func:`native_carrier_settings`), and
+    every candidate leg/box is measured against the plan's own ink, bodies,
+    pins, foreign wires and the sheet. The subject is the **non-continuous**
+    net: a name is one statement per run only where the net has more than one
+    run, so a single-run net keeps the drawing it had (P32's defect does not
+    exist without a second run to be mistaken for the first).
+    """
+    from .drawcompiler import TEXT_GAP
+
+    split = _native_split_nets(built.wires)
+    problems: list[str] = []
+    for label in layout.labels:
+        if not _visible_native_label(label) or str(label.net) not in split:
+            continue
+        found = _native_carrier_run(label, built.wires)
+        if found is None:
+            continue
+        index, _run_index, head, tail = found
+        wire = built.wires[index]
+        anchor = (float(label.x), float(label.y))
+        if id(label) in built.native_stub_rows:
+            # Its row was settled on the stub this plan drew (543H-2); re-seating
+            # the layout box would move a reservation nobody prints.
+            continue
+        box = [float(value) for value in _native_printed_row(label, built)]
+        horizontal = abs(head[1] - tail[1]) <= 1e-9
+        axis = 0 if horizontal else 1
+        other = 1 - axis
+        low, high = sorted((head[axis], tail[axis]))
+        box_low, box_high = sorted((box[axis], box[axis + 2]))
+        if box_low >= low - 1e-6 and box_high <= high + 1e-6:
+            continue
+        ink = _hard_ink_boxes(layout, profiles, built, subject=label)
+        if box_low >= high - 1e-6:
+            side, edge, base = 1.0, high, low
+        elif box_high <= low + 1e-6:
+            side, edge, base = -1.0, low, high
+        else:
+            # The box straddles the run's end but is not contained: it is wider
+            # than the run on both sides. Growing is the only repair.
+            side, edge, base = 1.0, high, low
+        if (high - low) >= (box_high - box_low) - 1e-6:
+            # The run can hold the row: shift it in by the smallest amount.
+            shift = (high - box_high) if side > 0 else (low - box_low)
+            centre = (low + high) / 2.0
+            shift_mid = centre - (box_low + box_high) / 2.0
+            deltas = [
+                (shift if axis == 0 else 0.0, shift if axis == 1 else 0.0),
+                (shift_mid if axis == 0 else 0.0, shift_mid if axis == 1 else 0.0),
+            ]
+            seated = None
+            for dx, dy in deltas:
+                moved = (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
+                if page_box is not None and (
+                    moved[0] < page_box[0] - 1e-9 or moved[1] < page_box[1] - 1e-9
+                    or moved[2] > page_box[2] + 1e-9 or moved[3] > page_box[3] + 1e-9
+                ):
+                    continue
+                if any(
+                    min(moved[2], near[2]) - max(moved[0], near[0]) > 0.0
+                    and min(moved[3], near[3]) - max(moved[1], near[1]) > 0.0
+                    for _what, near in ink
+                ):
+                    continue
+                crossing = None
+                for other_index, other_wire in enumerate(built.wires):
+                    if str(other_wire.net) == str(label.net):
+                        continue
+                    points = [
+                        (float(point[0]), float(point[1]))
+                        for point in other_wire.points
+                    ]
+                    for start, stop in zip(points, points[1:]):
+                        if _segment_box_chord(start, stop, moved) > 1e-6:
+                            crossing = (
+                                f"net {other_wire.net}'s conductor "
+                                f"({start[0]:g}, {start[1]:g})-"
+                                f"({stop[0]:g}, {stop[1]:g})"
+                            )
+                            break
+                    if crossing is not None:
+                        break
+                if crossing is not None:
+                    continue
+                seated = moved
+                break
+            if seated is None:
+                problems.append(
+                    f"net {label.net}: the visible name at "
+                    f"({float(label.x):g}, {float(label.y):g}) reserved its box "
+                    f"{_box_text(tuple(box))}, which overhangs the "
+                    f"{high - low:g}-unit carrier, and no seat inside that run is "
+                    "free of the page's own ink"
+                )
+                continue
+            built.native_carrier_rows[id(label)] = seated
+            continue
+        # The run is shorter than its own name: grow it along its own axis.
+        target = (box_high + TEXT_GAP) if side > 0 else (box_low - TEXT_GAP)
+        needed = abs(target - base)
+        grown = None
+        for length in NATIVE_CARRIER_LENGTHS:
+            if length < needed - 1e-9:
+                continue
+            far = base + side * length
+            if page_box is not None and not (
+                page_box[axis] - 1e-9 <= far <= page_box[axis + 2] + 1e-9
+            ):
+                continue
+            start = (edge, anchor[other]) if horizontal else (anchor[other], edge)
+            stop = (far, anchor[other]) if horizontal else (anchor[other], far)
+            if _native_carrier_leg_hits(
+                start, stop, built.wires, stub_bodies, stub_pins, ink, index,
+            ) is not None:
+                continue
+            grown = far
+            break
+        if grown is None:
+            problems.append(
+                f"net {label.net}: the visible name at "
+                f"({float(label.x):g}, {float(label.y):g}) needs a carrier "
+                f"covering {_box_text(tuple(box))}, but the {high - low:g}-unit run "
+                "it rides cannot grow to any free rung (another conductor, part "
+                "body, text row, pin or the sheet blocks every one)"
+            )
+            continue
+        # Keep the label's own anchor a **vertex** of the carrier: insert the new
+        # far end after it instead of moving it, so the label still sits at a
+        # point the plan states (and every reader of "anchor on a wire vertex"
+        # keeps working). The vertex has to stay **in place**: the run it ends is
+        # only one leg of the polyline, and moving the corner to the far end
+        # would swing the next leg off its axis (543I-5's middle-run counter-
+        # example). Growing is therefore an insertion between the corner and its
+        # outward neighbour, and the insertion is only legal while that
+        # neighbour keeps the polyline orthogonal — a corner that turns, or a
+        # neighbour the grown end would pass, is refused by name.
+        moved: list[tuple[float, float]] = []
+        replaced = False
+        refused = ""
+        for position, point in enumerate(wire.points):
+            spot = (float(point[0]), float(point[1]))
+            moved.append(spot)
+            if replaced or not (
+                abs(spot[axis] - edge) < 1e-6
+                and abs(spot[other] - anchor[other]) < 1e-6
+            ):
+                continue
+            updated = [spot[0], spot[1]]
+            updated[axis] = grown
+            far_point = (updated[0], updated[1])
+            if position == 0:
+                moved.insert(0, far_point)
+            elif position == len(wire.points) - 1:
+                moved.append(far_point)
+            else:
+                mate = None
+                for offset in (1, -1):
+                    neighbour = position + offset
+                    if not 0 <= neighbour < len(wire.points):
+                        continue
+                    axis_value = float(wire.points[neighbour][axis])
+                    other_value = float(wire.points[neighbour][other])
+                    if (
+                        abs(other_value - anchor[other]) <= 1e-6
+                        and abs(axis_value - base) <= 1e-6
+                    ):
+                        mate = neighbour
+                        break
+                outward = None
+                if mate is not None:
+                    candidate = position + (-1 if mate == position + 1 else 1)
+                    if 0 <= candidate < len(wire.points):
+                        outward = float(wire.points[candidate][axis]), float(
+                            wire.points[candidate][other]
+                        )
+                if outward is None or abs(outward[1] - anchor[other]) > 1e-6:
+                    refused = (
+                        f"net {label.net}: the visible name at "
+                        f"({float(label.x):g}, {float(label.y):g}) needs a carrier "
+                        f"covering {_box_text(tuple(box))}, but its {high - low:g}-unit "
+                        "run ends at a corner whose next leg turns off the "
+                        f"{'x' if horizontal else 'y'} axis: growing the run there "
+                        "would leave a diagonal segment"
+                    )
+                    replaced = False
+                    break
+                if (outward[0] - grown) * side < -1e-6:
+                    refused = (
+                        f"net {label.net}: the visible name at "
+                        f"({float(label.x):g}, {float(label.y):g}) needs a carrier "
+                        f"covering {_box_text(tuple(box))}, but its {high - low:g}-unit "
+                        "run ends at a corner and the grown end would pass the next "
+                        "vertex, doubling back over the wire"
+                    )
+                    replaced = False
+                    break
+                if abs(outward[0] - grown) <= 1e-6:
+                    # The neighbour already stands at the grown end: the run
+                    # reaches it, and re-adding the point would duplicate it.
+                    replaced = True
+                    continue
+                moved.append(far_point)
+            replaced = True
+        if not replaced:
+            if refused:
+                problems.append(refused)
+            continue
+        if any(
+            abs(start[0] - stop[0]) > 1e-6 and abs(start[1] - stop[1]) > 1e-6
+            for start, stop in zip(moved, moved[1:])
+        ):
+            problems.append(
+                f"net {label.net}: the visible name at "
+                f"({float(label.x):g}, {float(label.y):g}) cannot ride a carrier "
+                f"covering {_box_text(tuple(box))} without an off-axis segment"
+            )
+            continue
+        wire.points[:] = moved
+    return problems
+
+
+def native_carrier_problems(
+    labels: Sequence[Any],
+    wires: Sequence[Any],
+    page_box: tuple[float, float, float, float] | None = None,
+    rows: Mapping[int, Sequence[float]] | None = None,
+) -> list[str]:
+    """543I's gate: every visible native name prints on its run, every run named.
+
+    Two statements, both about the plan's final geometry:
+
+    1. a visible `native` label's row box must lie **inside** the run its anchor
+       rides (the row may not stand off in open paper — P32's `A6`/`A7` were 8
+       units past a 5-unit lead, which the old 10-unit band forgave);
+    2. every **non-continuous** run of a net that has visible native names must
+       carry one of them (P32's `B6`/`B7` were 60/55-unit leads whose only name
+       was suppressed, leaving bare wires).
+
+    Statement 1 has **no single-run exemption** (543I): a name box that left its
+    own carrier is the same defect whether the net has one run or two — P35's
+    `LED_A` row stood 12 units past its 30-unit stub, and "the net has only one
+    run" was the excuse that let it through. Statement 2 stays about the
+    non-continuous net, because "every run carries a name" only has a subject
+    when there is more than one run. Flags and ordinary (non-`native`) labels are
+    not this gate's subject either way. A page that states neither `native-attr`
+    nor `serviceLayout` never reaches this pass.
+    """
+    components = _native_wire_components(wires)
+    split = {net for net, groups in components.items() if len(groups) > 1}
+    problems: list[str] = []
+    visible: list[Any] = []
+    for label in labels:
+        if not _visible_native_label(label):
+            continue
+        visible.append(label)
+        found = _native_carrier_run(label, wires)
+        if found is None:
+            problems.append(
+                f"net {label.net}: the visible name at "
+                f"({float(label.x):g}, {float(label.y):g}) rides no conductor of "
+                "its own — nothing prints it on a wire"
+            )
+            continue
+        index, _run_index, head, tail = found
+        horizontal = abs(head[1] - tail[1]) <= 1e-9
+        axis = 0 if horizontal else 1
+        low, high = sorted((head[axis], tail[axis]))
+        stated = (rows or {}).get(id(label))
+        box = [
+            float(value) for value in (stated if stated is not None else label.bbox)
+        ]
+        box_low, box_high = sorted((box[axis], box[axis + 2]))
+        if box_low < low - 1e-6 or box_high > high + 1e-6:
+            problems.append(
+                f"net {label.net}: the visible name at "
+                f"({float(label.x):g}, {float(label.y):g}) prints at "
+                f"{_box_text(tuple(box))}, which is not on the "
+                f"{'x' if horizontal else 'y'} {low:g}..{high:g} run of "
+                f"wire[{index}] that carries it"
+            )
+        if page_box is not None and (
+            box[0] < page_box[0] - 1e-9 or box[1] < page_box[1] - 1e-9
+            or box[2] > page_box[2] + 1e-9 or box[3] > page_box[3] + 1e-9
+        ):
+            problems.append(
+                f"net {label.net}: the visible name at "
+                f"({float(label.x):g}, {float(label.y):g}) leaves the sheet "
+                f"({_box_text(tuple(box))})"
+            )
+    named = sorted({str(label.net) for label in visible if str(label.net) in split})
+    for net in named:
+        groups = components.get(net, [])
+        for component in groups:
+            anchors = [
+                (float(label.x), float(label.y))
+                for label in visible if str(label.net) == net
+            ]
+            covered = any(
+                _on_polyline(anchor, [
+                    (float(point[0]), float(point[1]))
+                    for point in wires[index].points
+                ])
+                for anchor in anchors
+                for index in component
+            )
+            if covered:
+                continue
+            described = ", ".join(
+                "(" + " → ".join(
+                    f"{float(point[0]):g}, {float(point[1]):g}"
+                    for point in wires[index].points
+                ) + ")"
+                for index in sorted(component)
+            )
+            problems.append(
+                f"net {net}: run {described} has no visible name — a suppressed "
+                "duplicate leaves it a bare wire, and the runs do not meet"
+            )
+    return problems
+
+
 def _native_attribute_moves(
     layout: LayoutPlan,
     built: "_Built",
@@ -1680,11 +2568,17 @@ def _native_attribute_moves(
         declares_rows = bool(profile is not None and profile.texts)
         if declares_rows and text.part_id not in stated:
             continue
-        if text.x is None or text.y is None:
-            x = (text.bbox[0] + text.bbox[2]) / 2.0
-            y = (text.bbox[1] + text.bbox[3]) / 2.0
-        else:
-            x, y = float(text.x), float(text.y)
+        # 543I-6I: the host prints a part's row **from the ATTR's X/Y as the
+        # row's lower-left corner** (`textmetrics.host_row_box`'s own contract,
+        # and the box `readability`/`drawlint` measure the landed page with), so
+        # the move this pass writes is the layout box's **lower-left**. It used to
+        # write `text.x/text.y`, which `_part_texts` sets to the box *centre* — a
+        # second anchor convention in the same row, half a row off the ink the
+        # compiler reserved and the gate measures. Measured on the CH343 at
+        # doubled pin pitch: the derived ink box covered `U1.4`, `V3`'s pad was
+        # refused as a wall, and the stated service interval was lost.
+        x = float(text.bbox[0])
+        y = float(text.bbox[1])
         moves.append(PlanAttributeMove(
             owner_kind="part", spec_id=text.part_id, role=text.kind, x=x, y=y,
         ))
@@ -1701,6 +2595,17 @@ def _native_attribute_moves(
             and wire.net == label.net
             and _on_polyline(anchor, wire.points)
         ]
+        if len(hits) > 1 and native_carrier_settings(presentation):
+            # 543I: two islands name one net at the **shared port**, so their
+            # carriers meet at the label's anchor and the anchor lies on both. On
+            # the explicit path the row belongs to the carrier on its own box's
+            # side (`_native_carrier_run`), not to "the only wire there is" — the
+            # two module views keep one printed name each and no wire is joined.
+            chosen = _native_carrier_run(
+                label, [built.wires[index] for index in hits],
+            )
+            if chosen is not None:
+                hits = [hits[chosen[0]]]
         if len(hits) != 1:
             found = (
                 "no label wire of that net passes through it"
@@ -1730,10 +2635,27 @@ def _native_attribute_moves(
                 move_version=2, value_visible=False,
             ))
             continue
+        # 543H-2: a row the landing pass re-seated onto the stub it drew is taken
+        # from that box, not from the layout's reservation — the two are the same
+        # box for every label whose stub reaches it (that is why the pass answers
+        # ``None`` there), and they differ exactly where the reservation would
+        # have printed the name off its own conductor. The row is only used for
+        # the carrier its geometry was measured on: `_drop_covered_runs` and
+        # `_cut_at_flag_attachments` ran between that measurement and this index.
+        laid = built.native_stub_rows.get(id(label))
+        row = built.native_carrier_rows.get(id(label), label.bbox)
+        if laid is not None and len(laid[0]) == len(built.wires[index].points):
+            same = all(
+                abs(float(a[0]) - float(b[0])) <= 1e-9
+                and abs(float(a[1]) - float(b[1])) <= 1e-9
+                for a, b in zip(laid[0], built.wires[index].points)
+            )
+            if same:
+                row = laid[1]
         moves.append(PlanAttributeMove(
             owner_kind="wire", wire_index=index, role="net",
-            x=(label.bbox[0] + label.bbox[2]) / 2.0,
-            y=(label.bbox[1] + label.bbox[3]) / 2.0,
+            x=(row[0] + row[2]) / 2.0,
+            y=(row[1] + row[3]) / 2.0,
         ))
     return moves
 
@@ -2494,10 +3416,26 @@ def _hard_ink_boxes(
     subject this call places: every other label box, every part row and every flag
     name row stays hard, and no net is exempted anywhere.
     """
-    out: list[tuple[str, tuple[float, float, float, float]]] = [
-        (f"the layout label box of net {other.net}", tuple(other.bbox))
-        for other in layout.labels if other is not subject and not _label_is_hidden(other)
-    ]
+    out: list[tuple[str, tuple[float, float, float, float]]] = []
+    for other in layout.labels:
+        if other is subject or _label_is_hidden(other):
+            continue
+        # 543H-6: a label this pass already re-seated prints on its **final** row,
+        # not on the box the layout reserved (543H-2). Its reservation is paper
+        # nobody writes on any more, and keeping it on this list made the next
+        # label step around a ghost while the row that is actually printed was
+        # worth no clearance at all. Only labels the pass has re-seated carry this
+        # entry; every other box is the layout's own, exactly as before.
+        laid = built.native_stub_rows.get(id(other))
+        if laid is not None:
+            out.append((f"the printed row of net {other.net}", laid[1]))
+        elif id(other) in built.native_carrier_rows:
+            out.append((
+                f"the printed row of net {other.net}",
+                built.native_carrier_rows[id(other)],
+            ))
+        else:
+            out.append((f"the layout label box of net {other.net}", tuple(other.bbox)))
     for text in layout.texts:
         if text.bbox:
             owner = text.part_id or "the page"

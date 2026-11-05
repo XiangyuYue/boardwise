@@ -1,13 +1,14 @@
 # boardwise — AI 协作约定（轻量）
 
-本仓库 AI 约定的**唯一权威**是 SOP 的**两份同步副本**：
+本仓库 AI 通用约定的**唯一权威**是 SOP 的**两份同步副本**：
 [`.kimi-code/skills/boardwise/SKILL.md`](.kimi-code/skills/boardwise/SKILL.md)（kimi 的约定路径）
 与 [`.agents/skills/boardwise/SKILL.md`](.agents/skills/boardwise/SKILL.md)（dsh 等通用入口——
 它们的 skill 扫描根是 `.agents/skills`，`.kimi-code/` 不在其中）：何时加载、审查闭环、
 真机纪律 R1–R3、bridge 动作速查、真机坑表、三线命令与交付纪律，全在那里。两份是**同一份
 文件放在两个地方**，同步由 `tests/test_doc_claims.py` 盯着（逐字节不一致即红），
 **clone 下来读哪份都行**。本文件只列最常被违反的红线，**不复制**那份内容；
-两处说法冲突时以 SKILL.md 为准。
+两处说法冲突时以 SKILL.md 为准。绘制线的专项裁决（分岛/合岛、成对支路、机器闸与
+视觉闸的分工）不在总 SOP 里，在 `boardwise-draw` 的两个同步副本（见「业务线派单」）。
 
 ## 项目地图（动手前先读这三份）
 
@@ -28,6 +29,12 @@
 
 - 审查线从 [`tasks/review-line.md`](tasks/review-line.md) 派单；绘制线从
   [`tasks/draw-line.md`](tasks/draw-line.md) 派单。两者共享一个模块化单体，不复制业务逻辑。
+- **绘制线任务开工前必须加载 `boardwise-draw` skill**：
+  [`.kimi-code/skills/boardwise-draw/SKILL.md`](.kimi-code/skills/boardwise-draw/SKILL.md)
+  与 [`.agents/skills/boardwise-draw/SKILL.md`](.agents/skills/boardwise-draw/SKILL.md)
+  （两份逐字节相同，dsh 扫 `.agents/skills`，由 `tests/test_doc_claims.py` 盯着）。
+  它只写绘制线裁决——语义分岛、成对支路、机器闸与视觉闸互不替代、修复优先级；
+  通用 SOP、R1–R3 与真机纪律仍以 `boardwise` skill 为唯一权威。
 - shared parser/model/bridge/core/CLI 的改动一律走
   [`tasks/shared-platform.md`](tasks/shared-platform.md) 的**集成锁**，不得夹在规则或算法批里。
 - shared、全量测试与真机串行；算法与迁移不得同批。审查线工作区 `E:\boardwise\.tmp_review_line`
@@ -73,7 +80,8 @@
 
 ## 绘图交付红线（岳 2026-10-20 定，520o 被拒候选落画布被骂后的裁决）
 
-任何画出来的原理图，端给用户之前三关全过，缺一关不许端：
+任何画出来的原理图，端给用户之前三关全过，缺一关不许端（分岛/成对支路的裁决细则与
+逐条检查清单见 `boardwise-draw` skill）：
 
 1. **自审闸**：编译/可读性闸 `ok=True`。闸不过的候选只许进 evidence 目录看几何，
    **不落画布、不端给用户**（`ok=False` 的图端出去 = 让用户替我们做验收）。

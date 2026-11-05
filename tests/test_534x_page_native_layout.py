@@ -127,17 +127,24 @@ def test_the_watched_nets_are_named_at_both_ends(native_plan):
 def test_the_watched_names_move_their_attribute_to_the_label_box(
     native_plan, native_page, circuit, profiles
 ):
-    """The row the page reserved is the row the host prints (version 1)."""
-    plan = _apply_plan(native_plan, circuit, PresentationSpec.load(V45), profiles)
-    moves = [move for move in plan.change.attribute_moves if move.role == "net"]
-    centres = {(move.x, move.y) for move in moves}
+    """The reserved row is the printed row *when the stub reaches it* (543H-6).
+
+    This page states a box the drawn ten-unit stub cannot reach: `TXD`'s row is
+    reserved `(223, 745.5)-(247, 754.5)` against a stub `(175, 750) -> (185, 750)`
+    and `GND`'s own lead runs through every seat between them. The landing pass
+    now refuses by name (the band rule of `drawapply._native_stub_row`) instead of
+    moving the row to a box 38 units off its conductor; the page-layer facts the
+    test was written for — `V3` and `RTS` carry a visible `native` mode at both
+    ends — are still asserted, on the layout.
+    """
+    with pytest.raises(drawapply.DrawPlanError) as refused:
+        _apply_plan(native_plan, circuit, PresentationSpec.load(V45), profiles)
+    message = str(refused.value)
+    assert "net TXD" in message and "no seat on that stub is legal" in message
+    assert "band a name may overhang" in message
     for net in WATCH:
         for label in (item for item in native_plan.labels if item.net == net):
-            assert _centre(label.bbox) in centres, (net, label.bbox)
-    for net in WATCH:
-        for label in (item for item in native_plan.labels if item.net == net):
-            move = next(m for m in moves if (m.x, m.y) == _centre(label.bbox))
-            assert move.move_version == 1, "a visible name is 053R's pose-only move"
+            assert label.text_mode == TEXT_MODE_NATIVE
 
 
 def test_readability_reads_the_native_box_not_a_ghost(native_plan):
@@ -167,24 +174,45 @@ def test_readability_reads_the_native_box_not_a_ghost(native_plan):
 def test_the_watched_labels_keep_a_straight_stub_through_their_anchor(
     native_plan, circuit, profiles
 ):
-    """The stub is drawn, straight, from the anchor — the mode changes no wire."""
-    plan = _apply_plan(native_plan, circuit, PresentationSpec.load(V45), profiles)
+    """The mode changes no wire — and a row its stub cannot carry is refused.
+
+    543H-6: the same page states `TXD`'s name box 38 units past the only stub its
+    pin can draw, so the landing pass refuses by name (see the test above).
+
+    The straight stub this test used to read off `native_plan.segments` was never
+    there: `V3` and `RTS` are **label-only** nets on this page (`segments` holds no
+    run for either), and their stubs are drawn by the landing pass. The loop over
+    that list was therefore empty and asserted nothing — the vacuity this test's
+    rebuild closes. What is read from the layout now is the fact the plan builds on:
+    each watched net has its two `native` labels and **no** conductor, and every
+    one of those labels has a straight stub candidate leaving its own anchor
+    (:func:`drawapply._label_stub_candidates`), which is what makes a straight stub
+    through the anchor possible at all.
+    """
+    with pytest.raises(drawapply.DrawPlanError):
+        _apply_plan(native_plan, circuit, PresentationSpec.load(V45), profiles)
     for net in WATCH:
-        for label in (item for item in native_plan.labels if item.net == net):
-            stub = next(
-                (
-                    wire for wire in plan.change.draw_wires
-                    if wire.net == net and len(wire.points) == 2
-                    and tuple(wire.points[0]) == (label.x, label.y)
-                ),
-                None,
+        labels = [item for item in native_plan.labels if item.net == net]
+        assert len(labels) == 2, (net, [(item.x, item.y) for item in labels])
+        conductors = [segment for segment in native_plan.segments if segment.net == net]
+        assert conductors == [], (
+            f"net {net} now carries a layout conductor "
+            f"{[list(map(float, p)) for p in conductors[0].points]}; this test reads "
+            "its stubs from the landing pass and must be rewritten"
+        )
+        for label in labels:
+            runs = drawapply._label_stub_candidates(label)
+            assert runs, f"net {net} has no stub candidate at ({label.x:g}, {label.y:g})"
+            head = runs[0]
+            (ax, ay), (bx, by) = ((float(p[0]), float(p[1])) for p in head.points[:2])
+            assert (ax, ay) == (float(label.x), float(label.y)), (
+                f"net {net}'s first stub candidate at ({label.x:g}, {label.y:g}) "
+                f"does not leave its anchor: {head.points}"
             )
-            assert stub is not None, (
-                f"net {net} lost the straight stub at ({label.x:g}, {label.y:g}): "
-                f"{[(w.net, w.points) for w in plan.change.draw_wires if w.net == net]}"
+            assert ax == bx or ay == by, (
+                f"net {net}'s first stub candidate at ({label.x:g}, {label.y:g}) "
+                f"is not axis-aligned: {head.points}"
             )
-            (ax, ay), (bx, by) = ((float(p[0]), float(p[1])) for p in stub.points)
-            assert ax == bx or ay == by, f"net {net} stub is not axis-aligned: {stub.points}"
 
 
 # ------------------------------------------- 4. the non-native page is untouched
