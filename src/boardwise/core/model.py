@@ -105,6 +105,17 @@ WELDED_BY_NAME = "welded-by-name"
 TRUNCATED_BY_DESIGNATOR = "truncated-by-duplicate-designator"
 TRUNCATED_BY_CROSS_PAGE_DESIGNATOR = "truncated-by-cross-page-designator"
 
+#: 041 §3: the only evidence level a cross-board **unproven** edge may cite, and
+#: what this reading can actually establish. ``E0`` is "the two sides spell the
+#: same net name", which is string equality — it proves neither a connection nor
+#: a disconnection. ``E1`` (a connector-looking designator, a matching footprint,
+#: a datasheet that shorts two pins *inside* one part, two boards numbering
+#: ``CN1``) cannot say which pin of one board meets which pin of another either,
+#: and there is no ``E2`` before a host netlist cross-check exists (041 §7 S3,
+#: deferred). The level lives here rather than in a rule because it is a
+#: statement about what the model may claim, and the claim is "not proven".
+EVIDENCE_LEVEL_BY_NAME = "E0"
+
 
 @dataclass
 class Component:
@@ -162,8 +173,10 @@ class DesignModel:
     #: Net names whose **membership is not a verified connection**, with the
     #: pages each name was seen on. Empty for every model that comes out of one
     #: export — which is every model except the merged per-page one (issue #19,
-    #: :func:`boardwise.cli._merge_schematic_models`): a single export's netlist
-    #: *is* its connectivity, so its nets are proven by construction.
+    #: :func:`boardwise.cli._merge_schematic_models`): within one board, a single
+    #: export's netlist *is* its connectivity, so its nets are proven by
+    #: construction. Cross-board ties are a different, explicitly unproven
+    #: question answered by :class:`NetInstance` / :attr:`ProjectModel.unproven_edges`.
     #:
     #: The per-page tier reads one page at a time and holds no document that says
     #: which board a page belongs to. Merging two pages by net **name** therefore
@@ -260,6 +273,91 @@ class BoardRef:
     page_uuids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class NetInstance:
+    """One board's net, as its own node — ``(board_uuid, net_name)`` (041 §2).
+
+    ``GND`` on Board1 and ``GND`` on Board3 are **two** instances: the same
+    spelling is E0 evidence and nothing more (041 §3), so a multi-board project's
+    default reading is that no two boards share a node. A tie between two
+    instances needs an explicit engineer declaration (041 §4.1, S2); this class
+    deliberately carries no field in which one could be implied.
+
+    ``board_uuid`` is the container's BOARD document id and must be **non-empty**:
+    there is no instance of "some board". A project with no BOARD document is one
+    *implicit* board whose uuid is empty, and an unregistered page of a
+    multi-board project lands in the empty-uuid ``unattached`` group; both are
+    non-addressable and get no instance at all (041 §1). The missing uuid is
+    never replaced by the title, a page position or a hash — a position-derived
+    ``board#0`` moves with the export order, which is the mistake the task book
+    vetoes.
+
+    ``net_name`` is read as-is, no case folding and no stripping: two names are
+    the same name only when they are the same string, because that is the only
+    question E0 can answer.
+    """
+
+    board_uuid: str
+    net_name: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.board_uuid, str) or not self.board_uuid.strip():
+            raise ValueError(
+                "a NetInstance needs a real BOARD uuid: a project with no BOARD "
+                "document, or a page no board registers, is non-addressable and "
+                "has no instance (041 §1). Titles display only, and no id is "
+                "invented from position, title or page number."
+            )
+
+
+@dataclass(frozen=True)
+class UnprovenNetEdge:
+    """Two net instances this reading **cannot** show to be one node (041 §4.1).
+
+    It is not an edge in the netlist sense: it is a recorded question. The
+    default pair of labels is the whole vocabulary of this batch —
+    ``E0`` / ``welded-by-name`` says "these two instances spell the same net
+    name", which is why they are worth asking about, not that they are connected
+    and not that they are open (``proven-open`` is a conclusion 041 does not issue
+    at all, §3).
+
+    No consumer may read this as a connection; the rule is the opposite one — a
+    consumer that needs "what sits on this net" must refuse to pool the two
+    boards rather than pick one (041 §4.2). Both ends are :class:`NetInstance`,
+    so both boards are addressable: an unattached page cannot appear on either
+    side.
+
+    The two ends must be **different** instances (``__post_init__`` refuses
+    ``first == second``): one net compared with itself is not a question about two
+    nodes, and a self-loop would let a consumer count a single instance twice.
+    Nothing else about the ends is restricted — the same board's two nets are two
+    nodes and may be paired.
+    """
+
+    first: NetInstance
+    second: NetInstance
+    reason: str = WELDED_BY_NAME
+    evidence_level: str = EVIDENCE_LEVEL_BY_NAME
+
+    def __post_init__(self) -> None:
+        for side, instance in (("first", self.first), ("second", self.second)):
+            if not isinstance(instance, NetInstance):
+                raise TypeError(
+                    f"UnprovenNetEdge.{side} must be a NetInstance, not "
+                    f"{type(instance).__name__}: an edge joins two addressable "
+                    "boards' nets, never a board, a title or a page"
+                )
+        if self.first == self.second:
+            # One net compared with itself is not a question about two nodes, and
+            # a self-loop would let a consumer count one instance twice (a board
+            # "affected" on both ends of one non-connection). The name itself is
+            # not restricted: the same board's two nets are two nodes.
+            raise ValueError(
+                f"UnprovenNetEdge cannot join {self.first!r} to itself — a net is "
+                "not unproven against its own instance"
+            )
+
+
 @dataclass
 class BoardModel(DesignModel):
     """One board's design model — the unit every rule runs on (040b §WI-2).
@@ -320,6 +418,15 @@ class ProjectModel:
 
     ``project_raw`` keeps the untouched top-level blocks of the *project*;
     ``raw`` (the façade) keeps reading the single board's, as before.
+
+    **Cross-board nets** (041) are a separate channel:
+    :meth:`net_instances`, :meth:`cross_board_net_instances`,
+    :attr:`unproven_edges` and :meth:`non_addressable_pages` describe what a
+    multi-board project *cannot* prove — that two boards' same-named nets are one
+    node — without changing a single finding, severity or verdict. They are kept
+    out of ``unproven_nets`` on purpose: that one is the page weld a rule must
+    refuse, and it would refuse on every board if cross-board names were put
+    there.
     """
 
     boards: list[BoardModel] = field(default_factory=list)
@@ -363,6 +470,105 @@ class ProjectModel:
         names = {name for board in self.boards for name in board.repeated_designators()}
         return sorted(names)
 
+    # --- cross-board nets (041 §1: instances, disclosure, no verdict) --------
+
+    def net_instances(self) -> list[NetInstance]:
+        """Every addressable board's nets, as instances, in project order.
+
+        Board order first, net name second, so the answer is stable across runs
+        and across a reload of the same project. A board with an empty uuid is
+        skipped: it is the implicit board of a project that declares none, or an
+        ``unattached`` page group, and neither can be paired with anything —
+        :meth:`non_addressable_pages` is where the latter is disclosed.
+
+        The list is flat and every entry names its own board. There is no
+        project-scoped net answering to this name, which is the point: a single
+        name-keyed dict for the whole project is the weld 040b removed one level
+        up, and it is what makes two boards' ``GND`` look like one node.
+        """
+        instances: list[NetInstance] = []
+        for board_model in self.boards:
+            uuid = board_model.board.uuid
+            if not uuid:
+                continue
+            for name in sorted(board_model.nets):
+                instances.append(NetInstance(uuid, name))
+        return instances
+
+    def cross_board_net_instances(self) -> dict[str, list[NetInstance]]:
+        """Net name -> its instances, for names carried by more than one board.
+
+        The net-shaped counterpart of :meth:`multi_board_designators`, with one
+        deliberate difference: the values are *instances* (board **uuid** + name),
+        never titles, because a title is display and a uuid is identity (041 §1).
+
+        A group here is a **question**, not a merge: its members remain separate
+        nodes, and :attr:`unproven_edges` is the record of that. Names carried by
+        one board only are absent, so an empty dict means "no name is shared",
+        not "no boards".
+        """
+        groups: dict[str, list[NetInstance]] = {}
+        for instance in self.net_instances():
+            members = groups.setdefault(instance.net_name, [])
+            if instance not in members:
+                members.append(instance)
+        return {
+            name: members
+            for name, members in sorted(groups.items())
+            if len({member.board_uuid for member in members}) > 1
+        }
+
+    @property
+    def unproven_edges(self) -> tuple[UnprovenNetEdge, ...]:
+        """Every pair of same-named instances on different boards, in order.
+
+        Derived, not stored: the same project always yields the same tuple
+        (net-name order, then project board order), so a report can print it and
+        a test can compare it. One edge per unordered pair — three boards sharing
+        ``GND`` is three questions, not one.
+
+        Nothing is read from a file and nothing is declared here: this property
+        derives ``E0`` / ``welded-by-name`` from the model alone, and no host
+        cross-check exists yet (S3). An engineer's declaration is a *separate*
+        input — read by :mod:`boardwise.core.interconnect` from the path a caller
+        names and disclosed beside these edges — and it changes nothing here: a
+        declared pair does not remove an edge from this tuple, nor promote the
+        same-named group it mentions out of ``E0`` (041 S2 §1). It is also **not**
+        the same channel as :attr:`unproven_nets` — that one marks membership a
+        rule must refuse, and feeding cross-board names into it would make every
+        member rule report UNKNOWN on every multi-board project (041 §1's
+        compatibility ruling).
+        """
+        edges: list[UnprovenNetEdge] = []
+        for members in self.cross_board_net_instances().values():
+            for position, first in enumerate(members):
+                for second in members[position + 1:]:
+                    edges.append(UnprovenNetEdge(first, second))
+        return tuple(edges)
+
+    def non_addressable_pages(self) -> tuple[tuple[str, str], ...]:
+        """``(page_uuid, board_title)`` for pages that belong to no board (041 §1).
+
+        Disclosure only. A page whose ``schematic`` reference dangles lands in the
+        empty-uuid ``unattached`` group, so it is not an addressable board: it
+        takes part in no instance and no edge, and a declaration file may not name
+        it (S2). Listing it is the honest alternative to picking a board for it —
+        and no id is minted for the guess.
+
+        Empty for a single-board project: there an empty uuid is the **implicit**
+        board (a project that declares no BOARD document), which has no
+        cross-board question to disclose. Empty as well when every board is a real
+        one, which is what the two real multi-board fixtures are.
+        """
+        if len(self.boards) < 2:
+            return ()
+        return tuple(
+            (page_uuid, board_model.board.title)
+            for board_model in self.boards
+            if not board_model.board.uuid
+            for page_uuid in board_model.board.page_uuids
+        )
+
     # --- single-board façade (refuses a multi-board project by name) --------
 
     def single_board(self) -> BoardModel:
@@ -405,11 +611,14 @@ class ProjectModel:
         """The project's welded net names — empty unless it is one merged board.
 
         Not the raising façade the fields above use, deliberately: a **multi-board
-        project** has nothing welded, because the container's own document chain
-        attributes every page to a board (:func:`boardwise.parsers.schematic.board_partition`),
-        so each board's netlist is its own. And the rules are handed whatever
-        model the caller has, so a read that cannot answer "unproven?" must answer
-        "no" rather than raise out of a rule run.
+        project** has nothing welded *within* this legacy page-merge channel,
+        because the container's own document chain attributes every page to a
+        board (:func:`boardwise.parsers.schematic.board_partition`), so each
+        board's netlist is its own. The separate :attr:`unproven_edges` channel
+        says which cross-board ties remain unproven; it never feeds these legacy
+        rule refusals. And the rules are handed whatever model the caller has, so
+        a read that cannot answer "unproven?" must answer "no" rather than raise
+        out of a rule run.
         """
         if len(self.boards) != 1:
             return {}
@@ -418,8 +627,8 @@ class ProjectModel:
     def unproven_pages(self, name: str | None) -> tuple[str, ...] | None:
         """As :meth:`DesignModel.unproven_pages`, on the project's one board.
 
-        ``None`` for a multi-board project — which is what every net there is:
-        attributed to a board by the container, therefore proven.
+        ``None`` for a multi-board project: each net is attributed and proven
+        **within its own board**; cross-board ties are not answered here.
         """
         if len(self.boards) != 1:
             return None

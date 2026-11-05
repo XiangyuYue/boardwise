@@ -54,12 +54,19 @@ owner=审查线；绘制线独立开发、互不改文件，主仓及绘制线�
 
 ## 5. 当前任务入口（2026-11-05）
 
-- **038U1/U2 记录一致性**：已在主仓完成未提交实现，合同与验收记录见
-  `tasks/038u_record_consistency.md` 和 `tasks/038u2_document_tombstones.md`。raw 帧读取保持不变，
-  原理图/PCB/库模型共用 ticket/client 判优；整文档 DELETE_DOC 删除/复活已接入，正常删除只披露，
-  异常墓碑不猜删。两份已删除空页的清单变化已获岳明确批准。
-- **041 跨板网络**：S0 合同草案已写在 `tasks/041-cross-board-net-DRAFT.md`，S1 未开工。
-  第一批只实现真实 board uuid 的网络实例、未证明披露和保守消费者；不做同名网焊接、
-  不改 finding/severity/verdict，也不启动语义网表函数层。S4 正式规则必须先有真实板间证据。
-- 后续派单顺序：先完成 038U1/U2 集成验收与提交，再开 041 S1；
-  新版宿主能力探针仍等明确的 4.1.94+ 测试环境和授权非空 PCB。
+- **038U1/U2 记录一致性**：已完成并提交 `d0275ae`，合同与验收记录见
+  `tasks/038u_record_consistency.md` 和 `tasks/038u2_document_tombstones.md`。
+- **038V 焊盘形状间距修正（实现与验收完成）**：任务书为
+  `tasks/038v_pad_shape_clearance.md`。圆盘/长圆改为精确胶囊，非圆椭圆采用有界外接 32 边形；
+  `pad_corners()` 的外接框公开合同不变。全量 9509 passed / 25 skipped / 2 个既有 Windows 环境失败；
+  connector、DSH、Rust 均通过，未跑原始 PCB-A 或真机。
+- **041 S1 跨板网络实例（实现与验收完成）**：合同与证据见
+  `tasks/041s1_net_instances.md`。真实 uuid 的 NetInstance/unproven_edges、checkup/review 披露和
+  triage 保守归属已落地；多板 DRC 叶子无板身份，统一不归属。全量 9542 passed / 25 skipped /
+  2 个既有 Windows 环境失败，connector、DSH、Rust 均通过；S1 本身不含声明读取器或 proven 边。
+- **041 S2 显式声明读取（实现与离线验收完成）**：合同与证据见
+  `tasks/041s2_interconnect.md`。`review <file>` / `checkup --file` 新增显式 `--interconnect`，
+  严格校验后只在报告中披露 proven 边，不合并网表、不改 findings/severity/verdict；空路径、坏文件、
+  错误板身份、live/PCB/finalize/在线均拒绝。最终全量 **9681 passed / 25 skipped / 2 个既有
+  Windows 环境失败**；connector、DSH、Rust 均通过。S3 宿主交叉验证继续暂缓，S4 必须先有真实板间证据。
+- 新版宿主能力探针仍等明确的 4.1.94+ 测试环境和授权非空 PCB。

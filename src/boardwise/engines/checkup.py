@@ -33,7 +33,14 @@ from ..core.metaparams import (
     WARN_CONFLICT as META_WARN_CONFLICT,
     crosscheck as meta_crosscheck,
 )
-from ..core.model import Component, DesignModel, Net, is_ground_net
+from ..core.model import (
+    EVIDENCE_LEVEL_BY_NAME,
+    WELDED_BY_NAME,
+    Component,
+    DesignModel,
+    Net,
+    is_ground_net,
+)
 from ..core.parts import (
     DESIGNATOR_CATEGORIES,
     FACTS_TRUST_CANDIDATE,
@@ -261,27 +268,26 @@ def _model_components(model) -> dict[str, Component]:
 
 
 def _model_nets(model) -> dict[str, Net]:
-    """A model's nets, merged **by name** for a project (040b).
+    """A model's nets, if the model is **one** netlist (040b; 041 §3.1).
 
-    A net name that exists on two boards is one entry here, because every reader
-    of this helper matches nets by name (the warning triage asks "which module is
-    this net in"). Net *instances* stay per board in the model.
+    This used to merge a project's boards by net name, first board winning the
+    members list. 041 §3.1 stops that: the same name on two boards is *two*
+    instances whose relation is unproven (``ProjectModel.unproven_edges``), so a
+    reader asking "what sits on this net" would be answered with two boards' parts
+    welded into one node — the silent weld 040b removed one level up.
+
+    Refusing is therefore the contract: a multi-board project raises
+    :class:`MultiBoardProjectError` from :meth:`ProjectModel.single_board` instead
+    of answering with board 0. A one-board project and a plain
+    :class:`DesignModel` are one netlist by construction and read straight through,
+    unchanged. A caller that needs every board reads ``model.boards`` itself and
+    says per board what it means (``warning_triage_slots`` does exactly that).
     """
     from ..core.model import ProjectModel
 
     if not isinstance(model, ProjectModel):
         return model.nets
-    merged: dict[str, Net] = {}
-    for board_model in model.boards:
-        for name, net in board_model.nets.items():
-            existing = merged.get(name)
-            if existing is None:
-                merged[name] = Net(name=name, pins=list(net.pins))
-                continue
-            for pin in net.pins:
-                if pin not in existing.pins:
-                    existing.pins.append(pin)
-    return merged
+    return model.single_board().nets
 
 
 def _cluster_designators(model: DesignModel) -> list[list[str]]:
@@ -3415,6 +3421,294 @@ def _render_guarded(lines: list[str], name: str, body) -> None:
 
 
 # --------------------------------------------------------------------------
+# the cross-board disclosure (041 S1 §2)
+# --------------------------------------------------------------------------
+
+#: `report.json`'s `source` key for the cross-board disclosure. Its **presence**
+#: is part of the message ("this reading had several addressable boards"), which
+#: is why a single-board or implicit project writes no key at all instead of a
+#: zeroed one — the same ruling `source.unprovenNets` follows.
+CROSS_BOARD_NETS_KEY = "crossBoardNets"
+
+
+def _board_title_of(model, board_uuid: str) -> str:
+    """The display title of the board ``board_uuid`` (never an identity, 041 §1)."""
+    for board_model in getattr(model, "boards", None) or []:
+        if board_model.board.uuid == board_uuid:
+            return board_model.board.title
+    return ""
+
+
+def _short_uuid(uuid: str) -> str:
+    """The uuid's **last six** characters — the repo's existing convention.
+
+    ``canvasrender`` (§1 of the 041 DRAFT) disambiguates board titles by the tail
+    of ``boardUuid``, and the tail is what differs between ids a container mints in
+    sequence. Display only: identity remains the whole uuid, and nothing is derived
+    from this string.
+    """
+    return (uuid or "")[-6:]
+
+
+def _net_instance_row(model, instance) -> dict:
+    """One declared endpoint as a report row (041 S2 §3).
+
+    ``boardUuid`` stays whole — it is the identity a reader can check against the
+    file — while ``boardTitle`` is only why the row is readable. ``netName`` is the
+    net exactly as the declaration and the board carry it, with no trimming.
+    """
+    return {
+        "boardUuid": instance.board_uuid,
+        "boardTitle": _board_title_of(model, instance.board_uuid),
+        "netName": instance.net_name,
+    }
+
+
+def _declared_count_line(count: int) -> str:
+    """The one sentence a declaration adds, shared by the note and the fallback row."""
+    return (
+        f"{count} 条已声明跨板连接"
+        "（显式工程师声明；仅披露，不合并网表）"
+    )
+
+
+def cross_board_net_section(model, interconnect=None) -> dict:
+    """The cross-board net disclosure as data, or ``{}`` when there is none (041 §2).
+
+    Content only for a :class:`ProjectModel` with **more than one board**: a plain
+    :class:`DesignModel`, a one-board project and a project whose only board is the
+    implicit one (no BOARD document) have no cross-board question to describe, and
+    return ``{}`` so their reports are byte-for-byte what they were.
+
+    The section says one thing three ways and never states a conclusion:
+
+    * ``boards`` — the addressable boards, real uuid **and** title. The uuid is the
+      identity; the title is why a human can read the row at all.
+    * ``count``/``nets`` — the net names carried by more than one board, with the
+      instances, ``evidenceLevel: "E0"``, ``reason: "welded-by-name"`` and
+      ``merged: false``. ``count == 0`` in a multi-board project means *checked and
+      nothing shared*, which is different from the absent key above.
+    * ``nonAddressablePages`` — pages that belong to no board (empty uuid): listed,
+      never paired, never given an invented id.
+
+    ``interconnect`` is 041 S2's optional, already-validated engineer declaration
+    (:class:`~boardwise.core.interconnect.InterconnectContract`). With it the
+    section grows two keys and says one more thing; with ``None`` every key, the
+    ``note`` and the whole Markdown are exactly what S1 printed, so an older caller
+    sees no change:
+
+    * ``provenCount``/``proven`` — the declared ties, in file order. Each row names
+      both ends by ``boardUuid``/``boardTitle``/``netName`` and carries
+      ``declaredBy``, ``note``, ``evidenceLevel: "engineer-declared"`` and
+      ``merged: false``.
+
+    ``merged: false`` is the ruling, not a formatting detail: a declaration is a
+    **claim disclosed beside** the unproven groups, never a weld. ``nets``,
+    ``unproven_edges`` and the model keep answering what they answered before, so a
+    same-named ``GND`` group stays "unproven by name" even when a declaration
+    mentions one of its members (041 S2 §1). The counts also stay separate, and
+    the two answer different questions: a declaration proves **the endpoints it
+    names** — that one pair is disclosed as an engineer-declared tie — while an
+    E0 same-named group is neither upgraded to proven nor deleted by it, so a
+    group nobody declared keeps its "only the name, not proven" reading (S2
+    §5.1).
+
+    An empty ``edges`` is a successful read and is disclosed as ``provenCount: 0``
+    with ``proven: []``: "checked, no declared ties" must not look like "no
+    declaration was given", which is why the two keys are added together and only
+    for a real contract. Anything that is neither a contract nor ``None`` is
+    refused rather than treated as "no declaration" — a failed read must never
+    degrade into that reading.
+    """
+    from ..core.interconnect import InterconnectContract
+    from ..core.model import ProjectModel
+
+    declared: InterconnectContract | None = None
+    if interconnect is not None:
+        if not isinstance(interconnect, InterconnectContract):
+            raise TypeError(
+                "cross_board_net_section(interconnect=...) takes a validated "
+                f"InterconnectContract (or None), not {type(interconnect).__name__} "
+                "— a declaration that was not read by the S2 reader is not a "
+                "declaration this report may disclose"
+            )
+        declared = interconnect
+
+    if not isinstance(model, ProjectModel) or len(model.boards) < 2:
+        return {}
+
+    boards = [
+        {"uuid": board_model.board.uuid, "title": board_model.board.title}
+        for board_model in model.boards
+        if board_model.board.uuid
+    ]
+    nets: list[dict] = []
+    for name, instances in model.cross_board_net_instances().items():
+        nets.append({
+            "name": name,
+            "instances": [
+                {
+                    "boardUuid": instance.board_uuid,
+                    "boardTitle": _board_title_of(model, instance.board_uuid),
+                    "netName": instance.net_name,
+                }
+                for instance in instances
+            ],
+            "evidenceLevel": EVIDENCE_LEVEL_BY_NAME,
+            "reason": WELDED_BY_NAME,
+            "merged": False,
+        })
+    pages = [
+        {"pageUuid": page_uuid, "boardTitle": title}
+        for page_uuid, title in model.non_addressable_pages()
+    ]
+    if nets:
+        note = (
+            f"{len(nets)} 个网名出现在多于一块板上：跨板连通性未证明"
+            "（证据级别 E0，仅网名相同），因此未合并；未证明不等于断开"
+        )
+    else:
+        note = (
+            "已检查：没有网名被多于一块板使用（跨板连通性无从谈起；"
+            "未证明不等于断开）"
+        )
+    if pages:
+        note += (
+            f"；另有 {len(pages)} 个页不属于任何板档（non-addressable），"
+            "未参与任何跨板判定"
+        )
+    if declared is not None:
+        note += "；" + _declared_count_line(len(declared.edges))
+    section = {
+        "boards": boards,
+        "count": len(nets),
+        "nets": nets,
+        "nonAddressablePages": pages,
+        "note": note,
+    }
+    if declared is not None:
+        section["provenCount"] = len(declared.edges)
+        section["proven"] = [
+            {
+                "from": _net_instance_row(model, edge.first),
+                "to": _net_instance_row(model, edge.second),
+                "declaredBy": edge.declared_by,
+                "note": edge.note,
+                "evidenceLevel": edge.evidence_level,
+                "merged": False,
+            }
+            for edge in declared.edges
+        ]
+    return section
+
+
+def _declared_end(end: dict) -> str:
+    """One end of a declared tie: short uuid, title for the eye, net verbatim."""
+    return (
+        f"`{_short_uuid(end.get('boardUuid', ''))}` {end.get('boardTitle', '')} "
+        f"`{end.get('netName', '')}`"
+    )
+
+
+def _declared_row(row: dict) -> str:
+    """One ``proven`` row: both ends, who declared it, and the level it carries.
+
+    ``merged=false`` is printed on every row because the row's whole point is that
+    the report discloses a claim without welding it — a reader must not have to
+    infer that from the section's prose.
+    """
+    return (
+        f"- 已声明：{_declared_end(row.get('from') or {})} ↔ "
+        f"{_declared_end(row.get('to') or {})} —— "
+        f"declaredBy={row.get('declaredBy', '')} / "
+        f"{row.get('evidenceLevel', '')} / "
+        f"merged={'true' if row.get('merged') else 'false'} / "
+        f"note={row.get('note', '')}"
+    )
+
+
+def render_cross_board_nets_markdown(section: dict | None) -> list[str]:
+    """Render :func:`cross_board_net_section`'s output; ``[]`` when there is none.
+
+    The one renderer for both reports (``checkup``'s ``report.md`` and
+    ``review --md``), so the two products cannot say different things about the
+    same reading. Uuids are shortened for the eye and the title is printed beside
+    them — display only, identity stays the uuid.
+
+    Vocabulary is the disclosure's, never an electrical verdict: these nets are
+    *not proven* to be one node, which is not the same as being open (041 §3), and
+    the section does not claim a pass for anything.
+
+    The lead sentence is the **section's own ``note``**, printed verbatim: JSON and
+    Markdown then cannot drift into two readings of one count (a `count: 0` section
+    whose prose says "已检查" is the case that mattered — silence and "nothing
+    shared" must not look alike). A hand-built section from before the note existed
+    still renders, with the count-only line as the fallback.
+
+    041 S2 adds one optional reading: when the section carries a ``proven`` key the
+    heading says 「含已声明连接」 and each declared tie gets its own row, with the
+    declared count printed even when it is ``0`` (a section that *was* given a
+    declaration and found none must not look like one that was given no file). A
+    section without the key — every S1 caller — renders byte-for-byte the old text,
+    heading included.
+    """
+    if not section:
+        return []
+    has_proven = "proven" in section
+    proven_count = section.get("provenCount")
+    if not isinstance(proven_count, int) or isinstance(proven_count, bool):
+        proven_count = len(section.get("proven") or [])
+    lines = [
+        "## 跨板网络（含已声明连接）" if has_proven else "## 跨板网络（未证明）",
+        "",
+    ]
+    boards = section.get("boards") or []
+    if boards:
+        lines.append(
+            "- 板："
+            + "、".join(
+                f"`{_short_uuid(board['uuid'])}` {board['title']}" for board in boards
+            )
+        )
+    note = str(section.get("note") or "")
+    if note:
+        lines.append(f"- {note}")
+        if has_proven and "条已声明跨板连接" not in note:
+            lines.append(f"- {_declared_count_line(proven_count)}")
+    elif has_proven:
+        lines.append(f"- {_declared_count_line(proven_count)}")
+    else:
+        count = section.get("count") or 0
+        lines.append(
+            f"- {count} 个网名出现在多于一块板上，跨板连通性未证明"
+            "（E0：仅网名相同，不构成电气连接；未证明不等于断开），因此未合并"
+        )
+    for row in section.get("nets") or []:
+        instances = "、".join(
+            f"`{_short_uuid(instance['boardUuid'])}` {instance['boardTitle']}"
+            for instance in row.get("instances") or []
+        )
+        lines.append(
+            f"- `{row['name']}`：{instances} —— E0 / {row['reason']} / "
+            f"merged={'true' if row.get('merged') else 'false'}"
+        )
+    for row in section.get("proven") or []:
+        lines.append(_declared_row(row))
+    pages = section.get("nonAddressablePages") or []
+    if pages:
+        lines.append(
+            f"- {len(pages)} 个页不属于任何板档（non-addressable），"
+            "未参与任何跨板判定："
+            + "、".join(
+                f"`{_short_uuid(page['pageUuid'])}`（{page['boardTitle']}）"
+                for page in pages
+            )
+        )
+    lines.append("")
+    return lines
+
+
+# --------------------------------------------------------------------------
 # warning triage (039 批② §WI-2)
 # --------------------------------------------------------------------------
 
@@ -3714,6 +4008,141 @@ def disambiguated_triage_keys(slots: list[dict]) -> list[str]:
     return sorted(bases)
 
 
+def _flat_designator_modules(modules: list[dict]) -> dict[str, str]:
+    """``designator -> module name`` over every row, first row winning.
+
+    This is the pre-041 read, and it is only correct when the caller already knows
+    it holds **one** netlist (a plain model or a one-board project): a project-level
+    map cannot tell two boards' ``C1`` apart.
+    """
+    mapping: dict[str, str] = {}
+    for module in modules:
+        for designator in module.get("components") or []:
+            mapping.setdefault(designator, module.get("name", ""))
+    return mapping
+
+
+def _board_scoped_modules(model, modules: list[dict]) -> list[dict[str, str]] | None:
+    """Per-board ``designator -> module`` maps, in ``model.boards`` order.
+
+    ``None`` when the model is **one netlist** (a plain :class:`DesignModel`, or a
+    project with exactly one board): the flat map is then the whole truth and the
+    pre-041 answer stands. ``[]`` for a project with **no** boards — there is
+    nothing to attribute to, and that is not a reason to read the project as one
+    board.
+
+    A module row names its board in ``module["board"]`` (that is the title, not the
+    uuid — 040b's module rows have always carried the title), so a board's map is
+    built from the rows whose title is **that** board's. Two boards sharing a title
+    cannot be told apart this way, and the answer there is an **empty map**: no
+    attribution rather than the first board's. Guessing between them is exactly the
+    first-board-wins weld 041 §3.1 removes, one level down.
+    """
+    boards = getattr(model, "boards", None)
+    if boards is None:
+        return None
+    if not boards:
+        return []
+    if len(boards) == 1:
+        return None
+    titles = collections.Counter(board_model.board.title for board_model in boards)
+    scoped: list[dict[str, str]] = []
+    for board_model in boards:
+        title = board_model.board.title
+        if titles[title] > 1:
+            scoped.append({})
+            continue
+        scoped.append(_flat_designator_modules(
+            [module for module in modules if module.get("board") == title]
+        ))
+    return scoped
+
+
+def _scoped_module(
+    scoped: list[dict[str, str]], model, board_title: object, refs: list[str]
+) -> str | None:
+    """The module a finding's refs belong to, read on the board the finding names.
+
+    When the finding names a **schematic** board, only that board's map is
+    consulted: the same ref on another board is another part, and answering from it
+    is the first-board-wins weld this fix removes.
+
+    When it names a board the project does not have — a PCB document's title
+    (``PCB3``) is the common case, and PCB rules do file findings under it — the
+    refs are resolved across the boards and attributed only when they land in
+    **exactly one** module. Two candidates mean the ref is ambiguous (two boards'
+    ``C1``), which is the same refusal, arrived at without guessing a board.
+    """
+    boards = getattr(model, "boards", None) or []
+    title = str(board_title or "")
+    index = next(
+        (i for i, board_model in enumerate(boards) if board_model.board.title == title),
+        None,
+    )
+    if index is not None and index < len(scoped):
+        mapping = scoped[index]
+        return next((mapping[ref] for ref in refs if ref in mapping), None)
+    for ref in refs:
+        holders = {
+            i for i, board_model in enumerate(boards) if ref in board_model.components
+        }
+        if len(holders) > 1:
+            # A cropped module list may leave only one candidate, but the model
+            # itself still proves this ref names two placements. Never turn a
+            # missing module row into permission to guess between boards.
+            return None
+    candidates = {
+        (i, scoped[i][ref])
+        for i in range(min(len(scoped), len(boards)))
+        for ref in refs
+        if scoped[i].get(ref)
+    }
+    if len(candidates) == 1:
+        return next(iter(candidates))[1]
+    return None
+
+
+def _triage_net_modules(model, modules: list[dict]) -> dict[str, str]:
+    """Net name -> module name, for the names a module attribution can be made about.
+
+    Read **per board** (041 §3.1). The old code pooled the project's boards by net
+    name first and then took the first module it met, so a warning on ``GND`` in a
+    three-board project was filed under whichever board's module happened to come
+    first — a claim about a net nobody had shown to be one node. Three rules now:
+
+    * each board contributes only **its own** modules (``module["board"]``), so two
+      boards' ``C1`` no longer share one entry in the map;
+    * a name carried by **more than one board group** gets no module at all. The
+      groups counted here are ``model.boards``, so the empty-uuid ``unattached``
+      group counts as an owner too: its pages spell the name, and an attribution
+      would be a statement about a page that belongs to no board;
+    * a name only one board carries keeps that board's module — this is a refusal
+      exactly where the answer is ambiguous, not a blanket "never attribute".
+
+    A plain :class:`DesignModel` and a one-board project are one netlist, so they
+    go through the same loop once and keep the pre-041 answer.
+    """
+    boards = getattr(model, "boards", None)
+    scoped = _board_scoped_modules(model, modules)
+    if scoped is None:
+        boards = [model]
+        scoped = [_flat_designator_modules(modules)]
+    owners: dict[str, set[int]] = {}
+    net_modules: dict[str, str] = {}
+    for index, board_model in enumerate(boards or []):
+        mapping = scoped[index]
+        for name, net in (board_model.nets or {}).items():
+            owners.setdefault(name, set()).add(index)
+            for designator, _pin in net.pins:
+                module = mapping.get(designator)
+                if module:
+                    net_modules.setdefault(name, module)
+    for name, seen in owners.items():
+        if len(seen) > 1:
+            net_modules.pop(name, None)
+    return net_modules
+
+
 def warning_triage_slots(
     *,
     model: DesignModel,
@@ -3752,16 +4181,12 @@ def warning_triage_slots(
     instead of letting two judgements become one. Callers put the collision in
     the report's `notes` via :func:`disambiguated_triage_keys`.
     """
-    module_of: dict[str, str] = {}
-    for module in modules:
-        for designator in module.get("components") or []:
-            module_of.setdefault(designator, module.get("name", ""))
-    net_modules: dict[str, str] = {}
-    for name, net in (_model_nets(model) or {}).items():
-        for designator, _pin in net.pins:
-            module = module_of.get(designator)
-            if module:
-                net_modules.setdefault(name, module)
+    module_of = _flat_designator_modules(modules)
+    scoped_modules = _board_scoped_modules(model, modules)
+    # A host DRC leaf carries a net name but no board identity. On a multi-board
+    # project even a name unique to one board may come from a stale PCB, so every
+    # pcb-drc row stays unattributed; only a single-netlist model uses net_modules.
+    net_modules = _triage_net_modules(model, modules) if scoped_modules is None else {}
 
     pending: list[tuple[str, tuple[str, str, str, str], dict]] = []
 
@@ -3827,7 +4252,17 @@ def warning_triage_slots(
             continue
         refs = [str(ref) for ref in (finding.get("refs") or [])]
         target = finding.get("target")
-        module = next((module_of[ref] for ref in refs if ref in module_of), None)
+        # 041 review-fix P1: the finding names its board, so its refs are read
+        # against **that** board's modules. The flat map is only used for a model
+        # that is one netlist; on a multi-board project `scoped_modules` holds one
+        # map per board (empty for a title two boards share), and a finding naming
+        # no known board gets no attribution rather than the first board's.
+        if scoped_modules is None:
+            module = next((module_of[ref] for ref in refs if ref in module_of), None)
+        else:
+            module = _scoped_module(
+                scoped_modules, model, finding.get("board"), refs
+            )
         slot = {
             "source": "boardwise-rule",
             # 516 C4: the rule id under the **snake_case** name the rest of the
@@ -5771,6 +6206,19 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
         lines,
         "证据覆盖（evidence）",
         lambda: lines.extend(render_evidence_markdown(report.get(EVIDENCE_KEY))),
+    )
+    # 041 S1: the cross-board channel, right after the coverage sections and
+    # before any verdict-bearing one. It discloses what the reading **cannot**
+    # prove — that two boards' same-named nets are one node — and owns no finding,
+    # so a report without the key (every single-board and implicit project) renders
+    # exactly as it did. Guarded like its neighbours: a rendering fault costs this
+    # section, not the report.
+    _render_guarded(
+        lines,
+        "跨板网络（cross-board-nets）",
+        lambda: lines.extend(
+            render_cross_board_nets_markdown(source.get(CROSS_BOARD_NETS_KEY))
+        ),
     )
 
     # --- 154 / E4: the integrated whole-board report, first, because it is the

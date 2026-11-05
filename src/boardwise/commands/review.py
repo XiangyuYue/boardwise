@@ -87,6 +87,25 @@ def register_review_parser(sub: Any) -> None:
         ),
     )
     review.add_argument(
+        "--interconnect",
+        metavar="PATH",
+        # `None`, not `""`: "the flag was not given" and "the flag was given an
+        # empty path" are different invocations, and only the first one keeps the
+        # pre-S2 behaviour. An explicit `--interconnect ""` reaches the reader,
+        # which refuses it as the missing path it is.
+        default=None,
+        help=(
+            "The explicit cross-board declaration to read and disclose (041 S2): "
+            "a JSON file naming which net on which board is tied to which net on "
+            "another board. Only a file review (`review <file>` / `--latest`) "
+            "reads it; `--live`, `--view pcb` and `review finalize` refuse it "
+            "rather than answering from a model that has no such endpoints. The "
+            "path is the only file ever opened — nothing is discovered next to "
+            "the project — and a declaration is disclosed in `--md`, never merged "
+            "into the netlist nor added to the findings."
+        ),
+    )
+    review.add_argument(
         "--out",
         dest="out",
         metavar="DIR",
@@ -121,6 +140,24 @@ def register_checkup_parser(sub: Any) -> None:
         help=(
             "Offline fallback: an exported .epro2 to report on, with no editor "
             "and no daemon involved. Mutually exclusive with --project/--instance."
+        ),
+    )
+    checkup.add_argument(
+        "--interconnect",
+        metavar="PATH",
+        # `None`, not `""`: "the flag was not given" and "the flag was given an
+        # empty path" are different invocations, and only the first one keeps the
+        # pre-S2 behaviour. An explicit `--interconnect ""` reaches the reader,
+        # which refuses it as the missing path it is.
+        default=None,
+        help=(
+            "The explicit cross-board declaration to read and disclose (041 S2): a "
+            "JSON file naming which net on which board is tied to which net on "
+            "another board. Only the offline `--file` path reads it — the online "
+            "paths refuse it rather than answering from a project with no stable "
+            "model to check it against. `source.crossBoardNets` and `report.md` "
+            "then carry the same `provenCount`/`proven` disclosure `review --md` "
+            "prints; no finding, severity or verdict moves."
         ),
     )
     checkup.add_argument(

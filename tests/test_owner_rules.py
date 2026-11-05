@@ -192,8 +192,8 @@ def _package_edges() -> set[tuple[str, str]]:
 
 
 def test_the_scan_sees_the_package():
-    assert len(PATHS) == 144, (
-        f"found {len(PATHS)} modules, expected the 144 this batch owns — "
+    assert len(PATHS) == 145, (
+        f"found {len(PATHS)} modules, expected the 145 this batch owns — "
         "a new module needs an owner line in contracts/module-owners.json"
     )
     assert {"core", "parsers", "rules", "engines", "bridge"} <= {

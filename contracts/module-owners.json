@@ -36,6 +36,7 @@
     "core/designintent.py": "shared",
     "core/geometry.py": "shared",
     "core/highspeed.py": "shared",
+    "core/interconnect.py": "shared",
     "core/islands.py": "draw",
     "core/layoutplan.py": "draw",
     "core/measure.py": "shared",

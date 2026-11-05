@@ -89,7 +89,7 @@
 | 039批② | 审查流程升级（schema /3） | 已落 | tasks/039b-review-flow-upgrade.md；outputs/039c_* |
 | 040 | 解析器页归属修复 | 已落 | tasks/040-parser-page-scope.md |
 | 040b | 一板一模型 | 已落 | tasks/040b-per-board-model.md |
-| 041 | 跨板网络（DRAFT） | 规划 | tasks/041-cross-board-net-DRAFT.md |
+| 041 | 跨板网络 | S1/S2 已落，S3 暂缓，S4 待真实样本 | tasks/041-cross-board-net-DRAFT.md；tasks/041s1_net_instances.md；tasks/041s2_interconnect.md |
 | 042 | 解析器 parentId 双程挂载 | 已落 | `5f7cd58`；tasks/042-parser-attr-parentid.md |
 | 043 | MPN 阻值解码偏差 | 已落 | tasks/043-mpn-value-decode.md |
 | 044 | arch 骨架生成器 | 已落 | tasks/044-architecture-self-consistency.md |

@@ -40,6 +40,10 @@ from ..rules.params import (
 from ..rules.paramspec import LdoFixedOutput, TvsStandoffRail
 from ..rules.railratings import CapVoltageRating, LdoDissipation
 from ..rules.sensebias import SamplingBias
+# 041 S1 §3.2: the cross-board disclosure's one renderer lives in `checkup` (both
+# reports print the same section; the checkup module already owns the report-level
+# renderers and imports nothing from here, so this edge is one way).
+from .checkup import render_cross_board_nets_markdown
 
 #: Every rule applied by :func:`run_review`, in execution order. The 011c
 #: facts rules sit after the L1 heuristics: they are slower (library loads)
@@ -355,6 +359,12 @@ def render_markdown(findings: list[Finding], model_meta: dict[str, Any]) -> str:
     check every ref's board to know which netlist a claim is about. A
     single-board report is byte-for-byte what it always was — no board heading,
     no change.
+
+    ``model_meta["cross_board_nets"]``, when the caller supplies it (041 S1), is
+    the cross-board disclosure and is rendered above the findings — including on
+    the no-findings path. It is the *same* section object ``checkup``'s report.md
+    prints, so the two products describe one reading one way; a caller that omits
+    the key gets the pre-041 output.
     """
     counts = severity_counts(findings)
     lines = [
@@ -367,6 +377,16 @@ def render_markdown(findings: list[Finding], model_meta: dict[str, Any]) -> str:
         f"{counts['INFO']} INFO",
         "",
     ]
+    # 041 S1 §3.2: the cross-board disclosure, from the **same** derivation and the
+    # same renderer `checkup`'s report.md uses (it comes in through ``model_meta``
+    # rather than a second code path), so two reports cannot disagree about one
+    # reading. It goes before the findings and above the no-findings line on
+    # purpose: "No findings." is where a reader most needs to be told that a
+    # same-named net on two boards proves nothing. Absent key (single board,
+    # implicit board) renders nothing — 041's keys are additive.
+    lines.extend(
+        render_cross_board_nets_markdown(model_meta.get("cross_board_nets"))
+    )
     if not findings:
         lines.append("No findings.")
         lines.append("")

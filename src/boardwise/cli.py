@@ -48,11 +48,15 @@ from .engines.checkup import (
     UNREVIEWED_DATASHEET_DIR,
     STALE_ACCEPTED_STATES,
     STATE_ACCEPTED_STALE_ELSEWHERE,
+    # 041 S1: the cross-board disclosure — one section object, printed by both
+    # `checkup`'s report.md and `review --md` (S1 §3.2).
+    CROSS_BOARD_NETS_KEY,
     accepted_unknown_counts,
     accepted_unknown_count,
     accepted_unknown_section,
     board_report_section,
     conclusion_section,
+    cross_board_net_section,
     declared_passive_exemptions,
     disambiguated_triage_keys,
     # 537C2: the environment section and its one console line — the report, both
@@ -174,6 +178,7 @@ from .core.changeplan import (
     sha256_of,
 )
 from .core.geometry import ParseStats
+from .core.interconnect import InterconnectError, load_interconnect
 from .parsers.enet import parse_enet
 from .parsers.epro2_model import build_design_model
 from .parsers.epru import EncryptedProjectError, build_board_geometry, load_epro2_source
@@ -1197,7 +1202,20 @@ def _cmd_review(args: argparse.Namespace) -> int:
     live_attempts: list[dict] = []
     parse_stats = ParseStats()
 
+    interconnect = None
     if live:
+        # 041 S2 §3: a declaration names endpoints of a project's *boards*, and a
+        # live reading is a page model with no board identity to check the uuids
+        # against — refused by name rather than validated against a model that
+        # answers "unknown board" for every endpoint.
+        if getattr(args, "interconnect", None) is not None:
+            print(
+                "boardwise review --live: --interconnect 只支持离线文件评审（review "
+                "<file>）；在线读出的是页面模型，没有可校验的板身份，声明没有可以"
+                "对上的端点（041 S2 §3）",
+                file=sys.stderr,
+            )
+            return 2
         if args.file or args.latest is not None:
             print(
                 "boardwise review --live: --live reads the editor, so a file "
@@ -1248,6 +1266,17 @@ def _cmd_review(args: argparse.Namespace) -> int:
         # then reports a design that is no longer there. `--view pcb` still reads
         # it, deliberately and by name, for board-level content.
         view = args.view or "schematic"
+        # 041 S2 §3: the pcb view is the same design read as a board, not the
+        # project's boards — and one board cannot be tied to another. Refused
+        # before the PCB document is even loaded, so no answer is half-given.
+        if getattr(args, "interconnect", None) is not None and view == "pcb":
+            print(
+                "boardwise review --view pcb: --interconnect 需要工程的板清单来校验"
+                "两端（boardUuid + 网名）；PCB 视图只有一个板面，没有跨板端点可声明"
+                "（041 S2 §3）",
+                file=sys.stderr,
+            )
+            return 2
         # The parse reports what it dropped into this (task 020 §WI-1); the model
         # itself is unchanged, so `--json` and every rule's input are byte-for-byte
         # what they were. Only the schematic view fills it — see `_load_model`.
@@ -1259,6 +1288,21 @@ def _cmd_review(args: argparse.Namespace) -> int:
         except ValueError as exc:
             print(f"boardwise: {path}: {exc}", file=sys.stderr)
             return 2
+        # 041 S2 §3: the declaration is read **after** the model (it is validated
+        # against it) and **before** the rule walk and any report is written, so a
+        # file that names an endpoint this project does not have leaves no
+        # half-written `--md`/`--json` behind and no "0 declared ties" either. The
+        # identity is the snapshot's own: a `.epro2` carries none, so a file that
+        # pins `projectUuid` is refused there instead of being matched against a
+        # file-name digest (S2 §1).
+        if getattr(args, "interconnect", None) is not None:
+            try:
+                interconnect = load_interconnect(
+                    args.interconnect, model, project_uuid=_snapshot_identity(path)[0]
+                )
+            except InterconnectError as exc:
+                print(f"boardwise review: {exc}", file=sys.stderr)
+                return 2
 
     rules_errored: list[str] = []
     findings = run_review(model, rules_errored=rules_errored)
@@ -1332,10 +1376,24 @@ def _cmd_review(args: argparse.Namespace) -> int:
         Path(args.json_path).write_text(render_json(findings), encoding="utf-8")
         print(f"JSON report written to {args.json_path}")
     if args.md_path:
+        # 041 S2 §3: the positional call shape is kept **exactly** as it was when
+        # no declaration is given — the keyword is only added for a contract that
+        # validated, so an existing caller/monkeypatch of
+        # `cross_board_net_section(model)` keeps seeing the call it saw before.
+        if interconnect is None:
+            cross_board_nets = cross_board_net_section(model)
+        else:
+            cross_board_nets = cross_board_net_section(model, interconnect=interconnect)
         meta = {
             "source": source,
             "components": components,
             "nets": nets,
+            # 041 S1 §2: the same section object `checkup`'s report.md prints.
+            # `{}` for a single-board or implicit project, which renders as
+            # nothing — the pre-041 Markdown is unchanged. S2 adds the disclosed
+            # declaration through the same object, so the two reports cannot
+            # disagree about it.
+            "cross_board_nets": cross_board_nets,
         }
         summary = _chinese_summary(
             findings,
@@ -1819,6 +1877,19 @@ def _cmd_review_finalize(args: argparse.Namespace) -> int:
     that this is not a board pass. Failures print one ``{code, path, message}``
     JSON object per line, and nothing else.
     """
+    # 041 S2 §3: `finalize` validates a delivery directory, it does not read a
+    # project — a declaration has no report to appear in here, so the flag is
+    # refused by name instead of being silently ignored by the validator. It is
+    # refused *here*, at the handler's own entrance, so that a direct call to
+    # this handler (review's dispatch, DSH's argv, a test) is refused alike.
+    if getattr(args, "interconnect", None) is not None:
+        print(
+            "boardwise review finalize: --interconnect 属于文件评审（review "
+            "<file>）的输入；finalize 只校验交付目录，不读工程、不出报告，"
+            "因此这里没有可以披露声明的地方（041 S2 §3）",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
     # The old review flags all name a *different* input (a file, the editor, the
     # newest export, another output path). Accepting one beside `--out` would
     # mean silently validating one of them, so the mix is refused before any
@@ -6618,19 +6689,35 @@ _CHECKUP_LOCK_FILE = ".checkup.lock"
 
 
 def _checkup_out_preflight(args: argparse.Namespace) -> tuple[int | None, Path]:
-    """The two `--out` refusals, before anything is read or written.
+    """The three argument refusals, before anything is read or written.
 
-    545 lifted these out of `_cmd_checkup`'s body **verbatim** (544 T-E03's
-    messages are unchanged) because the same pair now has to run before the
-    output lock is taken: an invocation the command refuses must not create a
+    545 lifted the `--out` pair out of `_cmd_checkup`'s body **verbatim** (544
+    T-E03's messages are unchanged) because the same pair now has to run before
+    the output lock is taken: an invocation the command refuses must not create a
     lock carrier, and an `--out` that is a regular file must never be treated as
     an output location at all. Both the wrapper and the body call it, so the two
     cannot drift and `_cmd_checkup_run` stays safe on its own.
+
+    041 S2 §3 adds the third, for the same reason and at the same point: an
+    online run (`--file` not given) refuses `--interconnect` **here**, so a
+    refused invocation reaches neither the daemon nor `--out`
+    (`out/.checkup.lock` is not even created — the wrapper's lock comes after
+    this call). A declaration is validated against a project's board list, and
+    the online tiers are page models with no such identity.
     """
     if args.file and (args.project or args.instance):
         print(
             "boardwise checkup: --file is the offline fallback and takes no "
             "--project/--instance (give one or the other)",
+            file=sys.stderr,
+        )
+        return 2, Path(args.out)
+
+    if getattr(args, "interconnect", None) is not None and not args.file:
+        print(
+            "boardwise checkup: --interconnect 只支持离线报告（checkup --file FILE "
+            "--interconnect PATH）；在线读出的页面模型没有可校验的板身份，本批不"
+            "定义在线声明，因此不连 daemon、不写任何报告（041 S2 §3）",
             file=sys.stderr,
         )
         return 2, Path(args.out)
@@ -6861,8 +6948,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     * The lock is released on **every** return path, exception included: the
       ``try/finally`` around the body is what keeps 544's write-error exit from
       leaving the directory refused for the next run.
-    * The refusal pair runs first: no lock carrier for arguments the command
-      already refuses (``--file`` + ``--project``, ``--out`` a regular file).
+    * The three refusals run first: no lock carrier for arguments the command
+      already refuses (``--file`` + ``--project``, ``--out`` a regular file, and
+      the 041 S2 online ``--interconnect`` — a declaration needs a board list the
+      online page tiers do not carry).
     """
     refusal, out_dir = _checkup_out_preflight(args)
     if refusal is not None:
@@ -6912,11 +7001,12 @@ def _cmd_checkup_run(args: argparse.Namespace) -> int:
     section at `{checked: false, reason}` and adds no counts, so exit 0 can never
     be read as "the editor's checks passed" when they never ran.
     """
-    # 545: the two refusals live in `_checkup_out_preflight` because the wrapper
-    # runs the identical pair **before** taking the output lock (a refused
+    # 545: the two `--out` refusals live in `_checkup_out_preflight` because the
+    # wrapper runs the identical pair **before** taking the output lock (a refused
     # invocation must leave no lock carrier behind). They are still run here, in
     # the same order with the same messages 544 gave them, so this function
-    # remains safe when called on its own.
+    # remains safe when called on its own. 041 S2's online `--interconnect`
+    # refusal joined that set for the same reason (no carrier, no daemon).
     refusal, out_dir = _checkup_out_preflight(args)
     if refusal is not None:
         return refusal
@@ -6935,6 +7025,11 @@ def _cmd_checkup_run(args: argparse.Namespace) -> int:
     # what is on disk) and not a second glob written here. Empty on every
     # non-folder path, so all three readers see one fact.
     folder_pcb_files: list = []
+    # 041 S2 §3: the validated declaration, or ``None`` when the flag was not
+    # given. Read after the model below and before any report byte is written, so
+    # a bad file leaves no `report.json`/`report.md` behind; the section that
+    # discloses it is built later, from this one object.
+    interconnect = None
 
     if args.file:
         path = Path(args.file)
@@ -6946,6 +7041,19 @@ def _cmd_checkup_run(args: argparse.Namespace) -> int:
         except ValueError as exc:
             print(f"boardwise checkup: {path}: {exc}", file=sys.stderr)
             return 2
+        # 041 S2 §3: validated against the model just loaded, with the snapshot's
+        # own identity (`_snapshot_identity`), which is empty for a `.epro2` — a
+        # file that pins `projectUuid` is therefore refused there rather than
+        # matched against a file-name digest. Refused before the tier line is
+        # printed, so the console says nothing about a run that will not happen.
+        if getattr(args, "interconnect", None) is not None:
+            try:
+                interconnect = load_interconnect(
+                    args.interconnect, model, project_uuid=_snapshot_identity(path)[0]
+                )
+            except InterconnectError as exc:
+                print(f"boardwise checkup: {exc}", file=sys.stderr)
+                return 2
         tier = "file"
         from .parsers.eprj3 import looks_like_eprj3, pcb_files
 
@@ -7100,6 +7208,26 @@ def _cmd_checkup_run(args: argparse.Namespace) -> int:
             "rulesRefused": list(NET_MEMBERSHIP_RULES),
             "note": "；".join(notes_about_unproven),
         }
+
+    # 041 S1 §2: the cross-board channel — the question the netlist cannot answer
+    # ("are Board1's GND and Board3's GND one node?") said as data, next to the
+    # page weld above because the reader's next question is 「那跨板呢」. Additive
+    # and disclosure-only: no finding, no severity, no verdict, and **absent** on
+    # a single-board or implicit project rather than a zeroed placeholder. It is a
+    # different channel from `unprovenNets` on purpose — putting cross-board names
+    # there would make every net-membership rule report UNKNOWN on every board.
+    #
+    # 041 S2 §3: the positional call shape stays exactly as it was when no
+    # declaration was given, so an existing monkeypatch of
+    # `cross_board_net_section(model)` keeps seeing one argument; the keyword only
+    # appears for a contract that validated. `review --md` builds its section
+    # through the same function, which is what keeps the two reports in step.
+    if interconnect is None:
+        cross_board_nets = cross_board_net_section(model)
+    else:
+        cross_board_nets = cross_board_net_section(model, interconnect=interconnect)
+    if cross_board_nets:
+        source[CROSS_BOARD_NETS_KEY] = cross_board_nets
 
     # --- the curated shelf: the facts-driven sections read it (039 批②).
     #

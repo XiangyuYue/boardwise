@@ -90,8 +90,10 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   213/226 passed；DSH 129 passed / 1 skipped。任务书 `tasks/544_checkup_output_errors.md`、
   `tasks/545_checkup_output_lock.md`，证据 `.tmp_544/`、`.tmp_545/`。
 - **审查线下一步**：eprj3 在线容器、真实 NO_CONNECT、`down` 与 envelope marker（信封字段
-  缺省形态）、缺省 `yAxisDirection`、旋转几何样本；多板 + 库组合另需样本。语义网表函数层
-  暂缓，等专门排期。官方格式一致性差分与 041 排在本轮实测缺陷之后。
+  缺省形态）、缺省 `yAxisDirection`、旋转几何样本；多板 + 库组合另需样本。041 S1/S2 均已完成
+  离线验收（S2 入口 `tasks/041s2_interconnect.md`）：全量 9681 passed / 25 skipped /
+  2 个既有 Windows 环境失败，connector/DSH/Rust 通过。S3 宿主交叉验证与语义网表函数层继续暂缓，
+  S4 正式规则必须先有真实板间证据，不自动接续。
 - **原生 CBB 已排为独立方向（038Q，11-03 调研/任务书完成）**：仓库当前**没有**原生 CBB
   实现；`core/blocks.py` 的 `BlockSymbol` 是绘图模板域，不是宿主原生块。type 17 只是线索，
   **待证实**，不得写成事实。**需真实 CBB 样本**才开阶段 A（离线只读），先读后写；
