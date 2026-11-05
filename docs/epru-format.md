@@ -65,9 +65,13 @@ One record per line: `{envelope-json}||{body-json}|` followed by `\n`.
   `"[\"LAYER\",1]"`), optional `firstTicket` (ticket of the record that created
   this object). **[confirmed]**
 - **Empty body**: a record may carry no payload, written as `{envelope}|||`.
-  There is nothing to read, so the parser counts and skips it. 558 of 11,798
-  records are like this. **[confirmed]** — this was **not** in the earlier
-  survey.
+  The raw framing reader counts it in `empty_body_records` and yields no body.
+  Since 038U1, the model-input consistency view reads it as the official
+  **atomic tombstone** for that id: a winning empty body retires every live
+  version but remains as an ordering boundary. On the original fixture 558 of
+  11,798 records are like this, and none has another version under the same id,
+  so its model reading is unchanged. **[confirmed]** — this was **not** in the
+  earlier survey.
 - **Last line has no terminator and no trailing newline.** The fixture ends
   mid-`BLOB`. Tolerate it. **[confirmed]**
 - Ids that are JSON arrays are the format's way of expressing a composite key.
@@ -686,7 +690,11 @@ that fires on a consumed type hides the real ones (`TABLE`, `UNIVERSAL`,
   read that context, so the two views cannot disagree and the stats are never
   double-counted.
 - Unknown record types: counted in `stats.unknown_types`, never fatal.
-- Records with an empty body: counted in `stats.empty_body_records`, skipped.
+- Records with an empty body: counted in `stats.empty_body_records` on the raw
+  framing pass. Model readers then use the 038U1 consistency view: a winning
+  tombstone produces no model object and removes older live versions of its id,
+  while its `body=None` slot remains as an ordering boundary. Raw framing
+  counters are not recomputed or inflated.
 - Malformed lines (bad envelope, missing separator): counted in
   `stats.malformed_records`, skipped.
 - No PCB document: returns an empty `BoardGeometry` rather than raising, so
@@ -901,3 +909,51 @@ tolerating the older shape rather than switching to the published one. The
 `POURED` local-coordinate question that 125b left open is now **closed by
 measurement** (§6.9): the path is `board / 10` with no offset, and the parser
 uses it.
+
+## 13. Record consistency and tombstones (038U1–U2)
+
+The current official reference is
+[`easyeda-format-skill/SKILL.md` at `4fcab1747d47b2ae01d7f93a485859970c5cf933`](https://github.com/easyeda/easyeda-format-skill/blob/4fcab1747d47b2ae01d7f93a485859970c5cf933/SKILL.md).
+Its「最终一致性」and「删除怎么表达」sections state the static rules directly:
+
+- the competition key is **document + normalised id**; envelope `type` is not a
+  key, so an `ATTR` and a `TEXT` under one id compete;
+- the larger `ticket` wins, then the larger source `client` in lexicographic
+  order (the old 2.0 note's smaller-client direction is explicitly obsolete);
+- an empty body is an **element tombstone**, while `DELETE_DOC` with
+  `{"isDelete":true}` is a **document tombstone**. `isDelete:false` can revive
+  a document. The two forms are not interchangeable.
+
+`iter_epru_records()` remains the raw framing view: it keeps stream order and
+all original counters. `resolve_document()` / `resolve_records()` and
+`split_documents(..., consistent=True)` provide the model-input view. Schematic,
+PCB and library readers share that view; they do not each invent a first- or
+last-writer rule. A duplicate group's winner occupies the id's first slot to
+preserve schematic adjacency, and a winning empty body remains as `body=None`
+so it still terminates an attribute run without producing a model object.
+
+An invalid ticket, a top-ticket tie without a client, or conflicting payloads
+at one `(client,ticket,id)` stays **unresolved** rather than being settled by
+stream order. `ParseStats.consistency_unresolved` counts those groups;
+`coverage.parseIncomplete` and the non-zero-only `consistencyUnresolved` field
+disclose them. Settled groups use the separate `consistency_duplicate_groups`
+counter and do not gate.
+
+All 14 archived `.epro2` fixtures have zero duplicate element ids within a
+document, so 038U1 leaves their models and findings unchanged. Two archives
+also carry a `DELETE_DOC` marker on an otherwise empty schematic page. With the
+explicit 038U2 compatibility ruling, those two page uuids now leave the model;
+the fingerprints **after normalising page-uuid lists** and all findings still
+have **zero mismatches**. No other model delta is accepted.
+
+`DELETE_DOC` is a known record type, no longer an `unknown_types` drift signal.
+`deleted_documents` and the non-zero-only `deletedDocuments` coverage field
+report confirmed document deletion without adding to `recordsDropped` or
+`parseIncomplete`. `isDelete:false` revives a document, an empty `DELETE_DOC`
+body means not-deleted, and an invalid or unsettled marker keeps the whole
+document and increments `consistency_unresolved` instead of guessing.
+
+Not covered here: multi-`DOCHEAD` physical merging, collaborative pend/revoke,
+Rust consumption of the resolved view, or a normative rule for stripping a
+composite id's type prefix. Only exactly equivalent JSON-array ids are
+canonicalised and merged; different arrays are not guessed to be the same id.

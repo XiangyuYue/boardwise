@@ -41,7 +41,12 @@ from pathlib import Path
 
 from ..core.geometry import ParseStats
 from ..core.parts import UNKNOWN
-from .epru_stream import EncryptedProjectError, iter_epru_records, load_epru_text
+from .epru_stream import (
+    EncryptedProjectError,
+    iter_epru_records,
+    load_epru_text,
+    resolve_records,
+)
 
 __all__ = [
     "DOC_PCB",
@@ -457,7 +462,11 @@ def load_exported_project(path: str | Path) -> LocalProject:
     devices: dict[str, LocalDevice] = {}
     current_uuid = ""
     current_device: LocalDevice | None = None
-    for record in iter_epru_records(text, stats):
+    # The consistency view, per document: a DEVICE whose META arrived twice must
+    # contribute the version the format's ticket/client rule picked, not whichever
+    # copy this pass happened to read last. Placements stay on the schematic's own
+    # public grouping below (``collect_part_devices``), which resolves the same way.
+    for record in resolve_records(iter_epru_records(text, stats), stats):
         if record.type == "DOCHEAD":
             body = record.body or {}
             in_device = str(body.get("docType") or "") == "DEVICE"

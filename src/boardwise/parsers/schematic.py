@@ -82,6 +82,7 @@ from .epru_stream import (
     ParseStats,
     iter_epru_records,
     load_epru_text,
+    resolve_records,
 )
 
 #: Round coordinates to this many decimals before matching endpoints to pins.
@@ -236,11 +237,22 @@ def _iter_schematic_records(text: str, stats: ParseStats) -> list[Any]:
     — measured 2026-09-26 to hit on every real fixture (1 to 3 boards each) and
     to dangle exactly once, on the injected orphan page. Nothing else about those
     documents is read: their rules and their empty bodies are not part numbers.
+
+    The stream is read through the **consistency view**
+    (:func:`boardwise.parsers.epru_stream.resolve_records`) *before* the doc-type
+    filter below: one element id that arrived more than once competes only inside
+    its own document, so the cut has to happen per ``DOCHEAD`` first. Applying it
+    before the filter is what keeps ``SCH_PAGE`` (which
+    ``epru_stream.split_documents`` does not retain) on the same view the PCB and
+    library readers get, and what keeps a resolved winner's first-slot position —
+    which is the adjacency ``_split_page`` depends on. The filter itself is
+    unchanged: every record of a ``SCH_PAGE``/``SYMBOL``/``DEVICE`` document, only
+    the ``META`` of a ``SCH``/``BOARD`` document.
     """
     out: list[Any] = []
     keep = False
     meta_only = False
-    for record in iter_epru_records(text, stats):
+    for record in resolve_records(iter_epru_records(text, stats), stats):
         if record.type == "DOCHEAD":
             # A head with no readable body is not a head this reader can use:
             # ``iter_epru_records`` hands an empty or non-object body on as
@@ -603,7 +615,9 @@ FOOTPRINT_ID_RE = re.compile(
 )
 
 
-def _collect_footprint_titles(text: str) -> dict[str, str]:
+def _collect_footprint_titles(
+    text: str, stats: ParseStats | None = None
+) -> dict[str, str]:
     """FOOTPRINT document uuid -> its ``META.title`` (the footprint name).
 
     This is the archive's own ``id -> 封装名`` table, and it is what makes the
@@ -618,12 +632,21 @@ def _collect_footprint_titles(text: str) -> dict[str, str]:
 
     Walks :func:`iter_epru_records` directly rather than the page-filtered
     :func:`_iter_schematic_records`, which drops FOOTPRINT documents by design.
-    No :class:`ParseStats` is passed, so this second pass counts nothing: the
-    counters belong to the parse that built the model.
+    The stream is read through the consistency view
+    (:func:`boardwise.parsers.epru_stream.resolve_records`), so a FOOTPRINT title
+    is the version the format's rule picked, not whichever copy came last.
+
+    ``stats`` is optional and belongs to the **independent** caller, which has
+    no other pass over this stream. :func:`build_project_model` deliberately
+    leaves it out: its own :func:`_iter_schematic_records` already resolved the
+    whole stream (every document type, FOOTPRINT included) against that counter,
+    so forwarding the same object here would report each duplicate group twice —
+    once per view pass. The diagnostics are complete either way; the raw framing
+    counters stay with the first pass (the stream is decoded here without one).
     """
     titles: dict[str, str] = {}
     uuid = ""
-    for record in iter_epru_records(text):
+    for record in resolve_records(iter_epru_records(text), stats):
         if record.type == "DOCHEAD":
             head = record.body or {}
             uuid = (
@@ -1416,13 +1439,18 @@ def collect_library_documents(path: str | Path) -> dict[str, tuple[str, str]]:
     (``R0402`` — the thing a consumer must use, per 006b), and ``source`` is
     ``"<libraryDocUuid>|<libraryUuid>"``, the pair the library answers to. Only
     ``DEVICE``, ``FOOTPRINT`` and ``SYMBOL`` documents have either.
+
+    Read through the consistency view
+    (:func:`boardwise.parsers.epru_stream.resolve_records`), so the ``META`` a
+    library document answers with is the version the format's ticket/client rule
+    picked rather than the last copy in the stream.
     """
     text, meta = load_epru_text(Path(path))
     stats = ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
     out: dict[str, tuple[str, str]] = {}
     uuid = ""
     keep = False
-    for record in iter_epru_records(text, stats):
+    for record in resolve_records(iter_epru_records(text, stats), stats):
         if record.type == "DOCHEAD":
             body = record.body or {}
             doc_type = str(body.get("docType") or "")
@@ -1574,6 +1602,9 @@ def build_project_model(
     split = _split_page(records, stats)
     symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
     device_meta = _collect_device_meta(records, stats)
+    # No ``stats``: the pass above already resolved this stream (all document
+    # types) against it, so handing it here would count every duplicate group
+    # twice. The titles are read from the same view either way.
     footprint_titles = _collect_footprint_titles(text)
 
     project = ProjectModel(source=str(path), project_raw={"project": dict(meta)})

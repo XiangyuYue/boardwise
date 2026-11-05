@@ -695,7 +695,7 @@ def load_eprj3_pcb_source(path: str | Path) -> "Epro2Source":
     found: list[tuple[Any, Path]] = []
     origin: dict[int, Path] = {}
     for pcb_path, chunk in zip(boards, chunks):
-        file_documents = split_documents(chunk, stats)
+        file_documents = split_documents(chunk, stats, consistent=True)
         file_boards = [
             document for document in file_documents if document.doc_type == "PCB"
         ]

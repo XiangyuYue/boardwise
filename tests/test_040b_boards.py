@@ -57,8 +57,14 @@ def test_the_containers_board_chain_gives_the_expected_boards():
     foc = build_project_model(FOC)
     assert foc.board_titles() == ["Board1", "Board2", "Board3"]
     pages = {b.board.title: list(b.board.page_uuids) for b in foc.boards}
+    # 038U2: Board1's second page (`b0342c…`) is gone on purpose. Its document
+    # is a three-record SCH_PAGE — DOCHEAD, META, and a `DELETE_DOC` carrying
+    # `isDelete: true` — so the file itself retired it, and the consistency view
+    # now leaves it out of the board instead of listing a page with no parts on
+    # it. Nothing else about the board moved; the rest of this file is the
+    # evidence (`test_040_page_scope`'s signature checks pin the electrical side).
     assert pages == {
-        "Board1": ["5f0f4e169f1745e789501f939bb10851", "b0342c521c674ddab8dcc8aaf269ca59"],
+        "Board1": ["5f0f4e169f1745e789501f939bb10851"],
         "Board2": ["0876ea4e415ed158"],
         "Board3": ["40daf13560b1086b"],
     }
@@ -66,7 +72,10 @@ def test_the_containers_board_chain_gives_the_expected_boards():
 
     motor = build_project_model(MOTOR)
     assert len(motor.boards) == 2
-    assert [len(b.board.page_uuids) for b in motor.boards] == [2, 1]
+    # 038U2, the same correction on the other archived deletion: 控制板's P2
+    # (`0c399818fb0c5cf7`) is an empty page the file deleted (`isDelete: true`),
+    # so it is no longer one of that board's pages — 2/1 became 1/1.
+    assert [len(b.board.page_uuids) for b in motor.boards] == [1, 1]
     # Custom titles are the container's, not ours: nothing here invents "Board1".
     assert motor.board_titles() != ["Board1", "Board2"]
 

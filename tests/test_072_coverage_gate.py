@@ -774,7 +774,14 @@ NOT_WIRED: dict[str, str] = {
     "total_records": "a total, not a loss — it is what the drops are counted against",
     "pcb_records": "records seen in the PCB document, not dropped",
     "pads_without_net": "an unnamed pad is still a pad on the board; not a record loss",
-    "empty_body_records": "a body with no geometry is still a component in the model",
+    # 038U1: the format's **atomic** delete for one element id is that same id
+    # arriving again with an empty body. It is not a record the reader failed to
+    # read, and a lone tombstone (5,844 on the 14 archived fixtures) deletes
+    # nothing — it marks where an id's earlier versions end.
+    "empty_body_records": (
+        "038U1: the format's atomic tombstone for one id, not a record loss; a "
+        "lone tombstone deletes nothing and the raw count is unchanged"
+    ),
     "malformed_records": "gates on its own field — coverage.parseIncomplete",
     "attrs_attached_by_parent_id": "counts how attributes arrived, not what was lost",
     # --- 135: POURED -------------------------------------------------------
@@ -797,6 +804,43 @@ NOT_WIRED: dict[str, str] = {
         "135: POURED records whose pourFill held no `fill: true` polygon. The "
         "record is still counted in records_by_type; there was no copper in it "
         "to lose, so it is not a record loss"
+    ),
+    # --- 038U1: the consistency view's own two counters ----------------------
+    # Only one of the two is any kind of coverage loss, and neither is a record
+    # loss. A **resolved** duplicate group is one element id that arrived more
+    # than once and the ticket/client rule settled: the model holds the winning
+    # version on purpose, so nothing a consumer needed is missing — still
+    # **ungated** (no `coverage` field, no verdict move).
+    "consistency_duplicate_groups": (
+        "038U1: duplicate-id groups the view settled. The winner is what the "
+        "format says the model must hold -- not a record the reader lost, so it "
+        "is still not gated"
+    ),
+    # An unresolved group is a **count of groups**, not of dropped records, and
+    # every version of such an id stays in the stream (no stream-order winner).
+    # So it must not be summed here — that would claim the reader lost records
+    # it kept. It is **disclosed** instead: `_coverage_section` sets
+    # `parseIncomplete` from it and carries its count as
+    # `coverage.consistencyUnresolved`, present only when non-zero (038U1's
+    # coverage half).
+    "consistency_unresolved": (
+        "038U1: groups the rule could not settle, kept whole -- a group count, "
+        "not dropped records, so not summed here; disclosed instead through "
+        "coverage.parseIncomplete + coverage.consistencyUnresolved"
+    ),
+    # --- 038U2: whole-document deletion --------------------------------------
+    # A document the file itself retired (a winning `DELETE_DOC` with
+    # `isDelete: true`). Nothing was lost: the format says the document is gone,
+    # so no consumer should have read it and no reading fell short. Summing it
+    # here would claim the parser dropped a document the engineer deleted, and
+    # gate a perfectly covered board. It is **disclosed** instead, as
+    # `coverage.deletedDocuments`, present only when non-zero. The case that does
+    # gate is a deletion the rule could not settle -- that document stays whole
+    # and lands on `consistency_unresolved` (038U1's field).
+    "deleted_documents": (
+        "038U2: documents the format itself deleted, left out of the model view "
+        "on purpose -- not a lost record, so not summed here; disclosed instead "
+        "through coverage.deletedDocuments (non-zero only), which gates nothing"
     ),
 }
 
@@ -826,6 +870,225 @@ def test_every_int_counter_on_parse_stats_is_gated_or_explained():
         "DROP_COUNTERS names a field ParseStats no longer has — a rename left the "
         "gate reading a name that is gone"
     )
+
+
+# --------------------------------------------------------------------------
+# 038U1 — the consistency view's unresolved groups, disclosed through coverage
+# --------------------------------------------------------------------------
+
+#: The ``parseIncomplete`` ``verdictWhy`` clause as it read before 038U1. Kept
+#: verbatim so the assertion can say "unchanged for a reading with no
+#: unresolved group" instead of matching a substring of the new sentence.
+_OLD_MALFORMED_CLAUSE = (
+    "解析流中途结束（有无法解析的记录行）：审查覆盖不完整，文件可能被截断或损坏"
+)
+
+
+def _read_board_coverage(**stats_kwargs):
+    """``_coverage_section`` over a reading that **did** produce a model.
+
+    Every 038U1 counter is passed through ``ParseStats`` rather than the section
+    being hand-built, because the wiring under test is the producer side: the
+    coverage section must read the counter the parser wrote.
+    """
+    from boardwise.cli import _coverage_section
+    from boardwise.core.geometry import ParseStats
+
+    model = DesignModel()
+    model.components["U1"] = Component(
+        uid="u1", designator="U1", pins=[Pin("1", "VIN", "VCC")]
+    )
+    model.nets = {"VCC": Net("VCC", [("U1", "1")])}
+    return _coverage_section(
+        model=model, board=None, attempts=[], rules_errored=[],
+        parse_stats=ParseStats(**stats_kwargs),
+    )
+
+
+def test_unresolved_consistency_groups_gate_and_disclose_their_count():
+    """038U1: a group the view could not settle is a coverage gap, not a drop.
+
+    Two ids whose ticket/client winner is unknown mean the model cannot settle
+    which version of those elements is the authoritative current one, so
+    ``parseIncomplete`` must be true and the count must ride along as its own
+    key — while ``recordsDropped`` stays 0, because every version of such an id
+    is still in the stream (nothing was left unread). The reason must name the
+    groups, not the old 「无法解析的记录行」 sentence: no row failed to parse here.
+    """
+    from boardwise.cli import _coverage_reasons
+
+    coverage = _read_board_coverage(consistency_unresolved=2)
+
+    assert coverage["modelEmpty"] is False
+    assert coverage["parseIncomplete"] is True, (
+        "no authoritative consistency view over these ids — an unsettled "
+        "element version means the coverage conclusion is incomplete"
+    )
+    assert coverage["consistencyUnresolved"] == 2
+    assert coverage["recordsDropped"] == 0, (
+        "a group count is not a record count: folding it into the drop sum would "
+        "claim records the reader kept were lost"
+    )
+    reasons = _coverage_reasons(coverage)
+    assert len(reasons) == 1, reasons
+    clause = reasons[0]
+    assert "2组同id记录无法按ticket/client判优" in clause, clause
+    assert "审查覆盖不完整" in clause and "需核对导出/协同来源" in clause, clause
+    assert "无法解析的记录行" not in clause, (
+        "every row parsed; what is missing is a settled winner, not a broken line"
+    )
+    assert clause != _OLD_MALFORMED_CLAUSE
+
+    both = _read_board_coverage(consistency_unresolved=2, malformed_records=1)
+    assert _coverage_reasons(both) == [clause], (
+        "a malformed stream beside the groups keeps the one accurate clause — it "
+        "names the groups and says the coverage is incomplete; printing the old "
+        "sentence too would re-assert a cause that need not hold"
+    )
+
+    assert _coverage_reasons(_read_board_coverage(malformed_records=1)) == [
+        _OLD_MALFORMED_CLAUSE
+    ], "with 0 unresolved groups the pre-038U1 sentence is unchanged, verbatim"
+
+
+def test_settled_duplicate_groups_neither_gate_nor_disclose_a_count():
+    """The other half of 038U1: a *settled* group is the format's own answer.
+
+    The winner is what the model must hold, so nothing was lost and nothing was
+    left open: no gate, no key, no reason.
+    """
+    from boardwise.cli import _coverage_reasons
+
+    coverage = _read_board_coverage(consistency_duplicate_groups=3)
+
+    assert coverage["parseIncomplete"] is False
+    assert "consistencyUnresolved" not in coverage, (
+        "absent — not 0 — when nothing was left open, so no reading has to learn "
+        "a key that only means 'a question never arose'"
+    )
+    assert coverage["recordsDropped"] == 0
+    assert _coverage_reasons(coverage) == []
+
+
+def test_a_clean_reading_keeps_exactly_the_coverage_keys_it_had():
+    """Zero stats: the pre-038U1 key set, in the pre-038U1 order.
+
+    This is the "old output does not move" guard for a build that never saw a
+    duplicate group: reports compared key-by-key against a stored section, and
+    the order `json` writes them in, must both be untouched. 038U2's
+    `deletedDocuments` follows the same rule — it is a fifth reason the key set
+    must not grow for a reading that deleted nothing.
+    """
+    coverage = _read_board_coverage()
+
+    assert list(coverage) == list(CLEAN_COVERAGE)
+    assert coverage == CLEAN_COVERAGE
+    assert "deletedDocuments" not in coverage, (
+        "038U2: a reading that retired no document must not carry the key at all"
+    )
+
+
+# --------------------------------------------------------------------------
+# 038U2 — deleted documents: disclosed, never gated
+# --------------------------------------------------------------------------
+
+
+def test_deleted_documents_are_disclosed_without_gating_anything():
+    """A document the file itself deleted is coverage the engineer retired.
+
+    Nothing was lost and no stream fell short, so the count must **not** reach
+    ``recordsDropped`` (it is not a dropped record), must **not** set
+    ``parseIncomplete`` (nothing failed to parse), and must add no
+    ``verdictWhy`` clause. It is disclosed as its own key, non-zero only, so a
+    reader can see that the model is smaller than the file on purpose.
+    """
+    from boardwise.cli import _coverage_reasons
+
+    coverage = _read_board_coverage(deleted_documents=2)
+
+    assert coverage["deletedDocuments"] == 2
+    assert coverage["recordsDropped"] == 0, (
+        "a normal deletion is not a drop: the format says the document is gone"
+    )
+    assert coverage["parseIncomplete"] is False
+    assert coverage["modelEmpty"] is False
+    assert _coverage_reasons(coverage) == [], "no finding, no severity, no verdict move"
+    assert list(coverage) == [
+        "parseIncomplete", "modelEmpty", "boardsEmpty", "boardsEmptyNames",
+        "pagesDropped", "rulesRefused", "recordsDropped", "deletedDocuments",
+        "rulesErrored", "pcbReviewMissing",
+    ], "the new key is appended beside the other absent-not-zero disclosures"
+
+
+def test_the_drop_sum_is_four_terms_and_deleted_documents_is_not_one_of_them():
+    """With the four producers live and a deletion beside them, 17 stays 17.
+
+    ``deleted_documents`` carries a non-zero decoy exactly like
+    ``pads_without_net``/``empty_body_records`` do in
+    ``test_the_records_dropped_sum_reads_every_gated_counter``: adding it to the
+    sum is the mistake this pins, and it would be invisible at 0.
+    """
+    from boardwise.cli import _coverage_section
+    from boardwise.core.geometry import ParseStats
+
+    model = DesignModel()
+    model.components["U1"] = Component(uid="u1", designator="U1", pins=[Pin("1", "VIN", "VCC")])
+    model.nets = {"VCC": Net("VCC", [("U1", "1")])}
+    coverage = _coverage_section(
+        model=model, board=None, attempts=[], rules_errored=[],
+        parse_stats=ParseStats(
+            pins_dropped_no_number=2,
+            components_without_symbol=3,
+            instances_without_designator=5,
+            conflicting_library_documents=7,
+            deleted_documents=13,
+        ),
+    )
+
+    assert coverage["recordsDropped"] == 17
+    assert coverage["deletedDocuments"] == 13
+    assert coverage["parseIncomplete"] is False
+
+
+def test_an_unsettled_deletion_gates_through_the_unresolved_field_not_this_one():
+    """The pair of facts the ruling separates, pinned side by side.
+
+    A deletion that **cannot** be settled keeps its document whole and is 038U1's
+    ``consistencyUnresolved`` (which gates); a settled one is 038U2's
+    ``deletedDocuments`` (which does not). They may never be the same number, or
+    a report could not tell "we are not sure" from "the file deleted it".
+    """
+    from boardwise.cli import _coverage_reasons
+
+    settled = _read_board_coverage(deleted_documents=1)
+    unsettled = _read_board_coverage(consistency_unresolved=1)
+
+    assert settled["parseIncomplete"] is False and _coverage_reasons(settled) == []
+    assert unsettled["parseIncomplete"] is True and len(_coverage_reasons(unsettled)) == 1
+    assert "deletedDocuments" not in unsettled
+    assert "consistencyUnresolved" not in settled
+
+
+def test_an_empty_model_keeps_its_reason_even_with_unresolved_groups():
+    """``modelEmpty`` outranks the parse clause, exactly as before 038U1.
+
+    An empty reading already says the strongest thing the section can say
+    (「整次审查没有输入」); an unresolved group is a lesser statement about a
+    reading that did produce a model, so it must not displace or accompany it.
+    """
+    from boardwise.cli import _coverage_reasons, _coverage_section
+    from boardwise.core.geometry import ParseStats
+
+    coverage = _coverage_section(
+        model=DesignModel(), board=None, attempts=[], rules_errored=[],
+        parse_stats=ParseStats(consistency_unresolved=2),
+    )
+
+    assert coverage["modelEmpty"] is True and coverage["parseIncomplete"] is True
+    reasons = _coverage_reasons(coverage)
+    assert len(reasons) == 1, reasons
+    assert reasons[0].startswith("模型为空（0 器件 0 网络）"), reasons[0]
+    assert "无法按ticket/client判优" not in reasons[0]
 
 
 def test_refused_conclusions_counts_instances_not_the_registry(monkeypatch):

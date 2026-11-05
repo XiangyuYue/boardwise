@@ -118,7 +118,9 @@ def test_modules_from_pages_disambiguate_repeated_titles_and_flag_collisions():
 
     assert facts["moduleBasis"] == MODULE_BASIS_BOARD
     assert [board["title"] for board in facts["boards"]] == ["Board1", "Board2", "Board3"]
-    assert facts["pageCount"] == 4 and facts["pagesWithComponents"] == 3
+    # 038U2: the fourth page is the empty SCH_PAGE retired by DELETE_DOC, so the
+    # archive now reports three live pages; the three non-empty pages are unchanged.
+    assert facts["pageCount"] == 3 and facts["pagesWithComponents"] == 3
     assert all(module.get("board") in {"Board1", "Board2", "Board3"} for module in modules)
     names = [module["name"] for module in modules]
     # Every page on this fixture is titled "P1" (three of them, on three boards),

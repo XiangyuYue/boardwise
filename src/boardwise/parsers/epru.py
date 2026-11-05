@@ -2819,11 +2819,17 @@ def load_epro2_source(path: str | Path) -> Epro2Source:
     into a netlist model
     (:func:`boardwise.parsers.epro2_model.build_design_model`) without
     reading the file twice.
+
+    The documents come through the 038U1 **consistency view**
+    (``split_documents(..., consistent=True)``): one surviving version per
+    element id, under the format's ticket/client rule. Both consumers above
+    therefore read the same adjudicated stream instead of each deciding for
+    itself; the raw frame log is untouched (``iter_epru_records``).
     """
     source_path = Path(path)
     text, meta = load_epru_text(source_path)
     stats = ParseStats(source=str(source_path), editor_version=meta.get("editorVersion"))
-    documents = split_documents(text, stats)
+    documents = split_documents(text, stats, consistent=True)
     return Epro2Source(source=str(source_path), stats=stats, documents=documents, project_meta=meta)
 
 
@@ -2866,7 +2872,7 @@ def parse_epru_text(text: str, *, source: str = "<text>", project_meta: dict[str
     """
     meta = project_meta or {}
     stats = ParseStats(source=source, editor_version=meta.get("editorVersion"))
-    documents = split_documents(text, stats)
+    documents = split_documents(text, stats, consistent=True)
     src = Epro2Source(source=source, stats=stats, documents=documents, project_meta=meta)
     board = build_board_geometry(src)
     board.name = str(meta.get("title") or "") or board.name

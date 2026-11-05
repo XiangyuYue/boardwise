@@ -1465,6 +1465,36 @@ class ParseStats:
     conflicting_library_documents: int = 0
     edit_version: str | None = None
     editor_version: str | None = None
+    #: Duplicate-id groups the 038U1 consistency view **settled**: one id that
+    #: arrived more than once in one document, where the ticket/client rule
+    #: picked a single surviving version (a max-ticket winner, a larger-client
+    #: winner, or byte-identical copies of one payload). One increment per
+    #: group, never per removed record. Zero on every archived fixture, which
+    #: is the floor this counter is measured against — it counts records the
+    #: raw frame log keeps and the model view drops.
+    consistency_duplicate_groups: int = 0
+    #: Duplicate-id groups the view could **not** settle without guessing: a
+    #: missing or non-integer ticket, a top-ticket tie with no source client,
+    #: or a same-client tie whose payloads disagree. Every version of such an
+    #: id is kept as it stands, so the model sees the disagreement instead of
+    #: a stream-order winner. A non-zero value must be disclosed by whatever
+    #: reader asked for the consistency view.
+    consistency_unresolved: int = 0
+    #: Documents the 038U2 view confirmed **deleted** and therefore left out of
+    #: every consistent document list (``split_documents(consistent=True)``,
+    #: ``resolve_documents``, ``resolve_records``). One per document, however many
+    #: ``DELETE_DOC`` markers argued about it — it counts *documents retired*, not
+    #: markers read. Zero on every archived fixture but the two whose empty pages
+    #: carry a real ``isDelete: true`` (measured: exactly 2 over the 14).
+    #:
+    #: A normal deletion is **not** a lost record: the format says the document is
+    #: gone, so nothing a consumer needed is missing, and this counter must never
+    #: be summed into ``coverage.recordsDropped``. It is disclosed beside it (as
+    #: ``coverage.deletedDocuments``, present only when non-zero) and moves no
+    #: verdict. A document whose deletion **cannot** be settled is the other case
+    #: entirely — it stays whole and lands on
+    #: :attr:`consistency_unresolved`, which does gate.
+    deleted_documents: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable view (keys sorted for stable output)."""
@@ -1489,6 +1519,9 @@ class ParseStats:
             "conflicting_library_documents": self.conflicting_library_documents,
             "edit_version": self.edit_version,
             "editor_version": self.editor_version,
+            "consistency_duplicate_groups": self.consistency_duplicate_groups,
+            "consistency_unresolved": self.consistency_unresolved,
+            "deleted_documents": self.deleted_documents,
         }
 
 

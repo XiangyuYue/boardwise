@@ -2904,7 +2904,17 @@ def _coverage_section(
     * ``parseIncomplete`` — the record stream did not read cleanly
       (``ParseStats.malformed_records``: records the parser had to skip, which is
       what a cut stream leaves behind — 0 on every intact fixture, measured), or
-      the reading came out empty (``modelEmpty``, the extreme form, issue #29);
+      the reading came out empty (``modelEmpty``, the extreme form, issue #29), or
+      the 038U1 consistency view could not settle every duplicate-id group
+      (``ParseStats.consistency_unresolved``, disclosed as
+      ``consistencyUnresolved`` below). All three make the coverage conclusion
+      incomplete, but not for one and the same reason: the first two mean the
+      reading fell short, while the third means the model **cannot settle which
+      version of an element is the authoritative current one** — every version of
+      the id is kept, so nothing was left unread and no record stream is short.
+      What is missing there is an authoritative consistency view, and that is the
+      fact ``parseIncomplete`` discloses for it (``coverage`` may not be called
+      complete on a model whose per-element current version is undetermined);
     * ``modelEmpty`` — 0 components and 0 nets (and 0 copper, for a backup). Its
       own field because the verdict must tell "there was no input at all"
       (``incomplete``) from "some part of the coverage is missing"
@@ -2947,8 +2957,34 @@ def _coverage_section(
       merge dropped (the same uuid arrived twice with two different bodies), so
       it belongs in this sum for the same reason: the report under-covers the
       board, and the run may no longer call itself ``complete``;
+    * ``consistencyUnresolved`` (038U1) — how many duplicate-id groups the
+      consistency view could not settle without guessing (a missing/non-integer
+      ticket, a top-ticket tie with no source client, a same-client tie whose
+      payloads disagree; :func:`boardwise.parsers.epru_stream` keeps every
+      version of such an id, so the model sees the disagreement instead of a
+      stream-order winner). A **group count, not a record count**: nothing was
+      dropped, which is why it is **not** in ``recordsDropped`` and why it must
+      not be folded into that sum — but the model cannot establish an
+      authoritative consistency view over those ids, so the coverage conclusion
+      is incomplete and it sets ``parseIncomplete`` too. The key is
+      emitted **only when non-zero** (absent-not-zero, the same discipline as
+      ``pcbReviewNotRun``): a clean reading must not carry a key that says "a
+      consistency question was open", and a report written before this batch
+      reads identically. Every consumer reads it with ``.get``;
     * ``rulesErrored`` — ids of rules that raised while running (fork 2). The run
       survives them now; this is how the report says so.
+    * ``deletedDocuments`` (038U2) — how many documents the format itself
+      retired (a winning ``DELETE_DOC`` with ``isDelete: true``) and the
+      consistent view therefore left out of the model. A **disclosure**, not a
+      gate, and the only field here of that kind beside ``pcbReviewNotRun``: a
+      deleted document is an edit the engineer made, so nothing was lost and no
+      reading is short — which is why it is not summed into ``recordsDropped``,
+      why it does not set ``parseIncomplete``, and why it adds no
+      ``verdictWhy`` clause. Present **only when non-zero**, the same
+      absent-not-zero rule as the two keys around it: the 12 archived fixtures
+      that delete nothing keep the exact key set and order they had. A deletion
+      that could **not** be settled is not this field — it stays a whole
+      document and gates through ``consistencyUnresolved``;
     * ``pcbReviewMissing`` (126d) — the run read a **file** backup that **has**
       PCB documents, and the PCB runner produced no section. A sixth way the
       review failed to cover the board, and the strongest of the six that are
@@ -2987,8 +3023,26 @@ def _coverage_section(
         # would have described differently.
         + int(parse_stats.conflicting_library_documents)
     )
+    # 038U1: a **group** count, not a record count. Nothing was dropped — every
+    # version of an unsettled id stays in the stream — so it is not part of
+    # `records_dropped` above. What it does mean is that the model cannot tell
+    # which version of those elements is the authoritative current one, so the
+    # coverage conclusion is incomplete: it gates through `parseIncomplete` and
+    # rides along as a key of its own.
+    consistency_unresolved = int(parse_stats.consistency_unresolved)
+    # 038U2: documents the format itself retired. **Not** a loss of coverage and
+    # not a record loss — the document is gone because it was deleted, so there
+    # is nothing a consumer should have read. It therefore joins neither
+    # `records_dropped` nor `parseIncomplete`: it is disclosed, and only when
+    # non-zero (absent-not-zero, the `pcbReviewNotRun` discipline), so a reading
+    # that retired nothing keeps exactly the keys it had. Deleting a document is
+    # a normal edit, not a parse failure; a deletion that could not be *settled*
+    # is the case that gates, and it arrives here as `consistency_unresolved`.
+    deleted_documents = int(parse_stats.deleted_documents)
     return {
-        "parseIncomplete": bool(model_empty or parse_stats.malformed_records),
+        "parseIncomplete": bool(
+            model_empty or parse_stats.malformed_records or consistency_unresolved
+        ),
         "modelEmpty": bool(model_empty),
         # #30 ⑥: boards that came out with no parts. A *count*, like
         # `pagesDropped` and `recordsDropped`, is what gates — but a bare "1
@@ -3016,6 +3070,20 @@ def _coverage_section(
             model, rules=rules_for(intent_source), rules_errored=rules_errored,
         )),
         "recordsDropped": records_dropped,
+        # 038U1: present **only when non-zero**, the same absent-not-zero rule as
+        # `pcbReviewNotRun` below and for the same reason — a coverage section
+        # with nothing to disclose must not carry a key announcing a question
+        # that was never open. Every archived fixture reads 0, so their report
+        # JSON keeps exactly the keys it had before this batch.
+        **({"consistencyUnresolved": consistency_unresolved}
+           if consistency_unresolved else {}),
+        # 038U2: a **reading**, not a gate — the same absent-not-zero shape, for
+        # the same reason. `recordsDropped`, `parseIncomplete`, `verdictWhy` and
+        # the verdict itself are all untouched by it: a document the file deleted
+        # on purpose is coverage the engineer retired, not coverage the parser
+        # failed to reach.
+        **({"deletedDocuments": deleted_documents}
+           if deleted_documents else {}),
         "rulesErrored": sorted(set(rules_errored)),
         "pcbReviewMissing": bool(pcb_review_missing),
         # 166 A: **absent, not empty**, and a reading rather than a gate. Absent
@@ -3050,6 +3118,15 @@ def _coverage_reasons(coverage: dict) -> list[str]:
     because a bare count is not actionable on a multi-board project; it is a
     ``complete-with-open-items`` reason, not an ``incomplete`` one (the project
     did have input — see :func:`_empty_board_titles`).
+
+    038U1 added a third trigger to ``parseIncomplete`` that is **not** a parse
+    failure: duplicate-id groups the consistency view could not settle. The
+    clause names that fact and does **not** print 「有无法解析的记录行」 — false for
+    exactly this reading, where every row was read and what is missing is a
+    settled winner. Where a malformed stream and an unresolved group are both
+    true, this clause is still accurate (the coverage *is* incomplete, and the
+    group count is the fact to act on), so it is the one printed; a reading with
+    ``consistencyUnresolved`` absent (0) keeps the old sentence word for word.
     """
     reasons: list[str] = []
     if coverage.get("modelEmpty"):
@@ -3058,9 +3135,18 @@ def _coverage_reasons(coverage: dict) -> list[str]:
             "整次审查没有输入"
         )
     elif coverage.get("parseIncomplete"):
-        reasons.append(
-            "解析流中途结束（有无法解析的记录行）：审查覆盖不完整，文件可能被截断或损坏"
-        )
+        unresolved = int(coverage.get("consistencyUnresolved") or 0)
+        if unresolved:
+            # 038U1: not a record-line failure — every row parsed, and what the
+            # model lacks is a ticket/client winner for this many id groups.
+            reasons.append(
+                f"{unresolved}组同id记录无法按ticket/client判优：审查覆盖不完整，"
+                "需核对导出/协同来源"
+            )
+        else:
+            reasons.append(
+                "解析流中途结束（有无法解析的记录行）：审查覆盖不完整，文件可能被截断或损坏"
+            )
     if coverage.get("boardsEmpty"):
         # #30 ⑥: the count says how many, the names say which — on a multi-board
         # project "1 块板是空的" is not actionable without them. The clause sits

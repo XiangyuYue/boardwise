@@ -51,3 +51,15 @@ import review。Finding、severity、mode 与报告措辞仍归 review；B1–B3
 owner=审查线；绘制线独立开发、互不改文件，主仓及绘制线的未提交改动不碰。shared 集成、
 全量测试与真机仍由 `tasks/shared-platform.md` 串行。旧 worktree 审计结论：没有可安全回收
 项，证据区不按名字清理。`git worktree add/remove/prune` 仍逐次经岳明确批准。
+
+## 5. 当前任务入口（2026-11-05）
+
+- **038U1/U2 记录一致性**：已在主仓完成未提交实现，合同与验收记录见
+  `tasks/038u_record_consistency.md` 和 `tasks/038u2_document_tombstones.md`。raw 帧读取保持不变，
+  原理图/PCB/库模型共用 ticket/client 判优；整文档 DELETE_DOC 删除/复活已接入，正常删除只披露，
+  异常墓碑不猜删。两份已删除空页的清单变化已获岳明确批准。
+- **041 跨板网络**：S0 合同草案已写在 `tasks/041-cross-board-net-DRAFT.md`，S1 未开工。
+  第一批只实现真实 board uuid 的网络实例、未证明披露和保守消费者；不做同名网焊接、
+  不改 finding/severity/verdict，也不启动语义网表函数层。S4 正式规则必须先有真实板间证据。
+- 后续派单顺序：先完成 038U1/U2 集成验收与提交，再开 041 S1；
+  新版宿主能力探针仍等明确的 4.1.94+ 测试环境和授权非空 PCB。
