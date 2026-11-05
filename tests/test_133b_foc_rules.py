@@ -344,15 +344,18 @@ def test_r16_warns_only_beyond_the_line_and_robot_is_the_measured_instance():
     """**155a's ruling**: 岳 2026-10-11 — over 200 mil is a WARN, within is INFO.
 
     ROBOT's ``DRV1`` is the corpus's measured instance of the outside: its
-    ``VM`` pins (11 and 4) are decoupled by ``C10`` at 596.4 / 767.3 mil and by
-    ``C6`` at 304.1 mil, all three over the line, while ``C6`` at 149.9 and
-    ``C9`` at 44.0 / 162.3 mil sit inside it. So the same board produces both
+    ``VM`` pins (11 and 4) are decoupled by ``C10`` at 598.3 / 768.9 mil and by
+    ``C6`` at 306.1 mil, all three over the line, while ``C6`` at 152.7 and
+    ``C9`` at 44.0 / 163.9 mil sit inside it. So the same board produces both
     severities, which is what makes it the acceptance anchor: the split is the
     ruling, not a blanket ``WARN`` on the rule.
 
     Measured rows (ROBOT PCB1, six of them):
-    ``C10@11 596.4 WARN`` / ``C10@4 767.3 WARN`` / ``C6@4 304.1 WARN`` /
-    ``C6@11 149.9 INFO`` / ``C9@11 44.0 INFO`` / ``C9@4 162.3 INFO``.
+    ``C10@11 598.3 WARN`` / ``C10@4 768.9 WARN`` / ``C6@4 306.1 WARN`` /
+    ``C6@11 152.7 INFO`` / ``C9@11 44.0 INFO`` / ``C9@4 163.9 INFO``.
+    DRV1.4/11 are 13.504 x 68.169 OVAL pads at 45°. Re-running this exact rule
+    with the retired box model reproduces 596.4 / 767.3 / 304.1 / 149.9 / 44.0
+    / 162.3; 038V's stadiums give the values above without flipping a severity.
     """
     rows = _rows(ROBOT, R16)
     assert rows, "DRV1 is a motor driver on ROBOT; the rule must fire"
@@ -360,8 +363,8 @@ def test_r16_warns_only_beyond_the_line_and_robot_is_the_measured_instance():
     for row in rows:
         gap = row.target.measurement["value"] if row.target.measurement else None
         by_severity.setdefault(row.severity, []).append(gap)
-    assert sorted(by_severity.get("WARN", [])) == [304.1, 596.4, 767.3], by_severity
-    assert sorted(by_severity.get("INFO", [])) == [44.0, 149.9, 162.3], by_severity
+    assert sorted(by_severity.get("WARN", [])) == [306.1, 598.3, 768.9], by_severity
+    assert sorted(by_severity.get("INFO", [])) == [44.0, 152.7, 163.9], by_severity
     for row in rows:
         gap = row.target.measurement["value"]
         if row.severity == "WARN":

@@ -29,8 +29,10 @@ from two divider groups to one, and it is pinned on the group it rejects
 the ``+5V`` rail rather than at the output node — must be reported. Both are
 pinned below, and so is the *number* that makes the second one legible: ``R14``
 shares ``+5V`` with the output capacitors, so the net comparison alone cannot
-see the problem, and the nearest output capacitor is **684.1 mil** away (#89B
-re-pinned this from 745.2 mil: the gap is now measured on ``+5V`` itself).
+see the problem, and the nearest output capacitor is **694.6 mil** away (#89B
+re-pinned this from 745.2 mil: the gap is now measured on ``+5V`` itself; 038V
+took it from 684.1, because ``C101``'s round ``ELLIPSE`` pad is a disc now and
+not the box corner that used to stand in for it).
 
 Every fixture here is read-only. Nothing runs an editor or a daemon.
 """
@@ -375,9 +377,18 @@ def test_the_whole_real_checkup_table_is_pinned(checkup_100):
     same_net_loop_distance`, 164c's reading) instead of ``component_distance``'s
     cross-net placement gap, so a value can rise (``C98`` 660.9 → 736.5,
     ``C89`` 99.5 → 221.5) as well as fall (``C3`` 41.8 → 29.1). One row's
-    **nearest** moved too: U6's ``+5V`` storage nearest is now ``C11`` at 95.8
-    mil, because on the loop reading ``C101``'s pad pair is farther than
-    ``C11``'s — the placement gap had ordered them the other way round.
+    **nearest** moved too: U6's ``+5V`` storage nearest is ``C11``, because on
+    the loop reading ``C101``'s pad pair is farther than ``C11``'s — the
+    placement gap had ordered them the other way round.
+
+    **038V moved two ``value`` cells, both upward.** ``C89`` 221.5 → 223.4 and
+    ``C11`` 95.8 → 105.8 (:mod:`boardwise.core.measure` now measures a pad's
+    real copper — ``OVAL`` as a stadium, a round ``ELLIPSE`` as a disc — instead
+    of its bounding box; see ``test_131b``'s module docstring for the full
+    derivation). ``C101`` rose with them (182.8 → 192.6) and is still farther
+    than ``C11``, so every listed **nearest** stands, and the axis-aligned round
+    parts (``C5``, ``C64``) did not move at all — which is what keeps this a
+    geometry correction rather than a re-fit.
     """
     assert {
         (r["target"]["component_ref"], r["target"]["net_refs"][0] if r["target"]["net_refs"] else "",
@@ -386,14 +397,14 @@ def test_the_whole_real_checkup_table_is_pinned(checkup_100):
         for r in _cap_rows(checkup_100)
     } == {
         ("U11", "+24V", "", None),
-        ("U11", "+24V", "C89", 221.5),
+        ("U11", "+24V", "C89", 223.4),
         ("U11", "", "", None),
         ("U5", "+5V", "C98", 736.5),
         ("U5", "+5V", "C5", 95.9),
         ("U5", "$1N66612", "C3", 29.1),
         ("U5", "$1N66612", "", None),
         ("U6", "+5V", "C98", 108.0),
-        ("U6", "+5V", "C11", 95.8),
+        ("U6", "+5V", "C11", 105.8),
         ("U6", "$1N66627", "C13", 244.8),
         ("U6", "$1N66627", "C64", 91.4),
     }
@@ -490,23 +501,32 @@ def test_the_anchor_u11_and_its_divider_are_found():
 def test_the_anchor_distances_are_pinned():
     """**Anchor 2.** The three distances, with their pad pairs.
 
-    ``U11 -> R14`` **37.2 mil** (pads 6/1), ``U11 -> R21`` **47.4 mil** (pads
+    ``U11 -> R14`` **41.4 mil** (pads 6/1), ``U11 -> R21`` **51.9 mil** (pads
     5/1) — both still :func:`boardwise.core.measure.component_distance`, the
-    IC-to-leg 口径 — and ``U11 -> C92`` (the FB-node capacitor) **650.9 mil**
+    IC-to-leg 口径 — and ``U11 -> C92`` (the FB-node capacitor) **653.0 mil**
     (pads 5/1) on the tap net, which since #89B is
     :func:`boardwise.rules.pcb.regulator.same_net_loop_distance`. The legs are
     tight to the pin; the node capacitor is not, and reporting all three is the
     difference between 「the divider is here」 and 「the node is filtered here」.
+
+    **038V raised all three, and ``U11`` is why.** Its pins are ``OVAL``
+    (23.622 × 62.992), so until 038V every one of these readings measured the
+    pin's *box*: ``component_distance`` 37.2 → 41.4 and 47.4 → 51.9,
+    ``same_net_loop_distance`` 650.9 → 653.0, with the pad pairs unchanged
+    (6/1, 5/1, 5/1). :mod:`boardwise.core.measure` now reads the stadium the
+    ``OVAL`` really is, and a box corner the copper never occupied no longer
+    counts as the pad. The row's own ``measurement`` is the nearer leg, so it
+    moved with R14.
     """
     row = _fb_rows()[0]
-    assert "upper leg R14 at 37.2 mil (pads 6 / 1)" in row.message
-    assert "lower leg R21 at 47.4 mil (pads 5 / 1)" in row.message
+    assert "upper leg R14 at 41.4 mil (pads 6 / 1)" in row.message
+    assert "lower leg R21 at 51.9 mil (pads 5 / 1)" in row.message
     assert (
-        "FB-node capacitor C92 at 650.9 mil from U11 on the tap net '$1N66466' "
+        "FB-node capacitor C92 at 653.0 mil from U11 on the tap net '$1N66466' "
         "(pads 5 / 1)"
     ) in row.message
     assert row.target.measurement == {
-        "kind": "distance", "value": 37.2, "unit": "mil",
+        "kind": "distance", "value": 41.4, "unit": "mil",
     }
 
 
@@ -516,9 +536,11 @@ def test_the_anchor_sense_point_is_reported_with_both_nets_quoted():
     ``R14``'s non-tap end is on ``+5V``. The rule reports the net comparison
     (same net as the output capacitors → :data:`SENSE_CAP_END`) **and** the
     distance that makes it interesting: the nearest energy-storage capacitor on
-    the output node is ``C101`` at **684.1 mil** from ``R14`` (#89B: on ``+5V``
-    itself, ``R14`` pad 2 to ``C101`` pad 1). Both sides of the comparison are in
-    the row so a reader can reject the premise, not just the tool's conclusion.
+    the output node is ``C101`` at **694.6 mil** from ``R14`` (#89B: on ``+5V``
+    itself, ``R14`` pad 2 to ``C101`` pad 1; 038V raised it from 684.1, because
+    ``C101``'s pad is a round ``ELLIPSE`` read as a disc now, not as its box).
+    Both sides of the comparison are in the row so a reader can reject the
+    premise, not just the tool's conclusion.
     """
     row = _fb_rows()[0]
     assert SENSE_CAP_END in row.message
@@ -527,7 +549,7 @@ def test_the_anchor_sense_point_is_reported_with_both_nets_quoted():
         "comparison says the output-capacitor end"
     )
     assert "'+5V'" in row.message
-    assert "C101 at 684.1 mil from the upper leg R14" in row.message
+    assert "C101 at 694.6 mil from the upper leg R14" in row.message
     assert "energy storage" in row.message, "the pool label names which capacitor"
     evidence = " ".join(row.evidence)
     # How the output node was established is stated, not assumed: U11 has no
@@ -621,13 +643,25 @@ def test_1_1_0_finds_its_buck_on_pcb1_only():
     1.1.0's ``PCB3`` is the backup's *first* document and places no regulator;
     ``PCB1`` (105 components) places all three. That the row appears at all is
     131c's document-scoping working, on the board the earlier scope left blind.
+
+    **038V moved both legs here and nothing else on the row.** ``U7``'s pins are
+    ``OVAL`` (23.622 × 62.992), so the two ``component_distance`` readings that
+    used to measure the pins' boxes rose: upper ``R20`` 646.4 → 648.4, lower
+    ``R23`` 560.1 → 562.5, pad pairs unchanged (6/1 and 6/2). The FB-node
+    capacitor ``C22`` (28.3) and the output-node ``C23`` (33.8) are on
+    axis-aligned approaches and did not move. The row's ``measurement`` is the
+    nearer leg, so it is now R23's 562.5.
     """
     rows = _fb_rows(FOC_110)
     assert len(rows) == 1
     assert rows[0].board == "PCB1"
     assert rows[0].target.component_ref == "U7"
     assert "R20/R23" in rows[0].message
-    assert "upper leg R20 at 646.4 mil" in rows[0].message
+    assert "upper leg R20 at 648.4 mil (pads 6 / 1)" in rows[0].message
+    assert "lower leg R23 at 562.5 mil (pads 6 / 2)" in rows[0].message
+    assert rows[0].target.measurement == {
+        "kind": "distance", "value": 562.5, "unit": "mil",
+    }
     assert "FB-node capacitor C22 at 28.3 mil" in rows[0].message
 
 

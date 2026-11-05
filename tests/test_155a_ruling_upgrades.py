@@ -285,9 +285,10 @@ def test_r16_real_boards_split_by_the_line_and_robot_is_the_outside():
     """真实读数：1.0.0 / 1.1.0 全在以内（INFO），ROBOT 三行超标（WARN）.
 
     实测 1.0.0 PCB1 ``U10``：83.0 / 170.9 / 92.1 mil；1.1.0 PCB1 ``U2``：
-    157.8 / 187.4 / 112.9 mil；ROBOT PCB1 ``DRV1``：``C10``@pin11 596.4、
-    ``C10``@pin4 767.3、``C6``@pin4 304.1（超），``C6``@pin11 149.9、
-    ``C9``@pin11 44.0、``C9``@pin4 162.3（以内）。
+    157.8 / 187.4 / 112.9 mil；ROBOT PCB1 ``DRV1``：``C10``@pin11 598.3、
+    ``C10``@pin4 768.9、``C6``@pin4 306.1（超），``C6``@pin11 152.7、
+    ``C9``@pin11 44.0、``C9``@pin4 163.9（以内）。两块 FOC 的值在 038V 前后
+    逐项一致；ROBOT 的 OVAL stadium 读数变化不改变任何一行的 severity。
     """
     for path, gaps in (
         (FOC_100, [83.0, 170.9, 92.1]),
@@ -300,10 +301,10 @@ def test_r16_real_boards_split_by_the_line_and_robot_is_the_outside():
     robot = _rows(ROBOT, R16)
     assert sorted(
         r.target.measurement["value"] for r in robot if r.severity == "WARN"
-    ) == [304.1, 596.4, 767.3]
+    ) == [306.1, 598.3, 768.9]
     assert sorted(
         r.target.measurement["value"] for r in robot if r.severity == "INFO"
-    ) == [44.0, 149.9, 162.3]
+    ) == [44.0, 152.7, 163.9]
 
 
 def test_only_the_ruled_foc_figure_is_compared_and_the_loop_stays_a_measurement():

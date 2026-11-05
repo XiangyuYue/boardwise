@@ -20,7 +20,7 @@ Evidence sources, in the order the task book names them:
   assertion.
 * **毕设FOC 1.0.0** (`ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2`, read-only)
   — the three regulators, every side and every pool, as a pinned table, with
-  the two acceptance anchors called out: **U11's C89** (4.7 µF, 221.5 mil) must
+  the two acceptance anchors called out: **U11's C89** (4.7 µF, 223.4 mil) must
   be the VIN storage nearest, and **U5's output pool** must hold only the parts
   on its own VOUT net — never the ``+5V`` input-side capacitors that share the
   input rail with U6.
@@ -68,6 +68,17 @@ not go through the runner: ``_ctx`` fills **both** ``model`` and ``pcb_model``
 from one synthetic ``DesignModel`` (no ``boards``, so it is read as its own
 page), and a test that wants to show which of the two fields *is* consulted
 passes two different models.
+
+**038V moved two of this table's numbers, and the cause is the geometry.**
+:mod:`boardwise.core.measure` measured every pad from its rotated bounding box
+until 038V; it now measures the pad's **real copper** — an ``OVAL`` as a
+stadium, an ``ELLIPSE`` whose width equals its height as a disc — so a diagonal
+gap can no longer borrow a box corner the copper never occupies. Two different
+shapes carry the change here: ``U11``'s pins are ``OVAL`` (23.622 × 62.992)
+measured against ``C89``'s rectangle, which lifts C89, and ``C11``/``C101`` are
+round ``ELLIPSE`` (51.181 × 51.181) measured against ``U6``'s rectangle, which
+lifts C11. An axis-aligned approach does not move (``C5`` is a disc too, and its
+95.9 is unchanged), which is why the rest of the table stands as 89A left it.
 
 The offline fixtures are read-only. Nothing here runs an editor or a daemon.
 """
@@ -578,7 +589,7 @@ def test_the_three_regulators_of_bishe_foc_1_0_0_are_the_ones_examined():
 
 
 def test_the_acceptance_anchor_u11_c89_is_the_vin_storage_nearest():
-    """**Anchor 1.** C89 (4.7 µF) is U11's VIN storage nearest, at 221.5 mil.
+    """**Anchor 1.** C89 (4.7 µF) is U11's VIN storage nearest, at 223.4 mil.
 
     This is the 冤案 the task book names. 126b measures the **HF** pool only and
     reports 「no high-frequency decoupling capacitor on ``+24V``」, because on
@@ -588,13 +599,16 @@ def test_the_acceptance_anchor_u11_c89_is_the_vin_storage_nearest():
 
     89A: the number is the **same-net pad-to-pad loop** on ``+24V``, so it rose
     from ``component_distance``'s 99.5 mil — which was the closest cross-net
-    placement gap, not the loop this capacitor stands on.
+    placement gap, not the loop this capacitor stands on. 038V read the same
+    pad pair off the real copper instead of the boxes and it rose again,
+    221.5 → **223.4**: ``U11``'s ``+24V`` pins are ``OVAL`` (23.622 × 62.992)
+    and the old box reading gave them corners the stadium does not reach.
     """
     rows = _foc_100_rows()
     finding = rows[("U11", "VIN", "STORAGE")]
     assert finding.target.counterpart_ref == "C89"
     assert finding.target.measurement == {
-        "kind": "distance", "value": 221.5, "unit": "mil",
+        "kind": "distance", "value": 223.4, "unit": "mil",
     }
     assert finding.target.net_refs == ["+24V"]
     # The HF pool on the same net really is empty — that row is about the pool,
@@ -696,11 +710,19 @@ def test_the_whole_1_0_0_table_is_pinned():
     same-net pad-to-pad loop projection (issue #89) instead of
     ``component_distance``'s cross-net placement gap: ``C89`` 99.5 → 221.5,
     ``C98`` 660.9 → 736.5, ``C3`` 41.8 → 29.1, ``C98`` on U6 107.5 → 108.0. One
-    **nearest** moved with it — U6's ``+5V`` storage is ``C11`` at 95.8 mil, not
-    ``C101`` at 118.7, because ``C101``'s loop pad pair is farther than
-    ``C11``'s. The three unchanged values (``C5`` 95.9, ``C13`` 244.8,
-    ``C64`` 91.4) are what keep this a measured rewrite rather than a table
-    fitted to the code.
+    **nearest** moved with it — U6's ``+5V`` storage is ``C11``, not ``C101``,
+    because ``C101``'s loop pad pair is farther (192.6 against C11's 105.8). The
+    three unchanged values (``C5`` 95.9, ``C13`` 244.8, ``C64`` 91.4) are what
+    keep this a measured rewrite rather than a table fitted to the code.
+
+    **038V moved two of those numbers and nothing else.** ``C89`` 221.5 →
+    223.4 and ``C11`` 95.8 → 105.8, both because the measurement now reads a
+    pad's real copper instead of its box (see the module docstring): ``U11``'s
+    pins are ``OVAL`` and ``C11`` is a round ``ELLIPSE``, so the box corners
+    that used to stand in for their copper are gone. ``C101`` rose with them
+    (182.8 → 192.6) and stays farther than ``C11``, so no **nearest** moved
+    here, and the two round parts whose gap is axis-aligned (``C5``, ``C64``)
+    did not move at all.
     """
     rows = _foc_100_rows()
     assert {
@@ -708,14 +730,14 @@ def test_the_whole_1_0_0_table_is_pinned():
         for key, f in rows.items()
     } == {
         ("U11", "VIN", "HF"): ("", None),
-        ("U11", "VIN", "STORAGE"): ("C89", 221.5),
+        ("U11", "VIN", "STORAGE"): ("C89", 223.4),
         ("U11", "VOUT", "?"): ("", None),
         ("U5", "VIN", "HF"): ("C98", 736.5),
         ("U5", "VIN", "STORAGE"): ("C5", 95.9),
         ("U5", "VOUT", "HF"): ("C3", 29.1),
         ("U5", "VOUT", "STORAGE"): ("", None),
         ("U6", "VIN", "HF"): ("C98", 108.0),
-        ("U6", "VIN", "STORAGE"): ("C11", 95.8),
+        ("U6", "VIN", "STORAGE"): ("C11", 105.8),
         ("U6", "VOUT", "HF"): ("C13", 244.8),
         ("U6", "VOUT", "STORAGE"): ("C64", 91.4),
     }

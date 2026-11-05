@@ -20,6 +20,7 @@ public ``extract_board`` path, whose "most components" idiom is copied from
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,7 @@ from boardwise.core.geometry import (
 from boardwise.core.measure import (
     clearances_vs,
     net_clearance,
+    pad_edge_distance,
     pour_connectivity,
     read_stackup,
 )
@@ -88,6 +90,7 @@ def _pad(
     height: float = 0.0,
     angle: float = 0.0,
     hole: float | None = None,
+    shape: str = "RECT",
 ) -> PadGeometry:
     return PadGeometry(
         id=id,
@@ -99,7 +102,7 @@ def _pad(
         y=y,
         width=width,
         height=height,
-        shape="RECT",
+        shape=shape,
         angle=angle,
         hole_diameter=hole,
     )
@@ -237,31 +240,52 @@ def test_llc_chs_vs_dcp_plus_pad_clearance(llc_board):
     """Q1's two source pads: 214.17 centre-to-centre, 110.236 wide each.
 
     Q1.3 (net CHS, pad id e22) and Q1.2 (net DC+, pad id e21) are the two
-    source pads of the same MOSFET. Both are 110.236 x 86.614 rectangles at
-    y = -2709.996, centres 2279.998 and 2494.168 apart -> 214.170 in x, with
-    the x-ranges touching-span. Each pad's facing half-width is
-    110.236 / 2 = 55.118, so the edge-to-edge gap is
-    214.170 − 55.118 − 55.118 = **103.934 mil for that pair**.
+    source pads of the same MOSFET. Both are 110.236 x 86.614 OVAL stadiums at
+    y = -2709.996, centres 2279.998 and 2494.168 apart -> 214.170 in x. Along
+    their long axis each reaches 55.118 from its centre, so the edge-to-edge
+    gap remains **103.934 mil for that pair**.
 
     **Issue #83 moved the answer to 85.965, and 103.934 is no longer the
-    minimum.** That pad-to-pad gap is still the arithmetic above, but
-    ``_capsule_distance``'s containment test compared each polygon with its own
-    vertices, so every pair with a pour on either side was decided by a
-    tautology and dropped out of the minimum — including ``DC+``'s FILL pour
-    against this same ``Q1.2`` pad, which is the closer copper at **85.965**.
-    With the operands back in the docstring's order the fill pair is measured
-    again and takes the minimum. Asserted in the same run as
-    ``test_83_pour_containment.py``, and corroborated independently: rebuilding
-    the pour polygons from ``PourShape.rings`` (the arcs-expanded view, 135 /
-    R2-1) instead of the ``points`` chords gives the same 85.9650927 for the
-    same pair.
+    minimum.** The containment test had compared polygons with their own
+    vertices, dropping the pour-against-pad pair that then won at 85.965.
+    038V reads the stadium instead of its box and re-derives the board minimum
+    to **95.0**, now a pour x pour pair: ``0dc2f2c467cb40e9``'s chamfer ends
+    at (2435, -2735), and ``69adc64c431b0772`` has a vertical edge at x = 2340
+    over y in [-2740, -2580]. The pour pair remains measurable, which is the
+    #83 property this test protects.
     """
     result = net_clearance(llc_board, "CHS", "DC+")
     assert result is not None
-    assert result.distance == pytest.approx(85.9650927, abs=0.01)
-    # The fill is CHS's copper, the pad is DC+'s, both on layer 1.
-    assert "de532d473516ee3b" in result.element_a
-    assert "Q1.2" in result.element_b
+    assert result.distance == pytest.approx(95.0, abs=1e-6)
+    assert "pour fill 0dc2f2c467cb40e9" in result.element_a
+    assert "pour fill 69adc64c431b0772" in result.element_b
+    assert result.shared_layer_ids == [2]
+    assert result.overlapping is False
+
+
+def test_llc_chs_fill_vs_dcp_oval_pad_hand_computed(llc_board):
+    """Isolate the pad-vs-fill pair so the board minimum cannot hide it.
+
+    Q1.2 is a 110.236 x 86.614 stadium centred at (2279.998, -2709.996).
+    Its right cap centre is (2291.809, -2709.996), radius 43.307. The CHS
+    fill's nearest vertical edge is x = 2435 and spans the cap's y, hence
+    ``2435 - 2291.809 - 43.307 = 99.884``. The retired box corner measured
+    85.965 against the chamfer; asserting this pair directly keeps the OVAL
+    path covered even though two other pours are closer at 95.0.
+    """
+    pad = next(p for p in llc_board.pads if p.component == "Q1" and p.pin_number == "2")
+    fill = next(p for p in llc_board.pours if p.id == "de532d473516ee3b")
+    pair_board = BoardGeometry(
+        layers=llc_board.layers,
+        stackup=llc_board.stackup,
+        pads=[pad],
+        pours=[fill],
+    )
+    result = net_clearance(pair_board, "CHS", "DC+", same_layer_only=True)
+    assert result is not None
+    assert result.distance == pytest.approx(99.884, abs=1e-6)
+    assert result.element_a == "pour fill de532d473516ee3b on layer 1"
+    assert result.element_b == "pad Q1.2 on layers 1/2"
     assert result.shared_layer_ids == [1]
     assert result.overlapping is False
 
@@ -289,35 +313,38 @@ def test_llc_chs_vs_chg_track_clearance_hand_computed(llc_board):
 
 
 def test_llc_chg_vs_cls_track_clearance_cross_layer_agnostic(llc_board):
-    """A second measured pair: CHG vs CLG, both layer-1 copper, 355.182 mil.
+    """A second measured pair: CHG vs CLG, both layer-1 copper, 362.688 mil.
 
-    CHG's copper nearest CLG is **Q1's 60 x 60 mil pad ``e22`` (``U9.3``)**, not
-    the horizontal track that ends at the pad's centre. The pad is centred on
-    (2345, -2970) and its right edge is therefore x = 2375 (measured corners
-    (2315, -3000) .. (2375, -2940), ``angle=180``). CLG's vertical track
-    ``faa458de4e2fb294`` runs x = 2745.828 over y in [-2835.828, -2709.996], so
-    the nearest point of CHG's copper to it is the pad's corner (2375, -2940):
-    hypot(2745.828 - 2375, 2835.828 - 2940) = hypot(370.828, 104.172)
-    = 385.18204938444364 centre-to-edge, minus the 30 mil half width of the
-    60-mil track and the pad's own 0 (a bare rectangle carries no capsule
-    radius) = **355.18204938444364**. Same layer, no touch.
+    CLG's vertical track ``faa458de4e2fb294`` runs x = 2745.828 over
+    y in [-2835.828, -2709.996]. CHG's track ``07c8e25c3fa445ec`` ends at the
+    centre of U9.3 (2345, -2970), and U9.3 is a 60 mil **circular** pad. The
+    track's round end cap and the pad therefore reach exactly the same distance
+    toward CLG: ``hypot(400.828, 134.172) - 30 - 30`` =
+    **362.6880778635707**. Same layer, no touch.
 
-    **162a moved this number, 362.688 -> 355.182, and the old one was the wrong
-    pair.** The track ``07c8e25c3fa445ec`` ends *at the pad's centre*, so the
-    pad's copper reaches 30 mil closer to CLG than the track's endpoint does;
-    the old coarse reject compared **centreline** boxes, pruned the pad away
-    against the track-track distance it had already found, and published
-    362.688 (the track pair's own value: hypot(400.828, 134.172) - 60 =
-    362.6880778635707). The exhaustive pairwise re-measurement agrees with the
-    new figure to the last bit — see ``outputs/162a/evidence.md``.
+    This is a tie, and record order (tracks before pads) names the track. The
+    pad's tied reading is asserted separately below. Before 038V the pad was a
+    square whose corner at (2375, -2940) produced 355.182; 162a had exposed
+    that corner when it fixed the centreline-bbox coarse reject. The geometry
+    correction here does not reintroduce that reject: both the track and the
+    now-circular pad remain measurable and agree on the same minimum.
     """
     result = net_clearance(llc_board, "CHG", "CLG")
     assert result is not None
-    assert result.distance == pytest.approx(355.18204938444364, abs=1e-6)
+    assert result.distance == pytest.approx(362.6880778635707, abs=1e-6)
     assert not result.overlapping
     assert (result.element_a, result.element_b) == (
-        "pad U9.3 on layers 1/2",
+        "track 07c8e25c3fa445ec on layer 1",
         "track faa458de4e2fb294 on layer 1",
+    )
+    # The tied pad still measures 362.688 against the same track's end cap, so
+    # the tie is real and not a shape-selection failure: a 60 mil disc parked
+    # on CLG's nearest track point is the capsule that track presents there.
+    u93 = [p for p in llc_board.pads if p.component == "U9" and p.pin_number == "3"][0]
+    track_cap = _pad("t", x=2745.828, y=-2835.828, width=60, height=60,
+                     shape="ELLIPSE")
+    assert pad_edge_distance(u93, track_cap) == pytest.approx(
+        362.6880778635707, abs=1e-6
     )
 
 
@@ -657,3 +684,104 @@ def test_poured_records_are_parsed_and_orphans_carry_no_net(llc_board):
     result = pour_connectivity(llc_board, "DC-")
     assert result.island_count == 1
     assert not ({p.id for p in poured} & set(result.islands[0].element_ids))
+
+# ---------------------------------------------------------------------------
+# 038V: the clearance engine reads the pad's real copper, not its bounding box
+# ---------------------------------------------------------------------------
+
+
+def test_round_pad_inside_a_pour_void_is_fourteen_mil_clear():
+    """038V §1, consumer 1: the report's circle pad against a pour void edge.
+
+    The pad is the reported ``66.929 x 66.929`` mil circle (``shape=ELLIPSE``,
+    ``width == height``), so its copper is a 33.4645 mil radius disc. The pour
+    ``B`` is a ``POURED`` island whose first void is the **circular** hole the
+    pour engine cut — the report's 「挖空边到圆心 47.548 mil」 — so the void edge
+    nearest the pad centre is 47.548 mil away and the measured gap is
+    ``47.548 - 33.4645`` = **14.0835 mil**.
+
+    Two things are asserted at once, and both matter:
+
+    * the reading is 14.0835, so ``VoltageSpacing`` sees a real gap;
+    * the retired rectangle reading — the pad corner at ``33.4645 * sqrt(2)``
+      = 47.3259 from the centre, giving **0.22205024196556777** — is excluded.
+      That number is what made a clean ring look like a clearance violation,
+      and a fix that still returns it has not fixed anything.
+
+    The void is written as a 512-gon because a pour ring is a polygon: its
+    inscribed radius is ``47.548 * cos(pi/512)``, **8.9e-4 mil** inside the true
+    circle, so the reading is asserted to 2e-3 rather than to the last bit.
+    """
+    layers, stackup = _two_layer_stack()
+    pad = _pad(
+        "pc", net="A", layer_id=1, x=0, y=0, width=66.929, height=66.929,
+        shape="ELLIPSE",
+    )
+    outline = [
+        Point(-300, -300), Point(300, -300), Point(300, 300), Point(-300, 300)
+    ]
+    void = [
+        Point(
+            47.548 * math.cos(2 * math.pi * i / 512),
+            47.548 * math.sin(2 * math.pi * i / 512),
+        )
+        for i in range(512)
+    ]
+    pour = PourShape(
+        id="pour-b", net="B", layer_id=1, kind="poured",
+        points=outline, rings=[outline, void],
+    )
+    board = BoardGeometry(layers=layers, stackup=stackup, pads=[pad], pours=[pour])
+
+    result = net_clearance(board, "A", "B")
+    assert result is not None
+    assert result.distance == pytest.approx(14.0835, abs=2e-3)
+    assert abs(result.distance - 0.22205024196556777) > 1.0
+    assert result.overlapping is False
+    assert result.shared_layer_ids == [1]
+    # The void edge is copper boundary, so the pad is *not* inside the solid
+    # pour: the pair stays measurable instead of dropping out as ``None``.
+    assert "pad" in result.element_a and "pour" in result.element_b
+
+
+def test_diagonal_circle_pads_in_net_clearance_are_forty_mil():
+    """038V §1, consumer 1: the same 40 mil answer through ``net_clearance``."""
+    layers, stackup = _two_layer_stack()
+    diagonal = 100 / 2 ** 0.5
+    board = BoardGeometry(
+        layers=layers,
+        stackup=stackup,
+        pads=[
+            _pad("pa", net="A", layer_id=1, x=0, y=0, width=60, height=60,
+                 shape="ELLIPSE"),
+            _pad("pb", net="B", layer_id=1, x=diagonal, y=diagonal,
+                 width=60, height=60, shape="ELLIPSE"),
+        ],
+    )
+    result = net_clearance(board, "A", "B")
+    assert result is not None
+    # 100 mil centre to centre on the 45° diagonal, minus two 30 mil radii.
+    assert result.distance == pytest.approx(40.0, abs=1e-9)
+    assert abs(result.distance - 15.147186257614282) > 1.0
+    assert result.overlapping is False
+
+
+def test_rectangle_pads_in_net_clearance_are_unchanged_negative_control():
+    """038V §4 negative control: the rectangle path through the same engine."""
+    layers, stackup = _two_layer_stack()
+    diagonal = 100 / 2 ** 0.5
+    board = BoardGeometry(
+        layers=layers,
+        stackup=stackup,
+        pads=[
+            _pad("pa", net="A", layer_id=1, x=0, y=0, width=60, height=60),
+            _pad("pb", net="B", layer_id=1, x=diagonal, y=diagonal,
+                 width=60, height=60),
+        ],
+    )
+    result = net_clearance(board, "A", "B")
+    assert result is not None
+    # Two axis-aligned 60 x 60 boxes whose centres are 100 apart on the
+    # diagonal: nearest corners (30, 30) and (40.7107, 40.7107) ->
+    # hypot(10.7107, 10.7107) = 100 - 60 * sqrt(2) = 15.147186257614282.
+    assert result.distance == pytest.approx(15.147186257614282, abs=1e-9)

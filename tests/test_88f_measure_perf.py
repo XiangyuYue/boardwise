@@ -12,9 +12,10 @@ This file pins three things:
 
 1. **Real-fixture identity + cost.** ``pour_connectivity(ROBOT, 'GND')`` and
    ``net_clearance(ROBOT, 'GND', 'VCC', same_layer_only=True)`` keep the exact
-   #88A answer (1 island / 295 members / pinned area and layers; 3.538... mil
-   and the same element pair), while the number of exact ``_segment_distance``
-   calls stays under 100 k and the wall stays under a loose ceiling. The
+   current answer (1 island / 295 members / pinned area and layers; 038V's
+   stadium reading 5.984311154065651 mil and the same element pair), while the
+   number of exact ``_segment_distance`` calls stays under 100 k and the wall
+   stays under a loose ceiling. The
    op-count is the primary gate — it is deterministic; the wall is a coarse
    backstop for a regression that only shows up as time.
 2. **Deterministic small-shape differential.** The production answer is
@@ -67,8 +68,9 @@ GND_MEMBERS = 295
 GND_AREA = 2210304.22645474
 GND_LAYERS = [1, 2, 15, 16]
 
-#: The same-layer GND/VCC gap: a pad and a track, 3.538... mil apart.
-VCC_GAP = 3.538172961471341
+#: The same-layer GND/VCC gap: U1.31's OVAL stadium and a track. 038V gives
+#: 16.88981115406565 - 5.9055 - 5 = 5.984311154065651; the box said 3.538... .
+VCC_GAP = 5.984311154065651
 VCC_ELEMENT_A = "pad U1.31 on layer 1"
 VCC_ELEMENT_B = "track 03d13fd9b5027b71 on layer 1"
 

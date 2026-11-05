@@ -79,6 +79,9 @@ def loop_area(board, anchors: Sequence[str | Point]) -> LoopArea
 - 焊盘按**旋转矩形**精算：`width/height` + `angle` + 组件 transform 后的板坐标中心
   → 4 角点 → 4 边线段集；边到边距 = 线段集两两最小距（相交=0）。
 - `shape` 为 OVAL/圆形时仍按外接矩形算，docstring 写明「保守低估间距」（矩形包含椭圆）。
+  **（038V 已取代本条）** 外接矩形角点会把圆盘对角半径放大为 `r*sqrt(2)`，产生实测 13.86 mil
+  的假阳性。当前距离测量统一走 `_pad_copper`：圆盘、长圆胶囊、非圆椭圆外接 32 边形；
+  `pad_corners()` 仅保留外接框合同，详见 `tasks/038v_pad_shape_clearance.md`。
 - 提炼一个内部 helper（如 `_pad_corners(pad) -> list[Point]`），棒2 直接复用——
   **棒1 任务书里注明这是给棒2 的接口**。
 

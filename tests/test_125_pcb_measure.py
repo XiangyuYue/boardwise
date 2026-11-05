@@ -37,6 +37,7 @@ from boardwise.core.measure import (
     _pad_corners,
     component_distance,
     loop_area,
+    pad_corners,
     pad_edge_distance,
     read_stackup,
     track_width_stats,
@@ -453,16 +454,212 @@ def test_pad_edge_distance_intersecting_is_zero():
     assert pad_edge_distance(a, b) == 0.0
 
 
-def test_pad_edge_distance_oval_uses_bounding_rect():
+def test_pad_edge_distance_along_the_long_axis_agrees_with_the_bounding_box():
+    """038V: along a shape's own long axis the stadium/ellipse equals its box.
+
+    Was ``test_pad_edge_distance_oval_uses_bounding_rect``, whose claim — every
+    non-rectangular pad is measured as its bounding rectangle — is what 038V
+    retired. On **this** arrangement the two models agree, and that is the
+    point of keeping it: an axis-aligned 100 x 40 ``OVAL`` reaches x = +50 (its
+    long axis) and an axis-aligned 100 x 40 ``ELLIPSE`` reaches x = -50, so the
+    gap is 200 - 50 - 50 = 100 either way. The two models only part company off
+    the axes, which the 038V tests below pin.
+    """
     rect = _pad("r", x=0, y=0, width=100, height=40, shape="RECT")
     oval = _pad("o", x=0, y=0, width=100, height=40, shape="OVAL")
     far = _pad("f", x=200, y=0, width=100, height=40, shape="ELLIPSE")
-    # Same bounding box -> same measurement (200 - 50 - 50 = 100): the
-    # conservative under-estimate contract for non-rectangular shapes.
     assert pad_edge_distance(oval, far) == pytest.approx(100.0, abs=1e-9)
     assert pad_edge_distance(oval, far) == pytest.approx(
         pad_edge_distance(rect, far), abs=1e-9
     )
+
+
+# ---------------------------------------------------------------------------
+# 038V: round / oblong / elliptical pads are no longer measured as rectangles
+# ---------------------------------------------------------------------------
+
+#: ``sec(pi/32)`` — the largest radial bulge of the 32-tangent polygon that
+#: stands in for a non-circular ``ELLIPSE`` (task book 038V §2).
+_ELLIPSE_BULGE = 1.0 / math.cos(math.pi / 32)
+
+
+def test_pad_corners_still_returns_the_bounding_rectangle_of_a_round_pad():
+    """The **public** contract 038V leaves alone: ``pad_corners`` is the box.
+
+    Board outline / silkscreen readers ask 「which box does this pad occupy」,
+    not 「where is this pad's copper」, so a round pad still answers with four
+    CCW corners at ``r * sqrt(2)`` from its centre. Only the *measurement*
+    geometry (:func:`pad_edge_distance`, ``net_clearance``,
+    ``component_distance``) stopped reading that box.
+    """
+    pad = _pad("c", x=10, y=20, width=66.929, height=66.929, shape="ELLIPSE")
+    corners = pad_corners(pad)
+    assert len(corners) == 4
+    radius = 66.929 / 2
+    for corner in corners:
+        assert math.hypot(corner.x - 10, corner.y - 20) == pytest.approx(
+            radius * math.sqrt(2), abs=1e-9
+        )
+    total = sum(
+        p.x * q.y - q.x * p.y
+        for p, q in zip(corners, [*corners[1:], corners[0]])
+    )
+    assert total > 0, "still CCW"
+
+
+def test_pad_edge_distance_diagonal_circles_is_forty_mil():
+    """038V §1: two 60-mil circles 100 mil apart on the diagonal are 40 apart.
+
+    Copper edge to copper edge is ``100 - 30 - 30 = 40``. The retired rectangle
+    model put each centre ``30 * sqrt(2)`` from its nearest corner and therefore
+    read ``100 - 60 * sqrt(2)`` = **15.147186257614282** — a 24.85 mil
+    under-estimate, which is what turned PCB-A's clean rings into clearance
+    warnings. The old number is asserted *out* so a regression cannot quietly
+    reinstate it.
+    """
+    a = _pad("a", x=0, y=0, width=60, height=60, shape="ELLIPSE")
+    b = _pad("b", x=100 / math.sqrt(2), y=100 / math.sqrt(2),
+             width=60, height=60, shape="ELLIPSE")
+    distance = pad_edge_distance(a, b)
+    assert distance == pytest.approx(40.0, abs=1e-9)
+    assert abs(distance - 15.147186257614282) > 1.0
+    # Symmetric in argument order, like every other pair measurement here.
+    assert pad_edge_distance(b, a) == pytest.approx(distance, abs=1e-12)
+
+
+def test_pad_edge_distance_rotated_ovals_are_their_stadiums():
+    """038V §2: an ``OVAL`` is a rotated stadium — two centres plus a radius.
+
+    ``A`` is a 100 x 20 ``OVAL`` at 45°, so its long axis runs along
+    ``(1, 1)/sqrt(2)``: centreline endpoints ``(+-40/sqrt(2), +-40/sqrt(2))`` =
+    ``(+-28.284271247461902, +-28.284271247461902)``, radius ``20 / 2 = 10``.
+    ``B`` is the same oval at 135° centred on ``(200, 0)``, so its long axis is
+    ``(-1, 1)/sqrt(2)`` and its endpoints are ``(200 -/+ 28.284271247461902,
+    +/- 28.284271247461902)``.
+
+    The closest pair is therefore the two facing endpoints at the same ``y``:
+    ``171.7157287525381 - 28.284271247461902`` = ``143.4314575050762``
+    centre-to-centre, minus both radii (10 + 10) = **123.4314575050762** mil.
+    Every other endpoint pair is farther (the next nearest is 200 - 56.5685 -
+    20 = 143.4 across the perpendicular diagonal, and the projections clamp to
+    the endpoints), so this is the minimum.
+
+    The rectangular reading cannot produce this number at all: a 100 x 20 box
+    rotated 45° reaches ``(50 + 10)/sqrt(2)`` = 42.43 on the diagonal, i.e.
+    14 mil further out than the stadium's 28.28 + 10 = 38.28.
+    """
+    half = 40 / math.sqrt(2)
+    a = _pad("a", x=0, y=0, width=100, height=20, angle=45, shape="OVAL")
+    b = _pad("b", x=200, y=0, width=100, height=20, angle=135, shape="OVAL")
+    distance = pad_edge_distance(a, b)
+    assert distance == pytest.approx(200 - 2 * half - 20, abs=1e-9)
+    assert distance == pytest.approx(123.4314575050762, abs=1e-9)
+    # Rotating the whole picture by 90° cannot change a shape-invariant gap.
+    turned_a = _pad("a", x=0, y=0, width=100, height=20, angle=135, shape="OVAL")
+    turned_b = _pad("b", x=0, y=200, width=100, height=20, angle=225, shape="OVAL")
+    assert pad_edge_distance(turned_a, turned_b) == pytest.approx(distance, abs=1e-9)
+
+
+def test_pad_edge_distance_non_circular_ellipse_is_a_circumscribed_32_gon():
+    """038V §2: a non-circular ``ELLIPSE`` is a **circumscribing** 32-gon.
+
+    Two properties are pinned, because an inscribed polygon would satisfy
+    neither:
+
+    * **the tangency point is on the boundary** — a probe on the ``+x`` axis
+      sees the gap to ``a = 100`` exactly, so the reading is ``1000 - 100``
+      = **900.0**, not 900 plus the sagitta of a chord;
+    * **between tangency points the polygon bulges outward, never inward** —
+      for a probe far away along ``phi`` the reading must sit between
+      ``1000 - h - (sec(pi/32) - 1) * a`` and ``1000 - h``, where
+      ``h = hypot(a cos phi, b sin phi)`` is the radius of the ellipse point at
+      that parameter. ``1000 - h`` is the distance to that particular copper
+      point, hence an **upper** bound on the true minimum gap. The containing
+      polygon cannot have a larger gap than the ellipse, so its reading must
+      also stay below this bound; the ``(sec(pi/32) - 1) * a`` term is the
+      largest amount it can under-state it, which is 0.483 mil for ``a = 100``
+      and is what makes this a stated error bound rather than an exactness
+      claim.
+    """
+    ellipse = _pad("e", x=0, y=0, width=200, height=100, shape="ELLIPSE")
+    a, b = 100.0, 50.0
+    on_axis = _pad("p", x=1000, y=0, width=0, height=0)
+    assert pad_edge_distance(ellipse, on_axis) == pytest.approx(900.0, abs=1e-9)
+
+    for k in (1, 2, 3):
+        phi = k * math.pi / 32
+        probe = _pad("q", x=1000 * math.cos(phi), y=1000 * math.sin(phi),
+                     width=0, height=0)
+        radius = math.hypot(a * math.cos(phi), b * math.sin(phi))
+        reading = pad_edge_distance(ellipse, probe)
+        assert reading <= 1000 - radius + 1e-9, (
+            f"phi={phi}: {reading} over-states the copper-point bound "
+            f"{1000 - radius:.6f}"
+        )
+        assert reading >= 1000 - radius - (_ELLIPSE_BULGE - 1) * a - 1e-9
+
+
+def test_pad_edge_distance_degenerate_pads_never_returns_nan():
+    """038V §2: a zero-extent shape falls back to a point (or a line), quietly."""
+    target = _pad("t", x=100, y=0, width=20, height=20)
+    # 0 x 0 "ellipse" is a point at the centre -> 90 (target's left edge at 90).
+    point_pad = _pad("z", x=0, y=0, width=0, height=0, shape="ELLIPSE")
+    assert pad_edge_distance(point_pad, target) == pytest.approx(90.0, abs=1e-9)
+    # 100 x 0 "oval" is the segment x in [-50, 50] at y = 0 -> 90 - 50 = 40.
+    flat_oval = _pad("f", x=0, y=0, width=100, height=0, shape="OVAL")
+    assert pad_edge_distance(flat_oval, target) == pytest.approx(40.0, abs=1e-9)
+    # 0 x 60 "ellipse" is the segment y in [-30, 30]; the target's y-band
+    # [-10, 10] is inside it, so the gap is the pure x gap: 90 - 0 = 90.
+    flat_ellipse = _pad("g", x=0, y=0, width=0, height=60, shape="ELLIPSE")
+    assert pad_edge_distance(flat_ellipse, target) == pytest.approx(90.0, abs=1e-9)
+    for pad in (point_pad, flat_oval, flat_ellipse):
+        assert math.isfinite(pad_edge_distance(pad, target))
+
+
+def test_pad_edge_distance_rectangles_are_unchanged_negative_control():
+    """038V §4 negative control: rectangles keep their old hand numbers.
+
+    ``RECT`` (and every shape the module does not model) still reads
+    :func:`pad_corners`, so the two numbers 125 pinned cannot move: a 40 x 40
+    square at 45° against a 40 x 40 square 100 mil away is
+    ``80 - 20 * sqrt(2)`` = 51.71572875, and two 100 x 60 rectangles are 200
+    apart. A fix that moved these would be measuring something else.
+    """
+    a = _pad("a", x=0, y=0, width=40, height=40, angle=45)
+    b = _pad("b", x=100, y=0, width=40, height=40)
+    assert pad_edge_distance(a, b) == pytest.approx(80 - 20 * math.sqrt(2), abs=1e-9)
+    c = _pad("c", x=0, y=0, width=100, height=60)
+    d = _pad("d", x=300, y=0, width=100, height=60)
+    assert pad_edge_distance(c, d) == pytest.approx(200.0, abs=1e-9)
+    # An unknown shape string is not a licence to guess: it stays a rectangle.
+    unknown = _pad("u", x=0, y=0, width=40, height=40, angle=45, shape="ROUNDRECT")
+    assert pad_edge_distance(unknown, b) == pytest.approx(
+        pad_edge_distance(a, b), abs=1e-9
+    )
+
+
+def test_component_distance_measures_round_pads_as_circles():
+    """038V consumer 3: ``component_distance`` reads the same pad geometry."""
+    board = BoardGeometry(
+        components=[
+            ComponentPlacement(id="cr1", designator="R1", x=0, y=0, angle=0),
+            ComponentPlacement(id="cc1", designator="C1", x=100, y=0, angle=0),
+        ],
+        pads=[
+            _pad("p1", component="R1", pin="1", net="A", layer_id=1,
+                 x=0, y=0, width=60, height=60, shape="ELLIPSE"),
+            _pad("p2", component="C1", pin="1", net="B", layer_id=1,
+                 x=100 / math.sqrt(2), y=100 / math.sqrt(2),
+                 width=60, height=60, shape="ELLIPSE"),
+        ],
+    )
+    dist = component_distance(board, "R1", "C1")
+    assert dist is not None
+    assert dist.center_distance == pytest.approx(100.0, abs=1e-9)
+    # 100 mil centre to centre, two 30 mil radii -> 40, not 100 - 60*sqrt(2)
+    # = 15.147186257614282.
+    assert dist.edge_distance == pytest.approx(40.0, abs=1e-9)
+    assert (dist.pad_a, dist.pad_b) == ("1", "1")
 
 
 def _component_board() -> BoardGeometry:

@@ -799,17 +799,19 @@ def test_a_part_measured_on_one_output_net_is_not_also_listed_as_missing_another
 def test_the_real_fixture_row_carries_the_same_net_readings():
     """毕设FOC 1.0.0's ``U11`` row, as the offline rule actually prints it.
 
-    The legs did not move (``U11 -> R14`` **37.2 mil**, pads 6/1; ``U11 -> R21``
-    **47.4 mil**, pads 5/1 — still :func:`component_distance`), and the two
-    capacitor numbers did:
+    #89B moved both capacitor readings to the same net's own pads. 038V then
+    replaced the OVAL pads' boxes with their true stadiums, which also changed
+    the IC-to-leg readings. Direct measurements on the fixture now give:
 
-    * the FB-node capacitor ``C92`` is **650.9 mil** from ``U11``'s ``FB`` pad
-      on the tap ``$1N66466`` (pads 5/1), where the cross-net reading said
-      638.8 (pads 8/1);
-    * the nearest storage capacitor on ``+5V`` is ``C101`` at **684.1 mil** from
-      ``R14`` (pads 2/1), where the cross-net reading said 745.2.
+    * ``U11 -> R14`` **41.4493 mil** (pads 6/1) and ``U11 -> R21``
+      **51.8915 mil** (pads 5/1), quoted as 41.4 and 51.9;
+    * FB-node capacitor ``C92`` **653.0061 mil** from U11.5 on ``$1N66466``
+      (pads 5/1), quoted as 653.0;
+    * storage capacitor ``C101`` **694.6161 mil** from R14.2 on ``+5V``
+      (pads 2/1), quoted as 694.6.
 
-    Both are now the same net's own gap, and both say so in the evidence.
+    The pad identities and same-net basis are unchanged; only the retired
+    bounding-box approximation moved the numbers.
     """
     schematic, _geometry = cli._load_model(FOC_100, view="schematic")
     findings, _section = run_pcb_review(
@@ -818,17 +820,17 @@ def test_the_real_fixture_row_carries_the_same_net_readings():
     assert len(findings) == 1
     row = findings[0]
     assert row.target.component_ref == "U11"
-    assert "upper leg R14 at 37.2 mil (pads 6 / 1)" in row.message
-    assert "lower leg R21 at 47.4 mil (pads 5 / 1)" in row.message
+    assert "upper leg R14 at 41.4 mil (pads 6 / 1)" in row.message
+    assert "lower leg R21 at 51.9 mil (pads 5 / 1)" in row.message
     assert row.target.measurement == {
-        "kind": "distance", "value": 37.2, "unit": "mil",
+        "kind": "distance", "value": 41.4, "unit": "mil",
     }
     assert (
-        "FB-node capacitor C92 at 650.9 mil from U11 on the tap net "
+        "FB-node capacitor C92 at 653.0 mil from U11 on the tap net "
         "'$1N66466' (pads 5 / 1)"
     ) in row.message
-    assert "C101 at 684.1 mil from the upper leg R14 (pads 2 / 1)" in row.message
+    assert "C101 at 694.6 mil from the upper leg R14 (pads 2 / 1)" in row.message
     evidence = " ".join(row.evidence)
-    assert "FB-node capacitor: C92 @ $1N66466 = 650.9 mil edge-to-edge" in evidence
+    assert "FB-node capacitor: C92 @ $1N66466 = 653.0 mil edge-to-edge" in evidence
     assert "state measured" in evidence
     assert f"state {CAP_MEASURED}" in evidence

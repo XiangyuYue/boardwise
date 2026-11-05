@@ -20,9 +20,18 @@ exception (an anchor string the caller asked us to resolve and could not be
 found is a caller error, not absent copper).
 
 **Interface note for stick 2 (125b).** :func:`pad_corners` is deliberately
-reusable: 125b's clearance engine consumes the same rotated-rectangle corner
-sets for pads, tracks-as-capsules and pour polygons. Keep its contract
-(4 CCW corners in board coordinates) stable.
+reusable for readers that need a pad's rotated bounding box. Keep its contract
+(4 CCW corners in board coordinates) stable. The clearance engine originally
+used those corners as the pad itself; 038V separated the two questions, as the
+next paragraph explains.
+
+**038V: the box is not the copper.** ``pad_corners`` is the pad's **bounding
+box**, and board-outline / silkscreen readers ask exactly that question, so it
+did not change. What changed is the *measurement* geometry: a round pad is a
+disc, an ``OVAL`` is a stadium, and a non-circular ``ELLIPSE`` is a
+circumscribing 32-gon — see :func:`_pad_copper`. Measuring the box instead
+over-stated a round pad's radius by ``sqrt(2)`` on the diagonal and turned
+clean rings into clearance warnings (PCB-A, task 038V §1).
 """
 
 from __future__ import annotations
@@ -91,19 +100,27 @@ __all__ = [
 def pad_corners(pad: PadGeometry) -> list[Point]:
     """The pad's four corner points in board coordinates, counter-clockwise.
 
-    Every pad is modelled as a **rotated rectangle**: ``width`` x ``height``
-    centred on ``(x, y)`` and rotated by ``angle`` degrees CCW in the y-up
-    board frame (the same convention as
+    Every pad is modelled here as a **rotated rectangle**: ``width`` x
+    ``height`` centred on ``(x, y)`` and rotated by ``angle`` degrees CCW in the
+    y-up board frame (the same convention as
     :meth:`boardwise.core.geometry.ComponentPlacement.transform`;
     ``PadGeometry.angle`` is board-frame since task 125a — the parser
     composes the component rotation at instantiation).
 
-    Non-rectangular shapes (``ELLIPSE``, ``OVAL``, circles) are measured as
-    their bounding rectangle: the rectangle contains the true shape, so
-    distances derived from these corners are a **conservative under-estimate**
-    of the real edge-to-edge spacing. That is the safe direction for
-    clearance evidence; the exact stadium/ellipse refinement is left to a
-    later stick if a rule ever needs it.
+    **This is the pad's box, and since 038V that is all it is.** Until 038V the
+    clearance engine also measured non-rectangular shapes from these corners —
+    the box contains the true shape, which looked like the safe direction. It
+    is not: a disc's corner sits ``r * sqrt(2)`` from its centre, so every
+    diagonal reading under-stated a round pad's clearance by
+    ``r * (sqrt(2) - 1)``, and PCB-A's clean ring around a 66.929 mil disc read
+    0.222 mil instead of 14.0835 mil. Measurements now go through
+    :func:`_pad_copper`, which reads a disc as a disc, an ``OVAL`` as a stadium
+    and a non-circular ``ELLIPSE`` as a circumscribing polygon. Remaining
+    callers need the box itself or a conservative superset of the copper:
+    board-outline, silkscreen, region and keepout readers, for example. The
+    same is true of :func:`vias_on_pad`'s hole-in-land containment — for a
+    non-rectangular pad it can still count a via in a box corner that the
+    copper does not occupy; it is not an exact-copper predicate.
 
     **Public since 126b** (it was the private ``_pad_corners`` when 125 wrote
     it, with a note saying 125b would consume it). It became public when the
@@ -132,6 +149,122 @@ def pad_corners(pad: PadGeometry) -> list[Point]:
 #: suite (which pins the private spelling as "125b's interface") stays green;
 #: it is the same function object, not a second implementation.
 _pad_corners = pad_corners
+
+
+#: 038V: how many tangents the stand-in polygon of a **non-circular**
+#: ``ELLIPSE`` is built from. The polygon is the intersection of the 32 tangent
+#: half-planes, so it **contains** the ellipse, and its worst radial excess is
+#: ``sec(pi/32)`` = 1.00483 — at most ``0.48 %`` of the semi-major axis, which
+#: for a 100 mil semi-axis is 0.483 mil. It is a stated error bound, not an
+#: "exact ellipse" claim; the task book (038V §2) requires exactly this.
+_ELLIPSE_TANGENTS = 32
+
+#: 038V: 「``width`` and ``height`` are the same number」 tolerance, in mils.
+#: A pad written as ``66.929 x 66.929`` is a circle, and its radius is exact —
+#: no polygon approximation is spent on it.
+_PAD_SQUARE_EPS = 1e-9
+
+
+def _ellipse_tangent_polygon(hw: float, hh: float) -> list[Point]:
+    """The circumscribing ``_ELLIPSE_TANGENTS``-gon of an ellipse, local frame.
+
+    The ellipse is ``x = hw cos t``, ``y = hh sin t``, whose tangent at ``t`` is
+    ``x cos t / hw + y sin t / hh = 1``. Intersecting the tangents at ``t1`` and
+    ``t2 = t1 + step`` (Cramer's rule on that 2x2 system, whose determinant is
+    ``sin(t2 - t1) / (hw hh)``) gives the vertex between them::
+
+        x = hw * (sin t2 - sin t1) / sin(t2 - t1)
+        y = hh * (cos t1 - cos t2) / sin(t2 - t1)
+
+    For ``hw == hh == r`` this degenerates to ``(r, r tan(step / 2))`` on the
+    first step, i.e. the familiar ``r * sec(pi / 32)`` vertex radius of a
+    circle's circumscribed 32-gon — which is where the error bound comes from.
+    Every tangency point lies on one of these edges, so the ellipse and the
+    polygon touch at 32 points and the polygon never cuts inside it.
+
+    Vertices come out counter-clockwise (``t`` increasing), which is the winding
+    :class:`_Shape` and every polygon reader in this module assume.
+    """
+    step = 2.0 * math.pi / _ELLIPSE_TANGENTS
+    sin_step = math.sin(step)
+    verts: list[Point] = []
+    for index in range(_ELLIPSE_TANGENTS):
+        t1 = index * step
+        t2 = t1 + step
+        verts.append(
+            Point(
+                hw * (math.sin(t2) - math.sin(t1)) / sin_step,
+                hh * (math.cos(t1) - math.cos(t2)) / sin_step,
+            )
+        )
+    return verts
+
+
+def _pad_copper(pad: PadGeometry) -> tuple[list[Point], float]:
+    """One pad's copper as **centreline points + a capsule radius**, in mils.
+
+    This is the single pad geometry every measurement in this module reads
+    (038V §2): :func:`pad_edge_distance`, ``net_clearance`` / ``clearances_vs``
+    / ``pour_connectivity`` (through :func:`_net_shape_records`) and
+    :func:`component_distance`. The pair ``(points, radius)`` is a capsule in
+    this module's sense — a closed polyline with a half-width — so one distance
+    routine serves a track, a via, a pour and now a pad.
+
+    Which shape each ``PadGeometry.shape`` gets, and why:
+
+    * **``ELLIPSE`` with ``width == height``** (to ``_PAD_SQUARE_EPS``) — a
+      circle: the centre once plus ``width / 2``. Exact, and the report's case.
+    * **``OVAL``** — a stadium: the two centres of the long axis (offset by
+      ``(long - short) / 2`` along the pad's own x when ``width >= height``, else
+      along y) plus ``min(width, height) / 2``. Rotating a stadium gives the
+      same stadium, so ``angle`` only rotates the two points; ``width ==
+      height`` degenerates to the circle above.
+    * **non-circular ``ELLIPSE``** — the circumscribing 32-gon of
+      :func:`_ellipse_tangent_polygon`, radius 0. It **contains** the ellipse,
+      so a distance measured from it is a conservative under-estimate of the
+      true gap and never an over-estimate (which an inscribed polygon would
+      be).
+    * **everything else** — :func:`pad_corners` and radius 0, i.e. the
+      pre-038V rotated rectangle, unchanged: ``RECT``, an empty shape string (a
+      hand-built pad), and any shape this module does not model. Guessing that
+      an unknown string means a disc would move numbers nobody looked at.
+
+    **Zero-extent input.** A zero extent collapses the shape to the line (or
+    point) it really is — a ``0 x 0`` ellipse is a point, a ``0 x 60`` ellipse
+    the segment ``y in [-30, 30]`` — which is the honest conservative reading
+    for a pad whose size did not parse, and which matches the box
+    :func:`pad_corners` would have given it.
+    """
+    hw = abs(float(pad.width)) / 2.0
+    hh = abs(float(pad.height)) / 2.0
+    shape = str(pad.shape or "").upper()
+    rad = math.radians(pad.angle)
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+
+    def place(dx: float, dy: float) -> Point:
+        """A pad-local offset in board coordinates (the 125a rotation)."""
+        return Point(pad.x + dx * cos_a - dy * sin_a, pad.y + dx * sin_a + dy * cos_a)
+
+    if shape == "ELLIPSE" and abs(hw - hh) > _PAD_SQUARE_EPS:
+        if hw <= 0.0 or hh <= 0.0:
+            # A zero semi-axis has no area: the ellipse is the line it
+            # collapses to, and the line is exact at radius 0.
+            if hh > hw:
+                return [place(0.0, -hh), place(0.0, hh)], 0.0
+            return [place(-hw, 0.0), place(hw, 0.0)], 0.0
+        return [place(p.x, p.y) for p in _ellipse_tangent_polygon(hw, hh)], 0.0
+    if shape == "OVAL":
+        long_half = max(hw, hh)
+        short_half = min(hw, hh)
+        offset = long_half - short_half
+        if hw >= hh:
+            return [place(-offset, 0.0), place(offset, 0.0)], short_half
+        return [place(0.0, -offset), place(0.0, offset)], short_half
+    if shape == "ELLIPSE":
+        # width == height (within float noise): a circle, exactly.
+        return [Point(pad.x, pad.y)], hw
+    return pad_corners(pad), 0.0
 
 
 def _cross(o: Point, a: Point, b: Point) -> float:
@@ -572,24 +705,26 @@ def conductor_copper(board: BoardGeometry, nets: Sequence[str]) -> ConductorCopp
 def pad_edge_distance(pad_a: PadGeometry, pad_b: PadGeometry) -> float:
     """Edge-to-edge distance between two pads, in mils (0 when touching).
 
-    Both pads are measured as rotated rectangles (see :func:`pad_corners`);
-    the distance is the minimum over the 16 edge-segment pairs, which is 0
-    exactly when the rectangles intersect or touch. For ``ELLIPSE`` / ``OVAL``
-    / circular shapes the bounding rectangle is used, so the result
-    under-estimates the true spacing (rectangle contains the shape) — the
-    conservative direction for spacing evidence.
+    Both pads are measured as the copper they really are (038V — see
+    :func:`_pad_copper`): a round pad is a disc, an ``OVAL`` a stadium, a
+    non-circular ``ELLIPSE`` a circumscribing 32-gon, and a rectangle (or an
+    unmodelled shape) still its four corners. The two capsules' centrelines are
+    compared and both radii subtracted, which is 0 exactly when the copper
+    bodies intersect or touch.
+
+    The old rectangle reading under-estimated every diagonal gap by
+    ``r * (sqrt(2) - 1)`` per round pad: two 60 mil discs 100 mil apart on the
+    diagonal were reported 15.147186257614282 apart and are 40.
 
     **Layer-blind on purpose.** This is the pure planar primitive: it answers
-    「how far apart are these two rectangles in the board's plane」, and the
-    caller decides what a layer-crossing pair means. See
+    「how far apart are these two pieces of copper in the board's plane」, and
+    the caller decides what a layer-crossing pair means. See
     :func:`component_distance`, which is the layer-aware reader.
     """
-    edges_a = _edges(pad_corners(pad_a))
-    edges_b = _edges(pad_corners(pad_b))
-    return min(
-        _segment_distance(a1, a2, b1, b2)
-        for a1, a2 in edges_a
-        for b1, b2 in edges_b
+    return _capsule_distance(
+        _pad_measure_shape(pad_a, set(), ""),
+        _pad_measure_shape(pad_b, set(), ""),
+        connectivity=False,
     )
 
 
@@ -601,7 +736,8 @@ class ComponentDistance:
     component_b: str = ""
     #: Distance between the two anchors (``ComponentPlacement.position``).
     center_distance: float = 0.0
-    #: Minimum edge-to-edge distance over the pad pairs (rotated rectangles).
+    #: Minimum edge-to-edge distance over the pad pairs — each pad read as its
+    #: real copper (038V: disc / stadium / circumscribing 32-gon / rectangle).
     edge_distance: float = 0.0
     #: ``pin_number`` of the closest pad (its ``id`` when it has no number).
     pad_a: str = ""
@@ -721,30 +857,26 @@ def component_distance(
     # A pair with **no** comparable pads left yields ``None`` — the same
     # "unmeasurable, not zero" answer an unknown designator gets — rather than
     # a fabricated distance.
-    shaped_a = [(pad, pad_corners(pad)) for pad in pads_a]
-    shaped_b = [(pad, pad_corners(pad)) for pad in pads_b]
+    shaped_a = [(pad, _pad_measure_shape(pad, set(), "")) for pad in pads_a]
+    shaped_b = [(pad, _pad_measure_shape(pad, set(), "")) for pad in pads_b]
     if not shaped_a or not shaped_b:
         return None
-    bbox_a = [(pad, corners, BBox.from_points(corners)) for pad, corners in shaped_a]
-    bbox_b = [(pad, corners, BBox.from_points(corners)) for pad, corners in shaped_b]
+    bbox_a = [(pad, shape, shape.bbox) for pad, shape in shaped_a]
+    bbox_b = [(pad, shape, shape.bbox) for pad, shape in shaped_b]
 
     best = math.inf
     best_pair: tuple[PadGeometry, PadGeometry] | None = None
-    for pad_a, corners_a, box_a in bbox_a:
-        edges_a = _edges(corners_a)
-        for pad_b, corners_b, box_b in bbox_b:
+    for pad_a, shape_a, box_a in bbox_a:
+        for pad_b, shape_b, box_b in bbox_b:
             if not _comparable_pair(board, pad_a, pad_b):
                 continue
             # Coarse bbox reject before the exact pass: shapes sit inside
-            # their bboxes, so a pair whose bbox gap already loses to the
-            # current best can never improve it.
+            # their bboxes (``_Shape.bbox`` is the copper's box, inflated by
+            # the capsule radius), so a pair whose bbox gap already loses to
+            # the current best can never improve it.
             if box_a is not None and box_b is not None and _bbox_distance(box_a, box_b) >= best:
                 continue
-            distance = min(
-                _segment_distance(a1, a2, b1, b2)
-                for a1, a2 in edges_a
-                for b1, b2 in _edges(corners_b)
-            )
+            distance = _capsule_distance(shape_a, shape_b, connectivity=False)
             if distance < best:
                 best = distance
                 best_pair = (pad_a, pad_b)
@@ -840,12 +972,15 @@ def loop_area(board: BoardGeometry, anchors: Sequence[str | Point]) -> LoopArea:
 # Shape model. Every copper element is reduced to one of two primitives:
 #
 # * a **capsule** — a closed polyline with a width. A track is its own
-#   centre-line, a pad rectangle is its four corners, a via is a degenerate
-#   2-point capsule of ``via_diameter``, a through-hole pad is a rectangle,
-#   a pour is its polygon. Distance is then measured on the *centrelines*
-#   and the two half-widths subtracted, which is exactly the edge-to-edge
-#   distance for convex constant-width shapes and conservative (never
-#   over-optimistic) for the general case.
+#   centre-line, a via is a degenerate 2-point capsule of ``via_diameter``,
+#   a pour is its polygon, and a pad is whatever :func:`_pad_copper` reads it
+#   as (038V): a disc for a round ``ELLIPSE`` (centre + radius), a stadium for
+#   an ``OVAL`` (its long-axis centres + the short half-width), a
+#   circumscribing 32-gon for a non-circular ``ELLIPSE``, and its four corners
+#   for a rectangle or an unmodelled shape. Distance is then measured on the
+#   *centrelines* and the two half-widths subtracted, which is exactly the
+#   edge-to-edge distance for convex constant-width shapes and conservative
+#   (never over-optimistic) for the general case.
 #
 # **Cross-layer semantics.** Elements on different copper layers are
 # compared by their XY-plane projection distance — the 2D footprint gap,
@@ -1019,6 +1154,43 @@ class _Shape:
         # The longest edge's x-extent: the sweep widens its window by this,
         # because an edge that *starts* left of the window can still reach in.
         self.max_dx = max((edge[2] - edge[0] for edge in packed), default=0.0)
+
+
+def _pad_measure_shape(
+    pad: PadGeometry,
+    layers: set[int],
+    label: str,
+    *,
+    pin: str = "",
+    component: str = "",
+) -> _Shape:
+    """One pad as a :class:`_Shape`, read from its real copper (038V).
+
+    The single construction point for the three consumers the task book names —
+    :func:`_net_shape_records` (so ``net_clearance``, ``clearances_vs`` and, on
+    the same shapes, ``pour_connectivity``), :func:`pad_edge_distance` and
+    :func:`component_distance` — so a pad cannot be a disc in one reading and a
+    box in another. The geometry itself comes from :func:`_pad_copper`; what
+    this adds is the shape's identity (``kind="pad"``, pin, placement) and the
+    layer set the caller wants it compared on.
+
+    ``layers`` is passed by the caller rather than read from the pad because the
+    callers ask different questions: the clearance engine reads the pad's
+    **effective** copper layers (:func:`_element_layers`), while
+    :func:`pad_edge_distance` is deliberately layer-blind and passes ``set()``
+    (its docstring says why).
+    """
+    points, radius = _pad_copper(pad)
+    return _Shape(
+        points,
+        radius,
+        layers,
+        label,
+        kind="pad",
+        pin=pin,
+        component=component,
+        is_pour=False,
+    )
 
 
 def _copper_layer_ids(board: BoardGeometry) -> list[int]:
@@ -1264,9 +1436,13 @@ def _net_shape_records(
         out.append(
             (
                 _pad_key(pad),
-                _Shape(
-                    pad_corners(pad),
-                    0.0,  # pad is a bare rectangle: the corners are the outline
+                # 038V: the pad's **real** copper, not its box — a disc for a
+                # round ELLIPSE, a stadium for an OVAL, a circumscribing 32-gon
+                # for a non-circular one, corners for a rectangle. The label
+                # below is built from the same record, and the layer rule is
+                # unchanged.
+                _pad_measure_shape(
+                    pad,
                     layers,
                     # 127b: the **effective** layers, not
                     # ``pad.footprint_layer_id``. A label reading "layer 1" for
@@ -1274,9 +1450,7 @@ def _net_shape_records(
                     # this fix removed, and the message is where a reader would
                     # have been misled.
                     _describe("pad", _pad_key(pad), layers),
-                    kind="pad",
                     pin=pad.pin_number or "",
-                    is_pour=False,
                     component=pad.component or "",
                 ),
                 0.0,
@@ -1510,8 +1684,11 @@ def _capsule_distance(a: _Shape, b: _Shape, *, connectivity: bool) -> float:
 
     Computed as the minimum centrelines-to-centrelines distance over the
     edge-segment pairs, minus both half-widths, floored at 0. Exact for the
-    convex constant-width shapes this module produces (tracks, vias, pad
-    rectangles, convex pours).
+    convex constant-width shapes this module produces (tracks, vias, convex
+    pours), and for pads it is exact for the discs and stadiums 038V builds —
+    a non-circular ``ELLIPSE``'s circumscribing 32-gon is the one shape where
+    the answer is a bounded under-estimate of the true gap
+    (``sec(pi/32)``, see :func:`_pad_copper`).
 
     **Issue #88A: a pour is measured on its rings.** Its edges are every ring's
     edges (outline **and** the clearance voids), and its solid copper is the

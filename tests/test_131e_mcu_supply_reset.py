@@ -365,14 +365,19 @@ def test_foc_100_supply_groups_are_the_measured_ones():
     and ``C1`` at 33.5 mil the nearest reservoir — where the old
     no-``model`` reading of this helper had ``C1`` as the bypass and ``C16``
     (74.7 mil) as the reservoir. Both columns still quote the schematic value.
+
+    038V reads the MCU's OVAL lands as stadiums rather than boxes. Direct
+    ``component_distance`` checks give C108 65.1942, C64 487.4636, C17
+    672.8143 and C67 717.1086; their displayed values below are the only AGND /
+    VCCA changes. The selected parts and the VCC/GND anchors are unchanged.
     """
     rows = _findings(FOC_100, "pcb-mcu-supply-groups")
     expected = {
         # net: (nearest bypass, mil, nearest reservoir, mil)
         "VCC": ("C72", 164.4, "C69", 180.7),
         "GND": ("C25", 45.6, "C1", 33.5),
-        "AGND": ("C108", 64.8, "C64", 475.2),
-        "VCCA": ("C17", 672.2, "C67", 708.8),
+        "AGND": ("C108", 65.2, "C64", 487.5),
+        "VCCA": ("C17", 672.8, "C67", 717.1),
     }
     for net, (bypass, bypass_mil, bulk, bulk_mil) in expected.items():
         message = _group_row(rows, net).message
@@ -503,7 +508,9 @@ def test_foc_100_reset_net_has_all_three_parts_bucketed_and_placed():
 
     All three are 600+ mil away, which is the reason this rule prints
     distances and does not judge them — 岳 has ruled on no reset-time, no RC and
-    no button distance.
+    no button distance. 038V's exact OVAL geometry changed only RST's reading:
+    ``component_distance(U1, RST)`` is 629.2862, displayed as 629.3 instead of
+    the box model's 628.8.
     """
     rows = [
         r for r in _findings(FOC_100, "pcb-mcu-reset-boot") if "NRST" in r.message
@@ -515,7 +522,7 @@ def test_foc_100_reset_net_has_all_three_parts_bucketed_and_placed():
     assert "switch / button" in message and "RST" in message
     # The three measured placements, in the message so a reader sees them
     # without opening the evidence.
-    for designator, mil in [("R30", 608.1), ("C73", 638.0), ("RST", 628.8)]:
+    for designator, mil in [("R30", 608.1), ("C73", 638.0), ("RST", 629.3)]:
         assert designator in _blob(rows) and f"{mil}" in _blob(rows)
     assert "no reset-time / RC / button-distance threshold has been ruled on" in message
 

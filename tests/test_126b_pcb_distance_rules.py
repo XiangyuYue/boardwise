@@ -911,9 +911,16 @@ def test_foc_pcb1_the_spacing_warns_are_four_and_none_of_them_touch(foc_findings
     copper layer is not measured, and a **same-net** pair is exempt, because two
     pads of one net meeting is the design's intent rather than a defect. That
     is 22 WARNs across the three boards -> 4, and **every remaining one is
-    same-side and cross-net**: U8/USB1 13.8, R18/U16 15.1, R22/USB1 19.2 and
+    same-side and cross-net**: U8/USB1 13.8, R18/U16 15.8, R22/USB1 19.2 and
     R24/USB1 19.2. All four are the real same-face crowded-placement population
-    126b's threshold was reaching for; none is an artifact.
+    126b's threshold was reaching for; none is a layer-attribution artifact.
+
+    038V changed only R18/U16, from 15.1 to **15.8**, by measuring U16.3 as the
+    22.378 x 76.78 mil vertical stadium it is instead of its box. R18.1 is a
+    rectangle whose lower-left corner is (1145.7519, -1704.9712); the stadium's
+    nearest cap centre is (1140, -1731.299), radius 11.189. The exact gap is
+    ``hypot(5.7519, 26.3278) - 11.189 = 15.7597923``. The old box had a purely
+    vertical 15.1388 mil gap, which was the rectangle approximation, not copper.
 
     The widest is R22/USB1 and R24/USB1 at 19.2 mil — just under the 20 mil
     line, which is still the observation 岳 is asked to rule on. What is no
@@ -938,7 +945,7 @@ def test_foc_pcb1_the_spacing_warns_are_four_and_none_of_them_touch(foc_findings
     }
     assert pairs == {
         ("U8", "USB1"): 13.8,
-        ("R18", "U16"): 15.1,
+        ("R18", "U16"): 15.8,
         ("R22", "USB1"): 19.2,
         ("R24", "USB1"): 19.2,
     }

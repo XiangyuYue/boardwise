@@ -439,11 +439,12 @@ def test_robot_osc_rows_measure_the_crystal_to_mcu_osc_pin_pair():
     """The per-pin measurement: crystal pad ↔ the MCU's own oscillator pin.
 
     The full pad × pin matrix, so all four readings are there:
-    ``X2.1`` (OSC-IN) reads **160.2 mil** against ``U1.5`` and **166.2 mil**
+    ``X2.1`` (OSC-IN) reads **161.5 mil** against ``U1.5`` and **168.0 mil**
     against ``U1.6``; ``X2.3`` (OSC-OUT) reads 88.0 against both. The
     same-net row is the oscillator leg and the cross-net row is the loop seen
     from the other end — both are measurements, neither is a verdict, and the
-    row says which is which.
+    row says which is which. 038V reads the MCU's OVAL pads as stadiums; the
+    retired box-corner readings were 160.2 and 166.2.
     """
     rows = [
         row
@@ -455,8 +456,8 @@ def test_robot_osc_rows_measure_the_crystal_to_mcu_osc_pin_pair():
         f"{row.message}\n{' | '.join(row.evidence)}\n{row.target.measurement}"
         for row in rows
     )
-    assert "160.2" in blob
-    assert "166.2" in blob
+    assert "161.5" in blob
+    assert "168.0" in blob
     assert "OSC-IN" in blob and "OSC-OUT" in blob
     same_net = [row for row in rows if "**same net**" in row.message]
     cross_net = [row for row in rows if "cross-net" in row.message]
@@ -464,7 +465,12 @@ def test_robot_osc_rows_measure_the_crystal_to_mcu_osc_pin_pair():
 
 
 def test_foc_100_osc_rows_measure_the_crystal_to_mcu_osc_pin_pair():
-    """The same on 1.0.0: ``X1.1`` reads 162.1 vs ``U1.12``, 162.8 vs ``U1.13``."""
+    """The same on 1.0.0: ``X1.1`` reads 162.1 vs ``U1.12``, 163.4 vs ``U1.13``.
+
+    U1.12/13 are 11.811 x 62.992 OVAL pads. 038V's stadium reading changed the
+    second gap from the box model's 162.8 to 163.3687, quoted as 163.4; the
+    first remains 162.0954, quoted as 162.1.
+    """
     rows = [
         row
         for row in _findings(FOC_100, "pcb-mcu-crystal-placement")
@@ -476,7 +482,7 @@ def test_foc_100_osc_rows_measure_the_crystal_to_mcu_osc_pin_pair():
         for row in rows
     )
     assert "162.1" in blob
-    assert "162.8" in blob
+    assert "163.4" in blob
     assert "OSC-IN" in blob and "OSC-OUT" in blob
 
 
