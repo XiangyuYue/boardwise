@@ -36,6 +36,29 @@ answer feeds a drawing decision:
   are returned in :attr:`DecouplingService.host_pins`; none is promoted to
   "the" pin by pin-number order.
 
+**A shunt on a functional node is not a decoupling shunt (543G-1).** A two-pin
+capacitor to ground looks the same whether it shunts a supply pin or loads a
+signal node: the crystal's load capacitors across ``XI``/``XO`` are topologically
+identical to an IC's bypass capacitor. The difference is the *company the net
+keeps*, and that is read from circuit declarations, not from names: on a
+non-supply net whose other members are the host and capacitor-class parts only
+(CH340's internal ``V3`` rail is exactly this shape, and its net class is
+``signal``), the shunt is decoupling. If a non-supply net also carries a part
+the shared classifier does not read as a capacitor **and** no module declares
+that part a core — a crystal, a resistor, a diode, a connector contact — the
+capacitor is part of that functional network (a crystal load, an RC filter) and
+is reported :data:`STATUS_NOT_DECOUPLING` with the offending members named.
+Declared module cores are exempt from that test on purpose: several ICs on one
+signal-class rail is a shared supply, and *which* of them the shunt serves is
+already answered (or refused) by the host-priority rules below. Supply-class
+nets are untouched.
+
+The same discipline bounds host identity for the guard: a core reached only
+through the net (the third priority, which keeps a capacitor declared in a
+coreless island of its own readable) may name the host, but it does **not** get
+to outvote the node's members — a crystal lead stays a crystal lead even when
+the island's own core is on the far side of an `attach` nobody wrote.
+
 This batch does not call the module from the compiler. It is the read-only
 relation table 543B will consume.
 """
@@ -169,6 +192,12 @@ def analyze_decoupling(
     parts = tuple(circuit.parts)
     by_pin = _nets_by_pin(circuit)
     declared_modules = _modules_by_part(presentation, parts)
+    capacitor_ids = frozenset(
+        part.id for part in parts if _is_capacitor(part, library)
+    )
+    core_ids = frozenset(
+        module.core for module in presentation.modules if module.core
+    )
     return DecouplingAnalysis(
         services=tuple(
             _service_for_part(
@@ -181,6 +210,8 @@ def analyze_decoupling(
                 presentation,
                 declared_modules,
                 library,
+                capacitor_ids=capacitor_ids,
+                core_ids=core_ids,
             )
             for part in parts
         )
@@ -239,6 +270,9 @@ def _service_for_part(
     presentation: PresentationSpec,
     declared_modules: dict[str, tuple[PresentationModule, ...]],
     library: object | None,
+    *,
+    capacitor_ids: frozenset[str] = frozenset(),
+    core_ids: frozenset[str] = frozenset(),
 ) -> DecouplingService:
     if not looks_like_capacitor(
         part_id, value, mpn, lcsc, library, name=symbol_ref
@@ -302,7 +336,10 @@ def _service_for_part(
     candidates: list[tuple[int, str, str, SpecNet, str]] = []
     for service_pin, service_net in service_terminals:
         for level, basis, hosts in _candidate_levels(
-            part_id, service_net, presentation, declared_modules.get(part_id, ())
+            part_id,
+            service_net,
+            presentation,
+            declared_modules.get(part_id, ()),
         ):
             for host_id in hosts:
                 candidates.append((level, basis, service_pin, service_net, host_id))
@@ -375,6 +412,21 @@ def _service_for_part(
         pin for _level, _basis, pin, net, host in best
         if net.id == served_net.id and host == host_id
     )
+    functional = _functional_neighbours(
+        served_net, part_id, host_id, capacitor_ids, core_ids
+    )
+    if functional and not _is_supply_net(served_net):
+        return DecouplingService(
+            part_id=part_id,
+            status=STATUS_NOT_DECOUPLING,
+            reason=(
+                "the node this capacitor shunts is also carried by "
+                f"{', '.join(functional)}; the shared classifier does not read "
+                "that part as a capacitor and no module declares it a core, so "
+                "this shunt belongs to that functional network (a crystal load, "
+                f"an RC filter, ...) instead of decoupling {host_id!r}'s supply pin"
+            ),
+        )
     host_pins = _pins_of(served_net, host_id)
     note = (
         f"{len(host_pins)} equivalent pins on the net are all kept; no single "
@@ -412,6 +464,13 @@ def _candidate_levels(
     A core that has no pin on the net cannot be served by it, so it is not a
     candidate at any level. A module claiming to be its own capacitor's core is
     ignored for the same reason a part cannot serve itself.
+
+    The last level stays: a capacitor declared in an island of its own (the
+    ``ch343_power`` group carries C1/C3/C4 with neither `core` nor `attach`)
+    still reads the single core its rail node touches. What 543G-1 forbids is
+    letting that route *outvote* the node's own members — a core found here does
+    not turn a crystal lead into a supply rail (see
+    :func:`_functional_neighbours`).
     """
 
     def hosts(candidates: list[str]) -> tuple[str, ...]:
@@ -457,6 +516,51 @@ def _pins_of(net: SpecNet, part_id: str) -> tuple[str, ...]:
 
 def _is_ground(net: SpecNet) -> bool:
     return net.cls == "gnd" or is_ground_net(net.id)
+
+
+def _is_supply_net(net: SpecNet) -> bool:
+    """A declared supply-class net: its readings are left exactly as they were."""
+    return net.cls == "power"
+
+
+def _is_capacitor(part: object, library: object | None) -> bool:
+    return looks_like_capacitor(
+        getattr(part, "id", "") or "",
+        getattr(part, "value", "") or "",
+        getattr(part, "mpn", "") or "",
+        getattr(part, "lcsc", "") or "",
+        library,
+        name=getattr(part, "symbol_ref", "") or "",
+    )
+
+
+def _functional_neighbours(
+    net: SpecNet,
+    part_id: str,
+    host_id: str,
+    capacitor_ids: frozenset[str],
+    core_ids: frozenset[str],
+) -> tuple[str, ...]:
+    """Parts that make ``net`` a functional node rather than a rail.
+
+    Exempt on purpose: the capacitor itself, the resolved host (a part is not
+    evidence about the net it serves) and every declared module core — several
+    ICs on one signal-class rail is a shared supply, and the priority rules
+    above already say whether one of them owns the shunt. What is left is a
+    part the shared classifier does not read as a capacitor and no module
+    declares a core: a crystal, a resistor, a diode, a connector contact — a
+    device that makes this node *its* node.
+    """
+    return _ordered_unique(
+        split[0]
+        for member in net.members
+        for split in [_split_member(member)]
+        if split is not None
+        and split[0] != part_id
+        and split[0] != host_id
+        and split[0] not in capacitor_ids
+        and split[0] not in core_ids
+    )
 
 
 def _ordered_unique(items) -> tuple:

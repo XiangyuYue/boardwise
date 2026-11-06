@@ -1,0 +1,877 @@
+{
+  "profiles": [
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "TYPE-C-31-M-12-C165948",
+      "title": "USB Type-C receptacle 16P, SMD (LCSC C165948), measured on the live editor",
+      "body": [
+        -25.5,
+        -65.5,
+        25.5,
+        65.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "EH",
+          "tip": [
+            35,
+            -55
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "EH",
+          "tip": [
+            35,
+            -45
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "3",
+          "name": "EH",
+          "tip": [
+            35,
+            -35
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "4",
+          "name": "EH",
+          "tip": [
+            35,
+            -25
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A5",
+          "name": "CC1",
+          "tip": [
+            -35,
+            25
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A6",
+          "name": "DP1",
+          "tip": [
+            -35,
+            5
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A7",
+          "name": "DN1",
+          "tip": [
+            -35,
+            -5
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A8",
+          "name": "SBU1",
+          "tip": [
+            -35,
+            -25
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B5",
+          "name": "CC2",
+          "tip": [
+            -35,
+            -35
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B6",
+          "name": "DP2",
+          "tip": [
+            -35,
+            -15
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B7",
+          "name": "DN2",
+          "tip": [
+            -35,
+            15
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B8",
+          "name": "SBU2",
+          "tip": [
+            -35,
+            35
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A4B9",
+          "name": "VBUS",
+          "tip": [
+            -35,
+            45
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B4A9",
+          "name": "VBUS",
+          "tip": [
+            -35,
+            -45
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A1B12",
+          "name": "GND",
+          "tip": [
+            -35,
+            55
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B1A12",
+          "name": "GND",
+          "tip": [
+            -35,
+            -55
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C165948 TYPE-C-31-M-12 placed at (430, 180) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 16 pins and its own geometry gave the body box [-25.5, -65.5, 25.5, 65.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C165948.json + measure_summary.json text rows measured 2026-10-27, read out of the ATTR records of the page document the host itself exported on 2026-10-23 (E:/boardwise/evidence/534/discard/document_source.json, chars=189792, truncated=false) — NOT a fresh measurement of this editor today. The old page carries USB1 at origin (330,-690) rotation 0, isMirror false (the pose this candidate draws USB1), with its Designator at (305,-755) and its Name at (305,-615): offsets [-25, 65] / [-25, -75] in symbol-local units, y up. `valueRow` is the string the host actually draws in the value row (TYPE-C-31-M-12: the device Name the host resolved, not the spec's value). A pose not stated here has no measured row and keeps the compiler's own side ladder.",
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -25.0,
+          "y": 65.0,
+          "rotation": 0.0,
+          "mirror": false
+        },
+        {
+          "kind": "value",
+          "x": -25.0,
+          "y": -75.0,
+          "rotation": 0.0,
+          "mirror": false
+        }
+      ],
+      "valueRow": "TYPE-C-31-M-12"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "R0603-5.1k-C23186",
+      "title": "5.1 kOhm resistor 0603 (LCSC C23186), measured on the live editor",
+      "body": [
+        -10.5,
+        -4.5,
+        10.5,
+        4.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20,
+            0
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20,
+            0
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": 10.0,
+          "y": 0.0,
+          "rotation": 270.0,
+          "mirror": false
+        },
+        {
+          "kind": "value",
+          "x": 10.0,
+          "y": -10.0,
+          "rotation": 270.0,
+          "mirror": false
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        }
+      ],
+      "poseSource": "declared",
+      "notes": [
+        "texts measured 534 r1: .tmp_534/text-profile-measurement-r1/findings.md section 2.2 (measurements.json), rows attributed by the host's own fill colour in .tmp_534/final-postcheck-r1/actual.svg sha256 743de22379a24dde247a0673eca143f3d3b43cbbd33f92d48c2ea93b5458adfb.",
+        "R17 and R18, both at rotation 270, draw their reference at (+10,0) and their value at (+10,-10): 2/2 identical. This is the 270 pose as measured, not a rigid turning of the upright (-10,+5) -- rotation 90 and 180 have no instance on that page and state no row."
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C23186 R0603-5.1k placed at (130, 620) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 2 pins and its own geometry gave the body box [-10.5, -4.5, 10.5, 4.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C23186.json + measure_summary.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "C0603-100nF-C1590",
+      "title": "100 nF capacitor 0603 (LCSC C1590), measured on the live editor",
+      "body": [
+        -5.5,
+        -8.5,
+        5.5,
+        8.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -15,
+            0
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            15,
+            0
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -5.0,
+          "y": 10.0,
+          "rotation": 0.0,
+          "mirror": false
+        },
+        {
+          "kind": "value",
+          "x": -5.0,
+          "y": -20.0,
+          "rotation": 0.0,
+          "mirror": false
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        }
+      ],
+      "poseSource": "declared",
+      "notes": [
+        "texts measured 534 r1: .tmp_534/text-profile-measurement-r1/findings.md section 2.2 (measurements.json), rows attributed by the host's own fill colour in .tmp_534/final-postcheck-r1/actual.svg sha256 743de22379a24dde247a0673eca143f3d3b43cbbd33f92d48c2ea93b5458adfb.",
+        "C12, C13 and C14, all at rotation 0, draw their reference at (-5,+10) and their value at (-5,-20): 3/3 identical.",
+        "534B layout experiment: 90/180/270 added so a shunt cap can stand beside an IC power pin; text rows are carried by the symbol transform, not re-measured."
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C1590 C0603-100nF placed at (1030, 620) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 2 pins and its own geometry gave the body box [-5.5, -8.5, 5.5, 8.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C1590.json + measure_summary.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "C0805-10uF-C15850",
+      "title": "10 uF capacitor 0805 (LCSC C15850), measured on the live editor",
+      "body": [
+        -10.5,
+        -8.5,
+        10.5,
+        8.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20,
+            0
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20,
+            0
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "texts": [
+        {
+          "kind": "reference",
+          "x": 15.0,
+          "y": 0.0,
+          "rotation": 270.0,
+          "mirror": false
+        },
+        {
+          "kind": "value",
+          "x": 15.0,
+          "y": -10.0,
+          "rotation": 270.0,
+          "mirror": false
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        }
+      ],
+      "poseSource": "declared",
+      "notes": [
+        "texts measured 534 r1: .tmp_534/text-profile-measurement-r1/findings.md section 2.2 (measurements.json), rows attributed by the host's own fill colour in .tmp_534/final-postcheck-r1/actual.svg sha256 743de22379a24dde247a0673eca143f3d3b43cbbd33f92d48c2ea93b5458adfb.",
+        "C11 at origin (85,720) rotation 270 draws its reference at (+15,0) and its value at (+15,-10): the two rows stack on the body's right side, x taken from the 16-wide body rather than the 8-wide one R0603 uses. Rotation 90 and 180 state no row.",
+        "534B layout experiment: 90/180/270 added so a shunt cap can stand beside an IC power pin; text rows are carried by the symbol transform, not re-measured."
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C15850 C0805-10uF placed at (730, 620) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 2 pins and its own geometry gave the body box [-10.5, -8.5, 10.5, 8.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C15850.json + measure_summary.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "CH340G-C14267",
+      "title": "CH340G USB-serial bridge, SOP-16 (LCSC C14267, measured on the live editor)",
+      "body": [
+        -30.5,
+        -45.5,
+        30.5,
+        45.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "GND",
+          "tip": [
+            -40.0,
+            35.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "TXD",
+          "tip": [
+            -40.0,
+            25.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "3",
+          "name": "RXD",
+          "tip": [
+            -40.0,
+            15.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "4",
+          "name": "V3",
+          "tip": [
+            -40.0,
+            5.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "5",
+          "name": "UD+",
+          "tip": [
+            -40.0,
+            -5.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "6",
+          "name": "UD-",
+          "tip": [
+            -40.0,
+            -15.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "7",
+          "name": "XI",
+          "tip": [
+            -40.0,
+            -25.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "8",
+          "name": "XO",
+          "tip": [
+            -40.0,
+            -35.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "9",
+          "name": "CTS#",
+          "tip": [
+            40.0,
+            -35.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "10",
+          "name": "DSR#",
+          "tip": [
+            40.0,
+            -25.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "11",
+          "name": "RI#",
+          "tip": [
+            40.0,
+            -15.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "12",
+          "name": "DCD#",
+          "tip": [
+            40.0,
+            -5.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "13",
+          "name": "DTR#",
+          "tip": [
+            40.0,
+            5.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "14",
+          "name": "RTS#",
+          "tip": [
+            40.0,
+            15.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "15",
+          "name": "R232",
+          "tip": [
+            40.0,
+            25.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "16",
+          "name": "VCC",
+          "tip": [
+            40.0,
+            35.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ],
+      "source": "measured 2026-10-03: C14267 placed at (300,500) on test/P24 (probe page fa96410e884cc55f); sch.component_pins answered all 16 pins at x=260 (pins 1-8) and x=340 (pins 9-16), y from 535 down to 465 in steps of 10, every PinLength 10; its own bbox was [269.5,454.5,330.5,545.5] -> body (-30.5,-45.5,30.5,45.5). Pin names are the host's own: GND/TXD/RXD/V3/UD+/UD-/XI/XO on the left face, CTS#/DSR#/RI#/DCD#/DTR#/RTS#/R232/VCC on the right face — both the UART pair and the USB data pair are on the LEFT, unlike 098's hand-written sample (a fact of this symbol; the presentation declares the sides it draws). Evidence: outputs/099/libprobe/pins_ch340g.json + 08_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "HC-49S-12M-C389706",
+      "title": "12 MHz HC-49S crystal, THT two-pin (LCSC C389706, measured)",
+      "body": [
+        -10.5,
+        -7.5,
+        10.5,
+        7.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "OSC1",
+          "tip": [
+            -20.0,
+            0.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "OSC2",
+          "tip": [
+            20.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ],
+      "source": "measured 2026-10-03: C389706 (5S0-1200A2020-00, footprint HC-49S_L11.0-W4.4-P4.88) placed at (600,500) on test/P24; sch.component_pins answered pin 1 'OSC1' at (580,500) and pin 2 'OSC2' at (620,500), both PinLength 10; its own bbox was [589.5,492.5,610.5,507.5] -> body (-10.5,-7.5,10.5,7.5). Two pins on opposite sides, 40 units apart. Evidence: outputs/099/libprobe/pins_xtal.json + 08_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "C0603-22P-C140958",
+      "title": "22pF 0603 C0G (LCSC C140958, measured)",
+      "body": [
+        -10.5,
+        -8.5,
+        10.5,
+        8.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            20.0,
+            0.0
+          ],
+          "direction": "right",
+          "length": 10.0,
+          "pinType": "passive"
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            -20.0,
+            0.0
+          ],
+          "direction": "left",
+          "length": 10.0,
+          "pinType": "passive"
+        }
+      ],
+      "source": "measured 2026-10-03: C140958 (C0603C220J2GAC7867, footprint C0603) placed at (800,500) on test/P24; sch.component_pins answered pin 1 at (820,500) (Rotation 0) and pin 2 at (780,500) (Rotation 180), both PinLength 10; its own bbox was [789.5,491.5,810.5,508.5] -> body (-10.5,-8.5,10.5,8.5). Note the pin order: at the host's own rotation 0, pin 1 leaves on the RIGHT — the library profile states the measured shape, not an assumed one. Evidence: outputs/099/libprobe/pins_c22p.json + 08_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "2x5P-2.54-C49056209",
+      "title": "2x5 2.54 mm pin header, THT (LCSC C49056209), measured on the live editor",
+      "body": [
+        -20.5,
+        -30.5,
+        10.5,
+        30.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -30,
+            20
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20,
+            20
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "3",
+          "name": "3",
+          "tip": [
+            -30,
+            10
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "4",
+          "name": "4",
+          "tip": [
+            20,
+            10
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "5",
+          "name": "5",
+          "tip": [
+            -30,
+            0
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "6",
+          "name": "6",
+          "tip": [
+            20,
+            0
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "7",
+          "name": "7",
+          "tip": [
+            -30,
+            -10
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "8",
+          "name": "8",
+          "tip": [
+            20,
+            -10
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "9",
+          "name": "9",
+          "tip": [
+            -30,
+            -20
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "10",
+          "name": "10",
+          "tip": [
+            20,
+            -20
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C49056209 2x5P-2.54 placed at (730, 180) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 10 pins and its own geometry gave the body box [-20.5, -30.5, 10.5, 30.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C49056209.json + measure_summary.json text rows measured 2026-10-27, read out of the ATTR records of the page document the host itself exported on 2026-10-23 (E:/boardwise/evidence/534/discard/document_source.json, chars=189792, truncated=false) — NOT a fresh measurement of this editor today. The old page carries H1 at origin (975,-770) rotation 0, isMirror true (the pose this candidate draws H1), with its Designator at (965,-800) and its Name at (965,-730): offsets [-10, 30] / [-10, -40] in symbol-local units, y up. `valueRow` is the string the host actually draws in the value row (PZ254V-22-10-A60-3000: the device Name the host resolved, not the spec's value). A pose not stated here has no measured row and keeps the compiler's own side ladder. The host's Name for C49056209 is `PZ254V-22-10-A60-3000` while the spec's OtherProperty.Value is `2x5P-2.54`: the drawn row is 70 units wide against the 40 the spec string would reserve.",
+      "texts": [
+        {
+          "kind": "reference",
+          "x": -10.0,
+          "y": 30.0,
+          "rotation": 0.0,
+          "mirror": true
+        },
+        {
+          "kind": "value",
+          "x": -10.0,
+          "y": -40.0,
+          "rotation": 0.0,
+          "mirror": true
+        }
+      ],
+      "valueRow": "PZ254V-22-10-A60-3000"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-+5V",
+      "title": "PWR-+5V",
+      "body": [
+        -5.0,
+        0.0,
+        5.0,
+        10.0
+      ],
+      "pins": [],
+      "source": "Rail flag glyph, measured on 534 r1 off the landed render (`actual.svg`, sha256 743de22379a24dde247a0673eca143f3d3b43cbbd33f92d48c2ea93b5458adfb): 5-unit lead then a 10-wide pennant, `(-5, 0, 5, 10)` with the rail family's 0 rotation; 7/7 +5V flags predicted exactly (delta [0,0,0,0]). 旗标族别名，2026-10-03 真机测量（pit 43）只说明族；本批实测的是范围。Evidence: `.tmp_534/text-profile-measurement-r1/findings.md` sec.1.2. Supersedes the carry-over `(-6, 0, 6, 18)`."
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-GND",
+      "title": "PWR-GND",
+      "body": [
+        -10.0,
+        0.0,
+        10.0,
+        19.0
+      ],
+      "pins": [],
+      "source": "Ground flag glyph, measured on 534 r1 off the landed render (`actual.svg`, sha256 743de22379a24dde247a0673eca143f3d3b43cbbd33f92d48c2ea93b5458adfb): a 10-unit lead then 20-wide bars, i.e. `(-10, 0, 10, 19)` with the family's 180 rotation putting them below the connection point. 4/4 GND flags predicted exactly (delta [0,0,0,0]); the family still prints **no** name (4/4 have no text node — confirmed again on this page). Evidence: `.tmp_534/text-profile-measurement-r1/findings.md` sec.1.2/1.3. Supersedes the carry-over `(-6, 0, 6, 18)`; the 2026-10-03 probe's reading (connection point at the origin, PinLength 10, bars 9.5..19.5 below) is unchanged, only the extent is now measured."
+    }
+  ]
+}

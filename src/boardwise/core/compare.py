@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from boardwise.core.model import DesignModel, Net
+from boardwise.core.netdomains import is_auto_net
 
 from .values import parse_capacitance_farads, parse_resistance_ohms
 
@@ -480,6 +481,7 @@ def reconcile_names(
     golden: DesignModel,
     *,
     skipped: list[str] | None = None,
+    auto_only: bool = False,
 ) -> DesignModel:
     """Rename the candidate's nets to the golden names, matched by membership.
 
@@ -504,6 +506,16 @@ def reconcile_names(
 
     This path applies immutably: the candidate is left alone and a new
     :class:`DesignModel` comes back.
+
+    ``auto_only`` (543N) narrows the plan to renames where **both** the source
+    and the target name are editor-generated (:func:`boardwise.core.netdomains.
+    is_auto_net`) — the ``$19N5`` -> ``$1N5`` renumbering a reopen produces.
+    The membership match is the same one; only which renames may be applied is
+    restricted, so two clusters with the same members still meet under one name
+    and a user-named net is never renamed by this mode. It is off by default:
+    calibration and draw keep the unrestricted behaviour bit for bit. Deciding
+    what a narrowed reconcile is allowed to *mean* stays with the caller
+    (``boardwise persistence``), which is the only consumer that passes it.
     """
     renamed = plan_membership_renames(
         golden.nets,
@@ -511,6 +523,16 @@ def reconcile_names(
         respect_golden_names=False,
         skipped=skipped,
     )
+    if auto_only:
+        # A filter, not a second judgement: the plan is already collision-free
+        # (`taken` plus the withdrawal fixed point), and dropping entries can
+        # only remove collisions, never create one. Identity entries survive
+        # harmlessly — the application below maps a name to itself.
+        renamed = {
+            name: match
+            for name, match in renamed.items()
+            if is_auto_net(name) and is_auto_net(match)
+        }
 
     import copy as _copy
 

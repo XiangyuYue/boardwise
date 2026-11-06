@@ -1,0 +1,209 @@
+{
+  "kind": "boardwise-circuit-spec",
+  "specVersion": 1,
+  "parts": [
+    {
+      "id": "USB1",
+      "symbolRef": "TYPE-C-31-M-12-C165948",
+      "value": "TYPE-C-31-M-12",
+      "lcsc": "C165948",
+      "mpn": "TYPE-C-31-M-12",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "R1",
+      "symbolRef": "R0603-5.1k-C23186",
+      "value": "5.1k",
+      "lcsc": "C23186",
+      "mpn": "0603WAF5101T5E",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "R2",
+      "symbolRef": "R0603-5.1k-C23186",
+      "value": "5.1k",
+      "lcsc": "C23186",
+      "mpn": "0603WAF5101T5E",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C1",
+      "symbolRef": "C0603-100nF-C1590",
+      "value": "100nF",
+      "lcsc": "C1590",
+      "mpn": "CL10B104KA8NNNC",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C2",
+      "symbolRef": "C0805-10uF-C15850",
+      "value": "10uF",
+      "lcsc": "C15850",
+      "mpn": "CL21A106KAYNNNE",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "U1",
+      "symbolRef": "CH340G-C14267",
+      "value": "CH340G",
+      "lcsc": "C14267",
+      "mpn": "CH340G",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C3",
+      "symbolRef": "C0603-100nF-C1590",
+      "value": "100nF",
+      "lcsc": "C1590",
+      "mpn": "CL10B104KA8NNNC",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C4",
+      "symbolRef": "C0603-100nF-C1590",
+      "value": "100nF",
+      "lcsc": "C1590",
+      "mpn": "CL10B104KA8NNNC",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "X1",
+      "symbolRef": "HC-49S-12M-C389706",
+      "value": "12MHz",
+      "lcsc": "C389706",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C5",
+      "symbolRef": "C0603-22P-C140958",
+      "value": "22pF",
+      "lcsc": "C140958",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "C6",
+      "symbolRef": "C0603-22P-C140958",
+      "value": "22pF",
+      "lcsc": "C140958",
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "H1",
+      "symbolRef": "2x5P-2.54-C49056209",
+      "value": "2x5P-2.54",
+      "lcsc": "C49056209",
+      "mpn": "PZ254V-22-10-A60-3000",
+      "provenance": "verified_recipe"
+    }
+  ],
+  "nets": [
+    {
+      "id": "GND",
+      "class": "gnd",
+      "members": [
+        "U1.1",
+        "USB1.A1B12",
+        "USB1.B1A12",
+        "USB1.1",
+        "USB1.2",
+        "USB1.3",
+        "USB1.4",
+        "R1.2",
+        "R2.2",
+        "C1.2",
+        "C2.2",
+        "C3.2",
+        "C4.2",
+        "C5.2",
+        "C6.2",
+        "H1.10"
+      ],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "+5V",
+      "class": "power",
+      "members": [
+        "USB1.A4B9",
+        "USB1.B4A9",
+        "C1.1",
+        "C2.1",
+        "U1.16",
+        "C3.1",
+        "H1.9"
+      ],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "D+",
+      "class": "signal",
+      "members": ["USB1.A6", "USB1.B6", "U1.5"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "D-",
+      "class": "signal",
+      "members": ["USB1.A7", "USB1.B7", "U1.6"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "CC1",
+      "class": "signal",
+      "members": ["USB1.A5", "R1.1"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "CC2",
+      "class": "signal",
+      "members": ["USB1.B5", "R2.1"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "V3",
+      "class": "signal",
+      "members": ["U1.4", "C4.1"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "XI",
+      "class": "signal",
+      "members": ["U1.7", "X1.1", "C5.1"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "XO",
+      "class": "signal",
+      "members": ["U1.8", "X1.2", "C6.1"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "TXD",
+      "class": "signal",
+      "members": ["U1.2", "H1.1"],
+      "provenance": "verified_recipe"
+    },
+    {
+      "id": "RXD",
+      "class": "signal",
+      "members": ["U1.3", "H1.2"],
+      "provenance": "verified_recipe"
+    }
+  ],
+  "nc": [
+    { "pin": "USB1.A8", "provenance": "verified_recipe" },
+    { "pin": "USB1.B8", "provenance": "verified_recipe" },
+    { "pin": "U1.9", "provenance": "verified_recipe" },
+    { "pin": "U1.10", "provenance": "verified_recipe" },
+    { "pin": "U1.11", "provenance": "verified_recipe" },
+    { "pin": "U1.12", "provenance": "verified_recipe" },
+    { "pin": "U1.13", "provenance": "verified_recipe" },
+    { "pin": "U1.14", "provenance": "verified_recipe" },
+    { "pin": "U1.15", "provenance": "verified_recipe" },
+    { "pin": "H1.3", "provenance": "verified_recipe" },
+    { "pin": "H1.4", "provenance": "verified_recipe" },
+    { "pin": "H1.5", "provenance": "verified_recipe" },
+    { "pin": "H1.6", "provenance": "verified_recipe" },
+    { "pin": "H1.7", "provenance": "verified_recipe" },
+    { "pin": "H1.8", "provenance": "verified_recipe" }
+  ]
+}

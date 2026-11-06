@@ -184,13 +184,22 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
     **40/40、60/60、40/40** 且可见贴名。C9/C10 共地、R7/R8 独立地旗、USB 去耦竖直与
     CH343 电容横向未回退。11 器件、49 计划导线、19 旗；lint **0E/0W/0I**，网表分区与
     导线几何均 **55/55 + 3/3 NC**，主代理逐岛目检通过。旧 P37 已删，Board2 仅 P1；
-    DRC 仅 3 个规格 NC + 3 个库属性 WARN。持久化 `saved_unverified`，第二拓扑未做。
+    DRC 仅 3 个规格 NC + 3 个库属性 WARN。该页后由 543N 完成关闭重开，升级为 `saved_verified`。
     543M 已补上联合等长的 `stub=straight` 门：auto/V45 恢复旧逐脚逻辑，straight 的
     P38 重编译与验收版逐字节相同；主代理 V45/auto/格点复跑 **35 passed**，独立
     删除门时 auto 负控制变红并已还原。最终 drawcompiler sha256=`0451d93a…`。
     证据 `evidence/543j/`、`evidence/543kl/`；543J 全量 **9390 passed / 25 skipped /
     2 既有环境红**，543K/L/M 最终全量 **9496 passed / 25 skipped / 2 既有环境红**；
     connector 576、dsh 129+1、Rust 111+4、draw smoke 与 doc-claims 39 均过。
+- **543G/N/H 当前状态（2026-11-06，工作树）**：P38 已关闭重开并 `saved_verified`；
+  自动网名重编号只在 persistence 按成员分区调和，通用 compare 不变。第二拓扑 CH340
+  页 **P39=`62e4828acc56a307`** 已三关：12器件/36计划导线/17旗、lint 0E/0W/0I、
+  独立逐脚 **45/45+15/15NC=60/60**、宿主逐岛视觉通过；P38和Board2 P1不动。
+  543G补齐信号支路非去耦、完整flow阅读列、branchOrder与振荡bay，规格无参考坐标。
+  201G披露合同和515A两项真缺陷已核销；201C/201D裁决不复活。证据 `evidence/543g/`、
+  `evidence/543n/`、`evidence/543h/`。P39持久化未重开验证。最终全量 **9962 passed /
+  25 skipped / 14 failed**（12条其他agent货架漂移+2条既有Windows环境红，本批6条回归已修）；
+  connector 576、dsh 129+1、Rust、draw smoke、CLI合同与仓库卫生均过。
 - **合并记录**：worktree `E:/boardwise-wt-layout` 分支 `534b-layout` 已合并 main
   （`b74ee91`）；本批（053C–053F）直接在 main 提交（`263929e`），全量
   **8980 passed / 23 skipped / 2 failed**（两条环境红：pytest-slots ACL、

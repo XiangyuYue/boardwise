@@ -445,3 +445,238 @@ def test_the_arguments_parse_as_advertised():
 
     args = build_parser().parse_args(["persistence", "--baseline", "s.json"])
     assert (args.out, args.baseline) == (None, "s.json")
+
+
+# --------------------------------------------------------------------------
+# 543N: auto-generated net names are renumbered across a reopen
+# --------------------------------------------------------------------------
+#
+# Measured on `test V4` P38 (evidence/543n/): the page came back with 11
+# components, the same geometry and the same partition, but the four unnamed
+# nets the editor had called `$19N5 …` were now `$1N5 …`. Comparing those names
+# verbatim reported 12 phantom differences on a save that had persisted
+# perfectly. The fix is a *narrow* one — an auto→auto rename is excused only
+# when the member set is identical — and the tests below pin both the excuse
+# and every shape it must not cover.
+
+#: The fixture's editor-generated names, renumbered the way the host does it.
+AUTO_RENUMBER = {
+    "$1N5": "$19N5",
+    "$1N22": "$19N19",
+    "$1N23": "$19N20",
+    "$1N35": "$19N35",
+    "$1N40": "$19N40",
+    "$1N42": "$19N42",
+}
+
+
+def _rewritten(mutate=None) -> str:
+    """The fixture netlist, auto names renumbered, then `mutate(netlist)`.
+
+    The mutation runs *after* the renumbering, so a shape is described against
+    the names the reopened page would really carry.
+    """
+    netlist = json.loads(_netlist_text())
+    for component in netlist["components"].values():
+        for pin in component["pinInfoMap"].values():
+            net = pin.get("net")
+            pin["net"] = AUTO_RENUMBER.get(net, net)
+    if mutate is not None:
+        mutate(netlist)
+    return json.dumps(netlist)
+
+
+def _renamed(netlist: dict, old: str, new: str) -> None:
+    """Rename every pin carrying `old` — a whole-cluster rename, same members."""
+    for component in netlist["components"].values():
+        for pin in component["pinInfoMap"].values():
+            if pin.get("net") == old:
+                pin["net"] = new
+
+
+def _set_pin(netlist: dict, component_id: str, number: str, net: str) -> None:
+    netlist["components"][component_id]["pinInfoMap"][number]["net"] = net
+
+
+def _nets_of(netlist_text: str) -> dict[str, set[tuple[str, str]]]:
+    netlist = json.loads(netlist_text)
+    nets: dict[str, set[tuple[str, str]]] = {}
+    for component_id, component in netlist["components"].items():
+        for number, pin in component["pinInfoMap"].items():
+            nets.setdefault(pin.get("net") or "", set()).add((component_id, number))
+    return nets
+
+
+def test_an_auto_net_renumbering_is_saved_verified(capsys, tmp_path, monkeypatch):
+    """The measured P38 shape: only editor-generated names moved."""
+    from boardwise.bridge import daemon as daemon_module
+
+    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    reopened = _rewritten()
+    assert _nets_of(reopened) != _nets_of(_netlist_text()), "the names really moved"
+    before = json.loads(_netlist_text())
+    after = json.loads(reopened)
+    assert sorted(before["components"]) == sorted(after["components"])
+
+    code = _compare_persistence(_snapshot(), _snapshot(netlist_text=reopened))
+    printed = capsys.readouterr().out
+
+    assert code == 0, "a renumbering of auto names is not a failed save"
+    assert "persistence: saved_verified" in printed
+    assert "NOT saved_verified" not in printed
+    assert "matched by member set, not by name" in printed, (
+        "the pass must disclose that this is a membership match, not name stability"
+    )
+    assert "$19N5 -> $1N5" in printed
+    assert "extras:" not in printed, "the reconcile leaves nothing extra behind"
+    records = _audit_records(tmp_path)
+    assert [r["action"] for r in records] == [daemon_module.AUDIT_PERSISTENCE_VERIFIED]
+    assert records[0]["persistence"] == "saved_verified"
+
+
+def test_the_reconcile_note_counts_every_renumbered_net(capsys):
+    reopened = _rewritten()
+    code = _compare_persistence(_snapshot(), _snapshot(netlist_text=reopened))
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert f"({len(AUTO_RENUMBER)})" in printed
+
+
+@pytest.mark.parametrize(
+    "detail, mutate",
+    [
+        (
+            "pin moved to another auto net",
+            lambda netlist: _set_pin(netlist, "gge45_1", "1", "$19N6"),
+        ),
+        (
+            "auto net split in two",
+            lambda netlist: _set_pin(netlist, "gge45_1", "1", "$19N50"),
+        ),
+        (
+            "two auto nets merged",
+            lambda netlist: (
+                _renamed(netlist, "$19N20", "$19N99"),
+                _renamed(netlist, "$19N35", "$19N99"),
+            ),
+        ),
+    ],
+    ids=["pin-moved", "split", "merged"],
+)
+def test_a_real_electrical_change_on_auto_nets_still_fails(detail, mutate, capsys):
+    """A renumbered *name* is excused; a changed *partition* never is."""
+    reopened = _rewritten(mutate)
+    code = _compare_persistence(_snapshot(), _snapshot(netlist_text=reopened))
+    printed = capsys.readouterr().out
+    assert code == 1, detail
+    assert "net missing in candidate" in printed or "member missing in candidate" in printed
+    assert "pin net mapping differs" in printed
+    assert "NOT saved_verified" in printed
+    assert "persistence: saved_verified" not in printed
+
+
+@pytest.mark.parametrize(
+    "detail, mutate",
+    [
+        ("named net renamed", lambda n: _renamed(n, "RX", "RXD_ALT")),
+        ("named net renamed to an auto name", lambda n: _renamed(n, "RX", "$19N77")),
+        ("auto net renamed to a user name", lambda n: _renamed(n, "$19N5", "USB_D_P")),
+    ],
+    ids=["named-renamed", "named-to-auto", "auto-to-named"],
+)
+def test_a_user_named_net_is_never_excused_by_the_auto_rule(detail, mutate, capsys):
+    """Same members is not the same net when a name that means something moved."""
+    reopened = _rewritten(mutate)
+    code = _compare_persistence(_snapshot(), _snapshot(netlist_text=reopened))
+    printed = capsys.readouterr().out
+    assert code == 1, detail
+    assert "NOT saved_verified" in printed
+    assert "persistence: saved_verified" not in printed
+
+
+def test_a_component_lost_in_a_renumbered_reopen_still_fails(capsys):
+    """The auto rule only touches net names; a lost part is still a loss."""
+    netlist = json.loads(_rewritten())
+    del netlist["components"]["gge57"]
+    code = _compare_persistence(_snapshot(), _snapshot(netlist_text=json.dumps(netlist)))
+    printed = capsys.readouterr().out
+    assert code == 1
+    assert "component missing in candidate" in printed
+    assert "NOT saved_verified" in printed
+
+
+# --------------------------------------------------------------------------
+# the contract underneath: `reconcile_names(..., auto_only=True)`
+# --------------------------------------------------------------------------
+
+
+def _model(netlist_text: str):
+    from boardwise.core.candidate import candidate_from_netlist
+
+    return candidate_from_netlist(netlist_text, "EasyEDA")
+
+
+def test_the_default_reconcile_is_unchanged_and_auto_only_is_the_narrow_one():
+    """Calibration still renames by membership, names included.
+
+    ``auto_only`` is off by default: the default call renames the user-named
+    ``RX`` cluster to the golden ``GND``-style name it matches, and the narrowed
+    call must not. Both directions are pinned here so "off by default" is a
+    measurement, not a claim.
+    """
+    from boardwise.core.compare import reconcile_names
+
+    golden = _model(_netlist_text())
+    named_rename = _model(_rewritten(lambda netlist: _renamed(netlist, "RX", "RX_ALT")))
+
+    default = reconcile_names(named_rename, golden)
+    narrowed = reconcile_names(named_rename, golden, auto_only=True)
+
+    assert "RX_ALT" not in default.nets, "the default path still matches by membership"
+    assert "RX" in default.nets
+    assert "RX_ALT" in narrowed.nets, "auto_only may not rename a user-named net"
+    assert "RX" not in narrowed.nets
+
+    renumbered = _model(_rewritten())
+    assert "$19N5" not in reconcile_names(renumbered, golden).nets
+    assert "$19N5" not in reconcile_names(renumbered, golden, auto_only=True).nets, (
+        "auto→auto is the case the narrow mode is for"
+    )
+
+
+def test_the_narrow_reconcile_keeps_the_safety_metadata():
+    """Same rebuild, same four fields — a truncated weld still refuses."""
+    from boardwise.core.compare import reconcile_names
+    from boardwise.core.model import TRUNCATED_BY_DESIGNATOR
+
+    golden = _model(_netlist_text())
+    candidate = _model(_rewritten())
+    candidate.duplicate_designators = ["R1"]
+    candidate.cross_page_designators = {"R1": ["page-1", "page-2"]}
+    candidate.unproven_nets = {"GND": ("page-a", "page-b")}
+    candidate.unproven_reasons = {
+        "GND": (TRUNCATED_BY_DESIGNATOR, "2nd placement of 'R1' left out")
+    }
+
+    out = reconcile_names(candidate, golden, auto_only=True)
+
+    assert out.duplicate_designators == ["R1"]
+    assert out.cross_page_designators == {"R1": ["page-1", "page-2"]}
+    assert out.unproven_nets == {"GND": ("page-a", "page-b")}
+    assert out.unproven_reasons == candidate.unproven_reasons
+
+
+def test_compare_models_itself_is_still_strict_about_net_names():
+    """The tolerance lives in the persistence caller, never in the referee.
+
+    `boardwise diff` and calibration read `compare_models` directly; if this
+    function had learned to forgive a renumbering, every consumer would gain a
+    verdict it never asked for.
+    """
+    from boardwise.core.compare import compare_models
+
+    report = compare_models(_model(_netlist_text()), _model(_rewritten()))
+    details = [d.detail for d in report.differences]
+    assert "net missing in candidate" in details
+    assert "net extra in candidate" in details
+    assert "pin net mapping differs" in details

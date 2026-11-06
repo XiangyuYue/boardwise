@@ -1,0 +1,123 @@
+{
+  "kind": "boardwise-presentation-spec",
+  "specVersion": 1,
+  "grammarRef": "ic-periphery",
+  "textPlacement": "native-attr",
+  "sidePreferences": {
+    "input": "left",
+    "output": "right",
+    "load": "left",
+    "source": "left",
+    "power": "top",
+    "gnd": "bottom"
+  },
+  "portRoles": {
+    "D+": "load",
+    "D-": "load",
+    "TXD": "output",
+    "RXD": "input",
+    "+5V": "input"
+  },
+  "flow": [
+    [
+      "usb_c",
+      "serial"
+    ],
+    [
+      "serial",
+      "uart"
+    ]
+  ],
+  "modules": [
+    {
+      "id": "usb_c",
+      "parts": [
+        "USB1",
+        "R1",
+        "R2",
+        "C1",
+        "C2"
+      ],
+      "role": "USB-C receptacle: both CC pull-downs live on their own receptacle pins, and the 100nF+10uF pair is the VBUS decoupling at the connector",
+      "grammarRef": "ic-periphery",
+      "core": "USB1",
+      "presentation": {
+        "sidePreferences": {
+          "load": "right",
+          "power": "top",
+          "gnd": "bottom"
+        }
+      }
+    },
+    {
+      "id": "serial",
+      "parts": [
+        "U1",
+        "C3",
+        "C4",
+        "X1",
+        "C5",
+        "C6"
+      ],
+      "role": "CH340G bridge: one decoupling capacitor on the VCC pin it is fed from, one on the internally regulated V3 pin, and the 12 MHz crystal with its two 22pF loads as the oscillator branch that clocks this bridge — a sub-circuit of the same part, hung off its own XI/XO pins, so it stays in this island; its rows read away from the crystal — C5's to its left, X1's and C6's to their right — because that is the only side each has room on: hung above, the crystal's value row crosses C5's ground flag and C6's rows cross the crystal's own body, so the two loads keep one pose and one local ground flag each and the texts are not a local-search accident",
+      "grammarRef": "ic-periphery",
+      "core": "U1",
+      "presentation": {
+        "sidePreferences": {
+          "load": "left",
+          "power": "top",
+          "gnd": "bottom"
+        }
+      }
+    },
+    {
+      "id": "uart",
+      "parts": [
+        "H1"
+      ],
+      "role": "2x5 UART header: the board's serial boundary — TXD/RXD as named nets, the 5 V rail out on pin 9 and the ground on pin 10, the remaining pins unconnected",
+      "grammarRef": "ic-periphery",
+      "core": "H1"
+    }
+  ],
+  "moduleOrder": [
+    "usb_c",
+    "serial",
+    "uart"
+  ],
+  "moduleColumns": 2,
+  "labelPolicy": {
+    "local": "wire",
+    "crossModule": "label",
+    "highFanout": "label",
+    "stub": "straight",
+    "stubMin": 40,
+    "rowModel": "centered"
+  },
+  "localLabelObligations": [
+    {
+      "nets": [
+        "D+",
+        "D-"
+      ],
+      "note": "the Type-C data pins are mirrored pairs (A6/B6 on one net, A7/B7 on the other): each pin is named on its own carrier instead of being joined by a U-line, and the two runs of one pair must be one length so neither reversible pin reads as the other"
+    }
+  ],
+  "flagLeadLimit": 120,
+  "partTexts": {
+    "USB1": "left",
+    "U1": "above",
+    "X1": "right",
+    "C3": "right",
+    "C4": "right",
+    "C5": "left",
+    "C6": "right",
+    "H1": "right"
+  },
+  "gndClustering": {
+    "radius": 100
+  },
+  "serviceLayout": {
+    "pinGap": 30
+  }
+}

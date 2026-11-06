@@ -57,6 +57,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 
 import test_053b_drawcompiler as b053  # noqa: E402
+import test_053c_attach as t053c  # noqa: E402
 import test_056_pagecompiler as p056  # noqa: E402
 import test_201a_flags as t201a  # noqa: E402
 
@@ -400,25 +401,32 @@ def test_adjacent_coincident_pair_holds_neither_way():
 # ----------------------------------------------------------------- 中危 6
 
 
-def test_ground_flag_seat_follows_the_flag_pass_ladder():
-    """中危 6: `_flag_seats` 的地网分支与 `_flag_seat_pins` 是同一把尺。
+def test_flag_reservation_keeps_every_rung_of_the_seat_ladder():
+    """中危 6（515A-⑥ 重钉）: 预留不是「梯子首档」，是**整把梯子**。
 
-    The opamp GND's members are C1.2, U1.11, U1.4 and the chain part is U1:
-    the old "first chain member" reading reserved the room at U1.11, while the
-    flag pass walks far-end-first (088b: 背向入口那端) and would stand the
-    symbol elsewhere. The reservation must name the head of the **same**
-    ladder the flag pass walks.
+    The opamp GND's members are C1.2, U1.11, U1.4. The rung the flag pass stands
+    on is chosen at draw time on placed coordinates (`_gnd_outlet_pin` reads the
+    rail's far end off the drawing), and the reservation pass runs before any
+    part has coordinates — so naming one rung there *is* the member-id guess this
+    hole was: on this fixture it produced `C1.2` while the drawing hangs the flag
+    on `U1.11`. The reservation therefore keeps every rung; the drawn seat is a
+    member of that set, which the next test measures on the finished plan.
     """
     circuit = t201a.opamp_circuit()
     presentation = t201a.opamp_presentation()
     library = t201a.book()
-    budget = dc.CompileBudget()
     binding = dc.bind_grammar(circuit, presentation, library)
-    ctx = dc._prepare(circuit, presentation, binding, library, budget).context
+    ctx = dc._prepare(
+        circuit, presentation, binding, library, dc.CompileBudget()
+    ).context
     assert ctx is not None
-    reservation = next(s for s in dc._flag_seats(ctx) if s.net_id == "GND")
-    # The ladder the flag pass walks, read directly: far end first, then pads
-    # by member id. Its head is what the reservation must name.
+    reserved = {
+        (seat.part_id, seat.token)
+        for seat in dc._flag_seats(ctx) if seat.net_id == "GND"
+    }
+    assert reserved == {("C1", "2"), ("U1", "11"), ("U1", "4")}, reserved
+    # The same ladder read directly, for its set: the reservation is not a
+    # second reading of "where may this flag hang".
     ladder = dc._flag_seat_pins(
         ctx,
         dc._Expression(
@@ -432,21 +440,117 @@ def test_ground_flag_seat_follows_the_flag_pass_ladder():
         "gnd",
     )
     assert ladder, "the flag pass must have a seat ladder at all"
-    head = ladder[0][0]
-    assert (reservation.part_id, reservation.token) == (
-        head.partition(".")[0], head.partition(".")[2],
-    ), (reservation.part_id, reservation.token, head)
-    # And it is not the old "first chain member" answer unless the ladder
-    # really lands there: for the opamp the two readings differ.
+    assert reserved == {(member.partition(".")[0], member.partition(".")[2])
+                        for member, _point in ladder}
+    # And this fixture is still the one where guess-by-id was wrong: the head
+    # of the zero-coordinate ladder is not the pad the real page uses.
     chain_first = next(
         member for member in sorted(circuit.net("GND").members)
         if ctx.slots.get(member.partition(".")[0]) is not None
         and ctx.slots[member.partition(".")[0]].kind == "chain"
     )
-    assert head != chain_first, (
-        "this fixture was chosen because the two ladders disagree: "
+    assert ladder[0][0] != chain_first, (
+        "this fixture was chosen because the two readings disagree: "
         "if they agree, the pin is not testing the fix"
     )
+
+
+def _flag_pins(plan, profiles, net):
+    """The member pin each drawn flag of `net` stands on, read off the drawing.
+
+    A flag is reached by a lead of its own net: walk that net's drawn segments
+    from the flag's anchor until a point coincides with a member's pin tip. No
+    model of the lead's shape is restated here — the segments are the drawing.
+    """
+    parts = {part.part_id: part for part in plan.parts}
+    members = {}
+    for part_id, part in parts.items():
+        profile = profiles.get(part.symbol_ref)
+        if profile is None:
+            continue
+        pose = pl.SymbolPose(part.rotation, part.mirror)
+        for pin in profile.pins:
+            members[(part_id, str(pin.number))] = pl.posed_tip(
+                pin.tip, pose, (part.x, part.y)
+            )
+    edges = {}
+    for segment in plan.segments:
+        if segment.net != net:
+            continue
+        points = segment.points
+        for first, second in zip(points, points[1:]):
+            edges.setdefault(first, set()).add(second)
+            edges.setdefault(second, set()).add(first)
+    out = []
+    for symbol in plan.power_symbols:
+        if symbol.net != net:
+            continue
+        anchor = (symbol.x, symbol.y)
+        seen, queue = {anchor}, [anchor]
+        found = None
+        while queue and found is None:
+            point = queue.pop(0)
+            for member, tip in members.items():
+                if abs(point[0] - tip[0]) < 1e-6 and abs(point[1] - tip[1]) < 1e-6:
+                    found = member
+                    break
+            for other in edges.get(point, ()):  # pragma: no branch
+                if other not in seen:
+                    seen.add(other)
+                    queue.append(other)
+        out.append(found)
+    return out
+
+
+def test_the_drawn_ground_flag_stands_in_a_reserved_seat():
+    """515A-⑥: 预留脚集合 ⊇ 实际落旗脚，量的是**成图**。
+
+    The opamp page used to reserve `C1.2` and hang the flag on `U1.11`; the old
+    single-rung test could not see it because it fed the same zero coordinates.
+    Here the flag's own lead is followed in `plan.segments` to the member pin it
+    leaves, and that pin must be in the reserved set.
+    """
+    circuit = t201a.opamp_circuit()
+    presentation = t201a.opamp_presentation()
+    library = t201a.book()
+    binding = dc.bind_grammar(circuit, presentation, library)
+    ctx = dc._prepare(
+        circuit, presentation, binding, library, dc.CompileBudget()
+    ).context
+    reserved = {
+        (seat.part_id, seat.token)
+        for seat in dc._flag_seats(ctx) if seat.net_id == "GND"
+    }
+    compiled = dc.compile(circuit, presentation, library, dc.CompileBudget())
+    assert compiled.candidates, compiled.failures
+    plan = compiled.candidates[0]
+    pins = _flag_pins(plan, library, "GND")
+    assert pins and all(pin is not None for pin in pins), pins
+    assert set(pins) <= reserved, (pins, reserved)
+    # The measured instance of the hole: the drawn seat is U1.11, not the
+    # member-id head C1.2 the old reading reserved.
+    assert set(pins) == {("U1", "11")}, pins
+    assert pins[0] not in {("C1", "2")}
+    # The room reserved at that pad holds the symbol the page really drew: the
+    # reservation box is `_flag_box`'s own shape, stated relative to the pin.
+    seat = next(
+        s for s in dc._flag_seats(ctx)
+        if s.net_id == "GND" and (s.part_id, s.token) == pins[0]
+    )
+    part = next(p for p in plan.parts if p.part_id == pins[0][0])
+    profile = library[part.symbol_ref]
+    tip = pl.posed_tip(
+        next(pin.tip for pin in profile.pins if str(pin.number) == pins[0][1]),
+        pl.SymbolPose(part.rotation, part.mirror), (part.x, part.y),
+    )
+    reserved_box = seat.box_at(tip)
+    for symbol in plan.power_symbols:
+        if symbol.net != "GND":
+            continue
+        assert (
+            reserved_box[0] <= symbol.x <= reserved_box[2]
+            and reserved_box[1] <= symbol.y <= reserved_box[3]
+        ), (reserved_box, (symbol.x, symbol.y))
 
 
 def test_flag_reservation_box_covers_its_own_pin():
@@ -567,3 +671,123 @@ def test_shared_net_flag_still_anchors_in_either_frame():
     assert checked.hard_violations == [], [
         v.render() for v in checked.hard_violations
     ]
+
+
+def test_single_owner_part_in_a_foreign_frame_is_reported():
+    """515A-⑧: a module's **part** drawn in a neighbour's frame is geometry the
+    page gate must name — the part half of the same hole the flag half pins.
+
+    The frame rule used to ask only "is this part in *some* frame", so moving
+    `pwr`'s own part into `sense`'s box passed every page constraint. Now the
+    part must stand in its own module's frame (or its attach host's), and the
+    finding names the part and the frame it belongs to.
+    """
+    import copy
+
+    scene = p056.scenes()[1]
+    result = pc.compile_page(
+        scene.circuit, scene.presentation, p056.library(), scene.budget
+    )
+    assert result.pages
+    page = copy.deepcopy(result.pages[0])
+    frames = {m.id: m.frame for m in page.modules}
+    owner = {part_id: m.id for m in page.modules for part_id in m.parts}
+    mover = next(p for p in page.plan.parts if owner[p.part_id] == "pwr")
+    sense = frames["sense"]
+    mover.x = (sense[0] + sense[2]) / 2.0
+    mover.y = (sense[1] + sense[3]) / 2.0
+    checked = readability.check_page(
+        page, scene.circuit, scene.presentation, p056.library(),
+        keepouts=(), module_gap=pc.MODULE_GAP,
+    )
+    outside = [
+        v for v in checked.hard_violations
+        if v.kind == readability.KIND_GEOMETRY_OUTSIDE_FRAMES
+        and v.objects == (f"parts[{mover.part_id}]",)
+    ]
+    assert outside, [
+        v.render() for v in checked.hard_violations
+    ]
+    evidence = outside[0].evidence
+    assert "sense" in evidence and "pwr" in evidence, evidence
+    assert mover.part_id in evidence, evidence
+
+
+def test_a_part_may_stand_in_the_frame_of_the_module_it_is_attached_to():
+    """The attach half is allowed, and the same move without the relation is
+    still refused: the rule is "own frame or attach host's", never "any frame"."""
+    import copy
+
+    presentation = t053c.attached_chain()  # div attached to rc
+    circuit = p056.chain_circuit()
+    result = pc.compile_page(
+        circuit, presentation, p056.library(),
+        pc.PageCompileBudget(page_box=(0.0, 0.0, 1169.0, 826.0)),
+    )
+    assert result.pages
+    page = copy.deepcopy(result.pages[0])
+    frames = {m.id: m.frame for m in page.modules}
+    owner = {part_id: m.id for m in page.modules for part_id in m.parts}
+    mover = next(p for p in page.plan.parts if owner[p.part_id] == "div")
+    host = frames["rc"]
+    mover.x = (host[0] + host[2]) / 2.0
+    mover.y = (host[1] + host[3]) / 2.0
+    attached = readability.check_page(
+        page, circuit, presentation, p056.library(),
+        keepouts=(), module_gap=pc.MODULE_GAP,
+    )
+    assert readability.KIND_GEOMETRY_OUTSIDE_FRAMES not in [
+        v.kind for v in attached.hard_violations
+    ], [v.render() for v in attached.hard_violations]
+    control = readability.check_page(
+        page, circuit, p056.chain_spec(), p056.library(),
+        keepouts=(), module_gap=pc.MODULE_GAP,
+    )
+    assert readability.KIND_GEOMETRY_OUTSIDE_FRAMES in [
+        v.kind for v in control.hard_violations
+    ], [v.render() for v in control.hard_violations]
+
+
+def test_the_full_seat_set_costs_exactly_what_its_first_rung_costs():
+    """515A-⑥ 后续（兼容小批）: 全集预留是**覆盖**，不是叠加房间。
+
+    `_flag_seats` states every rung of a net's seat ladder, and the placement
+    prices one room per flag: a net's later rungs are that flag's fallbacks, not
+    extra flags. The term therefore prices the **first** statement per net (the
+    head of the same ladder the draw pass walks). This test holds the two inputs
+    — the compiler's full set and the same request reduced to its first rungs —
+    to the **same cost terms, value and explanation**, so "full input" cannot
+    silently start pricing the fallbacks again.
+    """
+    circuit = t201a.opamp_circuit()
+    presentation = t201a.opamp_presentation()
+    library = t201a.book()
+    binding = dc.bind_grammar(circuit, presentation, library)
+    ctx = dc._prepare(
+        circuit, presentation, binding, library, dc.CompileBudget()
+    ).context
+    full = dc._topology_request(ctx)
+    seen, first = set(), []
+    for seat in full.flag_seats:
+        if seat.net_id in seen:
+            continue
+        seen.add(seat.net_id)
+        first.append(seat)
+    assert len(full.flag_seats) > len(first), (
+        "premise: the compiler states more than one rung per net",
+        len(full.flag_seats), len(first),
+    )
+    state = pl._seed(full, pl._ranks(full.relations, full.part_ids()))
+
+    def terms(request):
+        return {
+            term.name: (round(float(term.value), 9), term.detail)
+            for term in pl.evaluate(request, state)
+        }
+
+    assert terms(full) == terms(dataclasses.replace(
+        full, flag_seats=tuple(first)))
+    room = terms(full)["flag-room"]
+    assert f"over {len(first)} reserved seat(s)" in room[1] or (
+        f"{len(first)} seat(s) is clear" in room[1]
+    ), room[1]

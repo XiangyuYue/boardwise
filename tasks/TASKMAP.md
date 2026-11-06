@@ -314,17 +314,17 @@
 | 200C | v0.6.0 高速 A2 换层地孔+A3 差分对内 | 已落 `d2130b7` | tasks/200c1_ground_via.md、200c2_diffpair.md；outputs/200c1/evidence.md、200c2/evidence.md |
 | 201A | 地/电源符号策略重写 | 已落 | `856fb0a`；tasks/201a_flag_strategy.md；outputs/201a/evidence.md |
 | 201B | 拓扑感知模块落位+位姿联合搜索 | 已落 | `856fb0a`+`7ce7a5d`；tasks/201b_placement.md；outputs/201b/ |
-| 201C | 布线协商三步 | **搁置**（踢出 v0.5.15） | tasks/201c_routing.md；`.tmp_201c_hold/`；outputs/201c/evidence.md §13 |
-| 201D | 落位搜索计价「别人的文本行」 | **部分落**（`pin-text` 随 525 落；`text_overlap` 526 试了又撤，见 roadmap §4） | tasks/201d_text_row_cost.md |
+| 201C | 布线协商三步 | **543H裁不复活**（当前目标缺陷不可复现，旧patch不可应用；交叉账独立） | tasks/201c_routing.md；`.tmp_543h_201cd/` |
+| 201D | 落位搜索计价「别人的文本行」 | **部分落**（`pin-text` 随525；`text_overlap` 526撤回；**543H裁不复活**——旧路径前提未满足，island路径已用行租金） | tasks/201d_text_row_cost.md；`.tmp_543h_201cd/` |
 | 201E | A* 布线效率 | **已落**（2026-10-19 实测） | outputs/201e/evidence.md；真因：`h` 纯曼哈顿、看不见 `CROSS_COST`，`expanded≈C*²`；23.2 s / 10 次调用（201C 的 68 s / 21 次**不复现**） |
 | 201F | A* 可采纳下界（反向 Dijkstra 计价场） | **已完成**（工作树，待发） | outputs/201f/evidence.md；A\* 14.2 s→2.05 s（6.9×）、整页 23.0 s→11.05 s、83 预览逐字节相同；`LED_K`/`COMP` 的 expanded 判据**未达标**（原因见 evidence §4） |
-| 201G | 反激整页 0 候选的两个真因（**诊断单**） | 任务书已写，待派 | tasks/201g_flyback_zero_candidate.md；疑点 A＝`same-column(Q1,R5)` 全档不成立、B＝`SEC_12V` 旗标在 `D3.1` 无处可挂 |
+| 201G | 反激整页 0 候选的两个真因（**诊断单**） | **543H已核销**：当前五岛规格1候选，13条软披露与SEC_12V 30单位旗位有5条回归；same-column仍是披露项，非关系全满足 | tasks/201g_flyback_zero_candidate.md；tests/test_543h_201g_islands.py；`.tmp_543h_201g/` |
 
 ## 500+
 
 | 编号 | 主题 | 状态 | 证据/任务书路径 |
 |---|---|---|---|
-| 515A | v0.5.15 绘制引擎修洞（缝1/缝2） | 规划 | tasks/515a_draw_holes.md |
+| 515A | v0.5.15 绘制引擎修洞（缝1/缝2） | **543H已核销**：6项原有防回归；旗位预留全集与器件页框归属两项修复，主代理21+20及变异通过 | tasks/515a_draw_holes.md；tests/test_515a_draw_holes.py；`.tmp_543h_515a/` |
 | 515B | 发版前挖洞修复（S3#1–7 + S4#1–5） | 已落（`337f742`） | outputs/515b/evidence.md |
 | 516 | 审查反馈（岳真机实测 A/B/C 级） | 已落（`6ef9ded`） | tasks/516_review_feedback.md |
 | 519 | 异网 pin 尖间距：布局把两个网的针尖叠在同一点（修短路，12 对 → 0） | 已落（`1453ac7`） | 本批证据在 PROGRESS |
@@ -350,7 +350,7 @@
 | 530G | **标题栏 keepout 进岛打包**（S-01）：矩形是**图页符号自己的 `TABLE`**（700×180，锚在角上、不随图幅缩放，`core.pageframe`）+ 下方留白 15%；真反激岛页对真矩形零相交；无 page_box 的岛页摘要仍冻结 | 工作树 | evidence/530g/ |
 | 534 | **CH343 USB 转 UART 小板**：CH343G + Type-C 16P + 2×5P 排针，绘图线第一次全新设计 | **示例已入库 `a8613c5`（四岛版落 `test Board2 P3`）；交付由 534A/534B 收口**：独立 5 岛 spec；**V4 `/test V4` Board2 P2 六岛页全链通过**，V3 P4 与旧 V4 P2 为历史落图 | tasks/534_ch343_uart.md；tasks/534a_ch343_finish.md；tasks/534b_v4_layout.md；evidence/534b/report.md |
 | 534A | **CH343 交付收口**：拆岛降低 `usb_c` 线团、三关全过、lint/连通/视觉证据 | **历史五岛页**：`40091c5d26a5db27`（`test V4` P2）；lint 0E/2W；17 网/58 脚/3 NC PASS；已被 534B 六岛页取代，不再作为交付页 | tasks/534a_ch343_finish.md；evidence/534a_v4/report.md |
-| 534B | **CH343 V4 布局重做**：从六岛实验页（岳验收 20/100）转成 `attach` 去耦行 + `partTexts` + 地网分簇 | **已落 Board1 P13 `9e6240c6c29a8642`**（唯一原理图页；旧 P2/P3/P4/P5…P12 全部删除）：11 器件 / 54 wire / 18 flag；`draw lint` 0E/1W；宿主 DRC 0E/5W；逐脚 55/55。commit `263929e`。未解：左列标签仍挤、去耦行间距 41、USB 岛回环、D+/D− 背对背 | tasks/534b_v4_layout.md；evidence/534h/、evidence/534i/ |
+| 534B | **CH343 V4 布局重做**：从六岛实验页（岳验收 20/100）转成 `attach` 去耦行 + `partTexts` + 地网分簇 | **已落 Board1 P13 `9e6240c6c29a8642`**（唯一原理图页；旧 P2/P3/P4/P5…P12 全部删除）：11 器件 / 54 wire / 18 flag；`draw lint` 0E/1W；宿主 DRC 0E/5W；逐脚 55/55。commit `263929e`。左列标签、去耦行间距、USB回环与D±背对背已由后续543H–M在P38收口；当前页见543行 | tasks/534b_v4_layout.md；evidence/534h/、evidence/534i/ |
 | 533 | **岛页落图强制保护**（补 530G 的缺口：`--page-box` 是可选的，不带就没有 keepout → 530F 偏离 4 与 532 页 A 两次落进标题栏）：① 真机探明页面图幅**读得出来**——`sys.get_document_source` 的记录流里图纸符号自己带 `Width/Height/Blade Width/Title Block Position`（`document.current` 的 `schematicPage` 盒是 `{}`，读不出），接进 `parsers.schematic.sheet_attrs_from_text` → `pageframe.title_block_from_sheet_attrs`；② `draw plan` 绑活页 + 多岛时**自动**读图幅推 page_box+keepouts，读不到又没给 `--page-box` 则 exit 5；③ `draw apply` 核对 plan 自己记的 keep-out（`keep_out_note`）与目标页图幅，没记/对不上/读不到则 exit 5，**绝不静默落进标题栏**；④ 真机回归：新建 test 页自动读图幅 → 落图 → 标题栏矩形内 **0** 图元（同口径 532 页 A 仍 32）→ 连通 0 失配 → 删页存盘 | 工作树 | evidence/533/（报告 + probes + raw + 落图 PNG/SVG） |
 | 536 | 岛群→子岛：schema、plan 身份与 hard 校验（不含装配/多群页级） | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/536_archipelago_schema.md；tests/test_536_archipelago_schema.py；tests/test_archipelago_contract.py |
 | 537 | 审查流程环境/证据/权限/交付硬闸，含已复现的采样值输入与 Windows 编码缺口 | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/537_review_workflow_gates.md；Python 7650 passed；connector 536 passed；dsh-plugin 113 passed/1 skipped |
@@ -359,7 +359,7 @@
 | 540 | 0.6.0 前工作区整理、审查/绘制解耦、Rust 迁移平台准备；不改业务算法、不批量翻译 | 已落（A/B/C + 对抗修复 + 只读真机追加验收；最终候选 8132 passed / 94 skipped / 5 xfailed） | tasks/540_pre060_platform.md；tasks/540b_review_draw_decoupling.md；tasks/540c_rust_platform.md；**evidence/540/candidate-regression.md**；outputs/review/540/ |
 | 541 | **审查分阶段交付与可中断流程**：initial/partial 检查点、冻结输入、同基准复读、中止只读已有产物出 partial；运行时闸 R1 RunManifest、R2 `--strict` 重算 guard、R4 `--strict-partial` 已实施（显式 opt-in），R3 DSH pre-execute 与公开接口 allowlist 未实施 | 已落（§3.0a 纪律层）；R1/R2/R4 strict 工作树（2026-11-06，未提交） | docs/review-sop.md §3.0a；tasks/review-stage-runtime-gates.md；tasks/541_offline_runtime_gates.md；tests/test_review_stage_delivery.py、test_541_run_manifest.py、test_541_strict_reuse.py、test_541_partial_categories.py |
 | 542 | **原理图绘制 3.0**：drawing-line 集成、反激整页三关、四缝挖洞修复、RC 冻结与 V4 交接；CH343 示例 | **P0 完成并纳入 0.6.0**：P4 三关、岳人眼与重开 `saved_verified` 全过 | tasks/542_schematic_3_0_nov01.md；evidence/542/final-p4.md；evidence/201h/live/ |
-| 543 | **拓扑角色驱动的构造式布局**：去耦服务关系、文字/旗标/通道硬预留、成对信号与同拓扑自动基准；**agent 语义分岛，解释器负责几何**；自动、参考重放和 agent 微调分开验收 | **543K/L 已随 `924a180` 提交，P38=`0ec4dc022ef38563` 已过三关**：可见贴名、绕行距离分簇、并联去耦双端同策略、信号支路横向与成对文字同侧、D± 联合等长已落地；R7/R8 横向且文字在左，CC 各130直连，D± 为40/40、60/60、40/40；C9/C10共地、R7/R8独立地旗。11 器件/49 计划导线/19 旗，lint 0E/0W/0I、两种逐脚均55/55+3 NC、主代理逐岛目检通过；旧 P37 已删，Board2 P1 不动，DRC 仅规格 NC+库属性 WARN；持久化未重开验证，第二拓扑未做 | tasks/543_semantic_layout.md；evidence/543j/、evidence/543kl/ |
+| 543 | **拓扑角色驱动的构造式布局**：去耦服务关系、文字/旗标/通道硬预留、成对信号与同拓扑自动基准；**agent 语义分岛，解释器负责几何**；自动、参考重放和 agent 微调分开验收 | **CH343 P38 与CH340 P39均过三关**：P38=`0ec4dc022ef38563` 已关闭重开`saved_verified`；P39=`62e4828acc56a307` 为第二拓扑，12器件/36计划导线/17旗、lint 0E/0W/0I、独立逐脚45/45+15NC=60/60、宿主视觉通过。543G补齐非去耦信号支路、完整flow阅读列、branchOrder与振荡bay；无参考坐标。P39持久化未重开验证；最终全量9962 passed/25 skipped/14 failed（12条外部货架漂移+2条环境红，本批6条回归已修） | tasks/543_semantic_layout.md；evidence/543g/、evidence/543n/；543K/L已随`924a180`提交 |
 | 544 | **checkup / arch 写盘失败边界**：目录不可写、`--out` 为普通文件、`arch --out` 为目录或骨架写不进去，均 exit 2 + 人话、无 traceback；部分产物已落盘时如实报未完整交付 | **已落**：8 条专项测试，主代理含邻域 213 passed；其它命令写盘合同不改，真实 ACL 只用 monkeypatch 等效分支覆盖 | tasks/544_checkup_output_errors.md；tests/test_544_output_errors.py；.tmp_544/ |
 | 544P | **DSH 命令行凭据打码**：`commandLine` 在正常返回与 spawn 异常进入模型前统一过 `redactSecrets`，实际 spawn argv 不变 | **已落**：新增 2 回归；DSH 129 passed / 1 skipped + typecheck/build；原 T-E07 rawOccurrences=0、maskedOccurrences=2 | dsh-plugin/src/cli.ts；dsh-plugin/tests/cli.spec.ts；.tmp_test_run/T-E07/ |
 | 545 | **checkup 同目录 OS 互斥与串行重跑提示**：并发后到者在模型/daemon/报告前 exit 2，锁不可用也失败关闭；崩溃由内核释放，串行续审保留并打印 rerun | **已落**：13 条专项含真实跨进程/崩溃释放；主代理含 544 与邻域 226 passed；POSIX 分支未实测 | tasks/545_checkup_output_lock.md；tests/test_545_checkup_output_lock.py；.tmp_545/ |

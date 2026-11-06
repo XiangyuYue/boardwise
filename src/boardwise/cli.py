@@ -16483,6 +16483,35 @@ def _cmd_persistence(args: argparse.Namespace) -> int:
     return asyncio.run(run())
 
 
+def _auto_renamed_nets(before: Any, after: Any) -> list[tuple[str, str]]:
+    """The auto-net renames a membership reconcile applied, for the printed note.
+
+    Read back off the two models rather than taken from the plan: what the
+    operator is told is what the comparison actually uses. A pair is only
+    reported when exactly one of the old model's nets with those members is
+    **gone** from the reconciled model — a rename — and both names are
+    editor-generated, so nothing user-named is ever presented as renumbering.
+    """
+    from boardwise.core.netdomains import is_auto_net
+
+    by_members: dict[frozenset, list[str]] = {}
+    for name, net in before.nets.items():
+        by_members.setdefault(frozenset(net.pins), []).append(name)
+    pairs: list[tuple[str, str]] = []
+    for name, net in after.nets.items():
+        gone = [
+            old
+            for old in by_members.get(frozenset(net.pins), [])
+            if old not in after.nets
+        ]
+        if len(gone) != 1 or gone[0] == name:
+            continue
+        old = gone[0]
+        if is_auto_net(old) and is_auto_net(name):
+            pairs.append((old, name))
+    return sorted(pairs)
+
+
 def _compare_persistence(baseline: dict, current: dict) -> int:
     """0 the snapshot's content survived / 1 it did not / 3 could not decide.
 
@@ -16503,9 +16532,20 @@ def _compare_persistence(baseline: dict, current: dict) -> int:
     persisted. Measured 2026-09-28: a snapshot with zero losses still judged
     NOT saved_verified because 20 components and 40 net members had been added
     after it.
+
+    The reopened netlist is reconciled against the baseline **before** the
+    comparison, by member set and for auto-generated names only (543N): the
+    host renumbers ``$19N5`` to ``$1N5`` across a close-and-reopen while the
+    partition is identical, and comparing those names verbatim reported 12
+    phantom differences on a page that persisted perfectly. What this may
+    excuse is exactly the *name* of an editor-generated net, and only when the
+    members match — a user-named net, a named/auto mix, a split or merged
+    cluster, a moved or lost pin all still fail. The pass line keeps saying
+    ``saved_verified``; the printed note says the renames were matched by
+    membership, so nobody reads it as "the net names are stable".
     """
     from boardwise.core.candidate import NetlistFormatError, candidate_from_netlist
-    from boardwise.core.compare import compare_models
+    from boardwise.core.compare import compare_models, reconcile_names
     from boardwise.engines.draw import geometry_fingerprint, fingerprint_total
 
     models: dict[str, object] = {}
@@ -16526,7 +16566,18 @@ def _compare_persistence(baseline: dict, current: dict) -> int:
             print(f"boardwise persistence: {side} netlist: {exc}", file=sys.stderr)
             return 3
 
-    report = compare_models(models["baseline"], models["reopened"])
+    reconciled = reconcile_names(models["reopened"], models["baseline"], auto_only=True)
+    auto_renamed = _auto_renamed_nets(models["reopened"], reconciled)
+    report = compare_models(models["baseline"], reconciled)
+    if auto_renamed:
+        print(
+            "boardwise persistence: the editor renumbered auto-generated net names "
+            f"on reopen ({len(auto_renamed)}); matched by member set, not by name:"
+        )
+        for old, new in auto_renamed[:8]:
+            print(f"  {old} -> {new}")
+        if len(auto_renamed) > 8:
+            print(f"  … and {len(auto_renamed) - 8} more")
     failing = [d for d in report.differences if not d.is_extra]
     extras = [d for d in report.differences if d.is_extra]
     if failing:

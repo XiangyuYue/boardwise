@@ -25,3 +25,22 @@
 - 全量绿 `--basetemp=.tmp_pt_515a -n 4 --dist loadfile`（test_193 槽位红单跑确认）。变异 ≥2 组。
 - 企业名零出现；不动 git；不 rm（回收站）；不碰真机/bridge。
 - 证据 outputs/515a/evidence.md；PROGRESS.md append 一行；不要 commit。约 100 分钟。
+
+## 543H 当前基线核销与修复（2026-11-06）
+
+- 先只读逐项复现，未照单全收旧问题。①多模块双地、②拓扑轮关系闸、③拓扑轮userLocks、
+  ④降级expressions/note、⑤关系尺边界、⑦全锁stall短路均有当前实现与测试证据：
+  `tests/test_515a_draw_holes.py`、页级域下发、离格点锁、4820次边界对拍等。
+- ⑥旗位预留/落旗曾实锤不同脚：opamp预留C1.2、实际U1.11。现 `_flag_seats` 保留
+  `_flag_seat_pins` 的**全部候选**，实际落旗脚必属预留集合，且不再为无供电脚电源网
+  按member-id预留。新增成图引线回溯与预留盒断言；四个可出图样本digest不变。
+- ⑧页框归属曾实锤错位不报：现part必须完整落在自家模块框或attach宿主框，未分配件仍
+  走旧判，合法attach正例与无attach反例分开。错位器件点名 `geometry-outside-module-frames`。
+- 主代理：第⑧ **20 passed**、第⑥ **21 passed**；两组frame变异与两组flag变异均先红后
+  字节还原。执行者邻域：第⑧100 passed/1 skipped，第⑥73+46+45+1 passed；P38合同未回退。
+- 证据 `.tmp_543h_515a/`、`evidence/543g/main_515a_*.log`。全量回归在目标收尾批执行，
+  本段不声称真机或全量已通过。
+- **全量兼容续修**：首轮出现6条旧反激回归，根因是全部候选被placement逐条叠加成本。
+  现 `_priced_seats` 以每网首档计价、全集继续用于覆盖，旧拓扑19件位姿逐项一致。
+  六条主代理复跑 **29 passed**；去掉首档去重的变异使成本合同立即变红并已还原。
+  证据 `.tmp_543h_515a/flag_cost/`、`evidence/543h/regression_after.log`。

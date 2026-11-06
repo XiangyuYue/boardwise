@@ -3503,8 +3503,11 @@ def _flag_seats(ctx: _Context) -> tuple[placement.FlagReservation, ...]:
     * **which pin** — :func:`_flag_seat_pins`, the *same* ladder the flag pass
       walks when it hangs the symbol: a ground's far end first (088b), a rail's
       supplying pin first (069 sec.7), then that net's remaining pads (515A hole
-      6 / 520B2: one ruler for "where does this net's flag go"), so the room is
-      reserved at the pad the flag really stands on;
+      6 / 520B2: one ruler for "where does this net's flag go"). The **rung** of
+      that ladder is chosen at draw time on the placed coordinates, which this
+      pass does not have yet, so **every** rung is reserved (515A-⑥): the set of
+      reserved pads is a superset of the pad the flag really stands on, and no
+      pad is picked by member-id order here;
     * **which way** — a rail's glyph hangs *up* out of the rail and a ground's
       hangs *down*: :func:`flag_glyph_kind` of the net's own symbol decides, which
       is the same fact :func:`_rail_flag_seat` hangs by;
@@ -3513,11 +3516,14 @@ def _flag_seats(ctx: _Context) -> tuple[placement.FlagReservation, ...]:
       itself keeps free: the glyph, the host's own name row (none for a ground)
       and :data:`FLAG_CLEARANCE`. The lead's own run from the pin is folded into
       the same box, because a part standing in the corridor blocks the flag just
-      as surely as one standing on its glyph.
+      as surely as one standing on its glyph. One shape serves every rung — the
+      same function the flag pass draws with, so the reserved box and the drawn
+      flag are one ruler, not two.
 
     A net the library carries no flag symbol for is skipped: the plan writes a net
     label on it instead (:func:`_flag_wire_fallback`), and reserving room for a
-    glyph nobody will draw would push parts apart for nothing.
+    glyph nobody will draw would push parts apart for nothing. A rail the grammar
+    names no supplying pin for hangs no flag either, so it reserves nothing.
     """
     out: list[placement.FlagReservation] = []
     for net in sorted(ctx.circuit.nets, key=lambda item: item.id):
@@ -3538,10 +3544,19 @@ def _flag_seats(ctx: _Context) -> tuple[placement.FlagReservation, ...]:
         # rail branch used to answer "first chain member" on its own, and 520B2
         # widened the flag's ladder past that answer without this call noticing.
         #
-        # The expression carries ``(0.0, 0.0)`` for every pad: this reservation is
-        # an **input** to the layout search, so the pads have no coordinates yet
-        # and the ladder's "nearest first" order degrades to member id here (it
-        # already did for a ground). The **rule** is shared, the geometry is not.
+        # **Which rung is the seat (515A-⑥).** The rung is chosen at *draw* time,
+        # on the placed coordinates (`_gnd_outlet_pin` reads the rail's far end off
+        # the drawn geometry, and every later rung is "nearest first" to it), and
+        # this pass runs before the search has placed anything — so there is no
+        # honest way to name one rung here. The (0,0) points this expression used
+        # to carry made the ladder answer by **member id**, and on the opamp page
+        # that reserved `C1.2` while the drawing hung the flag on `U1.11`: the
+        # right pad, priced against the wrong one. The reservation therefore keeps
+        # **every** rung of that ladder: whichever pin the draw pass ends up
+        # standing on, its room was reserved, and no rung is guessed from an id
+        # order that the real page is free to contradict. The points stay (0,0)
+        # because this pass has no geometry — the ladder is read for its *set*
+        # here, and its order is the draw pass's business.
         expression = _Expression(
             net=net.id, style="flag",
             points=tuple(
@@ -3549,11 +3564,17 @@ def _flag_seats(ctx: _Context) -> tuple[placement.FlagReservation, ...]:
             ),
             reason="the seat ladder needs only the member ids",
         )
-        seat_pair = _flag_seat_pins(ctx, expression, net.cls)
-        seat = next(
-            (member for member, _point in seat_pair if member), members[0],
-        )
-        part_id, _, token = seat.partition(".")
+        seats = [
+            member
+            for member, _point in _flag_seat_pins(ctx, expression, net.cls)
+            if member
+        ]
+        if not seats:
+            # A rail the grammar names no supplying pin for hangs no flag
+            # (:func:`_wire_flag_seats` skips it the same way), so there is
+            # nothing to reserve — reserving `members[0]` would keep room for a
+            # symbol nobody draws, at a pad chosen by id.
+            continue
         kind = flag_glyph_kind(profile)
         up = kind != FLAG_GLYPH_KIND_GND
         anchor = (0.0, FLAG_LEAD if up else -FLAG_LEAD)
@@ -3569,12 +3590,14 @@ def _flag_seats(ctx: _Context) -> tuple[placement.FlagReservation, ...]:
         # never kept clear even though the flag's whole corridor starts there.
         xs.append(0.0)
         ys = [box[1], box[3], 0.0, anchor[1], 0.0]
-        out.append(placement.FlagReservation(
-            part_id=part_id,
-            token=token,
-            net_id=net.id,
-            box=(min(xs), min(ys), max(xs), max(ys)),
-        ))
+        for seat in dict.fromkeys(seats):
+            part_id, _, token = seat.partition(".")
+            out.append(placement.FlagReservation(
+                part_id=part_id,
+                token=token,
+                net_id=net.id,
+                box=(min(xs), min(ys), max(xs), max(ys)),
+            ))
     return tuple(out)
 
 
@@ -3735,6 +3758,270 @@ def _service_channels(ctx: _Context) -> bool:
     )
 
 
+#: 543G-12b: the widest the leftover may be when a bay's first foot sits exactly
+#: on its host pin's row. The leftover is a difference of two **symbol** facts —
+#: the bridge's own pin pitch and the host's pin pitch — so it is read, never
+#: stated: it is the one orthogonal jog the drawing makes to reach the second
+#: host pin, and S-05's target corridor is 30. A bridge whose leftover is wider
+#: is not seated as a bay; the ladder keeps it.
+BAY_JOG_LIMIT = 30.0
+
+#: 543G-12b: the narrowest corridor left between the bridge's body and the load
+#: on the far side of it, for the wire that has to come back between them. One
+#: stroke plus room to see it is not a stroke: two lattice steps.
+BAY_CORRIDOR = 2.0 * DEFAULT_GRID
+
+
+def _place_clock_bays(
+    ctx: _Context,
+    origins: dict[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+    boxes: Mapping[str, Box],
+) -> frozenset[str]:
+    """Seat a bridge and one load on each of its two nets as **one bay**.
+
+    What this answers, and why the ladder cannot (543G-10/11 measured it on the
+    543G CH340 bridge): a crystal across two of its host's pins plus the two
+    capacitors on those pins are **one branch of the circuit**, but the ladder
+    sees three siblings and hands each the next rung — 60, 120, 180 from the
+    *same* anchor — so the bridge alone ends up three rungs out and the two nets
+    run 240 and 210 units back to the host. The rung index is a statement about
+    siblings sharing one pad, and here the pads are what separate them.
+
+    The bay is read off the circuit, not off designators:
+
+    * exactly one `bridge`-role branch of the owner, its two feet on two
+      **different** nets the owner also has a pin on, one pin each;
+    * exactly one two-terminal `shunt`-role branch per one of those nets, whose
+      own far pin is on neither of them (a load to the rail or ground, not a
+      second bridge);
+    * all three leave on one side of the owner (the same escape direction), so
+      "one bay" is one place on the page.
+
+    Geometry, all of it measured:
+
+    * the bridge keeps the ladder's **first** rung, counted from the host pin it
+      shares a net with (:func:`_branch_anchor`'s point), not
+      ``lane + step*index`` — the index is what pushed it out;
+    * its first foot is put exactly on that host pin's row; the second foot's
+      distance from the **other** host pin's row is then the two symbols' pitches
+      minus each other, and that is the jog — refused when it exceeds
+      :data:`BAY_JOG_LIMIT`, so a bridge that would need a U-line is not a bay;
+    * the load on the bridge's own row goes **past** the bridge; the other load
+      hangs on the bridge's **second row** (its own foot's row, one pin pitch
+      away) and stands **between** the bridge and the host, so the run back to
+      the second host pin makes the one jog once, on the way home. Hung on the
+      host pin's row instead, that load's value row lands back on the first
+      net's line and forces it to step round (measured: a 5-unit notch in XI);
+    * both seats are the first lattice step at which their real boxes clear the
+      bay's own members by :data:`BAY_CORRIDOR` and every other part by
+      :data:`GAP`;
+    * the rung is stepped out until both seats exist, and the whole bay is
+      refused once the nets would reach further than two lanes
+      (``2 * lane``) — the bay's own budget, not the page's.
+
+    Returns the members placed, so the sibling passes can leave them where they
+    are: a second move by :func:`_share_one_bay` or :func:`_align_branch_lanes` is
+    exactly what undoes a bay (543G-12 measured it).
+    """
+    if not _pair_bands(ctx):
+        return frozenset()
+    siblings: dict[str, list[str]] = {}
+    for part_id, slot in sorted(ctx.slots.items()):
+        if slot.kind == "branch":
+            siblings.setdefault(slot.owner, []).append(part_id)
+    placed: set[str] = set()
+    for owner in sorted(siblings):
+        if owner not in ctx.chain:
+            # a branch's own anchor moves with its owner's answer: there is no
+            # fixed pin row to measure a bay against (the same reason
+            # `_share_one_bay` keeps the staircase there)
+            continue
+        seat = _clock_bay_seat(
+            ctx, owner, siblings[owner], poses, boxes, origins,
+        )
+        if seat is None:
+            continue
+        origins.update(seat)
+        placed.update(seat)
+    return frozenset(placed)
+
+
+def _clock_bay_seat(
+    ctx: _Context,
+    owner: str,
+    siblings: Sequence[str],
+    poses: Mapping[str, SymbolPose],
+    boxes: Mapping[str, Box],
+    origins: Mapping[str, tuple[float, float]],
+) -> dict[str, tuple[float, float]] | None:
+    """One bay's origins, or ``None`` when this owner has no bay to seat.
+
+    The reading of *what* a bay is lives in :func:`_place_clock_bays`; this is
+    the geometry, kept apart so the refusal is a plain ``None`` at every step
+    rather than a half-placed group.
+    """
+    slots = ctx.slots
+    bridges = [part_id for part_id in siblings if slots[part_id].role == "bridge"]
+    if len(bridges) != 1:
+        return None
+    bridge = bridges[0]
+    slot = slots[bridge]
+    nets = (slot.shared_net, slot.other_net)
+    if not all(nets) or nets[0] == nets[1]:
+        return None
+    owner_nets = _part_nets(ctx.circuit, owner)
+    hosts: dict[str, str] = {}
+    for net in nets:
+        found = [
+            pin for pin, carried in sorted(owner_nets.items()) if carried == net
+        ]
+        if len(found) != 1:
+            return None
+        hosts[net] = found[0]
+    loads: dict[str, str] = {}
+    for net in nets:
+        found = [
+            part_id for part_id in siblings
+            if part_id != bridge
+            and slots[part_id].role == "shunt"
+            and slots[part_id].shared_net == net
+            and slots[part_id].other_net not in nets
+        ]
+        if len(found) != 1:
+            return None
+        loads[net] = found[0]
+    bay = (bridge, loads[nets[0]], loads[nets[1]])
+    if len(set(bay)) != 3:
+        return None
+    if any(ctx.locked(part_id) is not None for part_id in bay):
+        return None
+    directions = {
+        _branch_offset_direction(ctx, slots[part_id], poses, origins)
+        for part_id in bay
+    }
+    if len(directions) != 1:
+        return None
+    direction = directions.pop()
+    shared_tip = _pin_local(ctx, bridge, slot.pin_shared, poses)
+    other_tip = _pin_local(ctx, bridge, slot.pin_other, poses)
+    if shared_tip is None or other_tip is None:
+        return None
+    host_a = _pin_point(ctx, owner, hosts[nets[0]], poses, origins)
+    host_b = _pin_point(ctx, owner, hosts[nets[1]], poses, origins)
+    if host_a is None or host_b is None:
+        return None
+    u = direction
+    perp = (-u[1], u[0])
+    if not _close(_dot(host_a, u), _dot(host_b, u)):
+        # the two host pins do not stand on one row across the escape: there is
+        # no single corridor this bay could hang in
+        return None
+    row_a = _dot(host_a, perp)
+    row_b = _dot(host_b, perp)
+    pitch = _dot(other_tip, perp) - _dot(shared_tip, perp)
+    jog = abs((row_b - row_a) - pitch)
+    if jog > BAY_JOG_LIMIT:
+        return None
+
+    def page_box(part_id: str, origin: tuple[float, float]) -> Box:
+        return _part_box(ctx.profile(part_id), poses[part_id], origin)
+
+    def grown(box: Box) -> Box:
+        # against anything that is not a bay member: the compiler's own gap
+        return (box[0] - GAP, box[1] - GAP, box[2] + GAP, box[3] + GAP)
+
+    def bay_grown(box: Box) -> Box:
+        # between the bay's own three parts: one corridor, which is the room the
+        # wire between them needs anyway — they are one branch of the circuit,
+        # not three
+        return (
+            box[0] - BAY_CORRIDOR, box[1] - BAY_CORRIDOR,
+            box[2] + BAY_CORRIDOR, box[3] + BAY_CORRIDOR,
+        )
+
+    fixed = [page_box(part_id, origins[part_id]) for part_id in sorted(origins)
+             if part_id not in bay]
+    aligned = loads[nets[0]]
+    jogged = loads[nets[1]]
+    aligned_tip = _pin_local(ctx, aligned, slots[aligned].pin_shared, poses)
+    jogged_tip = _pin_local(ctx, jogged, slots[jogged].pin_shared, poses)
+    if aligned_tip is None or jogged_tip is None:
+        return None
+    grid = ctx.budget.grid
+    # The bay's own budget, deliberately **not** scaled by the rung: a rung widens
+    # the page's spacing to relieve congestion, while this cluster is drawn tight
+    # on purpose (S-05). Measured on the 543G bridge: the scaled rung put the
+    # bridge 90 units out on the widest variant and cost XI its 120-unit budget.
+    step = ctx.budget.lane
+    limit = 2.0 * step
+    clearance = _extent(boxes[bridge], (-u[0], -u[1]))[0] + GAP
+    distance = _snap(max(step, clearance), grid, 0.0)
+    while distance + jog <= limit + 1e-9:
+        bridge_origin = (
+            host_a[0] + u[0] * distance - shared_tip[0],
+            host_a[1] + u[1] * distance - shared_tip[1],
+        )
+        bridge_box = page_box(bridge, bridge_origin)
+        if any(_overlaps(grown(bridge_box), other) for other in fixed):
+            distance = _snap(distance + grid, grid, 0.0)
+            continue
+        seat: dict[str, tuple[float, float]] = {bridge: bridge_origin}
+        # the load on the bridge's own row sits **past** it, so the run from the
+        # host pin reaches both the bridge's foot and the load's on one line
+        extra = 0.0
+        aligned_box: Box | None = None
+        while distance + extra <= limit + 1e-9:
+            at = (
+                host_a[0] + u[0] * (distance + extra),
+                host_a[1] + u[1] * (distance + extra),
+            )
+            origin = (at[0] - aligned_tip[0], at[1] - aligned_tip[1])
+            box = page_box(aligned, origin)
+            if (
+                not any(_overlaps(grown(box), other) for other in fixed)
+                and not _overlaps(bay_grown(box), bridge_box)
+            ):
+                aligned_box = box
+                seat[aligned] = origin
+                break
+            extra += grid
+        if aligned_box is None:
+            distance = _snap(distance + grid, grid, 0.0)
+            continue
+        # The load on the other net hangs off the bridge's **own second row**, not
+        # off the host pin's row: it is 40 units away from the first row (the
+        # bridge's pin pitch) and the host's two pins are 10 apart, so a load
+        # hung at the host's row would put its value row back on the first net's
+        # line and force that line to step 5 units round it (measured on the
+        # 543G bay's first seat). Hung on the bridge's row it sits level with the
+        # crystal's other foot — the classic oscillator drawing — and the 30-unit
+        # jog is made once, on the way back to the host.
+        inner = distance
+        jogged_box: Box | None = None
+        while inner > BAY_CORRIDOR:
+            at = (
+                host_a[0] + u[0] * inner + perp[0] * pitch,
+                host_a[1] + u[1] * inner + perp[1] * pitch,
+            )
+            origin = (at[0] - jogged_tip[0], at[1] - jogged_tip[1])
+            box = page_box(jogged, origin)
+            if (
+                not any(_overlaps(grown(box), other) for other in fixed)
+                and not _overlaps(bay_grown(box), bridge_box)
+                and not _overlaps(bay_grown(box), aligned_box)
+            ):
+                jogged_box = box
+                seat[jogged] = origin
+                break
+            inner -= grid
+        if jogged_box is None:
+            distance = _snap(distance + grid, grid, 0.0)
+            continue
+        return seat
+    return None
+
+
 def _chain_and_shelf_layout(
     ctx: _Context, variant: _Variant
 ) -> tuple[
@@ -3858,6 +4145,9 @@ def _chain_and_shelf_layout(
     service_counts: dict[tuple[str, tuple[float, float]], int] = {}
     branch_ids = _branch_order(ctx)
     group_span = _group_pad_spans(ctx, branch_ids) if pair_bands else {}
+    # 543G-2: an owner whose own branches the grammar has already ordered among
+    # themselves keeps the ladder's staircase. See `_declared_sibling_owners`.
+    declared_siblings = _declared_sibling_owners(ctx) if pair_bands else frozenset()
     next_base = 0
     rungs: dict[str, _BranchRung] = {}
     for part_id in branch_ids:
@@ -3869,7 +4159,7 @@ def _chain_and_shelf_layout(
         owner = slot.owner
         direction = _branch_offset_direction(ctx, slot, poses, origins)
         anchor = _branch_anchor(ctx, slot, poses, origins)
-        if pair_bands:
+        if pair_bands and owner not in declared_siblings:
             # 543H-1b: branches that are interchangeable share **one lane**. Two
             # branches off one owner, leaving on one side, in one role and drawn
             # with one symbol differ only in the pad they hang off — and that
@@ -4047,9 +4337,21 @@ def _chain_and_shelf_layout(
             index=index,
         )
 
-    _share_one_bay(ctx, origins, poses, boxes, rungs, residue)
+    # 543G-12b: a bridge and its two loads are **one bay**, measured from the
+    # host pins they share nets with — before the sibling passes, which are told
+    # to leave the bay's members where they were put.
+    bays = _place_clock_bays(ctx, origins, poses, boxes)
 
-    _align_branch_lanes(ctx, origins, poses, residue)
+    _share_one_bay(
+        ctx,
+        origins,
+        poses,
+        boxes,
+        {part_id: rung for part_id, rung in rungs.items() if part_id not in bays},
+        residue,
+    )
+
+    _align_branch_lanes(ctx, origins, poses, residue, exclude=bays)
 
     shelf_y = axial if ctx.chain else 0.0
     shelf_x = 0.0
@@ -4343,6 +4645,23 @@ def _branch_anchor(
     return origins.get(slot.owner, (0.0, 0.0))
 
 
+def _stated_branch_order(ctx: _Context, branches: Iterable[str]) -> dict[str, int]:
+    """The position each branch takes in its module's stated `branchOrder` (543G-11).
+
+    Read from the presentation's own modules: the page path hands each module its
+    group's statement, the standalone path hands the document's. Only parts this
+    stage is placing **as a branch** are indexed, so a declaration that also names
+    chain parts leaves them where they are; a part named in two modules keeps the
+    first position (the parser has already refused a repeat inside one module).
+    """
+    out: dict[str, int] = {}
+    for module in getattr(ctx.presentation, "modules", ()) or ():
+        for position, part_id in enumerate(getattr(module, "branch_order", ())):
+            if part_id in branches:
+                out.setdefault(part_id, position)
+    return out
+
+
 def _branch_order(ctx: _Context) -> list[str]:
     """The order branches are placed in: an owner before everything it owns.
 
@@ -4355,12 +4674,34 @@ def _branch_order(ctx: _Context) -> list[str]:
     a presentation whose two branches own each other — broken the way
     :func:`_ranks` breaks one: by taking what is left, in order, so the stage
     reports a relation conflict rather than hanging on a contradictory document.
+
+    **543G-11: a stated `branchOrder` outranks the designator order.** 088b §二
+    states the order a module's parallel branches are drawn in, from the inlet
+    end outwards — and until this change only the `power-entry` grammar read it
+    (`grammar/power_entry.py`), so a document that stated it for any other
+    group had written an order nobody carried out: measured on the 543G bridge,
+    four permutations of `X1`/`C5`/`C6` gave byte-identical drawings, because
+    the seater only ever looked at `(rank, part id)`. The declaration is a
+    statement about *this* group's own branches, so it decides the sequence
+    before rank does; a branch the module does not name keeps the old tie-break
+    and follows the named ones. The document's own checks (a designator twice, a
+    designator outside the module's `parts`) are refused while parsing
+    (:func:`boardwise.core.presentationspec._module_branch_order`), and the
+    owner-before-owned rule below still wins — an order cannot place a branch
+    before the part it hangs off. A module that states no order builds the same
+    list as before this change, item for item.
     """
     branches = {
         part_id for part_id, slot in ctx.slots.items() if slot.kind == "branch"
     }
+    stated = _stated_branch_order(ctx, branches)
     pending = sorted(
-        branches, key=lambda part_id: (ctx.slots[part_id].rank, part_id),
+        branches,
+        key=lambda part_id: (
+            stated.get(part_id, len(stated)),
+            ctx.slots[part_id].rank,
+            part_id,
+        ),
     )
     ordered: list[str] = []
     waiting = {part_id: set() for part_id in branches}
@@ -4672,6 +5013,7 @@ def _align_branch_lanes(
     origins: dict[str, tuple[float, float]],
     poses: Mapping[str, SymbolPose],
     residue: tuple[float, float],
+    exclude: frozenset[str] = frozenset(),
 ) -> None:
     """Put every branch of a same-line group **on** the line, not near it.
 
@@ -4700,6 +5042,11 @@ def _align_branch_lanes(
     checker reports a conflict against the lock (053 sec.5 scenario 12) rather
     than the compiler overriding either. A group of only fixed members does
     nothing at all.
+
+    ``exclude`` names the parts this pass must not touch: 543G-12b seats a bay
+    (:func:`_place_clock_bays`) on seats measured from its host pins, and a
+    same-line group that also holds one of its members would shift it back off
+    them — the second move is what the bay exists to stop.
     """
     groups: dict[str, list[str]] = {}
     axes: dict[str, str] = {}
@@ -4718,6 +5065,7 @@ def _align_branch_lanes(
                 part_id for part_id in present
                 if ctx.locked(part_id) is None
                 and ctx.slots[part_id].kind == "branch"
+                and part_id not in exclude
             ),
             key=lambda part_id: (ctx.slots[part_id].rank, part_id),
         )
@@ -4963,6 +5311,48 @@ def _declared_among(ctx: _Context, members: Sequence[str]) -> bool:
         if constraint.subject in inside and constraint.object in inside:
             return True
     return False
+
+
+def _declared_sibling_owners(ctx: _Context) -> frozenset[str]:
+    """Owners whose own branches the grammar has already ordered (543G-2).
+
+    The pair reading (:func:`_bay_buckets`, :func:`_group_pad_spans`,
+    :func:`_share_one_bay`) answers the grammar's **silence** about how two
+    interchangeable siblings sit side by side. The moment the grammar itself
+    states a relation **between two branches of one owner**, that silence is
+    gone and the pair reading must not spend its one-lane answer on them: a
+    ``same-row``/``same-column``/``adjacent``/tap between the siblings already
+    names the line they stand on and how far apart, and re-banding them by
+    symbol puts one of them a lane off that line.
+
+    Measured, and this predicate is why it exists: ch340_serial's ``X1`` (the
+    crystal) and ``C1`` (its XI load capacitor) carry ``adjacent(X1, C1)`` from
+    the crystal's own 098 cluster, but they are drawn with two different
+    symbols, so the pair reading gave ``X1`` its own group base three lanes out
+    while ``C1`` collapsed onto the first band with ``C2`` — the two then sat on
+    different rows and the gate answered ``presentation-poor/X1`` on all seven
+    variants. The ladder's old per-``(owner, direction)`` staircase keeps them on
+    one line, which is what the grammar asked for.
+
+    The reading is deliberately per **owner**, not per symbol group: the decision
+    has to be all-or-nothing for one owner's branches, because a branch that took
+    a group base and one that took the counter would otherwise be handed the
+    same band and land on one origin.
+
+    Nothing here reads a part id, a net name or a pin number: it only asks which
+    endpoints of the binding are branches of the same owner.
+    """
+    declared: set[str] = set()
+    for constraint in ctx.binding.constraints:
+        here = ctx.slots.get(constraint.subject)
+        there = ctx.slots.get(constraint.object)
+        if here is None or there is None:
+            continue
+        if here.kind != "branch" or there.kind != "branch":
+            continue
+        if here.owner and here.owner == there.owner:
+            declared.add(here.owner)
+    return frozenset(declared)
 
 
 def _share_one_bay(
@@ -13333,7 +13723,9 @@ def _flag_seat_pins(
     pad it supplies falls back to the pad the reader is already looking at, not to
     whichever id sorts first. When the caller has no coordinates (the reservation
     pass, whose expression carries ``(0.0, 0.0)`` for every pad) that order
-    degenerates to member id, exactly as the ground ladder already does there.
+    degenerates to member id — which is why the reservation pass keeps the whole
+    ladder and never reads its first rung as the seat (515A-⑥): the order is a
+    fact about the drawn page, and only the draw pass has the page.
     """
     if cls == "gnd":
         far = _gnd_outlet_pin(ctx, expression)

@@ -127,6 +127,14 @@ direction (`src/boardwise/cli.py::_compare_persistence`,
   failing on the second reading would have made the state unusable exactly when
   it mattered.
 
+**Editor-generated net ids are not design names.** A reopen may renumber an automatic
+net (`$19N5` → `$1N5`). The comparison reconciles only source/target pairs that are
+both automatic names and whose complete pin-member sets match, then prints those
+pairs with `matched by member set, not by name`. A user-named net rename, a
+named/automatic mix, a split or merged net, or a moved/lost pin still fails. The
+generic `compare_models` strictness is unchanged; this narrow rule belongs only to
+persistence.
+
 A pass also writes one line to the audit log; check it arrived:
 
 ```bash

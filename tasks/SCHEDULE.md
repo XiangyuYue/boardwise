@@ -69,6 +69,18 @@
   主代理35、auto 门独立变异先红后还原。最终全量 **9496 passed / 25 skipped /
   2 既有环境红**；connector 576、dsh 129+1、Rust 111+4、draw smoke 与 doc-claims 39
   均过，证据 `evidence/543kl/`。不做 git 写，持久化未重开验证，第二拓扑未做。
+- **543G/N/H 第二拓扑与旧账核销（2026-11-06 工作树）**：P38 已由543N完成
+  关闭重开，**saved_verified**。第二拓扑CH340落 **P39=`62e4828acc56a307`**，
+  12器件/36计划导线/17旗，lint 0E/0W/0I，独立逐脚 **45/45+15/15NC=60/60**，
+  宿主逐岛视觉通过；P38与Board2 P1保留。通用能力补齐信号支路非去耦判定、
+  完整flow阅读列、branchOrder消费与振荡bay，未读参考坐标。证据 `evidence/543g/`、
+  `evidence/543n/`。P39持久化未重开验证。最终全量 **9962 passed / 25 skipped /
+  14 failed**：12条其他agent货架漂移+2条既有Windows环境红，本批6条回归已全修。
+  connector 576、dsh 129+1、Rust、draw smoke、CLI合同与仓库卫生均过。
+- **201G/515A/201C/201D核销**：201G当前规格1候选、13条软披露和SEC_12V旗位已钉；
+  515A六项旧洞有防回归，旗位预留与页框归属两项已修并变异验证；201C/201D经当前
+  实验裁决**不复活**（目标缺陷不可复现、旧patch不可应用、201D前提未满足）。
+  证据 `evidence/543h/`、`.tmp_543h_201cd/`。交叉与same-statement指标是独立后续项。
 - **审查线测试反馈（2026-11-04）**：544P 堵住 DSH `commandLine` 凭据泄露；
   544 修 checkup/arch 写盘异常，545 加同目录 OS 互斥与串行 rerun 提示。主代理邻域
   **226 passed**；connector **576 passed** + typecheck；DSH **129 passed / 1 skipped** +

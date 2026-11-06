@@ -263,3 +263,34 @@ fallback → 删除旧实现」垂直迁移。Python fallback 只过渡，不形
   connector **576 passed**+typecheck；dsh-plugin **127 passed / 1 skipped**+typecheck/build+
   draw smoke；Rust **111 passed / 4 ignored**（fmt/clippy/test）；doc-claims **33 passed**。
   这些读数不替代P29视觉验收，也不把未覆盖维度写成兼容完成；本任务没有commit/add/push。
+
+## 9. 543N：persistence 自动网名重编号（集成小批）
+
+### 公开合同与回退
+
+- `core.compare.reconcile_names` 复用既有 membership 匹配与防合并逻辑，新增默认关闭的
+  `auto_only` 过滤；只接受**源名与目标名都满足 `core.netdomains.is_auto_net`** 的改名。
+  通用 compare/calibration 缺省行为不变，不修改 `compare_models` 的严格网名合同。
+- `cli._compare_persistence` 在调用 `compare_models` 前，以 golden=baseline 对 reopened 做
+  `reconcile_names(..., auto_only=True)`。自动编号可以变，成员分区不能变；用户命名网改名、
+  命名↔自动、拆网、并网、丢脚、改脚仍失败。回退是去掉该调用，缺省 reconcile 不变。
+- 真实基线：P38 重开前后 11 器件不变，四个 `$19N…`→`$1N…` 自动网的成员集合逐一相同，
+  所有用户命名网相同，几何没有缺失；证据 `evidence/543n/`。不把这次误报写成丢图，也不
+  在未修比较器前写 `saved_verified`。
+
+### 兼容矩阵与 negative control
+
+| 维度 | 本批覆盖 | 必须不变 / 不得声称 |
+|---|---|---|
+| V4 在线 | `test V4` P38 已关闭重开后的真实 netlist/geometry | Board2 P1、ROBOT 不写；P38 分区一致才可验收 |
+| V3 在线 | **未覆盖** | 不把 V4 读数写成 V3 宿主兼容 |
+| 离线比较 | persistence 与既有 compare/calibration 测试 | 缺省 reconcile、Finding/verdict、CLI 旧退出码不变 |
+| `.epro2/.eprj2/.eprj3` | 仅在线 EasyEDA netlist 文本；容器 parser 未改，**未覆盖** | 不声称三种容器持久化兼容完成 |
+| 单/多板 | 单工程单页；多板**未覆盖** | 重复 PCB 双审、分歧库串板不在本批改变或宣称验证 |
+| 普通器件/CBB | 11 个普通器件；CBB **未覆盖** | 不声称 CBB 持久化语义已支持 |
+| 自动→自动且分区相同 | 允许，返回 `saved_verified` | 必须披露这是成员归并，不是网名稳定 |
+| 命名网变化 / 命名↔自动 | 拒绝 | 同成员集合也不许冒充名字未变 |
+| 自动网拆并、脚移动/丢失 | 拒绝 | negative control 必须红，不得用自动名豁免真实电气差异 |
+
+实施文件域限 `core/compare.py`、`cli.py`、`tests/test_persistence.py` 与必要的
+compare 邻域测试。至少两处变异、owner/layer 守卫、两个消费者证据；全量与真机串行。

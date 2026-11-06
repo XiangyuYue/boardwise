@@ -3284,6 +3284,7 @@ def check_page(
     violations.extend(_check_geometry_framed(
         plan, placed, frames, membership,
         _nets_by_module(circuit_spec, presentation_spec),
+        _attached_pairs(presentation_spec),
     ))
     violations.extend(_check_part_membership(plan, membership))
     violations.extend(_check_wires_clear_of_frames(plan, frames))
@@ -3495,6 +3496,7 @@ def _check_geometry_framed(
     frames: Mapping[str, Box],
     membership: Mapping[str, tuple[str, ...]],
     nets_by_module: Mapping[str, tuple[str, ...]] | None = None,
+    attached: Mapping[str, str] | None = None,
 ) -> list[HardViolation]:
     """Everything the page draws lies inside **its own module's** frame.
 
@@ -3510,13 +3512,18 @@ def _check_geometry_framed(
     frame of a module that owns a member of the net they name (`nets_by_module`
     is that reading, from the circuit and the spec; a cross-module wire
     legitimately ends in either of its two modules, and a net the spec knows
-    no module for keeps the old "some frame" answer). The parts keep the plain
-    containment test: :func:`_check_part_membership` owns the "exactly one
-    claim" question for them, and their evidence already names the claimants.
+    no module for keeps the old "some frame" answer). A **part** is the fourth
+    object with an owner, and it is measured the same way (515A-⑧): the frame
+    that holds it must be one of its own modules' frames, or the frame of the
+    module its own module is **attached** to (`presentationSpec.modules[*].attach`
+    says the block is drawn against the host's drawing). An unowned part keeps
+    the old "some frame" answer here — :func:`_check_part_membership` is the
+    finding for that defect, and one defect is reported once.
     """
     if not frames:
         return []
     out: list[HardViolation] = []
+    attached = {} if attached is None else attached
 
     def framed(box: Box) -> bool:
         """Is this box held by some module frame? (containment, not overlap)"""
@@ -3528,6 +3535,14 @@ def _check_geometry_framed(
             return bool(frames_here)
         owners = nets_by_module.get(net_id, ())
         return not owners or bool(set(frames_here) & set(owners))
+
+    def part_owners(part_id: str) -> set[str]:
+        """The frames one part may be drawn in: own modules, plus their hosts."""
+        owners = set(membership.get(part_id, ()))
+        owners.update(
+            attached[owner] for owner in list(owners) if owner in attached
+        )
+        return owners
 
     def anchor_evidence(
         sentence: str, frames_here: tuple[str, ...], net_id: str, tail: str = ""
@@ -3544,7 +3559,34 @@ def _check_geometry_framed(
 
     for part in sorted(placed, key=lambda item: item.part_id):
         box = _part_extent(part)
-        if framed(box):
+        here = tuple(
+            name for name, frame in sorted(frames.items())
+            if _box_inside(box, frame)
+        )
+        owners = membership.get(part.part_id, ())
+        allowed = part_owners(part.part_id)
+        if not owners and here:
+            # `_check_part_membership` reports the unowned part; the frame
+            # question stays "in some frame" so one defect is reported once.
+            continue
+        if here and set(here) & allowed:
+            continue
+        if here:
+            own = "; ".join(
+                f"{name} {_box_text(frames[name])}"
+                for name in sorted(allowed) if name in frames
+            ) or "none"
+            out.append(HardViolation(
+                kind=KIND_GEOMETRY_OUTSIDE_FRAMES,
+                objects=(f"parts[{part.part_id}]",),
+                evidence=(
+                    f"the part {part.part_id}'s extent {_box_text(box)} is drawn in "
+                    + " and ".join(here)
+                    + f" — but the part belongs to {own}, and a module's part "
+                    "belongs inside the frame that holds its drawing (an attached "
+                    "module may also stand in the frame of its host)"
+                ),
+            ))
             continue
         out.append(HardViolation(
             kind=KIND_GEOMETRY_OUTSIDE_FRAMES,

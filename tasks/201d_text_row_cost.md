@@ -21,3 +21,12 @@
 ## 纪律
 
 同前：只动 placement.py / drawcompiler.py 落位段（router/旗标/grammar 不碰）；不动 git；不 rm（回收站）；零企业名；不碰真机。证据 outputs/201d/evidence.md；PROGRESS.md append 一行；不要 commit。约 100 分钟。
+
+## 543H 复活裁决：不复活（2026-11-06）
+
+- 当前两条路径均无跨器件/跨网文本真碰撞，150页的3条pin-text-press是T1自身符号行；
+  旧路径placement仍先于flag/label决策，201D前提未满足，全量text_overlap仍会把
+  布线后才确定的网名行混进布局计价，526退化结构原因未消失。
+- 裁决A：不恢复全量text_row_cost。island路径已经用布线前行租金处理文字净空，
+  不把另一套旧代价函数叠上去。`min_text_gap`把same-statement对计入genuine intersection
+  是独立的指标披露问题，不通过复活201D解决。实验见`.tmp_543h_201cd/`。

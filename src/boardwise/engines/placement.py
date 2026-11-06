@@ -1263,6 +1263,27 @@ def _overlap_term(boxes: Mapping[str, Box]) -> CostTerm:
     )
 
 
+def _priced_seats(
+    seats: tuple[FlagReservation, ...],
+) -> tuple[FlagReservation, ...]:
+    """One seat per net: its ladder's head, in the order the request states it.
+
+    The compiler states every rung of a net's seat ladder (515A-⑥); a net's later
+    rungs are the fallbacks for the *same* flag, so the room is priced once, at
+    the rung the ladder prefers. Order-preserving on purpose: the request is
+    built net-by-net in the compiler's own ladder order, so the first statement
+    of a net is the head of the same ladder the draw pass walks.
+    """
+    seen: set[str] = set()
+    out: list[FlagReservation] = []
+    for seat in seats:
+        if seat.net_id in seen:
+            continue
+        seen.add(seat.net_id)
+        out.append(seat)
+    return tuple(out)
+
+
 def _flag_room_term(
     request: PlacementInput,
     pins: Mapping[str, Mapping[str, tuple[float, float]]],
@@ -1287,15 +1308,30 @@ def _flag_room_term(
     Soft, like every other term but the three hard ones: a crowded flag position
     is a drawing the plan then refuses, and that refusal is the gate's to make —
     this prices it so the search can move the part that is in the way.
+
+    **One seat per net is priced (515A-⑥ follow-up).** The compiler hands over
+    **every** rung of its seat ladder (`drawcompiler._flag_seats`), because the
+    rung is chosen at draw time on the placed coordinates and nothing may stand
+    in the chosen pin's corridor. Those rungs are alternatives for one flag, not
+    N flags: pricing each of them would price a room the plan will not use and
+    would move drawings that were never crowded (measured: the flyback's topology
+    answer moved all 19 parts the moment the extra rungs were summed). So the
+    term reads the **first** statement per net, which is the rung the compiler's
+    own ladder prefers — the same order the flag pass walks — and prices that.
+    Keeping the whole list is not a second judgement: it is the same ladder's own
+    fallback, and the list is what lets a drawing whose first rung turns out
+    illegal still find its reserved room. One ruler, two uses: the head is priced,
+    the tail is covered.
     """
-    if not request.flag_seats:
+    seats = _priced_seats(request.flag_seats)
+    if not seats:
         return CostTerm(
             "flag-room", 0.0,
             "this request states no flag seat, so nothing is reserved",
         )
     total = 0.0
     worst = ("", 0.0)
-    for seat in request.flag_seats:
+    for seat in seats:
         pin = (pins.get(seat.part_id) or {}).get(seat.token)
         if pin is None:
             total += 0.0
@@ -1315,9 +1351,9 @@ def _flag_room_term(
         "flag-room", total,
         "the area of the parts standing in the room the plan's own flags need "
         + (f"— the worst is {worst[0]} at {worst[1]:g} units² over "
-           f"{len(request.flag_seats)} reserved seat(s)"
+           f"{len(seats)} reserved seat(s)"
            if worst[1] > 0.0 else
-           f"— every one of the {len(request.flag_seats)} seat(s) is clear"),
+           f"— every one of the {len(seats)} seat(s) is clear"),
     )
 
 

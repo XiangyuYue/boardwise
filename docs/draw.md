@@ -756,11 +756,41 @@ flag and a GND flag. The page has 11 parts, 49 planned wires and 19 flags.
 `draw lint` is **0E/0W/0I**; independent geometry and host-netlist partition
 checking are each **55/55 connections + 3/3 NC**, and the main agent visually
 accepted every island. P37 was withdrawn for the inconsistent branch poses and
-the 60/55 pair, and has been deleted after P38 passed. Board1 now has only P38
-and Board2 retains only the user's P1. DRC contains only the three specified
-NC pins and three library-attribute warnings on P38. Persistence remains
-`saved_unverified`; a second topology is not covered. Evidence:
-`evidence/543j/`, `evidence/543kl/`.
+the 60/55 pair, and has been deleted after P38 passed. Board2 retains only the
+user's P1. DRC contains only the three specified NC pins and three
+library-attribute warnings on P38. P38 later survived a real close-and-reopen
+and is `saved_verified`; automatic net renumbering is reconciled by membership
+only in the persistence command. Evidence: `evidence/543j/`, `evidence/543kl/`,
+`evidence/543n/`.
+
+### Second topology and constructive clusters (543G)
+
+The same opt-in path also covers the public CH340 UART example, not only CH343:
+
+- The decoupling reader rejects a capacitor on a signal node that also carries a
+  functional non-capacitor (a crystal, resistor or connector). A local internal
+  supply such as V3 remains decoupling even when its declared class is `signal`;
+  power-net behaviour is unchanged.
+- When `moduleColumns` and a flow that is one chain through every module are
+  stated, modules fill reading columns before moving to the next column. Partial
+  or absent flow keeps the old row-major fill.
+- `modules[].branchOrder` is consumed by the ordinary branch seater: declared
+  branches come first, unlisted branches keep their rank/id order, and dependency
+  order still wins. No declaration preserves the old sequence.
+- One bridge branch with one shunt on each of its two nets can be seated as an
+  oscillator bay. The compiler anchors each net on its real host pin, accepts at
+  most a 30-unit jog required by the symbols' pitch difference, and excludes bay
+  members from later sibling realignment. Missing loads, multiple bridges,
+  unavailable seats or a larger jog falls back to the old ladder.
+
+The accepted page is Board1 **P39 `62e4828acc56a307`**: 12 parts, 36 planned
+wires and 17 flags, with `draw lint` **0E/0W/0I** and independent host-netlist
+checking **45/45 connections + 15/15 NC**. Its D± carriers are 40/60/40,
+XI/XO are each 90, and all six cross-island carriers are 40. The main agent
+visually accepted the host render. P38 remains as the CH343 example and Board2's
+P1 is untouched. P39 is `saved_unverified` until its own close-and-reopen.
+Evidence: `evidence/543g/`, especially `live_mpn/` and the final specification
+`blocklib/specs/ch340_uart_543g.*`.
 
 ## Flag and naming rules on compiled pages (060–074)
 

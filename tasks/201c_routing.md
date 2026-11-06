@@ -31,3 +31,12 @@
 - 全量绿 `--basetemp=.tmp_pt_201c -n 4 --dist loadfile`（test_193 槽位红就单跑确认）；变异 ≥2 组（关 rip-up、L 捷径不付代价）。
 - 企业名零出现；不动 git；不 rm（回收站）；不碰真机（主代理在 test/test2 窗做实验，**不许动 bridge**）。
 - 证据 `outputs/201c/evidence.md`；PROGRESS.md append 一行；**不要 commit**。约 100 分钟没完就停手收尾。
+
+## 543H 复活裁决：不复活（2026-11-06）
+
+- 当前五岛反激：1候选、0 corridor失败、0 label fallback、0竖排网名；FB_SENSE与R8值行净距5，
+  不再出现旧0.5压线。150旧单模块路径同样ok，5个rejected全是重复几何，没有走廊拒绝。
+- 旧`.tmp_201c_hold/201c.patch`对当前三文件均`patch does not apply`，且本身仍缺“布线后
+  名字行自检+单网重布”。flyback当前已不走补丁落点，复活等于为零缺陷重写能力。
+- 裁决A：不恢复rip-up/软预留/escape，也不单做名字行重布。交叉6>4是独立的A*/代价账，
+  不能作为复活201C的证据。完整实验与hash在`.tmp_543h_201cd/`。

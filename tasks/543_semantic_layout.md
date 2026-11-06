@@ -550,6 +550,65 @@ local-label 逐脚独立选档造成，不是电路需要的不对称，P37 撤�
   第二轮全量 **9496 passed / 25 skipped / 2 failed**，仅剩两条既有环境红，未跑第三轮。
 - 证据 `evidence/543kl/`；最终全量与其它测试线读数见该批 README 和日志。不做 git 写。
 
+### 543G：CH340 第二拓扑泛化（完成；外部漂移与环境红另记）
+
+- 第二样本为公开合成 `blocklib/specs/ch340_uart_543g.*`：CH340G + Type-C/CC +
+  两组去耦 + 12 MHz 晶振与两负载 + 2x5 UART。不是读取参考页坐标或复制 CH343 网名。
+- agent 最终只声明三个功能岛：`usb_c`、`serial`、`uart`。晶振及负载是 CH340 的附属
+  支路，留在 serial；H1.9 正常输出 +5V。曾尝试的独立 coreless clock 岛与纯信号排针岛
+  属于过度拆分，相关 grammar 限制只记边界，不借本样本扩写一套新语法。
+- 通用修复分批：543G-1 信号网上的晶振/RC 电容不再误判为去耦，V3 内部轨仍识别；
+  543G-2 grammar 已声明同 owner 支路关系时退回旧阶梯；543G-7 完整 flow 链 +
+  `moduleColumns` 使用阅读列；543G-11 既有 `branchOrder` 真正进入支路排序；
+  543G-12b 仅在一条 bridge、两个 shunt、同宿主同侧且 jog≤30 时按宿主脚联合成 bay。
+- H1 文字右侧、时钟三件文字朝外是 agent 的可读性声明，已写入规格，不是手填坐标。
+  最终 draw plan 的 Type-C D± 为 40/40、60/60，U1 D± 与 U1/H1 TXD/RXD 各 40；
+  XI/XO 各 90，后者只有一次由脚距造成的 30 正交折线。主代理已亲看
+  `.tmp_543n/g12c_clock_text/final.svg` 全页、时钟与 USB 局部，离线视觉通过。
+- 测量教训：编译 `page.plan.segments` 的 5 单位预留段会在落地扩成 40，不能再与最终
+  `drawapply.module_plan` 的导线混用；P38 同样是 `200→205→240`。G-5/G-9 的
+  「Type-C 必须腾空间」结论已作废，不为这个假缺口改算法。
+- **真机授权边界**：只在 `test V4` Board1 新建一页作为 CH340 独立示例；P38 与
+  Board2 用户参考 P1=`30560d9c0a52a6d2` 不改，`ROBOT ctrl FOC` 及一切其他工程禁写。
+  新页先空页 plan/apply，lint、独立逐脚和宿主渲染三关全过才保留；失败只进证据。
+  两页分别代表 CH343/CH340 两个通过拓扑，不删除 P38 冒充“替换验收”。
+- **最终真机页 P39=`62e4828acc56a307`**：12 器件、36 计划导线、17 旗；apply 成功并保存。
+  `draw lint` 0E/0W/0I；一次性独立逐脚 **45/45 连接 + 15/15 NC = 60/60**；主代理
+  已亲看宿主 PNG 全页与三岛局部。早期两份 plan 因 C1590 的 MPN 未声明而零写入失败，
+  补齐真实 MPN 后重新出 plan 成功，未新增生产放件解析器。失败证据 `evidence/543g/live/`，
+  成功证据 `evidence/543g/live_mpn/`。
+- DRC 仅规格内 15 个 P39 NC、P39 两个电阻库属性 WARN 与 P38 既有 WARN；不写 DRC 全绿。
+  主代理聚焦 **47 passed**，MPN 后第二拓扑 **18 passed**；有效变异均先红后字节还原。
+  全量回归在目标收尾批执行，P39 当前仍 `saved_unverified`，总索引 `evidence/543g/README.md`。
+
+### 543N：P38 关闭重开持久化（完成）
+
+- 只读验收对象为 `test V4` Board1 P38=`0ec4dc022ef38563`；Board2 仅有用户参考页
+  P1=`30560d9c0a52a6d2`，未改。`ROBOT ctrl FOC` 与所有其他工程未写。
+- 基线冻结后，岳已关闭重开 test V4；新 instance 为 `inst-004022079-0uroct26`，重新读取
+  doc.list 确认同一工程 UUID、同一 P38、Board2 P1 不变。多窗口下一次性
+  `.tmp_543n/persistence_targeted.py` 显式寻址，未让旧 persistence 命令猜窗口。
+- 首次比较发现四个自动网 `$19N…`→`$1N…`，没有器件/图元丢失；独立逐脚证明四个自动网
+  分区与全部用户命名网完全相同。shared 小批给 `reconcile_names` 增加默认关闭的
+  `auto_only`，仅 persistence 启用，命名↔自动、命名网变化、拆并网与脚变化仍拒绝。
+  通用 compare 缺省行为不变，兼容矩阵见 `tasks/shared-platform.md` §9。
+- 主代理邻域 **187 passed**、合同 **43 passed**；过滤全关与命名/自动混用两组变异均先红，
+  cp 还原 sha256 一致。最终真实在线比较：11 components / 17 nets / 76 primitives，
+  **saved_verified**；四个改名按成员集合并披露，证据 `evidence/543n/`。
+
+### 543H 最终回归与旧任务裁决（完成）
+
+- 201G 当前五岛规格1候选，13条软披露及SEC_12V旗位由 `test_543h_201g_islands.py` 钉住；
+  515A六项旧洞有防回归，旗位预留与器件页框归属两项已修。201C/201D经当前实验
+  裁决不复活，证据 `evidence/543h/`、`.tmp_543h_201cd/`。
+- 首轮全量发现6条旗位成本回归；`_priced_seats` 改为每网首档计价、全集覆盖后，
+  六条独立复跑29 passed。最终第二轮 **9962 passed / 25 skipped / 14 failed**：
+  12条其他agent货架漂移与2条既有Windows环境红，本批业务回归全消，未跑第三轮。
+- connector **576 passed** + typecheck；DSH **129 passed / 1 skipped** + typecheck/build；
+  Rust fmt/clippy/test通过；draw smoke、CLI合同、仓库卫生均通过。
+  最终日志 `evidence/543h/final_pytest_rerun.log`，源码哈希 `final_source_hashes.txt`。
+  未做git提交、推送或发布。
+
 ## 3. 总验收与兼容口径
 
 - 总验收不是单一 `ok=True`：自动基线、离线硬违反、逐脚连通、渲染视觉和真机门禁各自有证据。

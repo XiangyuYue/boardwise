@@ -619,6 +619,8 @@ def compile_page(
     for variant in _variants(
         orders, len(ctx.modules), budget,
         columns_hint=ctx.presentation.module_columns or None,
+        reading_bands=bool(ctx.presentation.module_columns)
+        and _flow_fills_every_module(ctx.presentation),
     ):
         page, failure, violations, need, kind = _assemble(ctx, variant)
         if page is None:
@@ -1298,6 +1300,40 @@ def _module_budget_for(
 # ------------------------------------------------ stage 3: orders and variants
 
 
+def _flow_fills_every_module(presentation: PresentationSpec) -> bool:
+    """Whether the stated flow is **one chain over every module** of the page.
+
+    543G-7: a flow is an ordering hint until it names the whole page. When every
+    module is on it, has at most one predecessor and at most one successor, and
+    the edges number one fewer than the modules, the document has stated the
+    page's **reading order** outright — and then the grid follows it down a
+    column (:func:`_arrange`, ``reading_bands``), instead of walking left to
+    right and putting the last module back under the first one.
+
+    A page whose flow leaves modules off (an attached decoupling pair, a lamp,
+    a header that is not on the path) is *not* this case: its sequence is a
+    partial order among others and keeps 056's fill, so its frames do not move.
+    """
+    ids = [module.id for module in presentation.modules]
+    if len(ids) < 2 or not presentation.flow:
+        return False
+    edges = [
+        (edge.from_module, edge.to_module) for edge in presentation.flow
+    ]
+    named = {name for edge in edges for name in edge}
+    if named != set(ids) or len(edges) != len(ids) - 1:
+        return False
+    out_degree: dict[str, int] = {}
+    in_degree: dict[str, int] = {}
+    for source, target in edges:
+        out_degree[source] = out_degree.get(source, 0) + 1
+        in_degree[target] = in_degree.get(target, 0) + 1
+    return (
+        all(value <= 1 for value in out_degree.values())
+        and all(value <= 1 for value in in_degree.values())
+    )
+
+
 def _placement_orders(ctx: _Context) -> list[tuple[str, ...]]:
     """The module sequences the page may be placed in, deterministically.
 
@@ -1349,24 +1385,33 @@ MAX_ORDERS = 6
 
 @dataclass(frozen=True)
 class _Variant:
-    """One point of the finite page search."""
+    """One point of the finite page search.
+
+    ``reading_bands`` says how the grid is filled: **down a column, then the next
+    column** (543G-7) instead of left to right, row by row. Both fills put the
+    same modules in the same grid; only the slot the *sequence* walks through
+    changes, so it is a property of the page (its stated reading direction), not
+    of one module.
+    """
 
     generation: int
     order: tuple[str, ...]
     columns: int
     rung: float
+    reading_bands: bool = False
 
     @property
     def label(self) -> str:
         return (
             f"generation={self.generation} columns={self.columns} "
             f"gap={self.rung:g}x order={'/'.join(self.order)}"
+            + (" reading=down-columns" if self.reading_bands else "")
         )
 
 
 def _variants(
     orders: Sequence[tuple[str, ...]], count: int, budget: PageCompileBudget,
-    *, columns_hint: int | None = None,
+    *, columns_hint: int | None = None, reading_bands: bool = False,
 ) -> list[_Variant]:
     """The finite search space, in a fixed order and cut at `max_variants`.
 
@@ -1377,6 +1422,12 @@ def _variants(
     everything between), and the gap ladder gives a crowded page more room.
     A stated ``moduleColumns`` replaces that column sweep with the one grid shape
     the author asked for.
+
+    ``reading_bands`` is set by the caller for a page that states both
+    ``moduleColumns`` and a ``flow``: the columns are then the page's reading
+    bands, and the flow's own sequence is walked **down** one band and on into
+    the next (:func:`_arrange`). A page that states neither keeps the row-major
+    fill it has always had, so old inputs are placed byte for byte as before.
     """
     variants: list[_Variant] = []
     column_choices = (
@@ -1388,7 +1439,7 @@ def _variants(
                 for rung in budget.gap_ladder:
                     variants.append(_Variant(
                         generation=generation, order=order, columns=columns,
-                        rung=float(rung),
+                        rung=float(rung), reading_bands=reading_bands,
                     ))
                     if len(variants) >= budget.max_variants:
                         return variants
@@ -2737,7 +2788,8 @@ def _place(
     relocate = budget.relocate_around_keepouts and bool(budget.keepouts)
     if not locked:
         offsets, frames, failure, need = _arrange(
-            assembled, variant.order, variant.columns, variant.rung, budget
+            assembled, variant.order, variant.columns, variant.rung, budget,
+            reading_bands=variant.reading_bands,
         )
         if failure is None and relocate:
             moved = _relocate(offsets, frames, list(budget.keepouts), inner, budget.grid)
@@ -2764,7 +2816,8 @@ def _place(
     if free:
         order = tuple(name for name in variant.order if name not in locked)
         free_offsets, free_frames, failure, need = _arrange(
-            free, order, min(variant.columns, len(order)), variant.rung, budget
+            free, order, min(variant.columns, len(order)), variant.rung, budget,
+            reading_bands=variant.reading_bands,
         )
         if failure is not None:
             return offsets, frames, failure, need, ""
@@ -2812,6 +2865,8 @@ def _arrange(
     columns_wanted: int,
     rung: float,
     budget: PageCompileBudget,
+    *,
+    reading_bands: bool = False,
 ) -> tuple[
     dict[str, tuple[float, float]], dict[str, Box], GrammarFailure | None,
     tuple[float, float] | None,
@@ -2820,25 +2875,39 @@ def _arrange(
 
     Split out of :func:`_place` unchanged, so the modules a page lock does not
     pin are arranged exactly the way every module was before 057.
+
+    ``reading_bands`` (543G-7) changes only **which slot the sequence walks into
+    next**: with it, the grid is filled down one column and on into the next, so
+    the page's columns are reading bands and a stated flow runs with the reader's
+    eye. Without it the grid keeps 056's fill — left to right, row by row — and
+    the geometry of every page that does not state the reading direction is
+    unchanged to the unit.
     """
     columns = max(1, min(columns_wanted, len(order)))
     rows = math.ceil(len(order) / columns)
+
+    def _slot(position: int) -> tuple[int, int]:
+        """``(row, column)`` of one position in the sequence."""
+        if reading_bands:
+            return position % rows, position // rows
+        return divmod(position, columns)
+
     gap = rung * budget.module_gap + budget.grid
     by_id = {item.module.id: item for item in assembled}
     widths: list[float] = []
     heights: list[float] = []
     for column in range(columns):
         members = [order[position] for position in range(len(order))
-                   if position % columns == column]
-        widths.append(max(
+                   if _slot(position)[1] == column]
+        widths.append(max((
             by_id[name].frame[2] - by_id[name].frame[0] for name in members
-        ))
+        ), default=0.0))
     for row in range(rows):
         members = [order[position] for position in range(len(order))
-                   if position // columns == row]
-        heights.append(max(
+                   if _slot(position)[0] == row]
+        heights.append(max((
             by_id[name].frame[3] - by_id[name].frame[1] for name in members
-        ))
+        ), default=0.0))
     page = budget.page_box
     assert page is not None  # `_check_budget` refuses a page without one
     inner = _page_inner(page, budget)
@@ -2847,7 +2916,7 @@ def _arrange(
     offsets: dict[str, tuple[float, float]] = {}
     frames: dict[str, Box] = {}
     for position, name in enumerate(order):
-        row, column = divmod(position, columns)
+        row, column = _slot(position)
         slot_left = left + sum(widths[:column]) + gap * column
         slot_top = top - sum(heights[:row]) - gap * row
         frame = by_id[name].frame
