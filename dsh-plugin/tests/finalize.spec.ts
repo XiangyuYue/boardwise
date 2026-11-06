@@ -81,10 +81,10 @@ function newSession(id: string): InstanceType<typeof Session> {
  * A real registry on a real cordis Context, plus the tools `apply` registers.
  * `projection: false` reproduces a mount that lacks the service.
  */
-function harness(options: { projection?: boolean } = {}): {
+async function harness(options: { projection?: boolean } = {}): Promise<{
   projections: InstanceType<typeof SessionProjectionRegistry>
   tools: Map<string, Tool>
-} {
+}> {
   const ctx = new Context()
   const projections = new SessionProjectionRegistry(ctx)
   const tools = new Map<string, Tool>()
@@ -98,7 +98,7 @@ function harness(options: { projection?: boolean } = {}): {
     },
   }
   if (options.projection !== false) pluginCtx['sessionProjections'] = projections
-  apply(pluginCtx as never)
+  await apply(pluginCtx as never)
   return { projections, tools }
 }
 
@@ -178,7 +178,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
   it('reads a >32 KiB receipt whole while stdout is over the cap and not JSON, then records the complete state', async () => {
     const big = 'w'.repeat(64 * 1024)
     const value = receipt({ big, review: { conclusion: 'pass-with-notes' } })
-    const { projections, tools } = harness()
+    const { projections, tools } = await harness()
     const session = newSession('session-finalize-big')
     const out = tempDir()
     const mock = serveReceipt(value, { stdout: `{not json ${'x'.repeat(48 * 1024)}` })
@@ -218,7 +218,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
   })
 
   it('records nothing on a non-zero exit even when a complete receipt already exists', async () => {
-    const { projections, tools } = harness()
+    const { projections, tools } = await harness()
     const session = newSession('session-finalize-nonzero')
     const out = tempDir()
     serveReceipt(receipt(), { code: 2, stdout: 'boardwise review finalize: 内容不一致\n' })
@@ -229,7 +229,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
   })
 
   it('records nothing when exit 0 wrote no receipt, and never falls back to stdout', async () => {
-    const { projections, tools } = harness()
+    const { projections, tools } = await harness()
     const session = newSession('session-finalize-missing')
     const out = tempDir()
     // A complete receipt on stdout: an implementation that parsed stdout would
@@ -244,7 +244,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
   })
 
   it('records nothing when the receipt file is not JSON or not an object', async () => {
-    const { projections, tools } = harness()
+    const { projections, tools } = await harness()
     const session = newSession('session-finalize-broken')
     const out = tempDir()
 
@@ -294,7 +294,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
     ]
 
     for (const [label, value] of cases) {
-      const { projections, tools } = harness()
+      const { projections, tools } = await harness()
       const session = newSession(`session-finalize-bad-${label.replaceAll(/\W+/g, '-')}`)
       const out = tempDir()
       serveReceipt(value)
@@ -307,8 +307,8 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
     }
   })
 
-  it('does not read a hand-written receipt: no tool call, no record', () => {
-    const { projections } = harness()
+  it('does not read a hand-written receipt: no tool call, no record', async () => {
+    const { projections } = await harness()
     const session = newSession('session-finalize-handwritten')
     const out = tempDir()
     writeJson(join(out, 'finalize.json'), receipt())
@@ -320,7 +320,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
   })
 
   it('keeps different directories and replaces the receipt of the same directory', async () => {
-    const { projections, tools } = harness()
+    const { projections, tools } = await harness()
     const session = newSession('session-finalize-dirs')
     const outA = tempDir()
     const outB = tempDir()
@@ -362,7 +362,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
   })
 
   it('keeps the records of one Session invisible to another Session', async () => {
-    const { projections, tools } = harness()
+    const { projections, tools } = await harness()
     const sessionA = newSession('session-finalize-a')
     const sessionB = newSession('session-finalize-b')
     const out = tempDir()
@@ -375,8 +375,8 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
     expect(sessionB.seq).toBe(0)
   })
 
-  it('returns the same projection state for unrelated events and fails closed on a corrupt record', () => {
-    const { projections } = harness()
+  it('returns the same projection state for unrelated events and fails closed on a corrupt record', async () => {
+    const { projections } = await harness()
     const session = newSession('session-finalize-events')
     const before = stateOf(projections, session)
 
@@ -396,7 +396,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
   })
 
   it('fails loudly, before spawning, when the projection service is missing', async () => {
-    const { tools } = harness({ projection: false })
+    const { tools } = await harness({ projection: false })
     const session = newSession('session-finalize-no-projection')
     const out = tempDir()
     const mock = installSpawn(child => child.finish(0))
@@ -409,7 +409,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
   })
 
   it('fails loudly, before spawning, when the call has no current Session', async () => {
-    const { tools } = harness()
+    const { tools } = await harness()
     const out = tempDir()
     const mock = installSpawn(child => child.finish(0))
 
@@ -420,7 +420,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
   })
 
   it('requires out and never spawns without it', async () => {
-    const { tools } = harness()
+    const { tools } = await harness()
     const session = newSession('session-finalize-no-out')
     const mock = installSpawn(child => child.finish(0))
 
@@ -430,7 +430,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
   })
 
   it('treats cancellation as an error and records nothing', async () => {
-    const { projections, tools } = harness()
+    const { projections, tools } = await harness()
     const session = newSession('session-finalize-abort')
     const out = tempDir()
     installSpawn(() => {
@@ -447,7 +447,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
   })
 
   it('treats a timeout as an error and records nothing', async () => {
-    const { projections, tools } = harness()
+    const { projections, tools } = await harness()
     const session = newSession('session-finalize-timeout')
     const out = tempDir()
     installSpawn(() => {

@@ -40,8 +40,8 @@ has no working directory that means anything, so
 :func:`parts_library` and ``core.portmeta.default_port_meta_path`` resolves the
 sidecar through :func:`portmeta_sidecar` — one answer each to "which shelf" and
 "which sidecar", the same way the connector bundle has one answer for "which
-bundle". Both keep the repo-relative spelling from a checkout, so only the frozen
-answer changes.
+bundle". Both resolve through the same resource root: a checkout gets its absolute
+path (038X), never a spelling reinterpreted against the caller's CWD.
 """
 
 from __future__ import annotations

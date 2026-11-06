@@ -225,6 +225,64 @@ export interface ReviewFinalizeResult {
 }
 
 /**
+ * The slice of an awaited 0.2.2 registration this plugin uses: a retained handle
+ * whose `stateOf` reads one Session synchronously. Declared structurally because
+ * this plugin compiles against both harness versions — 0.2.1's `register`
+ * returns a disposer, 0.2.2's returns an awaitable handle.
+ */
+export interface ReviewProjectionHandle {
+  stateOf(session: Session): unknown
+}
+
+/**
+ * The one read face the tool and the delivery gate use, whether it was built
+ * from an awaited handle (0.2.2) or from the registry's own read (0.2.1).
+ * `undefined` means "this Session has no state for the key", which every caller
+ * treats as fail-closed, never as "empty, so anything qualifies".
+ */
+export interface ReviewProjectionReader {
+  stateOf(session: Session): BoardwiseReviewFinalizedState | undefined
+}
+
+/**
+ * What registering the projection hands back: a ready reader (0.2.1, or no
+ * projection service at all), or the pending registration to await (0.2.2),
+ * whose reader exists only once the handle is ready.
+ */
+export type ReviewProjectionRegistration =
+  | ReviewProjectionReader
+  | Promise<ReviewProjectionReader | undefined>
+  | undefined
+
+/**
+ * Is this registration result 0.2.2's awaitable registration, or 0.2.1's
+ * awaitable *disposer*?
+ *
+ * Both are callable and both answer `then`, so "it has a then" decides nothing.
+ * Awaiting 0.2.1's `ctx.effect` result **runs the disposer** — it would
+ * unregister the projection we just registered, and every later read would find
+ * nothing. Only a complete promise face (`then` + `catch` + `finally`) is the
+ * await-ready registration; a then-only callable is the old disposer and stays
+ * on the synchronous branch, untouched and never awaited.
+ */
+export function isPendingRegistration(
+  registration: ReviewProjectionRegistration,
+): registration is Promise<ReviewProjectionReader | undefined> {
+  return hasPromiseFace(registration)
+}
+
+/** `then`, `catch` and `finally` all present — a promise, not an awaitable disposer. */
+function hasPromiseFace(value: unknown): value is PromiseLike<unknown> {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return false
+  const candidate = value as { then?: unknown; catch?: unknown; finally?: unknown }
+  return (
+    typeof candidate.then === 'function' &&
+    typeof candidate.catch === 'function' &&
+    typeof candidate.finally === 'function'
+  )
+}
+
+/**
  * Register the Session projection and the eighth tool.
  *
  * The projection registration is optional so a lightweight fake `Context` (the
@@ -232,30 +290,95 @@ export interface ReviewFinalizeResult {
  * without a projection service is a loud failure, never a quiet "the file was
  * fine, so this counts". In production `inject` names `sessionProjections`, so
  * the plugin is not loaded without it.
+ *
+ * The two harness versions differ here. 0.2.1's `register` returns cordis's
+ * awaitable disposer (a callable with only `then`) and the registry's own
+ * `stateOf(session, key)` is the current read, so the tool is registered right
+ * away and the reader wraps that read. 0.2.2's `register` returns a full promise
+ * of a handle: that branch awaits it, holds the handle, registers the tool only
+ * after it is ready and reads **through the handle**. Only a promise face takes
+ * it, so the synchronous behaviour — including never awaiting the disposer — is
+ * unchanged.
  */
-export function registerReviewFinalize(ctx: Context): void {
+export function registerReviewFinalize(ctx: Context): ReviewProjectionRegistration {
   const projections = (ctx as { sessionProjections?: SessionProjectionRegistry }).sessionProjections
-  if (projections !== undefined) {
-    projections.register({
-      key: REVIEW_FINALIZED_KEY,
-      stateVersion: REVIEW_FINALIZED_STATE_VERSION,
-      stateSchema: projectionStateSchema,
-      init: (): ProjectionState => ({ receipts: {} }),
-      apply: (state, event) => {
-        const record = pluginRecordOf(event)
-        if (record === undefined || record.type !== REVIEW_FINALIZED_RECORD) {
-          // Not ours: the same reference keeps every other unit's work untouched.
-          return state
-        }
-        const parsed = projectionStateSchema.safeParse(record.data)
-        // Fail closed: a record we cannot read grants no delivery qualification
-        // and must not take the projection (or the session) down with it.
-        if (!parsed.success) return state
-        return parsed.data
-      },
-    })
+  if (projections === undefined) {
+    registerFinalizeTool(ctx, undefined)
+    return undefined
   }
 
+  const registered: unknown = projections.register({
+    key: REVIEW_FINALIZED_KEY,
+    stateVersion: REVIEW_FINALIZED_STATE_VERSION,
+    stateSchema: projectionStateSchema,
+    init: (): ProjectionState => ({ receipts: {} }),
+    apply: (state, event) => {
+      const record = pluginRecordOf(event)
+      if (record === undefined || record.type !== REVIEW_FINALIZED_RECORD) {
+        // Not ours: the same reference keeps every other unit's work untouched.
+        return state
+      }
+      const parsed = projectionStateSchema.safeParse(record.data)
+      // Fail closed: a record we cannot read grants no delivery qualification
+      // and must not take the projection (or the session) down with it.
+      if (!parsed.success) return state
+      return parsed.data
+    },
+  })
+
+  // 0.2.2's register answers a full promise of a ready handle; 0.2.1's answers
+  // cordis's awaitable disposer, which must not be awaited (that disposes).
+  if (hasPromiseFace(registered)) {
+    return registerOnReady(ctx, registered)
+  }
+
+  const reader = registryReader(projections)
+  registerFinalizeTool(ctx, reader)
+  return reader
+}
+
+/**
+ * 0.2.2: await the registration, hold its handle, then publish the tool.
+ *
+ * Nothing the version returns is disposed here: the Cordis fiber owns the
+ * registration, and the reader's closure keeping the ready handle is exactly the
+ * retention the handle contract asks for. A rejected registration is propagated
+ * (never swallowed), so activation fails instead of publishing a gate that has
+ * nothing to read.
+ */
+async function registerOnReady(
+  ctx: Context,
+  registered: PromiseLike<unknown>,
+): Promise<ReviewProjectionReader | undefined> {
+  const handle = await registered
+  const reader = handleReader(handle)
+  // The tool comes only after the handle is ready, so no call can read a
+  // projection that is still registering.
+  registerFinalizeTool(ctx, reader)
+  return reader
+}
+
+/** The read face over a ready handle — never the deprecated registry read. */
+function handleReader(handle: unknown): ReviewProjectionReader | undefined {
+  if (handle === null || typeof handle !== 'object') return undefined
+  const stateOf = (handle as ReviewProjectionHandle).stateOf
+  if (typeof stateOf !== 'function') return undefined
+  const read = stateOf.bind(handle) as (session: Session) => unknown
+  return {
+    stateOf: session => read(session) as BoardwiseReviewFinalizedState | undefined,
+  }
+}
+
+/** The 0.2.1 read face: the registry's own `stateOf(session, key)`. */
+function registryReader(projections: SessionProjectionRegistry): ReviewProjectionReader {
+  return {
+    stateOf: session =>
+      projections.stateOf(session, REVIEW_FINALIZED_KEY) as BoardwiseReviewFinalizedState | undefined,
+  }
+}
+
+/** Publish the finalize tool over one read face (`undefined` = no projection). */
+function registerFinalizeTool(ctx: Context, reader: ReviewProjectionReader | undefined): void {
   ctx.tools.register(defineTool({
     name: REVIEW_FINALIZE_TOOL,
     description:
@@ -286,11 +409,12 @@ export function registerReviewFinalize(ctx: Context): void {
     execute: async (args, exec) => {
       const tool = REVIEW_FINALIZE_TOOL
       const out = requireOut(tool, text(args.out))
-      if (projections === undefined) {
+      if (reader === undefined) {
         throw new Error(
-          `${tool}: no session-projection service is available, so the receipt could not be recorded in this ` +
-          'Session. The plugin declares `sessionProjections` in its inject list; a mount without it cannot ' +
-          'promise a Session receipt, and a file-only answer is not accepted as success.',
+          `${tool}: no session-projection service is available (or its registration never became ready), so the ` +
+          'receipt could not be recorded in this Session. The plugin declares `sessionProjections` in its inject ' +
+          'list; a mount without it cannot promise a Session receipt, and a file-only answer is not accepted as ' +
+          'success.',
         )
       }
       const session: Session | undefined = exec.agent?.session
@@ -330,8 +454,10 @@ export function registerReviewFinalize(ctx: Context): void {
         callId: typeof rawCallId === 'string' && rawCallId !== '' ? rawCallId : null,
       }
       // stateOf → spread → append: deliberately synchronous. An `await` here
-      // could interleave with another finalize and drop its directory.
-      const current = projections.stateOf(session, REVIEW_FINALIZED_KEY)
+      // could interleave with another finalize and drop its directory. On the
+      // 0.2.2 branch this is the ready handle's read, never the deprecated
+      // registry one.
+      const current = reader.stateOf(session)
       if (current === undefined) {
         throw new Error(
           `${tool}: the session-projection registry does not serve \`${REVIEW_FINALIZED_KEY}\`, so the receipt ` +

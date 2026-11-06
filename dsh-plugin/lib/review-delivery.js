@@ -70,20 +70,32 @@ function deny(reason) {
  * `tools`. In production `inject` names `tools`, `sessionProjections`, `fs` and
  * `workingDirectory`, so the listener is always present there. A partial mount
  * gets no gate rather than a gate that cannot resolve paths or receipts.
+ *
+ * `reader` is the ready read face of an **awaited** projection registration
+ * (0.2.2). When it is given the gate reads through it and never touches the
+ * registry's deprecated `stateOf(session, key)`; when it is absent the old
+ * registry read is used exactly as before.
  */
-export function registerReviewDelivery(ctx) {
+export function registerReviewDelivery(ctx, reader) {
     const candidate = ctx;
+    const projections = reader === undefined ? candidate.sessionProjections : readerProjections(reader);
     if (candidate.fs === undefined ||
         candidate.workingDirectory === undefined ||
-        candidate.sessionProjections === undefined) {
+        projections === undefined) {
         return undefined;
     }
     const listener = createReviewDeliveryGate({
         fs: candidate.fs,
         workingDirectory: candidate.workingDirectory,
-        sessionProjections: candidate.sessionProjections,
+        sessionProjections: projections,
     });
     return ctx.on(REVIEW_DELIVERY_EVENT, listener);
+}
+/** The gate's read face over a ready handle (537D3a's key is the only one). */
+function readerProjections(reader) {
+    return {
+        stateOf: session => reader.stateOf(session),
+    };
 }
 /**
  * Build the listener itself. The main agent's independent integration can use

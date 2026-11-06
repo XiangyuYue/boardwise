@@ -36,8 +36,11 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 
 ## 3. 三条线的当前状态（核对日期 2026-11-06）
 
-### 3.0 0.6.0与派单路由（先看这里）
+### 3.0 0.6.x与派单路由（先看这里）
 
+- **当前是 0.6.1 内测发布候选**：审查线 `cdff88b` 与绘制线 `44901da` 已提交；发布只带
+  已提交内容，不带候选货架、临时测试计划、锁文件和探针产物。版本骨架见 `docs/roadmap.md`，
+  发布结果与能力边界以本版 Release 为准。
 - **0.6.0 功能门槛已收口**：200A/B/C 已随 `d2130b7` 入库；542 P0 反激三关、岳人眼和重开
   `saved_verified` 全过；527D2/D3 已落。CH343 示例随 `a8613c5` 入库。
 - **540 已完成**：A/B/C + 对抗修复 + 只读真机验收；142 模块/0 legacy、24 CLI 命令、DSH 10 工具。
@@ -99,7 +102,7 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   `tasks/041s2_interconnect.md`，已随 `6253a0b` 提交），真实 3 板与 2 板声明均已双报告对拍；
   全量 9682 passed / 25 skipped / 2 个既有 Windows 环境失败，connector/DSH/Rust 通过。
   S3 宿主交叉验证与语义网表函数层继续暂缓，S4 正式规则必须先有真实板间证据，不自动接续。
-- **工作树新完成（未提交）**：038W PAD_NET 每脚判优、038X 默认货架绝对路径与
+- **审查线本批已随 `cdff88b` 提交**：038W PAD_NET 每脚判优、038X 默认货架绝对路径与
   缺失披露、527C2 跨视图几何分类与全部位号、529 mid 容值带、541 R1/R2/R4 strict；
   任务书 `tasks/038w_pad_net_journal.md`、`tasks/038x_shelf_resolution.md`、
   `tasks/527c2_cross_view_geometry.md`、`tasks/529_decap_mid_band.md`、
@@ -191,7 +194,7 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
     证据 `evidence/543j/`、`evidence/543kl/`；543J 全量 **9390 passed / 25 skipped /
     2 既有环境红**，543K/L/M 最终全量 **9496 passed / 25 skipped / 2 既有环境红**；
     connector 576、dsh 129+1、Rust 111+4、draw smoke 与 doc-claims 39 均过。
-- **543G/N/H 当前状态（2026-11-06，工作树）**：P38 已关闭重开并 `saved_verified`；
+- **543G/N/H 已随 `44901da` 提交（2026-11-06）**：P38 已关闭重开并 `saved_verified`；
   自动网名重编号只在 persistence 按成员分区调和，通用 compare 不变。第二拓扑 CH340
   页 **P39=`62e4828acc56a307`** 已三关：12器件/36计划导线/17旗、lint 0E/0W/0I、
   独立逐脚 **45/45+15/15NC=60/60**、宿主逐岛视觉通过；P38和Board2 P1不动。

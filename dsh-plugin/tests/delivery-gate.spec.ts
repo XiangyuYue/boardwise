@@ -212,7 +212,7 @@ interface Harness {
 }
 
 /** Register the real plugin on a real proxy context and capture its listener. */
-function harness(): Harness {
+async function harness(): Promise<Harness> {
   const cordis = new Context()
   const projections = new SessionProjectionRegistry(cordis)
   const fs = new TempFs()
@@ -232,7 +232,7 @@ function harness(): Harness {
       return () => true
     },
   }
-  apply(pluginCtx as never)
+  await apply(pluginCtx as never)
 
   const listener = listeners.get(REVIEW_DELIVERY_EVENT)
   if (listener === undefined) throw new Error(`apply did not register ${REVIEW_DELIVERY_EVENT}`)
@@ -344,7 +344,7 @@ afterEach(() => {
 
 describe('present delivery gate: ordinary files are untouched', () => {
   it('lets images, Office files and a report.md with no review marker through', async () => {
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-ordinary')
     const workspace = tempDir('boardwise-workspace-')
     h.useSession(session, workspace)
@@ -361,7 +361,7 @@ describe('present delivery gate: ordinary files are untouched', () => {
   })
 
   it('leaves every non-present tool alone, without touching the filesystem', async () => {
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-other-tool')
     const result = await h.present(session, [join(tempDir(), 'x.epro2')], {
       name: 'boardwise_checkup',
@@ -374,7 +374,7 @@ describe('present delivery gate: ordinary files are untouched', () => {
   })
 
   it('leaves a shape present itself rejects to present', async () => {
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-shape')
     expectAllowed(await h.present(session, [], { args: { files: 'not-an-array' } }))
     expectAllowed(await h.present(session, [], { args: { files: [{ path: 7 }] } }))
@@ -386,7 +386,7 @@ describe('present delivery gate: ordinary files are untouched', () => {
 describe('present delivery gate: only the current Session receipt authorizes', () => {
   it('denies a marker directory with no record, even beside a hand-written finalize.json', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-no-record')
     h.useSession(session, delivery.dir)
     // A perfectly shaped receipt on disk, written by hand: never authorization.
@@ -402,7 +402,7 @@ describe('present delivery gate: only the current Session receipt authorizes', (
 
   it('denies a parallel present that runs before finalize completed', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-parallel')
     h.useSession(session, delivery.dir)
     // finalize is in flight: the marker exists, the Session record does not yet.
@@ -411,7 +411,7 @@ describe('present delivery gate: only the current Session receipt authorizes', (
 
   it('keeps one Session receipt invisible to another Session', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const owner = h.session('session-delivery-owner')
     const intruder = h.session('session-delivery-intruder')
     h.useSession(owner, delivery.dir)
@@ -424,7 +424,7 @@ describe('present delivery gate: only the current Session receipt authorizes', (
 
   it('denies an untracked file and the receipt itself inside a finalized directory', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-untracked')
     h.useSession(session, delivery.dir)
     appendReceipt(h, session, delivery.dir, delivery.receipt)
@@ -438,7 +438,7 @@ describe('present delivery gate: only the current Session receipt authorizes', (
 
   it('denies a record entry whose key and reviewDir disagree', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-bad-entry')
     h.useSession(session, delivery.dir)
     // A record the projection schema accepts (arbitrary map key), but which a
@@ -451,7 +451,7 @@ describe('present delivery gate: only the current Session receipt authorizes', (
 
   it('denies a receipt that signs finalize.json itself', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-signs-itself')
     h.useSession(session, delivery.dir)
     const receipt: ReviewFinalizeReceipt = {
@@ -470,7 +470,7 @@ describe('present delivery gate: only the current Session receipt authorizes', (
 describe('present delivery gate: a matched receipt must still match its files', () => {
   it('allows a delivery only when every tracked file matches, including a zero-byte file', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-good')
     h.useSession(session, delivery.dir)
     appendReceipt(h, session, delivery.dir, delivery.receipt)
@@ -488,7 +488,7 @@ describe('present delivery gate: a matched receipt must still match its files', 
 
   it('denies when the presented file changed after finalize', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-presented-changed')
     h.useSession(session, delivery.dir)
     appendReceipt(h, session, delivery.dir, delivery.receipt)
@@ -503,7 +503,7 @@ describe('present delivery gate: a matched receipt must still match its files', 
     // keeps both words 15 bytes, so the size checks before and after the read
     // all pass and the recomputed digest is the one gate left standing.
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-presented-same-size')
     h.useSession(session, delivery.dir)
     appendReceipt(h, session, delivery.dir, delivery.receipt)
@@ -521,7 +521,7 @@ describe('present delivery gate: a matched receipt must still match its files', 
 
   it('denies when a tracked file that is not presented changed after finalize', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-other-changed')
     h.useSession(session, delivery.dir)
     appendReceipt(h, session, delivery.dir, delivery.receipt)
@@ -532,7 +532,7 @@ describe('present delivery gate: a matched receipt must still match its files', 
 
   it('denies a same-size rewrite: only the recomputed sha256 can catch it', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-same-size')
     h.useSession(session, delivery.dir)
     appendReceipt(h, session, delivery.dir, delivery.receipt)
@@ -544,7 +544,7 @@ describe('present delivery gate: a matched receipt must still match its files', 
 
   it('does not bypass a deleted marker: the Session root is recognized, then the hash set fails', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-marker-gone')
     h.useSession(session, delivery.dir)
     appendReceipt(h, session, delivery.dir, delivery.receipt)
@@ -555,7 +555,7 @@ describe('present delivery gate: a matched receipt must still match its files', 
 
   it('denies a missing tracked file and a failed stat/read with the relative path named', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-missing')
     h.useSession(session, delivery.dir)
     appendReceipt(h, session, delivery.dir, delivery.receipt)
@@ -564,7 +564,7 @@ describe('present delivery gate: a matched receipt must still match its files', 
     expectDenied(await h.present(session, ['report.json']), /board-report\.md.*missing/i)
 
     const delivery2 = makeDelivery()
-    const h2 = harness()
+    const h2 = await harness()
     const session2 = h2.session('session-delivery-stat-fault')
     h2.useSession(session2, delivery2.dir)
     appendReceipt(h2, session2, delivery2.dir, delivery2.receipt)
@@ -573,7 +573,7 @@ describe('present delivery gate: a matched receipt must still match its files', 
     expectDenied(await h2.present(session2, ['report.json']), /report\.md.*(inspected|stat exploded)/i)
 
     const delivery3 = makeDelivery()
-    const h3 = harness()
+    const h3 = await harness()
     const session3 = h3.session('session-delivery-read-fault')
     h3.useSession(session3, delivery3.dir)
     appendReceipt(h3, session3, delivery3.dir, delivery3.receipt)
@@ -584,7 +584,7 @@ describe('present delivery gate: a matched receipt must still match its files', 
 
   it('refuses a receipt path escape before reading any content', async () => {
     const delivery = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-escape')
     h.useSession(session, delivery.dir)
     const escaped: ReviewFinalizeReceipt = {
@@ -605,7 +605,7 @@ describe('present delivery gate: a matched receipt must still match its files', 
   it('hashes a tracked file larger than 1 MiB in bounded chunks', async () => {
     const big = 'A'.repeat(REVIEW_DELIVERY_CHUNK_BYTES * 2 + 1234)
     const delivery = makeDelivery({ 'big.bin': big })
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-big')
     h.useSession(session, delivery.dir)
     appendReceipt(h, session, delivery.dir, delivery.receipt)
@@ -628,7 +628,7 @@ describe('present delivery gate: a matched receipt must still match its files', 
 describe('present delivery gate: nested directories never borrow a receipt', () => {
   it('denies a nested marker directory that has no receipt of its own', async () => {
     const parent = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-nested')
     h.useSession(session, parent.dir)
     appendReceipt(h, session, parent.dir, parent.receipt)
@@ -647,7 +647,7 @@ describe('present delivery gate: nested directories never borrow a receipt', () 
   it('keeps sibling deliveries independent', async () => {
     const left = makeDelivery()
     const right = makeDelivery()
-    const h = harness()
+    const h = await harness()
     const session = h.session('session-delivery-siblings')
     h.useSession(session, left.dir)
     appendReceipts(h, session, [
@@ -664,7 +664,7 @@ describe('present delivery gate: nested directories never borrow a receipt', () 
 })
 
 describe('present delivery gate: registration contract', () => {
-  it('mounts the listener only when fs, workingDirectory and the projection registry exist', () => {
+  it('mounts the listener only when fs, workingDirectory and the projection registry exist', async () => {
     const minimal: string[] = []
     apply({
       tools: { register: () => () => {} },
@@ -677,7 +677,7 @@ describe('present delivery gate: registration contract', () => {
     // gate is invented without the services it needs.
     expect(minimal).not.toContain(REVIEW_DELIVERY_EVENT)
 
-    const h = harness()
+    const h = await harness()
     expect(h.listeners.has(REVIEW_DELIVERY_EVENT)).toBe(true)
   })
 })

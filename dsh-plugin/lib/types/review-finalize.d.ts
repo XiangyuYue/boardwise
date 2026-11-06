@@ -22,6 +22,7 @@
  * @module
  */
 import type { Context } from '@deepseek-ai/cordis';
+import type { Session } from '@deepseek-ai/dsh-session';
 /** The tool name (the eighth boardwise tool). */
 export declare const REVIEW_FINALIZE_TOOL = "boardwise_review_finalize";
 /** The CLI's delivery receipt inside `--out`. */
@@ -126,6 +127,42 @@ export interface ReviewFinalizeResult {
     };
 }
 /**
+ * The slice of an awaited 0.2.2 registration this plugin uses: a retained handle
+ * whose `stateOf` reads one Session synchronously. Declared structurally because
+ * this plugin compiles against both harness versions — 0.2.1's `register`
+ * returns a disposer, 0.2.2's returns an awaitable handle.
+ */
+export interface ReviewProjectionHandle {
+    stateOf(session: Session): unknown;
+}
+/**
+ * The one read face the tool and the delivery gate use, whether it was built
+ * from an awaited handle (0.2.2) or from the registry's own read (0.2.1).
+ * `undefined` means "this Session has no state for the key", which every caller
+ * treats as fail-closed, never as "empty, so anything qualifies".
+ */
+export interface ReviewProjectionReader {
+    stateOf(session: Session): BoardwiseReviewFinalizedState | undefined;
+}
+/**
+ * What registering the projection hands back: a ready reader (0.2.1, or no
+ * projection service at all), or the pending registration to await (0.2.2),
+ * whose reader exists only once the handle is ready.
+ */
+export type ReviewProjectionRegistration = ReviewProjectionReader | Promise<ReviewProjectionReader | undefined> | undefined;
+/**
+ * Is this registration result 0.2.2's awaitable registration, or 0.2.1's
+ * awaitable *disposer*?
+ *
+ * Both are callable and both answer `then`, so "it has a then" decides nothing.
+ * Awaiting 0.2.1's `ctx.effect` result **runs the disposer** — it would
+ * unregister the projection we just registered, and every later read would find
+ * nothing. Only a complete promise face (`then` + `catch` + `finally`) is the
+ * await-ready registration; a then-only callable is the old disposer and stays
+ * on the synchronous branch, untouched and never awaited.
+ */
+export declare function isPendingRegistration(registration: ReviewProjectionRegistration): registration is Promise<ReviewProjectionReader | undefined>;
+/**
  * Register the Session projection and the eighth tool.
  *
  * The projection registration is optional so a lightweight fake `Context` (the
@@ -133,5 +170,14 @@ export interface ReviewFinalizeResult {
  * without a projection service is a loud failure, never a quiet "the file was
  * fine, so this counts". In production `inject` names `sessionProjections`, so
  * the plugin is not loaded without it.
+ *
+ * The two harness versions differ here. 0.2.1's `register` returns cordis's
+ * awaitable disposer (a callable with only `then`) and the registry's own
+ * `stateOf(session, key)` is the current read, so the tool is registered right
+ * away and the reader wraps that read. 0.2.2's `register` returns a full promise
+ * of a handle: that branch awaits it, holds the handle, registers the tool only
+ * after it is ready and reads **through the handle**. Only a promise face takes
+ * it, so the synchronous behaviour — including never awaiting the disposer — is
+ * unchanged.
  */
-export declare function registerReviewFinalize(ctx: Context): void;
+export declare function registerReviewFinalize(ctx: Context): ReviewProjectionRegistration;

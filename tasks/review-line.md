@@ -71,24 +71,24 @@ owner=审查线；绘制线独立开发、互不改文件，主仓及绘制线�
   错误板身份、live/PCB/finalize/在线均拒绝。真实 3 板与 2 板 `.epro2` 均完成双报告对拍；
   最终全量 **9682 passed / 25 skipped / 2 个既有 Windows 环境失败**；connector、DSH、Rust 均通过。
   S3 宿主交叉验证继续暂缓，S4 必须先有真实板间证据。
-- **038W PAD_NET 每脚网络判优（工作树完成，未提交）**：合同见 `tasks/038w_pad_net_journal.md`。
+- **038W PAD_NET 每脚网络判优（已随 `cdff88b` 提交）**：合同见 `tasks/038w_pad_net_journal.md`。
   每脚投影复用 038U 原子视图的同一 ticket/client 判优，改板前的旧网不再靠 `setdefault` 获胜；
   不改规则、CLI 参数与报告 schema。
-- **038X 默认货架绝对路径与缺失披露（工作树完成，未提交）**：合同见
+- **038X 默认货架绝对路径与缺失披露（已随 `cdff88b` 提交）**：合同见
   `tasks/038x_shelf_resolution.md`。非 frozen 的默认读写统一改用 `resources.parts_library()`
   绝对路径，只读入口显式披露货架缺失，`load_parts` 的「缺文件可建空架」底层合同不变。
-- **529 去耦 mid 容值带（工作树完成，未提交）**：合同见 `tasks/529_decap_mid_band.md`。
+- **529 去耦 mid 容值带（已随 `cdff88b` 提交）**：合同见 `tasks/529_decap_mid_band.md`。
   2.2/4.7µF 落入 mid 档，191D 的临时收窄按原判据回退，全 bulk 输入档保留 INFO 特例；
   四个距离阈值 `200/300/800/200` 不动。
-- **527C2 跨视图几何分类与全部位号（工作树完成，未提交）**：合同见
+- **527C2 跨视图几何分类与全部位号（已随 `cdff88b` 提交）**：合同见
   `tasks/527c2_cross_view_geometry.md`。lonely-pin 的 note 按几何分「没画线 / 网名不同 /
   落位嫌疑」并点名全部位号；`min_pins` 仍为 3，哪一侧电气结论更有权威不变。
-- **541 可离线运行时闸（R1/R2/R4 strict 已实现，工作树未提交）**：合同见
+- **541 可离线运行时闸（R1/R2/R4 strict 已随 `cdff88b` 提交）**：合同见
   `tasks/541_offline_runtime_gates.md`。R1 `core/runmanifest.py` 版本化 manifest 与语义 diff；
   R2 `checkup --file --strict` / `--new-evidence`；R4 `review finalize --strict-partial`
   四档披露校验。R3 的 DSH profile pre-execute 闸等重启授权，**未实施**；公开接口 allowlist
   也**未实施**，不得写成 R3/R4 全部完成。
-- 以上均为未提交的工作树产物；最终全量 **9893 passed / 25 skipped / 14 failed / 1 warning**。
+- 以上批次的最终全量 **9893 passed / 25 skipped / 14 failed / 1 warning**。
   其中 12 条是工作树既有货架数据漂移，2 条是既有 Windows 环境失败，不宣称全量全绿；
   connector、DSH、Rust 均通过。
 - 新版宿主能力探针仍等明确的 4.1.94+ 测试环境和授权非空 PCB。

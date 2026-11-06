@@ -29,6 +29,13 @@ incompatible with dsh 0.2.1-rc.3: requirements {"@deepseek-ai/dsh-session":"0.2.
 API 面已对照 rc.3 核过：`defineTool`、`ctx.tools.register(ToolDefinition)`、
 `appendPluginRecord` / `pluginRecordOf`、`SessionProjectionRegistry` 都在。
 
+**0.2.2-rc.1（DSH NEXT 2.0.22）适配**：上游 projection 注册改为异步并返回 ready handle。
+插件在完整 Promise 面出现时先等待并持有 handle，再注册 finalize 与 delivery gate；旧版只有
+`then` 的可调用 disposer 仍走原同步路径，不会被误 await 成注销。两套真实依赖均跑过
+typecheck 与 **137 passed / 1 skipped**。这是包级兼容验证，不等于 DSH NEXT 2.0.22 桌面
+安装/profile 已实测；peer 范围无需因该版本再改，`defineTool`、`tools/pre-execute`、
+`appendPluginRecord` / `pluginRecordOf` 与新包一致。
+
 ## 工具面
 
 | 工具 | 包装的命令 | 关键参数 | timeoutMs |
@@ -141,10 +148,10 @@ npm pack                       # 产出 boardwise-dsh-<version>.tgz
 ### 装进 profile
 
 ```sh
-dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
-dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
+dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.1.tgz
+dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.1.tgz
 # desktop / web / headless 是**不同** profile，各装一次
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.1.tgz
 ```
 
 也可以从 GitHub 装（要求仓库根的 shim 已提交，见下节）：
@@ -190,7 +197,7 @@ DSH NEXT 把 desktop profile 的所有权锁给了应用本身，CLI 不转发�
 ```sh
 node tools/dsh_plugin_install.mjs \
   --profile D:/dsh-home/profiles/desktop \
-  --tarball dsh-plugin/boardwise-dsh-0.6.0.tgz
+  --tarball dsh-plugin/boardwise-dsh-0.6.1.tgz
 
 node tools/dsh_plugin_install.mjs --profile <dir> --tarball <tgz> --dry-run   # 只看计划
 ```
@@ -224,7 +231,7 @@ desktop 则用 `D:\.pnpm-store\v11`。两套 store 对不上，pnpm 就报这个
 pnpm 在解析阶段就拒）：
 
 ```sh
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.1.tgz
 # → ERR_PNPM_UNEXPECTED_STORE（modules dir 的 store 与当前 store 不一致）
 ```
 
@@ -234,7 +241,7 @@ profile，在它上面安装：
 
 ```sh
 dsh --profile boardwise-clean --from-default-profile headless --dump-config
-dsh plugin --profile boardwise-clean add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
+dsh plugin --profile boardwise-clean add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.1.tgz
 ```
 
 本机实测：安装 431ms 成功，`--dump-config` 出现 `# == boardwise-dsh` / `tool-boardwise`；旧
@@ -253,7 +260,7 @@ dsh plugin --profile boardwise-clean add file:E:/boardwise/dsh-plugin/boardwise-
 DSH="$HOME/AppData/Roaming/DSH Desktop/host-commands/desktop/generations/<hash>/bin/dsh.cmd"
 "$DSH" --profile boardwise-web-clean --from-default-profile web --dump-config
 "$DSH" plugin --profile boardwise-web-clean add \
-  file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
+  file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.1.tgz
 "$DSH" --profile boardwise-web-clean --dump-config | grep -n 'tool-boardwise'
 ```
 
@@ -328,6 +335,7 @@ npm publish --dry-run           # 只看文件面，不上传
 | `0.1.7-rc.2` | ✔ 全通 | 2026-09-29 实测：`plugin add` exit 0、bundle patch 生效、4 工具注册 4/4、`boardwise_arch` 真调 exit 0 |
 | `0.2.0-rc.1` | ✔ 全通 | 同一轮实测，输出与 0.1.7-rc.2 **逐字节相同** |
 | `0.2.1-rc.2` | ✔ 桌面版实读 | 2026-10-24 桌面 profile 实测：`plugin why` 报 1 个版本、`--dump-config` 有 `tool-boardwise`、`boardwise_doctor` 真调 exit 1（daemon 在线、结果非失败）、`boardwise_checkup` 真调 exit 3 且 report.json / report.md / architecture.md / design-intent.md 四件产物均 `[present]` |
+| `0.2.2-rc.1` | ✔ 包级与隔离 CLI profile 通过 | 2026-11-06 同版依赖 typecheck/build + **137 passed / 1 skipped**；隔离 `bw022` 的 `plugin why` 报 1 个版本、`--dump-config` 含 `tool-boardwise`；DSH NEXT 2.0.22 桌面应用尚未实测 |
 
 原始日志与结论：`outputs/066_dsh_matrix/VERDICT.md`（零 FAIL 格；`0.2.1-rc.2`
 一行是 2026-10-24 在桌面 profile 上的补读，不是矩阵里那一轮的产物）。
@@ -349,7 +357,7 @@ npm publish --dry-run           # 只看文件面，不上传
 
 ```sh
 npm run typecheck     # tsc --noEmit（src 为唯一被检查的源码）
-npm test              # vitest run tests —— 114 例（113 过 1 跳过；mock spawn，不起真进程）
+npm test              # vitest run tests —— 138 例（137 过 1 跳过；mock spawn，不起真进程）
 npm run build         # → lib/
 npm run smoke         # 独立冒烟：import lib/index.js，真起 CLI（见下）
 ```

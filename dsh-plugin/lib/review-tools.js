@@ -271,5 +271,7 @@ export function registerReviewWorkflow(ctx) {
         timeoutMs: TRIAGE_BATCH_TIMEOUT_MS,
     }));
     // The eighth tool overall: shared tools ran between checkup and this workflow.
-    registerReviewFinalize(ctx);
+    // A 0.2.2 awaitable registration is forwarded as-is, so the caller can wait for
+    // the handle before publishing anything that reads it.
+    return registerReviewFinalize(ctx);
 }

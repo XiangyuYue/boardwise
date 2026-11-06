@@ -90,3 +90,23 @@
 - VERDICT.md 三个问题都有实测答案（不是推断），每格有日志佐证。
 - `bw066` profile 已清理；`/tmp/dsh066` 可留（系统临时区）。
 - 仓库 `git status` 除 `dsh-plugin/lib/` 与 tgz 外无变化。
+
+## 0.2.2-rc.1 / DSH NEXT 2.0.22 适配（2026-11-06）
+
+- 上游 `SessionProjectionRegistry.register` 改为异步 ready handle；真实包还可能是可调用
+  disposer 与 Promise 的混合形状。旧 0.2.1 disposer 只有 `then`，await 会执行注销；
+  新注册具有完整 `then/catch/finally` Promise 面，插件据此分派，不能只判 thenable 或 function。
+- finalize 与 delivery 在新分支等待并持有 handle，均读 `handle.stateOf(session)`；旧分支
+  保持同步注册和旧 registry 读。注册失败向 Cordis 激活路径传播，不发布没有投影可读的闸。
+- `defineTool`、`PreToolDecision`、`ToolExecution`、`tools/pre-execute`、
+  `appendPluginRecord` / `pluginRecordOf` 已对照 0.2.2 包；本插件未使用
+  `tools.resolve` / `tools.executable` / `tools.mode`，无对应迁移面。现有 peer 范围可覆盖，
+  Node 24.15 满足上游 24.9+，无需为对齐版本号改 engines。
+- 实测：0.2.1 与 0.2.2-rc.1 两套真实依赖均为 **8 files / 137 passed / 1 skipped**，
+  typecheck/build 均过；新增 `tests/projection-async.spec.ts` 8 例，含 then-only disposer
+  不误判、ready 前不发布、delivery 不读 deprecated registry、缺状态 fail-closed。
+- 隔离 CLI profile `bw022` 另以官方 `@deepseek-ai/dsh@0.2.2-rc.1` 装载 0.6.1 tgz：
+  `plugin why` 报 1 个版本，`--dump-config` 含 `# == boardwise-dsh` / `tool-boardwise`，
+  无 startup/incompatible 错误；未使用模型额度。
+- **边界**：包级与隔离 CLI profile 已通过；DSH NEXT 2.0.22 桌面安装、真实桌面 profile
+  重载及界面内工具实际调用仍需单独验证。

@@ -37,7 +37,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools';
 import type { Session } from '@deepseek-ai/dsh-session';
-import { REVIEW_FINALIZED_KEY } from './review-finalize.ts';
+import { REVIEW_FINALIZED_KEY, type ReviewProjectionReader } from './review-finalize.ts';
 /** The one tool this gate inspects. Every other tool takes `next()` untouched. */
 export declare const REVIEW_DELIVERY_TOOL = "present";
 /** The cordis event the listener is mounted on. */
@@ -100,8 +100,13 @@ export type ReviewDeliveryListener = (exec: ToolExecution, next: () => Promise<P
  * `tools`. In production `inject` names `tools`, `sessionProjections`, `fs` and
  * `workingDirectory`, so the listener is always present there. A partial mount
  * gets no gate rather than a gate that cannot resolve paths or receipts.
+ *
+ * `reader` is the ready read face of an **awaited** projection registration
+ * (0.2.2). When it is given the gate reads through it and never touches the
+ * registry's deprecated `stateOf(session, key)`; when it is absent the old
+ * registry read is used exactly as before.
  */
-export declare function registerReviewDelivery(ctx: Context): (() => boolean) | undefined;
+export declare function registerReviewDelivery(ctx: Context, reader?: ReviewProjectionReader): (() => boolean) | undefined;
 /**
  * Build the listener itself. The main agent's independent integration can use
  * this directly with any `FileSystem`/`workingDirectory`/projection pair; the

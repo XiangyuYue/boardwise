@@ -6,7 +6,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { OUT_DIR_PREFIX } from './cli.ts'
-import { registerReviewFinalize } from './review-finalize.ts'
+import { registerReviewFinalize, type ReviewProjectionRegistration } from './review-finalize.ts'
 import {
   STRUCTURED_OUTPUT,
   TEXT_OUTPUT,
@@ -123,7 +123,7 @@ export function registerReviewCheckup(ctx: Context): void {
 }
 
 /** Register review-read/evidence/triage/finalize in their historical order. */
-export function registerReviewWorkflow(ctx: Context): void {
+export function registerReviewWorkflow(ctx: Context): ReviewProjectionRegistration {
   ctx.tools.register(defineTool({
     name: 'boardwise_review_read',
     description:
@@ -305,5 +305,7 @@ export function registerReviewWorkflow(ctx: Context): void {
   }))
 
   // The eighth tool overall: shared tools ran between checkup and this workflow.
-  registerReviewFinalize(ctx)
+  // A 0.2.2 awaitable registration is forwarded as-is, so the caller can wait for
+  // the handle before publishing anything that reads it.
+  return registerReviewFinalize(ctx)
 }

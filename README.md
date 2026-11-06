@@ -4,6 +4,9 @@ English | [中文](#中文)
 
 An agent harness for hardware engineers.
 
+Current development version: **0.6.1** (prerelease). Published packages are in
+[Releases](https://github.com/xianyuyijinban/boardwise/releases).
+
 It lets an AI assistant (Claude Code, DeepSeek, Kimi Code — any of them)
 actually read your schematic — components, nets, pins, not screenshots —
 and do real work on it: review the board, mark the problems, edit with
@@ -65,14 +68,25 @@ Newer pieces worth knowing:
   the conclusion still counts the accepted parts.
 - **KiCad bare net ids** — a `(net 3)` with no name is read (as `net#3`) instead
   of the whole board being refused for carrying no net names.
+- **V4 and cross-board evidence** — archived V4 projects can review multiple PCBs
+  board by board, with duplicate-board and divergent-library refusal. An explicit
+  `review <file> --interconnect <declaration.json>` (also on `checkup --file`)
+  discloses engineer-declared cross-board ties without merging netlists or moving
+  findings and verdicts.
+- **Geometry and shelf fixes** — round, oval and non-round elliptical pads are no
+  longer all measured as bounding rectangles. The checkout's default parts shelf
+  resolves independently of the caller's working directory, and a missing shelf is
+  not silently described as an empty one.
 - **Staged, interruptible review** — after **one** `checkup` the first checkpoint
   (`initial`/`partial`: environment and versions, `report.conclusion`, ERROR / host
   DRC, open items, artifact paths) is delivered **before** any deeper digging; deeper
   work then runs in small batches (at most 3 findings each). An existing report can be
   read again instead of re-run, and an aborted run is summarised as `partial` from what
-  is already on disk. The first-checkpoint order and the global recompute dedupe are
-  still **process constraints, not runtime gates** — see `docs/review-sop.md` §3.0a.
-  Nothing here is claimed to be enforced by the tool automatically.
+  is already on disk. The first-checkpoint order remains a process constraint. The
+  optional `checkup --file --strict` gate refuses recomputation over an unchanged
+  baseline, and `review finalize --strict-partial` validates the four evidence
+  categories. These opt-in gates do not claim a harness-wide pre-execute guard;
+  that piece is not implemented.
 
 ## Architecture and roadmap
 
@@ -100,8 +114,8 @@ retries.
 |---|---|
 | Schematic review (rule families + datasheet gate + eval harness) | Usable, in maintenance |
 | Review-to-local-edit (preview / authorize / readback / re-review) | Usable |
-| Drawing compiler (divider / RC / LDO / IC periphery / power entry) | Modules and multi-module pages land in the editor; flyback (UC3845) lands on-page from locked placements with rail/ground flags, lint-clean; free auto-placement is still below the bar we hold it to |
-| PCB review (DRC closure → module-by-module layout → device checks) | Stages A–D done (loop/return-path, power, MCU, FOC rule packs) — stage E (device checks + report) not started; roadmap in `tasks/122-pcb-review-roadmap.md` |
+| Drawing compiler (divider / RC / LDO / IC periphery / power entry) | Flyback, CH343 and CH340 example pages have passed their stated connectivity, lint and visual checks; CH343 also passed close/reopen persistence. Arbitrary circuits and CH340 persistence are not claimed |
+| PCB review (DRC closure → module-by-module layout → device checks) | Stages A–E done, including device checks and integrated reports; V4 archives support per-PCB review. Real multi-board + library projects and live PCB bitmaps remain uncovered |
 | Full schematic capture → PCB generation → SPICE simulation | In that order |
 | KiCad platform | Planned |
 
@@ -120,12 +134,12 @@ Three artifacts in [Releases](https://github.com/xianyuyijinban/boardwise/releas
 
 | File | For |
 |---|---|
-| `boardwise-windows-x.x.x.exe` | Anyone who doesn't want Python: single-file CLI, part library embedded |
+| `boardwise.exe` | Anyone who doesn't want Python: single-file CLI, part library embedded |
 | `boardwise-connector-x.x.x.eext` | Everyone: the extension you import into EasyEDA |
 | `boardwise-dsh-x.x.x.tgz` | DeepSeek users: the dsh plugin, optional |
 
 Environment: Windows. Python ≥ 3.10 (source installs only; 3.9 and
-below are not supported). EasyEDA Pro **3.2.149 / 3.2.186 / V4.1.60**
+below are not supported). EasyEDA Pro **3.2.149 / 3.2.186 / 4.1.60 / 4.1.93**
 are all verified on real machines; older versions are not guaranteed.
 macOS/Linux are untested — the offline review probably runs, the bridge
 is unverified.
@@ -198,6 +212,9 @@ MIT
 
 硬件工程师的 Agent Harness。
 
+当前开发版本：**0.6.1**（内测）。已发布安装包见
+[Releases](https://github.com/xianyuyijinban/boardwise/releases)。
+
 让 AI 助手（Claude Code、DeepSeek、Kimi Code……哪个都行）真正读懂你的
 原理图——器件、网络、引脚，不是截图——然后替你干活：审板子、标问题、
 按你的授权改图、导出制板文件。目前吃透的是立创 EDA 专业版，KiCad 是
@@ -243,12 +260,17 @@ boardwise checkup
   不再欠它；它**不是审过**，结论里照样数着这些被接受的器件。
 - **KiCad 裸网序号**——没有名字的 `(net 3)` 照读（记成 `net#3`），不再因为一块板
   网名全丢就整盘读不出来。
+- **V4 与跨板证据**——V4 归档工程可逐块 PCB 审查，重复 PCB 和分歧库副本会明确拒绝。
+  `review <file> --interconnect <声明.json>`（`checkup --file` 同样支持）只披露工程师确认的
+  板间连接，不合并网表、不改变 finding 或 verdict。
+- **几何与货架修复**——圆盘、`OVAL` 和非圆 `ELLIPSE` 焊盘不再统一按外接矩形量间距；
+  默认货架不再受启动目录影响，文件缺失也不会被静默说成「真实空架」。
 - **分阶段、可中断的审查**——**一次** `checkup` 之后，先把首轮检查点
   （`initial`/`partial`：环境与版本、`report.conclusion`、ERROR / 宿主 DRC、待确认项、
   产物位置）交付出去，再分批深挖；每批最多 3 条 finding。已有报告可以复读而不必重跑，
-  中止的 run 基于已在盘上的产物整理成 `partial`。首轮顺序与「全局重算去重」目前仍是
-  **流程约束，不是运行时硬闸**——见 `docs/review-sop.md` §3.0a。这里没有一句说工具会
-  自动执行它。
+  中止的 run 基于已在盘上的产物整理成 `partial`。首轮顺序仍是流程约束；显式
+  `checkup --file --strict` 可拒绝同基准重算，`review finalize --strict-partial` 可校验
+  四类证据披露。它们都是 opt-in，不代表 harness 级 pre-execute 闸已经实现。
 
 ### 架构和规划
 
@@ -276,8 +298,8 @@ daemon + 编辑器扩展      读工程数据，写之前先预览、你授权�
 |---|---|
 | 原理图审查（规则族 + 数据手册闸 + 评测体系） | 可用，维护中 |
 | 审查到局部修改（预览/授权/回读/复查） | 可用 |
-| 画法编译器（分压/RC/LDO/IC 外围/电源入口） | 单模块与多模块整页均已能落进编辑器；反激（UC3845）带锁定落点+电源/地旗标已能落页且 lint 零错误；自由自动摆放目前达不到我们要求的及格线 |
-| PCB 审查（DRC 闭环 → 按模块布局 → 器件检查） | A–D 阶段完成（环路/回流路径、电源、MCU、FOC 规则包），E 阶段（器件检查+报告整合）未开——路线图见 `tasks/122-pcb-review-roadmap.md` |
+| 画法编译器（分压/RC/LDO/IC 外围/电源入口） | 反激、CH343 与 CH340 示例页已通过各自声明的连通、lint 和视觉验收；CH343 另通过关闭重开持久化。任意电路与 CH340 持久化不作承诺 |
+| PCB 审查（DRC 闭环 → 按模块布局 → 器件检查） | A–E 阶段完成，含器件检查与整合报告；V4 归档可逐块 PCB 审查。真实多板＋库工程和实时 PCB 位图仍未覆盖 |
 | 完整原理图绘制 → PCB 生成 → SPICE 仿真 | 按序推进 |
 | KiCad 平台 | 规划中 |
 
@@ -293,12 +315,12 @@ daemon + 编辑器扩展      读工程数据，写之前先预览、你授权�
 
 | 文件 | 给谁 |
 |---|---|
-| `boardwise-windows-x.x.x.exe` | 不想装 Python 的人：单文件 CLI，器件库已内嵌 |
+| `boardwise.exe` | 不想装 Python 的人：单文件 CLI，器件库已内嵌 |
 | `boardwise-connector-x.x.x.eext` | 所有人：立创 EDA 里导入的扩展 |
 | `boardwise-dsh-x.x.x.tgz` | DeepSeek 用户：dsh 插件，可选 |
 
 环境：Windows；Python ≥ 3.10（仅开发/源码安装需要，3.10 以下不支持）；
-立创 EDA 专业版 **3.2.149 / 3.2.186 / V4.1.60** 都真机验证过，更低版本
+立创 EDA 专业版 **3.2.149 / 3.2.186 / 4.1.60 / 4.1.93** 都真机验证过，更低版本
 不保证。macOS/Linux 没测过——理论上离线审查能跑，桥没验证。
 
 最快的路：`docs/install.md`（给朋友看的版本，全程中文，每步写了
