@@ -203,6 +203,31 @@ class DesignModel:
     #: (107). The sentence is stored rather than rebuilt because only the parser
     #: knows which placement it dropped; it is quoted, never parsed.
     unproven_reasons: dict[str, tuple[str, str]] = field(default_factory=dict)
+    #: Where the drawing put each pin, and where its **WIRE** segments run — the
+    #: geometry a cross-view reader needs and a netlist cannot carry (527C2).
+    #:
+    #: ``None`` is the honest answer for every model with no drawing behind it to
+    #: measure — KiCad, ``.enet``, a hand-built model — so a consumer keeps its
+    #: old generic wording instead of pretending to a geometry it never read.
+    #: KiCad's own endpoint-or-interior pin rule is *not* the EasyEDA one, so a
+    #: later KiCad projection must bring its own ``binding`` rather than reuse
+    #: this one's.
+    #:
+    #: When a parser does fill it, the dict holds:
+    #:
+    #: - ``binding``: how a pin counts as *on* a wire. ``"endpoint"`` is the
+    #:   schematic view's own law (040): the pin's posed point lands **exactly**
+    #:   on a segment end.
+    #: - ``pins``: ``(designator, pin number) -> (page uuid, x, y)``, canvas
+    #:   space, taken from the one placement the model keeps (049/105).
+    #: - ``wires``: ``page uuid -> [(Point, Point), ...]`` — the segments a
+    #:   ``WIRE`` head owns and nothing else. A placed symbol's own graphics are
+    #:   not copper (040 §WI-2), and neither pages nor boards are ever merged: a
+    #:   page is its own coordinate system.
+    #:
+    #: It is a reading, not a ruling: it says where the lines are, never whether
+    #: a pin should have been on one.
+    pin_wires: dict[str, Any] | None = None
 
     def unproven_pages(self, name: str | None) -> tuple[str, ...] | None:
         """The pages ``name`` was seen on when it is unproven, else ``None``.

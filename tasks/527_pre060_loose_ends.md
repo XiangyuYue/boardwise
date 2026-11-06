@@ -76,9 +76,11 @@
 4. `engines/pcbreview.py` 的 docstring 里「23 rows across the 14 fixtures」已改：那两个排除是
    **构造性**的（循环里 `continue`），只有行数是读数——行数连同出处搬进证据文件，不再手抄进代码。
 
-**527C2（规划，未做）**：`cross_view_lonely_pins` 接线几何，把 note 分成「图纸没画线（陈旧板）」
+**527C2（已落当前工作树 2026-11-06，未提交；任务书 `tasks/527c2_cross_view_geometry.md`）**：
+`cross_view_lonely_pins` 接线几何，把 note 分成「图纸没画线（陈旧板）」
 /「落线了但网名不同（图纸连法不同）」/「整块落线率异常（落位嫌疑）」，并在 `checkup` 的 note 里
-点名全部位号（现在每板只列前 6 个，ROBOT 的 7 条读成 6 + `…`，容易数错）。
+**点名全部位号**（原来每板只列前 6 个，ROBOT 的 7 条读成 6 + `…`，容易数错）。
+`min_pins` 仍为 3；电气结论归属不变，最终全量在途。
 
 ## 527D `category` 的授予路径（523，已落）
 

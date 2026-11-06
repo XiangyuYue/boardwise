@@ -99,7 +99,12 @@
 - 四次变异均转红并以 cp+sha256 恢复：位置合成 board id、单板组误算跨板、triage 跨板拒绝失效、
   单板披露误出现。返修新增的同位号/同模块名/裁剪模块清单负例也钉住后续回退。
 - 真实夹具：FOC 146 个 NetInstance、39 个同名组、49 条 unproven 边；MOTOR 分别 156/38/38。
-  两夹具 finding 数与 severity 不变；checkup FOC 仍 241 findings、50E/21W/170I，
-  review 仍 45 findings、30E/1W/14I。
+  两夹具 finding 数与 severity 不变；S1 当时记的是 checkup FOC 241 findings、50E/21W/170I，
+  review 45 findings、30E/1W/14I。
+- **2026-11-06 计数更新（529，不是 041 的改动）**：529 让 2.2/4.7µF 进入 mid 近距离去耦池后，
+  FOC 的 checkup 读数是 **239 findings、50E/20W/169I**（少了一条 `decap-required-caps` WARN
+  和随它的 INFO）。`tests/test_041_cross_board_nets.py`、`tests/test_041s2_interconnect.py`
+  的冻结常量已同步为 239 / (50, 20, 169)；review 仍 45、30E/1W/14I，`completion.verdict`
+  仍 `incomplete`，041 自己仍不增不减一条 finding。
 - 未覆盖：V3/V4 真机、eprj2 多板、CBB、真实多板 eprj3 文件夹与板间线束。S2 声明读取、
   S3 宿主交叉验证、S4 正式规则均未开工。实现与文档未提交、未推送。

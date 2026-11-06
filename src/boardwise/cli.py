@@ -1915,6 +1915,11 @@ def _cmd_review_finalize(args: argparse.Namespace) -> int:
         )
         return REVIEW_FINALIZE_BAD_INPUT
 
+    # 541 R4: the opt-in four-class disclosure gate, read once here. A Namespace
+    # built by hand (a test, a caller that predates 541) has no such attribute,
+    # and absent == off is the compatibility promise.
+    strict_partial = bool(getattr(args, "strict_partial", False))
+
     out_value = str(getattr(args, "out", "") or "").strip()
     if not out_value:
         print(
@@ -2012,6 +2017,13 @@ def _cmd_review_finalize(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"boardwise review finalize: {exc}", file=sys.stderr)
         return REVIEW_FINALIZE_BAD_INPUT
+
+    # 541 R4: the evidence section **as delivered**, kept before the re-gate.
+    # `refresh_datasheets` below recomputes `partialVersion`/`partialCategories`
+    # from the rows, so judging the recomputed copy would repair exactly the
+    # field `--strict-partial` exists to refuse. A missing section stays `None`
+    # and the validator falls back to the report's own (pre-existing behaviour).
+    original_evidence = copy.deepcopy(report.get("evidence"))
 
     regated = copy.deepcopy(report)
     try:
@@ -2114,8 +2126,17 @@ def _cmd_review_finalize(args: argparse.Namespace) -> int:
 
     # The accepted content validator (537D2a1). It compares the recomputed
     # report with that synchronised summary; every byte outside the two machine
-    # headings is still the human's input.
-    issues.extend(validate_review_summary(regated, final_summary))
+    # headings is still the human's input. 541 R4: `--strict-partial` adds the
+    # four-class disclosure gate on top — the default `False` is the old
+    # behaviour, so an old partial report (no `partialCategories`) still passes.
+    issues.extend(
+        validate_review_summary(
+            regated,
+            final_summary,
+            strict_partial=strict_partial,
+            partial_evidence=original_evidence,
+        )
+    )
 
     # The artifacts, through 537D1a's projection and this CLI's file facts. The
     # standard outputs are handled by `missingOutputs` (report.md and
@@ -2359,6 +2380,12 @@ def _checkup_report(
     metadata_value_conflicts: list[dict] | None = None,
     metadata_state_counts: dict[str, int] | None = None,
     shelf_path: str = "",
+    # 038X: the shelf this run meant to read could not be read (missing, not a
+    # file, or unparseable). Additive and **absent unless true**: `shelfMissing`
+    # answers "was the facts layer usable?" and a `false` on every ordinary
+    # report would be a key nobody asked for. `shelfPath` above still carries the
+    # path that was tried, so the two keys together say which file was missing.
+    shelf_missing: bool = False,
     # 537C2: the environment section's input, when a caller already built it.
     # Keyword-only like everything else; the default reads this checkout's
     # connector version through `_repo_connector_version()` (tests monkeypatch
@@ -2448,6 +2475,15 @@ def _checkup_report(
     this JSON?" is asking about the producer, not the input. Always present, and
     **not a gate**: `completion`, `summary.exitCode` and the process exit code
     never read it, so a version can never move a verdict.
+
+    038X added `shelfMissing` — present **only** when the shelf the run meant to
+    read could not be read at all (missing, not a file, unparseable). Absent, not
+    `false`, like `architecture` above and for the same reason: every ordinary
+    report keeps the exact key set it had, and a reader who finds the key learns
+    something specific (which file, via `shelfPath`, and why, via
+    `source.notes`). The gate that answers "may this run call itself complete?"
+    is `completion.coverage.shelfUnreadable`, set by the caller from the same
+    fact; this key is the top-level statement of it.
     """
     # Read once: the `model` section below and the fallback evidence ledger both
     # need these counts, and two walks of the same model could disagree.
@@ -2541,6 +2577,14 @@ def _checkup_report(
             needs_datasheet=needs_datasheet,
         ),
     }
+    # 038X: the facts layer's availability, stated once at the top level. Absent,
+    # not `false` — the question it answers ("could this run read the shelf at
+    # all?") is only asked by a reader who already saw something suspicious, and
+    # every ordinary report keeps the exact key set it had. `source.notes` carries
+    # the reason (which path, and why) and `completion.coverage.shelfUnreadable`
+    # is what keeps the verdict from calling such a run complete.
+    if shelf_missing:
+        body["shelfMissing"] = True
     # Absent, not empty: "the switch is off" and "the switch is on and nobody has
     # scored anything yet" are two different states of the report (039 批② §WI-3).
     if layout_review is not None:
@@ -2961,6 +3005,11 @@ def _coverage_section(
     pcb_review_missing: bool = False,
     pcb_review_not_run: dict | None = None,
     intent_source: object | None = None,
+    # 038X: the read-only entry point could not read the shelf this run meant to
+    # judge parts against (`_checkup_shelf` answered None). A coverage failure in
+    # the same sense as `modelEmpty`: the run was obliged to look and could not,
+    # so the verdict may not call it complete.
+    shelf_unreadable: bool = False,
 ) -> dict:
     """The coverage gate's **facts**, read off the parse the report is about (#30).
 
@@ -3166,6 +3215,12 @@ def _coverage_section(
         # offline report and a report written before this batch are unaffected.
         **({"pcbReviewNotRun": dict(pcb_review_not_run)}
            if pcb_review_not_run else {}),
+        # 038X: the facts layer had no usable shelf — the one coverage failure that
+        # is not about the *export*. Absent unless true, like the two keys above,
+        # and read with `.get` everywhere: a report written before this batch (and
+        # every report whose shelf was readable) keeps its exact key set, and the
+        # re-gate path carries whatever this run stored.
+        **({"shelfUnreadable": True} if shelf_unreadable else {}),
     }
 
 
@@ -3263,6 +3318,16 @@ def _coverage_reasons(coverage: dict) -> list[str]:
         reasons.append(
             "工程含 PCB 文档但本次没有 pcb_review 一节：PCB 版面几何未审（离线/归档 "
             "路径的 PCB 审查未完成，见 source.notes）—— 整块 PCB 的结论缺失"
+        )
+    if coverage.get("shelfUnreadable"):
+        # 038X: last, like the two clauses before it, and worded as what is
+        # missing rather than as an error: the parts shelf is the facts layer's
+        # only input, so with it unreadable the run judged no part against a
+        # shelf — which is not the same statement as "the shelf judged nothing".
+        reasons.append(
+            "货架读不了（源文件缺失/不可读，见 source.notes 与 shelfPath）："
+            "facts 驱动的器件判据整层没有输入 —— 未审器件节说的是「没有货架」，"
+            "不是「货架为空」"
         )
     return reasons
 
@@ -3493,6 +3558,11 @@ def _completion_body(
         # memory would be dropped exactly there" — the same trap, one batch
         # later).
         or coverage.get("pcbReviewMissing")
+        # 038X: a shelf the run could not read means the facts layer judged
+        # nothing, so the verdict is `incomplete` even on a board whose parts all
+        # happen to be exempt from the datasheet gate. Read with `.get` for the
+        # re-gate reason spelled out above.
+        or coverage.get("shelfUnreadable")
     ):
         verdict = "incomplete"
     elif (
@@ -4923,9 +4993,11 @@ def _checkup_shelf_path(args: argparse.Namespace) -> str:
 
     ``--library`` wins; otherwise whatever this process's default is
     (:func:`boardwise.rules.facts.default_library_path`, frozen-aware since
-    186-H2). The report prints it back (`shelfPath`) because the clearing
-    instruction it carries names a write target: without the path, a reader
-    cannot tell whether the file they just curated is the file this review read.
+    186-H2 and absolute since 038X — the checkout's own ``blocklib/parts.json``,
+    never a working-directory-relative spelling). The report prints it back
+    (`shelfPath`) because the clearing instruction it carries names a write
+    target: without the path, a reader cannot tell whether the file they just
+    curated is the file this review read.
     """
     from boardwise.rules.facts import default_library_path
 
@@ -4944,15 +5016,13 @@ def _checkup_shelf(args: argparse.Namespace):
     carries underneath it, so an entry an upgrade added is visible). The merge
     is reported in a note whenever it happened, because a review that judged
     against two files and named one would leave the reader guessing which.
-    """
-    from boardwise.core.parts import PartError, load_parts
 
-    path = _checkup_shelf_path(args)
-    if getattr(args, "library", None):
-        try:
-            return load_parts(path), ""
-        except PartError as exc:
-            return None, f"货架 {path} 读不了（{exc}）：未审器件节按「没有货架」计算，不是「货架为空」"
+    038X: both cases go through :func:`_read_default_shelf`, because an explicit
+    ``--library`` that does not exist must not bypass the path check either —
+    `load_parts` reads a missing file as an empty shelf, so the old branch here
+    turned a typo'd path into "reviewed against an empty shelf". The caller's
+    own verdict sentence is appended, never the shelf's reason replaced.
+    """
     library, note = _read_default_shelf(args)
     if library is None:
         return None, f"{note}：未审器件节按「没有货架」计算，不是「货架为空」"
@@ -5137,12 +5207,89 @@ def _note_cross_view_lonely(notes: list[str], pcb_review: dict | None) -> None:
     summed: 「12 个引脚对不上」 without the designators is a number nobody can act
     on.
 
+    **Every** row is named (527C2): the line used to stop at six with an
+    ellipsis, which is the one thing a reader cannot act on — the pin that was cut
+    is the one they would have checked. The count is already in the sentence, so
+    length is what the row list is for.
+
+    When the section carries ``geometry`` (527C2's per-page projection), the line
+    also states what the drawing shows, class by class and with every foot
+    listed: 图纸没画线 (with the nearest wire-end distance, or 「该页无导线」 for a
+    sheet that holds no wire at all — a different reading from distance 0),
+    落线但两视图网名不同 (``schematicNet→pcbNet``), 整块未落线 (the designator's
+    ``offWire/pins``), and 几何缺读数 (a foot with no coordinate, or one on a sheet
+    the geometry never projected) disclosed on its own and **never** counted as
+    「没画线」. A board with no geometry keeps the old wording exactly.
+
     The wording states the difference and both readings, and picks no side: a pin
     alone in the schematic is what a parser that mis-places a mirrored symbol's
     pins produces (189A2's own defect), and it is also what a schematic edited
     after the board was last synced produces (017) — the PCB document is the
-    board's own copy and goes stale the other way.
+    board's own copy and goes stale the other way. Likewise 「整块未落线」 is
+    labelled a 落位嫌疑 and nothing more: none of these lines concludes the board
+    is stale, and none of them ranks the two views.
     """
+    def _feet(items: list[dict]) -> str:
+        return "、".join(
+            "{}.{}".format(row.get("designator"), row.get("pin")) for row in items
+        )
+
+    def _geometry_clause(geometry: dict, total: int) -> str:
+        clauses: list[str] = []
+        no_wire = geometry.get("noWire") or []
+        if no_wire:
+            named = "、".join(
+                "{}.{}（{}）".format(
+                    row.get("designator"), row.get("pin"),
+                    "该页无导线" if row.get("distance") is None
+                    else "距最近线端 {:g} 单位".format(float(row["distance"])),
+                )
+                for row in no_wire
+            )
+            clauses.append("图纸没画线 {} 个：{}".format(len(no_wire), named))
+        different = geometry.get("differentNet") or []
+        if different:
+            named = "、".join(
+                "{}.{}（{}→{}）".format(
+                    row.get("designator"), row.get("pin"),
+                    row.get("schematicNet") or "（无网名）",
+                    row.get("pcbNet") or "（无网名）",
+                )
+                for row in different
+            )
+            clauses.append("落线但两视图网名不同 {} 个：{}".format(len(different), named))
+        all_off = geometry.get("allOffWire") or []
+        if all_off:
+            named = "、".join(
+                "{}（{}/{} 脚）".format(
+                    row.get("designator"), int(row.get("offWire") or 0),
+                    int(row.get("pins") or 0),
+                )
+                for row in all_off
+            )
+            clauses.append(
+                "整块未落线（落位嫌疑，只报观测）{} 个器件：{}".format(len(all_off), named)
+            )
+        unresolved = geometry.get("unresolved") or []
+        if unresolved:
+            named = "、".join(
+                "{}.{}（{}）".format(
+                    row.get("designator"), row.get("pin"),
+                    "模型无该脚坐标"
+                    if row.get("reason") == "missingPin" else "该页几何未投影",
+                )
+                for row in unresolved
+            )
+            clauses.append("几何缺读数 {} 个：{}".format(len(unresolved), named))
+        on_wire = total - len(no_wire) - len(different) - len(unresolved)
+        if on_wire > 0:
+            clauses.append("落在线上且两视图网名相同 {} 个".format(on_wire))
+        if not clauses:
+            return ""
+        return "；几何读数（binding={}，引脚点到本页 WIRE 线段端点的距离）：{}".format(
+            geometry.get("binding") or "（未声明）", "，".join(clauses)
+        )
+
     rows: list[tuple[str, dict]] = []
     for board in (pcb_review or {}).get("boards") or []:
         cross = board.get("crossView") or {}
@@ -5151,18 +5298,17 @@ def _note_cross_view_lonely(notes: list[str], pcb_review: dict | None) -> None:
     if not rows:
         return
     parts = []
+    has_geometry = False
     for title, cross in rows:
         lonely = cross["lonely"]
-        named = "、".join(
-            "{}.{}".format(row.get("designator"), row.get("pin"))
-            for row in lonely[:6]
+        head = "{}：{} 个引脚（{}）".format(
+            title or "(无标题板)", len(lonely), _feet(lonely)
         )
-        parts.append(
-            "{}：{} 个引脚（{}{}）".format(
-                title or "(无标题板)", len(lonely), named,
-                "…" if len(lonely) > 6 else "",
-            )
-        )
+        geometry = cross.get("geometry")
+        if isinstance(geometry, dict):
+            has_geometry = True
+            head += _geometry_clause(geometry, len(lonely))
+        parts.append(head)
     notes.append(
         "原理图/PCB 两视图网表对不上（189A2 一致性检查，只查 ≥"
         f"{int(rows[0][1].get('minPins') or 0)} 脚器件）："
@@ -5172,7 +5318,9 @@ def _note_cross_view_lonely(notes: list[str], pcb_review: dict | None) -> None:
           "原理图解析漏接（如镜像器件引脚落位错——189A2 就是这个形状）与"
           "PCB 档未同步（原理图改过但没重排板，017）都会造成它，"
           "两侧都不是天然权威，逐条人工核"
-          "（逐条读数见 report.json 的 pcb_review.boards[].crossView.lonely）"
+          "（逐条读数见 report.json 的 pcb_review.boards[].crossView.lonely"
+          + ("，几何分类见同处 geometry" if has_geometry else "")
+          + "）"
     )
 
 
@@ -6689,14 +6837,14 @@ _CHECKUP_LOCK_FILE = ".checkup.lock"
 
 
 def _checkup_out_preflight(args: argparse.Namespace) -> tuple[int | None, Path]:
-    """The three argument refusals, before anything is read or written.
+    """The five argument refusals, before anything is read or written.
 
     545 lifted the `--out` pair out of `_cmd_checkup`'s body **verbatim** (544
     T-E03's messages are unchanged) because the same pair now has to run before
     the output lock is taken: an invocation the command refuses must not create a
     lock carrier, and an `--out` that is a regular file must never be treated as
-    an output location at all. Both the wrapper and the body call it, so the two
-    cannot drift and `_cmd_checkup_run` stays safe on its own.
+    an output location at all. Both the wrapper and the body call it, so the
+    checks cannot drift and `_cmd_checkup_run` stays safe on its own.
 
     041 S2 §3 adds the third, for the same reason and at the same point: an
     online run (`--file` not given) refuses `--interconnect` **here**, so a
@@ -6704,7 +6852,33 @@ def _checkup_out_preflight(args: argparse.Namespace) -> tuple[int | None, Path]:
     (`out/.checkup.lock` is not even created — the wrapper's lock comes after
     this call). A declaration is validated against a project's board list, and
     the online tiers are page models with no such identity.
+
+    541 R2 adds the fourth and fifth: `--strict` is the offline re-computation
+    guard and has nothing to freeze online (the ladder's tiers are not evidence a
+    manifest can hash), so an online strict run is refused right here — no daemon,
+    no `out`, no lock — and `--new-evidence` without `--strict` is refused rather
+    than silently ignored, because a declaration nobody reads is the kind of
+    sentence this batch exists to stop trusting.
     """
+    if getattr(args, "strict", False) and not args.file:
+        print(
+            "boardwise checkup: --strict 只支持离线路径（checkup --file FILE --strict）"
+            "——重算闸比对的是能冻结成哈希的证据（项目归档、货架、设计意图合同、引擎"
+            "指纹），在线梯级的页面/网表模型没有这样一份可比的基准，因此本批不定义在线"
+            "重算：不连 daemon、不建 --out、不写任何报告、也不取输出锁（541 R2）",
+            file=sys.stderr,
+        )
+        return 2, Path(args.out)
+
+    if str(getattr(args, "new_evidence", "") or "") and not getattr(args, "strict", False):
+        print(
+            "boardwise checkup: --new-evidence 只在 --strict 下有意义——没有 --strict "
+            "就没有要与旧 run.json 对拍的基准，这句声明没人读；加上 --strict，或去掉它"
+            "（541 R2）",
+            file=sys.stderr,
+        )
+        return 2, Path(args.out)
+
     if args.file and (args.project or args.instance):
         print(
             "boardwise checkup: --file is the offline fallback and takes no "
@@ -6913,7 +7087,6 @@ def _checkup_lock_failure_sentence(out_dir: Path, exc: OSError) -> str:
 
 
 def _checkup_rerun_sentence(out_dir: Path) -> str:
-    """What a rerun into a directory that already has a report actually does."""
     return (
         f"  rerun: {out_dir / 'report.json'} 是上一轮留下的——本次已重算并覆盖机器生成物"
         "（report.json / report.md / board-report.md，以及 review-summary.md 的机器段）；"
@@ -6921,6 +7094,692 @@ def _checkup_rerun_sentence(out_dir: Path) -> str:
         "与 1/3/4 节按 key 保留，warning-triage.json 的已分诊判定并入，"
         "design-intent.md 已填时只读合并（有设计意图合同时以合同为源）；"
         "上面 review-summary / design-intent 两行写的是本轮实际动作"
+    )
+
+
+# --- 541 R2: `checkup --strict`, the re-computation guard ---------------------
+
+#: The manifest a `--strict` run freezes beside its report, and the diff it leaves
+#: when there was a previous one. Both live in `--out` (the same directory the
+#: report does) because they are scheduling state *of that directory's review*, and
+#: never inside `report.json` — see `core/runmanifest.py`'s module docstring.
+_CHECKUP_RUN_MANIFEST_FILE = "run.json"
+_CHECKUP_RUN_DIFF_FILE = "run-diff.json"
+
+#: The refusal codes. They are printed verbatim (a test greps them) and they name
+#: what stopped the run, because "exit 2" alone does not tell an agent whether it
+#: should change evidence, use the existing report, or fix a file.
+STRICT_REJECT_USE_EXISTING = "reject-use-existing"
+STRICT_REJECT_NEEDS_NEW_EVIDENCE = "reject-needs-new-evidence"
+STRICT_REJECT_EVIDENCE_NOT_NEW = "reject-evidence-not-new"
+STRICT_REJECT_UNREADABLE_MANIFEST = "reject-unreadable-manifest"
+
+#: Every `--strict` refusal exits 2: the invocation cannot be acted on. It is the
+#: same code `_checkup_out_preflight` uses for "this input cannot be used", and it
+#: keeps the run's own 0/1/3 vocabulary meaning what it meant (a review happened).
+STRICT_REFUSAL_EXIT = 2
+
+#: The fixed word an unwritten manifest announces itself with. The note beside it
+#: carries the exception's text, which differs per host and locale; an agent that
+#: has to decide "did this run freeze a baseline?" needs one token it can grep for
+#: the way the refusal codes are grepped. The exit code is **not** moved by it: a
+#: delivered report stays delivered (541 R2).
+STRICT_MANIFEST_UNWRITTEN = "run-manifest-unwritten"
+
+#: The two **human** sidecars of a review, as baseline inputs (B5 fix B). They are
+#: evidence a person wrote — a datasheet mark, a triage verdict — and they live in
+#: `--out` beside the report, which the tree digest skips when `--out` sits inside
+#: the project. Reading them into the baseline is what keeps a newly added mark
+#: from being refused as "the same evidence": a changed sidecar moves the baseline
+#: and opens a run, the same way a re-exported archive does.
+_CHECKUP_STRICT_SIDECARS = (NEEDS_DATASHEET_FILE, WARNING_TRIAGE_FILE)
+
+#: The machine artifacts a checkup run writes into `--out`. Consulted **only** when
+#: `--out` *is* the baselined tree: "skip the out directory" would then skip the
+#: whole project, so the run's own files are named instead and the project's
+#: content still counts — an `--out` at the project root never hashes itself
+#: either. The two sidecars above are deliberately absent: they are inputs.
+_CHECKUP_OUT_ARTIFACT_NAMES = frozenset(
+    {
+        "report.json",
+        "report.md",
+        "board-report.md",
+        REVIEW_SUMMARY_FILE,
+        "architecture.md",
+        "design-intent.md",
+        _CHECKUP_LOCK_FILE,
+        _CHECKUP_RUN_MANIFEST_FILE,
+        _CHECKUP_RUN_DIFF_FILE,
+    }
+)
+
+
+def _checkup_strict_requested(args: argparse.Namespace) -> bool:
+    """Is this a `--strict` run? Every new assertion goes through here.
+
+    A Namespace built by hand (a test, a caller that predates 541) has no `strict`
+    attribute at all, and that must read as "the flag was not given" — the default
+    path is unchanged, down to not opening `run.json`.
+    """
+    return bool(getattr(args, "strict", False))
+
+
+def _checkup_out_skip(root: Path, out_dir: Path | None) -> tuple[tuple[str, ...] | None, bool]:
+    """How the tree digest keeps this run's own output out of its own baseline.
+
+    Returns ``(out_parts, artifacts_by_name)``:
+
+    * `out_parts` — `--out`'s path below `root`, or ``None`` when `--out` is the
+      tree itself, outside it, or unknown. Everything under it is skipped, so a
+      `report.json`/`run.json`/`run-diff.json` the previous run wrote into a
+      project-relative `--out` cannot move the digest that judged it. Without
+      this, an `--out` inside the project tree hashed its own output and no
+      second `--strict` run could ever be refused (B5 fix B);
+    * `artifacts_by_name` — ``True`` only when `--out` **is** `root`: skipping the
+      out subtree would then skip the whole project, so the run's own files are
+      excluded by name instead (:data:`_CHECKUP_OUT_ARTIFACT_NAMES`) and an
+      `--out` at the project root stays stable across runs too.
+    """
+    if out_dir is None:
+        return None, False
+    try:
+        resolved_root = Path(root).resolve()
+        resolved_out = Path(out_dir).resolve()
+    except OSError:  # pragma: no cover — a path that cannot be resolved
+        return None, False
+    if resolved_out == resolved_root:
+        return None, True
+    try:
+        relative = resolved_out.relative_to(resolved_root)
+    except ValueError:
+        # `--out` is outside the tree: it cannot contribute a file to it.
+        return None, False
+    return tuple(relative.parts), False
+
+
+def _checkup_is_run_state(name: str) -> bool:
+    """Is this file name the **run's own state** rather than evidence?
+
+    The lock carrier and the atomic temporaries of `_write_json_atomic` /
+    `write_manifest` (`.<name>.<random>.tmp`, same directory, `os.replace`d into
+    place) exist only while a write is in flight. They are never evidence, and a
+    digest that counted one would depend on whether a run happened to be writing.
+    """
+    return name == _CHECKUP_LOCK_FILE or (name.startswith(".") and name.endswith(".tmp"))
+
+
+def _checkup_tree_digest(
+    root: Path, out_dir: Path | None = None
+) -> tuple[int, str]:
+    """``(bytes, sha256)`` of a **folder project** as one content digest.
+
+    An `.eprj3` project is a directory, and the baseline's job is "the same tree
+    or not", not "one file's bytes". The digest is over each file's relative path,
+    size and own digest in sorted order, so a renamed page or a re-exported
+    document moves it and a directory scan order cannot. Files only: an empty
+    directory contributes nothing, which is the honest reading of an empty project.
+
+    `out_dir` is the `--out` this run will report into (see
+    :func:`_checkup_out_skip`): the review's own output is not evidence for the
+    review, and the lock carrier / in-flight temporaries are not files of the
+    project at all.
+    """
+    from .core.runmanifest import sha256_file
+
+    out_parts, artifacts_by_name = _checkup_out_skip(root, out_dir)
+    depth = len(out_parts) if out_parts else 0
+    digest = hashlib.sha256()
+    total = 0
+    for entry in sorted(path for path in root.rglob("*") if path.is_file()):
+        relative = entry.relative_to(root)
+        if depth and tuple(relative.parts[:depth]) == out_parts:
+            continue
+        if _checkup_is_run_state(entry.name):
+            continue
+        if artifacts_by_name and relative.as_posix() in _CHECKUP_OUT_ARTIFACT_NAMES:
+            continue
+        size = entry.stat().st_size
+        digest.update(
+            f"{relative.as_posix()}\0{size}\0{sha256_file(entry)}\n".encode("utf-8")
+        )
+        total += size
+    return total, digest.hexdigest()
+
+
+def _checkup_input_identity(path: Path, out_dir: Path | None = None) -> dict | None:
+    """One `inputs` row for a path this run reads, or ``None`` when it is absent.
+
+    Absent is not invented: a `--library` typo or a not-yet-written intent
+    contract contributes **no row**, so the baseline does not claim to have read a
+    file that is not there. The day the file appears the row appears with it, which
+    moves the baseline and opens a new run — the right answer for "the evidence I
+    judge with changed".
+
+    `out_dir` travels to :func:`_checkup_tree_digest` unchanged: a directory input
+    that *contains* this run's own `--out` must fold the project, not the report
+    the project's last review left inside it.
+    """
+    from .core.runmanifest import sha256_file
+
+    target = Path(path).expanduser()
+    try:
+        resolved = target.resolve()
+    except OSError:
+        return None
+    if resolved.is_dir():
+        size, digest = _checkup_tree_digest(resolved, out_dir)
+    elif resolved.is_file():
+        size, digest = resolved.stat().st_size, sha256_file(resolved)
+    else:
+        return None
+    return {
+        "path": str(resolved).replace("\\", "/"),
+        "bytes": int(size),
+        "sha256": digest,
+    }
+
+
+def _checkup_engine_identity() -> dict[str, str]:
+    """The three fingerprints of the engine that would judge this run (R2 §3).
+
+    What the run is judged **by** is part of the baseline: the same bytes judged
+    by a different rule set are not the same review. `rulebody` is `unavailable`
+    in a frozen build (it ships bytecode and no sources), and that word is a fact
+    about the build rather than a missing value the manifest would refuse.
+    """
+    from .engines.review_eval import rulebody_fingerprint, ruleset_fingerprint
+
+    return {
+        "boardwise": _local_version(),
+        "ruleset": ruleset_fingerprint([rule.id for rule in BUILTIN_RULES]),
+        "rulebody": rulebody_fingerprint() or "unavailable",
+    }
+
+
+def _checkup_intent_identity(args: argparse.Namespace, project: Path) -> dict | None:
+    """The DesignIntent contract this run would read, as `{path, sha256}` or ``None``.
+
+    The default location is **not** spelled again here: it comes from
+    `core.architecture.project_uuid` (the same ``file-<digest>`` fold the model
+    gets offline) fed into `_load_intent_contract` (the same reader the run body
+    uses, including `--intent`). A second spelling of the default path would let
+    the guard freeze one file while the run read another — the exact split this
+    batch exists to close. `project_uuid` reads only the model's `source`, so a
+    three-attribute stand-in is all it needs at guard time, before any parse.
+    """
+    from types import SimpleNamespace
+
+    from .core.architecture import project_uuid
+    from .core.runmanifest import sha256_file
+
+    project_uuid, _source = project_uuid(SimpleNamespace(source=str(project)))
+    # The notes this read produces are the body's to print: the guard only needs
+    # to know *which* file and whether it is there.
+    _contract, contract_path, _error = _load_intent_contract(args, project_uuid, [])
+    if contract_path is None:
+        return None
+    try:
+        target = Path(contract_path).resolve()
+    except OSError:
+        return None
+    if not target.is_file():
+        return None
+    return {
+        "path": str(target).replace("\\", "/"),
+        "sha256": sha256_file(target),
+    }
+
+
+def _checkup_strict_baseline(
+    args: argparse.Namespace, out_dir: Path
+) -> dict | None:
+    """The baseline this invocation would freeze, or ``None`` when it cannot be taken.
+
+    ``None`` only when the project archive itself cannot be hashed. That is not a
+    licence to skip the guard for a run that will succeed: the run then exits 2 on
+    its own unreadable `--file`, so the only thing that changes is which sentence
+    the caller reads.
+
+    `out_dir` is the `--out` this run reports into, and it is passed in because the
+    baseline has two kinds of dependence on it: a directory project that *contains*
+    `--out` must not hash this run's own report (``_checkup_tree_digest``), and the
+    two human sidecars that live in `--out` are evidence a person wrote — they are
+    read as their own rows below, which is what lets a new mark open a run instead
+    of being refused as "the same evidence" (B5 fix B).
+    """
+    from .core.runmanifest import make_manifest
+    from .parsers.eprj3 import looks_like_eprj3
+
+    project = Path(args.file).expanduser()
+    # A **folder project** (038F3) is a directory holding a `*.eprj3` index, and its
+    # evidence is the tree: hashing only the 354-byte index would let a re-drawn
+    # `sch/` page reuse the previous conclusion — the exact reuse this guard exists
+    # to stop. Both spellings a caller may give (the folder, the index inside it)
+    # therefore fold to the same row: the folder's own content digest.
+    project_root = (
+        project.parent if project.is_file() else project
+    )
+    project_row = _checkup_input_identity(
+        project_root if looks_like_eprj3(project) else project, out_dir
+    )
+    if project_row is None:
+        return None
+    inputs = [project_row]
+    # 038X: the default shelf is already an absolute path, and an explicit
+    # `--library` is the same file the run reads (`_checkup_shelf_path`).
+    library_row = _checkup_input_identity(Path(_checkup_shelf_path(args)), out_dir)
+    if library_row is not None:
+        inputs.append(library_row)
+    interconnect = getattr(args, "interconnect", None)
+    if interconnect is not None:
+        interconnect_row = _checkup_input_identity(Path(str(interconnect)), out_dir)
+        if interconnect_row is not None:
+            inputs.append(interconnect_row)
+    # The reviewer's own marks, read out of `--out` by the run body
+    # (`merge_needs_datasheet_sidecar` / the triage sidecar) and therefore part of
+    # what this review judges with. Absent stays absent: no file, no row.
+    for sidecar in _CHECKUP_STRICT_SIDECARS:
+        sidecar_row = _checkup_input_identity(Path(out_dir) / sidecar)
+        if sidecar_row is not None:
+            inputs.append(sidecar_row)
+    engine = _checkup_engine_identity()
+    intent = _checkup_intent_identity(args, project)
+    # `make_manifest` is the one normaliser (sorted inputs, forward slashes,
+    # materialised channels); building a prospective document here is what keeps
+    # the guard's comparison and the manifest it later writes from being two
+    # different spellings of the same baseline.
+    prospective = make_manifest(
+        inputs=inputs, engine=engine, intent=intent, channels={}
+    )
+    return {
+        "outDir": Path(out_dir),
+        "inputs": list(prospective["inputs"]),
+        "engine": dict(prospective["engine"]),
+        "intent": prospective["intent"],
+        "projectPath": project_row["path"],
+        "projectSha256": project_row["sha256"],
+        "newEvidence": str(getattr(args, "new_evidence", "") or "") or None,
+        "old": None,
+    }
+
+
+def _checkup_strict_refusal_sentence(code: str, out_dir: Path, detail: str = "") -> str:
+    """The one sentence a refused `--strict` run prints, code and next step included.
+
+    It states what did **not** happen (no model read, no daemon, no lock, no report
+    byte) because that is the difference between a refusal and a warning followed
+    by the same run — 541's whole point.
+    """
+    manifest = out_dir / _CHECKUP_RUN_MANIFEST_FILE
+    head = (
+        f"boardwise checkup: {code} — --strict 重算闸在取输出锁、读模型、跑规则、"
+        f"跑 PCB 审查、写报告之前就停下了：没有连 daemon、没有建立 {out_dir} 的锁、"
+        "没有写任何报告文件"
+    )
+    if code == STRICT_REJECT_USE_EXISTING:
+        return (
+            f"{head}。{manifest} 记着与本次完全相同的基准（项目归档 / 货架 / 设计意图 "
+            "合同 / 引擎指纹），而这份基准已经审过一轮：同一批证据再算一遍不会得到"
+            "新结论。要读上次的结论用 `boardwise review-read --out "
+            f"{out_dir}`；真换了证据就换一份归档（文件字节变了哈希自然变）后重跑；"
+            "--strict 之外的普通 checkup 仍是旧行为（重算并覆盖机器生成物）"
+        )
+    if code == STRICT_REJECT_NEEDS_NEW_EVIDENCE:
+        return (
+            f"{head}。{manifest} 记着与本次完全相同的基准，且这份基准已有两轮审查"
+            "（drcReviewCount >= 2）：同一批证据的第三次重算不再产生新信息。"
+            "要么换证据（重新导出归档、改 --library / --intent / --interconnect，"
+            "任何一项变哈希都开新 run），要么用 `boardwise review-read --out "
+            f"{out_dir}` 读既有报告；确属同一归档重新导出而字节未变时，"
+            "--new-evidence archive-bytes-changed 也会被拒（哈希没变就等于没换证据）"
+        )
+    if code == STRICT_REJECT_EVIDENCE_NOT_NEW:
+        return (
+            f"{head}。本次声明 --new-evidence archive-bytes-changed，但当前归档的 "
+            f"SHA-256 与 {manifest} 里那次运行的完全相同：声明不被采信——"
+            "这份文件没有被重新导出，或导出后的字节与上次一致。"
+            "re-export 之后重跑（哈希变了这条声明才算成立），或去掉 --new-evidence "
+            "改用 `boardwise review-read`"
+        )
+    if code == STRICT_REJECT_UNREADABLE_MANIFEST:
+        return (
+            f"{head}。{detail}——旧 run.json 读不懂，本次不当首次运行处理："
+            "以「没有基准」放行会让一份坏文件被静默当成干净的第一次。"
+            f"修复 {manifest}（删掉它等于承认基准丢失，届时下一次 --strict 会按首次"
+            "运行重新冻结），或换一个 --out"
+        )
+    return f"{head}（{detail}）"
+
+
+def _checkup_baseline_contents(inputs: Sequence[dict]) -> list[tuple[int, str]]:
+    """The inputs' **content**: `(bytes, sha256)` pairs, paths dropped, sorted.
+
+    The baseline is the evidence, not the spelling of where it sits. Copying the
+    same archive to a second path — or keeping the same shelf beside the report —
+    changes a row's `path` and nothing else, and re-running over it is still the
+    re-computation this guard exists to refuse; comparing rows whole let that copy
+    pass as new evidence (B5 fix B). A *different* hash, or an added/removed input,
+    is what opens a new run. Two rows with the same bytes contribute one entry
+    each, so a manifest that really does read two identical files still differs
+    from one that reads a single one.
+    """
+    return sorted((int(row["bytes"]), str(row["sha256"])) for row in inputs)
+
+
+def _checkup_strict_stop_code(old: dict) -> str:
+    """Which "stop repeating this baseline" code this manifest has earned.
+
+    `drcReviewCount` is how many reviews this same baseline has already had, and
+    the second one is where "read the existing report" escalates to "bring new
+    evidence" (541 R2 §2). One spelling, so the declared-evidence branch and the
+    silent branch cannot disagree about the threshold.
+    """
+    return (
+        STRICT_REJECT_NEEDS_NEW_EVIDENCE
+        if int(old.get("drcReviewCount") or 1) >= 2
+        else STRICT_REJECT_USE_EXISTING
+    )
+
+
+def _checkup_strict_guard(
+    args: argparse.Namespace, out_dir: Path
+) -> tuple[str | None, dict | None]:
+    """``(refusal sentence | None, plan | None)`` — 541 R2's gate, before any work.
+
+    Called from the wrapper **before** the previous-report stamp and the output
+    lock, so a refusal reaches none of the things it is refusing to repeat: no
+    model load, no rule walk, no PCB runner, no DRC read, no report write, and no
+    lock carrier on disk.
+
+    * not `--strict` → ``(None, None)``: nothing is read, nothing is written, and
+      the old behaviour is untouched;
+    * no `run.json` → allowed (a first run freezes the baseline);
+    * same baseline, nothing declared → refused: `reject-use-existing`, or
+      `reject-needs-new-evidence` once that baseline already had two reviews.
+      "Same" is judged on the inputs' **content** (`_checkup_baseline_contents`),
+      so the same bytes under a new path are the same baseline, not new evidence;
+    * the evidence flag declared but the archive's bytes are the old ones →
+      `reject-evidence-not-new` — the sentence is checked, never trusted, and a
+      copy of the archive at another path is still "the old bytes";
+    * a `run.json` that does not load → refused, **not** treated as a first run;
+    * a baseline that moved → allowed, and the post-run diff names the variable.
+    """
+    if not _checkup_strict_requested(args):
+        return None, None
+    from .core.runmanifest import RunManifestError, load_manifest, manifest_baseline
+
+    plan = _checkup_strict_baseline(args, out_dir)
+    if plan is None:
+        return None, None
+    plan["outDir"] = out_dir
+    manifest_path = out_dir / _CHECKUP_RUN_MANIFEST_FILE
+    if not manifest_path.is_file():
+        return None, plan
+    try:
+        old = load_manifest(manifest_path)
+    except RunManifestError as exc:
+        return (
+            _checkup_strict_refusal_sentence(
+                STRICT_REJECT_UNREADABLE_MANIFEST, out_dir, f"{manifest_path}: {exc}"
+            ),
+            None,
+        )
+    plan["old"] = old
+    old_base = manifest_baseline(old)
+    same_baseline = (
+        _checkup_baseline_contents(old_base["inputs"])
+        == _checkup_baseline_contents(plan["inputs"])
+        and old_base["engine"] == plan["engine"]
+        and old_base["intent"] == plan["intent"]
+    )
+    if plan["newEvidence"]:
+        # The declaration is a claim about bytes; the bytes decide. A different
+        # baseline is allowed anyway, so the flag only has to be *checked* where it
+        # is the sole reason the run may proceed.
+        if not same_baseline:
+            return None, plan
+        # Same baseline: the claim is false however the files are spelled. The code
+        # says which half is false — the archive the caller named still has the
+        # bytes that were already reviewed (`reject-evidence-not-new`, the same
+        # sentence 541 R2 shipped), or the same content was merely copied beside
+        # the old one, which is the baseline coming back under another name
+        # (`reject-use-existing`). Neither runs anything.
+        before = {row["path"]: row["sha256"] for row in old_base["inputs"]}
+        code = (
+            STRICT_REJECT_EVIDENCE_NOT_NEW
+            if before.get(plan["projectPath"]) == plan["projectSha256"]
+            else _checkup_strict_stop_code(old)
+        )
+        return _checkup_strict_refusal_sentence(code, out_dir), None
+    if not same_baseline:
+        return None, plan
+    return _checkup_strict_refusal_sentence(_checkup_strict_stop_code(old), out_dir), None
+
+
+def _checkup_finding_identities(findings: Sequence[dict]) -> list[str]:
+    """Stable, non-repeating identities for a report's `findings[]` (R2 §4).
+
+    `checkup.triage_key`'s `boardwise-rule` recipe — `rule_id` plus the finding's
+    structured target/pins/nets — for **every** severity, not the WARN subset
+    `warning_triage[]` carries: the key is an identity, not a ledger, and an ERROR
+    is exactly a finding whose identity a reader would want to diff. Whatever still
+    collides after that goes through `disambiguate_triage_keys`, the same pass and
+    the same `triage_order` the report's own slots use, so a diff's `removed` +
+    `added` pairs can never be two rows swapped under one key.
+
+    The message is **not** the identity: rewording a detail is the same finding.
+    """
+    from .engines.checkup import disambiguate_triage_keys, triage_key, triage_order
+
+    pending: list[tuple[str, tuple[str, str, str, str], dict]] = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        target = finding.get("target")
+        target = target if isinstance(target, dict) else None
+        raw_refs = finding.get("refs")
+        refs = (
+            [str(ref) for ref in raw_refs]
+            if isinstance(raw_refs, (list, tuple))
+            else []
+        )
+        key = triage_key(
+            {
+                "source": "boardwise-rule",
+                "severity": str(finding.get("severity") or ""),
+            },
+            rule_id=str(finding.get("rule_id") or ""),
+            refs=refs,
+            target=target,
+        )
+        pending.append(
+            (
+                key,
+                triage_order({"text": str(finding.get("message") or "")}, target),
+                # The pass hands non-colliding slots back untouched, so the key has
+                # to travel in the slot itself — the same shape `add_row` gives it
+                # inside `warning_triage_slots`.
+                {"key": key},
+            )
+        )
+    slots, _collided = disambiguate_triage_keys(pending)
+    return sorted(str(slot.get("key") or "") for slot in slots)
+
+
+def _checkup_manifest_fields(report: dict) -> dict:
+    """The four run-shaped fields a manifest takes **from the report** (R2 §4).
+
+    Read, never re-derived: the report is what this run actually concluded, and a
+    second walk here would be a second answer. `pages` prefers the report's own
+    per-board page lists and falls back to the single page the source names;
+    `channels` is a boolean over the evidence ledger's statuses (`ok` and
+    `not-applicable` are the two closed statuses — everything else is an open
+    channel, so it reads `false`); `modelCounts.datasheetsMissing` is the same
+    unreviewed-part count `summary.unreviewedParts` carries.
+    """
+    from .engines.evidence import CHANNEL_ORDER, CLOSED_STATUSES
+
+    model = report.get("model") or {}
+    source = report.get("source") or {}
+    pages: list[str] = []
+    for board in model.get("boards") or []:
+        for page in board.get("pages") or []:
+            if str(page) and str(page) not in pages:
+                pages.append(str(page))
+    if not pages and source.get("pageUuid"):
+        pages = [str(source["pageUuid"])]
+    channels = {
+        name: str(
+            ((report.get("evidence") or {}).get("channels") or {}).get(name, {}).get(
+                "status"
+            )
+            or ""
+        )
+        in CLOSED_STATUSES
+        for name in CHANNEL_ORDER
+    }
+    summary = report.get("summary") or {}
+    datasheets_missing = summary.get("unreviewedParts")
+    if datasheets_missing is None:
+        datasheets_missing = len(report.get("unreviewed_parts") or [])
+    return {
+        "pages": pages,
+        "channels": channels,
+        "modelCounts": {
+            "components": int(model.get("components") or 0),
+            "nets": int(model.get("nets") or 0),
+            "datasheetsMissing": int(datasheets_missing or 0),
+        },
+        "findings": _checkup_finding_identities(list(report.get("findings") or [])),
+    }
+
+
+def _write_json_atomic(path: Path, payload: dict) -> Path:
+    """Write a JSON document beside `path`, then `os.replace` it into place.
+
+    `run-diff.json` is a diff, not a manifest, so it must not go through
+    `runmanifest.write_manifest` (that would validate — and therefore reshape — it
+    as one). Same discipline though: same-directory temporary file, fsync, atomic
+    replace, and the temporary file never survives a failure, so a reader never
+    sees half a diff.
+    """
+    import tempfile
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    blob = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="\n",
+        dir=str(target.parent),
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary = handle.name
+    try:
+        with handle:
+            handle.write(blob)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+    return target
+
+
+def _checkup_strict_record(
+    plan: dict, args: argparse.Namespace, out_dir: Path, exit_code: int
+) -> None:
+    """Freeze this run: `run.json`, and `run-diff.json` when there was a previous one.
+
+    Called **inside** the output lock, after the body returned, and only for the
+    exits that produced a report (0/1/3). The manifest is scheduling state, so
+    writing it never moves the exit code and an unwritable `--out` never turns a
+    delivered report into a failure: the note goes to stderr and the run keeps the
+    code its review earned.
+
+    `drcReviewCount` is the previous run's count **+ 1** — how many reviews this
+    same baseline has now had — because that number is what the next `--strict`
+    run refuses on. `run-diff.json` is `semantic_diff(old, new)`: what moved in the
+    evidence, what moved in coverage, and which findings appeared or disappeared,
+    with a single-variable attribution only when exactly one baseline variable did.
+
+    A manifest that could not be written says so with the fixed token
+    :data:`STRICT_MANIFEST_UNWRITTEN` — the exception's text is host- and
+    locale-shaped, the token is not, and "no baseline was frozen" is the one thing
+    the caller has to be able to act on (B5 fix B). The exit code is untouched.
+    """
+    from .core.runmanifest import (
+        RunManifestError,
+        make_manifest,
+        semantic_diff,
+        write_manifest,
+    )
+
+    report_path = out_dir / "report.json"
+    if exit_code not in (0, 1, 3) or not report_path.is_file():
+        return
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"  note: {STRICT_MANIFEST_UNWRITTEN} — --strict 的 "
+            f"{_CHECKUP_RUN_MANIFEST_FILE} 未写："
+            f"{report_path} 读不出（{type(exc).__name__}: {exc}）；报告本身已按原样交付",
+            file=sys.stderr,
+        )
+        return
+    fields = _checkup_manifest_fields(report)
+    old = plan.get("old")
+    previous_count = int(old.get("drcReviewCount") or 0) if old else 0
+    try:
+        manifest = make_manifest(
+            inputs=plan["inputs"],
+            engine=plan["engine"],
+            intent=plan["intent"],
+            channels=fields["channels"],
+            pages=fields["pages"],
+            model_counts=fields["modelCounts"],
+            findings=fields["findings"],
+            drc_review_count=previous_count + 1,
+            new_evidence=plan["newEvidence"],
+        )
+        write_manifest(out_dir / _CHECKUP_RUN_MANIFEST_FILE, manifest)
+    except (OSError, RunManifestError) as exc:
+        print(
+            f"  note: {STRICT_MANIFEST_UNWRITTEN} — --strict 的 "
+            f"{_CHECKUP_RUN_MANIFEST_FILE} 未写"
+            f"（{type(exc).__name__}: {exc}）：报告已交付，下一次 --strict 会当作没有基准",
+            file=sys.stderr,
+        )
+        return
+    print(
+        f"  run: {out_dir / _CHECKUP_RUN_MANIFEST_FILE}"
+        f"（runId {manifest['runId']}，第 {manifest['drcReviewCount']} 次审查）"
+    )
+    if old is None:
+        return
+    try:
+        diff = semantic_diff(old, manifest)
+        _write_json_atomic(out_dir / _CHECKUP_RUN_DIFF_FILE, diff)
+    except (OSError, RunManifestError) as exc:
+        print(
+            f"  note: --strict 的 {_CHECKUP_RUN_DIFF_FILE} 未写"
+            f"（{type(exc).__name__}: {exc}）",
+            file=sys.stderr,
+        )
+        return
+    print(
+        f"  run-diff: {out_dir / _CHECKUP_RUN_DIFF_FILE}"
+        f"（基准{'未变' if diff['sameBaseline'] else '已变'}，"
+        f"归因 {diff['attribution'] or '（无变量变化）'}，"
+        f"finding +{len(diff['addedFindings'])}/-{len(diff['removedFindings'])}）"
     )
 
 
@@ -6952,10 +7811,21 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
       already refuses (``--file`` + ``--project``, ``--out`` a regular file, and
       the 041 S2 online ``--interconnect`` — a declaration needs a board list the
       online page tiers do not carry).
+    * 541 R2's `--strict` guard runs **between** those refusals and everything
+      else: before the previous-report stamp, before the lock carrier exists, and
+      long before a model is read. A refused rerun leaves the directory exactly as
+      it found it (no lock file, no report byte). After a run that produced a
+      report, the same wrapper freezes `run.json` (and `run-diff.json` over a
+      previous manifest) **inside** the lock, without touching the body's return
+      path: the exit code is still the review's own.
     """
     refusal, out_dir = _checkup_out_preflight(args)
     if refusal is not None:
         return refusal
+    guard_refusal, strict_plan = _checkup_strict_guard(args, out_dir)
+    if guard_refusal is not None:
+        print(guard_refusal, file=sys.stderr)
+        return STRICT_REFUSAL_EXIT
     previous = _checkup_report_stamp(out_dir)
     try:
         lock = _checkup_lock_acquire(out_dir)
@@ -6969,6 +7839,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         return 2
     try:
         exit_code = _cmd_checkup_run(args)
+        if strict_plan is not None:
+            # Inside the lock on purpose: the manifest is state of this `--out`,
+            # and a second strict run must not slip between the report and it.
+            _checkup_strict_record(strict_plan, args, out_dir, exit_code)
     finally:
         lock.release()
     current = _checkup_report_stamp(out_dir)
@@ -7001,12 +7875,12 @@ def _cmd_checkup_run(args: argparse.Namespace) -> int:
     section at `{checked: false, reason}` and adds no counts, so exit 0 can never
     be read as "the editor's checks passed" when they never ran.
     """
-    # 545: the two `--out` refusals live in `_checkup_out_preflight` because the
-    # wrapper runs the identical pair **before** taking the output lock (a refused
+    # 545: the argument refusals live in `_checkup_out_preflight` because the
+    # wrapper runs the same checks **before** taking the output lock (a refused
     # invocation must leave no lock carrier behind). They are still run here, in
     # the same order with the same messages 544 gave them, so this function
-    # remains safe when called on its own. 041 S2's online `--interconnect`
-    # refusal joined that set for the same reason (no carrier, no daemon).
+    # remains safe when called on its own. 041 S2's online `--interconnect` and
+    # 541 R2's online strict/new-evidence refusals joined that set for the same reason.
     refusal, out_dir = _checkup_out_preflight(args)
     if refusal is not None:
         return refusal
@@ -7671,6 +8545,10 @@ def _cmd_checkup_run(args: argparse.Namespace) -> int:
         # list this run actually judged with, which with `--intent` is not the
         # module-level registry.
         intent_source=intent_source,
+        # 038X: the read-only shelf entry answered None — the facts layer has no
+        # input, and the verdict must say so rather than let "no part was judged"
+        # read as "no part needed judging".
+        shelf_unreadable=shelf is None,
     )
     if coverage["modelEmpty"]:
         notes.append(
@@ -7986,6 +8864,10 @@ def _cmd_checkup_run(args: argparse.Namespace) -> int:
         pcb_review=pcb_review,
         accepted_unknown=accepted_rows,
         shelf_path=shelf_path,
+        # 038X: only when the shelf could not be read at all — the report states
+        # it at the top level instead of leaving the reader to infer it from a
+        # note, and `shelfPath` beside it names the file that was missing.
+        shelf_missing=shelf is None,
         evidence=evidence_ledger,
     )
     # issue #69 条 1（机器侧）: the chains are built **before** anything is written,
@@ -16475,7 +17357,7 @@ def _cmd_parts_select(args: argparse.Namespace) -> int:
                 # `--write` without `--library` handed `None` to `save_parts` —
                 # `Path(None)`, a TypeError out of the middle of the flow, in both
                 # a checkout and the exe. `_parts_library_path(writable=True)` is
-                # that helper: the repo-relative shelf from a checkout, the user's
+                # that helper: the absolute shelf in this checkout (038X), the user's
                 # own shelf (seeded from the bundled copy on first use) when
                 # frozen — never a file the review would not read back.
                 shelf_path = _parts_library_path(args, writable=True)
@@ -16515,14 +17397,28 @@ def _read_default_shelf(args: argparse.Namespace):
 
     An explicit ``--library`` is that one file, untouched: the user named a
     shelf and merging a second one into it would answer a question nobody asked.
-    Otherwise it is :func:`boardwise.rules.facts.read_default_library` — the
-    process's shelves merged, user over bundled — which is the pair
+    Otherwise it is the process's shelves merged, user over bundled
+    (:func:`boardwise.rules.facts.default_library_paths`), which is the pair
     ``parts list`` labels and the review judges against.
 
-    A shelf that cannot be read is returned as ``(None, why)``, never as an empty
-    one: "the shelf could not be read" and "the shelf is empty" are different
-    answers, and every caller here reports the first.
+    **A path that is not a file is an answer, not an empty shelf** (038X).
+    ``core.parts.load_parts`` reads a missing file as an empty library on
+    purpose — the write side has to be able to create a new shelf — so every
+    *read-only* entry point checks the paths it is about to read **first**:
+
+    * one is missing or is not a file → ``(None, why)``, naming each such path.
+      "the shelf could not be read" and "the shelf is empty" are different
+      answers, and only the first one is true here;
+    * every path reads and the merge holds 0 entries → the empty library **and**
+      a note saying so, so a real empty shelf is not mistaken for a failure.
+
+    The check is here rather than in :func:`load_parts` because the two sides
+    want opposite readings of the same missing file: `parts add` / `parts fetch`
+    create it, `parts list` / `show` / `missing` / `checkup` must not pretend it
+    was there and empty.
     """
+    from pathlib import Path
+
     from boardwise.core.parts import PartError, load_libraries
     from boardwise.rules.facts import default_library_paths
 
@@ -16530,6 +17426,16 @@ def _read_default_shelf(args: argparse.Namespace):
         paths: tuple[str, ...] = (args.library,)
     else:
         paths = default_library_paths()
+    absent = [_shelf_path_problem(str(path)) for path in paths
+              if not Path(str(path)).is_file()]
+    if absent:
+        reason = "；".join(absent)
+        if len(paths) > 1:
+            reason += (
+                f"。默认合并要 {len(paths)} 架全在：缺的那架不当空架，"
+                "残缺合并不冒充完整货架"
+            )
+        return None, reason
     try:
         library = load_libraries(paths)
     except PartError as exc:
@@ -16537,6 +17443,11 @@ def _read_default_shelf(args: argparse.Namespace):
         # broken bundled shelf used to be reported as the user's file being
         # unreadable, which sends the reader to edit a file that is fine.
         return None, f"货架 {_unreadable_shelf(paths, exc)} 读不了（{exc}）"
+    empty_note = (
+        f"货架 {'、'.join(str(path) for path in paths)} 读到了 0 条："
+        "这是空货架，不是读取失败"
+        if not library.parts else ""
+    )
     if len(paths) > 1:
         origins = library.origins
         note = (
@@ -16546,8 +17457,28 @@ def _read_default_shelf(args: argparse.Namespace):
             f" / builtin {sum(1 for v in origins.values() if v == 'builtin')}"
             f" / 覆盖 {sum(1 for v in origins.values() if v == 'user-overrides-builtin')}）"
         )
-        return library, note
-    return library, ""
+        return library, f"{note}。{empty_note}" if empty_note else note
+    return library, empty_note
+
+
+def _shelf_path_problem(path: str) -> str:
+    """Why ``path`` cannot be read as a shelf file, in one readable sentence.
+
+    **Any** path, not just an explicitly named one (038X): the default used to be
+    the relative spelling ``blocklib/parts.json``, so a process started outside
+    the repository asked for a file that was not there and got an empty shelf
+    back. The reason therefore spells out how a relative path was resolved — that
+    is the fact that made the failure invisible.
+    """
+    from pathlib import Path
+
+    file = Path(path)
+    if file.is_dir():
+        return f"货架 {path} 是个目录，不是文件"
+    if not file.exists():
+        resolved = "" if file.is_absolute() else f"（相对路径按当前目录 {Path.cwd()} 解析）"
+        return f"货架 {path} 不存在{resolved}"
+    return f"货架 {path} 不是普通文件"
 
 
 def _unreadable_shelf(paths: tuple[str, ...], exc: Exception) -> str:
@@ -16713,26 +17644,29 @@ def _parts_library_path(args: argparse.Namespace, *, writable: bool = False) -> 
     than repeated — two copies of that path is how a curation pass ends up
     filling a file no rule ever opens.
 
-    ``writable`` picks which of the two spellings that default is: a **checkout**
-    writes to the repo-relative constant, and a **frozen** process writes to the
-    user's own shelf under the boardwise home (186-H2), which is created as a copy
-    of the bundled shelf on its first use (:func:`_seed_user_shelf`). Both are the
-    file the read side resolves — `rules.facts.default_library_path` prefers the
-    user shelf once it exists — so "written" and "read" name the same file on the
-    artifact a friend runs. Before 186-H2 a frozen write went to a relative
-    ``blocklib/parts.json`` beside the working directory: the entry landed in a
-    file no review ever opened, while the report's own clearing instruction told
+    ``writable`` picks which of the two answers that default is: a **checkout**
+    writes the repository's own ``blocklib/parts.json`` — the absolute file 038X
+    made the default, so a `parts add` started from any directory edits the shelf
+    the rules read instead of creating a second one beside the working directory —
+    and a **frozen** process writes to the user's own shelf under the boardwise
+    home (186-H2), which is created as a copy of the bundled shelf on its first
+    use (:func:`_seed_user_shelf`). Both are the file the read side resolves —
+    `rules.facts.default_library_path` prefers the user shelf once it exists — so
+    "written" and "read" name the same file on the artifact a friend runs. Before
+    186-H2 a frozen write went to a relative ``blocklib/parts.json`` beside the
+    working directory: the entry landed in a file no review ever opened, while the
+    report's own clearing instruction told
     the reader to do exactly that.
     """
     from boardwise import resources
-    from boardwise.rules.facts import DEFAULT_LIBRARY_PATH, default_library_path
+    from boardwise.rules.facts import default_library_path
 
     if args.library:
         return args.library
     if not writable:
         return default_library_path()
     if not resources.is_frozen():
-        return DEFAULT_LIBRARY_PATH
+        return default_library_path()
     return str(_seed_user_shelf())
 
 
@@ -17070,8 +18004,16 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
     library_path = _parts_library_path(args)
     library, shelf_note = _read_default_shelf(args)
     if library is None:
+        # 038X: "could not look" is not "looked and found nothing". The miss below
+        # keeps its documented exit 2; a shelf that cannot be read gets its own
+        # code and its own sentence, because the reader's next action differs
+        # (fix/repoint the file vs. add an entry).
         print(f"boardwise parts show: {shelf_note}", file=sys.stderr)
-        return 2
+        print(
+            "boardwise parts show: 货架读不了，根本没能查（不是「未命中」）",
+            file=sys.stderr,
+        )
+        return 3
     if shelf_note:
         # The same line `parts list` prints: which shelves answered (191B/192C §2).
         print(f"note: {shelf_note}", file=sys.stderr)
@@ -20044,16 +20986,11 @@ def _architecture_shelf_evidence(args: argparse.Namespace):
     Reuses the checkup shelf loader, so "which shelf" has one answer for both
     commands. The generator treats a shelf it cannot read as *absent evidence*
     (more TODOs), never as an empty shelf — and the note says which it was.
-    """
-    from boardwise.core.parts import PartError, load_parts
-    from boardwise.rules.facts import default_library_path
 
-    path = getattr(args, "library", None) or default_library_path()
-    if getattr(args, "library", None):
-        try:
-            return load_parts(path), ""
-        except PartError as exc:
-            return None, f"货架 {path} 读不了（{exc}）：架构骨架按「没有货架证据」生成"
+    038X: this goes through :func:`_read_default_shelf` for **both** cases, so an
+    explicit ``--library`` naming a path that does not exist is reported here too
+    instead of being read as an empty shelf (the same hole as `checkup`'s).
+    """
     library, note = _read_default_shelf(args)
     if library is None:
         return None, f"{note}：架构骨架按「没有货架证据」生成"

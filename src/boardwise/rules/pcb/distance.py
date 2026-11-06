@@ -529,6 +529,15 @@ _BOUNDARY_FARADS = 1e-12
 
 CAP_ROLE_BULK = "bulk"
 CAP_ROLE_HF = "hf"
+#: 529: the band between the HF ceiling and the bulk floor is **its own role**.
+#: It used to fall into :data:`CAP_ROLE_UNKNOWN`, and that blank was a defect of
+#: the classifier rather than a reading of the board: 2.2 µF / 4.7 µF input
+#: ceramics are the commonest input filter there is, and filing them as
+#: 「nobody wrote a value」 made `pcb-decap-distance` say a rail had no filtering
+#: when it had three (毕设FOC's ``+5V``). ``mid`` is a decoupling candidate — it
+#: shares the HF pool's tiers — and it still is not bulk: it is too small to be
+#: the reservoir, and the tiers are chosen by the **rail**, never by the value.
+CAP_ROLE_MID = "mid"
 CAP_ROLE_UNKNOWN = "unknown"
 
 
@@ -566,10 +575,14 @@ def capacitor_role(candidate: object, model: object) -> CapRole:
     candidate's echo of it, so the reading and the candidate cannot disagree
     about which field was consulted. ``>= BULK_FARADS`` is bulk, ``<= HF_FARADS``
     is a high-frequency candidate, and the band between them (1 µF < c < 10 µF,
-    where this fixture's 2.2 µF and 4.7 µF parts sit) is **neither pool** —
-    stated plainly rather than rounded into one, because that band is exactly
-    where 「is it bulk or is it bypass」 is a question about the loop rather than
-    about the part.
+    where this fixture's 2.2 µF and 4.7 µF parts sit) is :data:`CAP_ROLE_MID` —
+    a decoupling candidate in its own right (529, 岳 2026-10-19). Before 529 that
+    band was ``unknown``, which said 「nobody wrote a value」 about a part whose
+    value *was* written: the classifier had run out of roles, and the reading
+    that consumed it then reported a rail with three input ceramics as having
+    none. ``mid`` is still not bulk — the reservoir belongs near the entry — and
+    it is still not the HF role: what separates them is the impedance curve, and
+    the **distance tier is chosen by the rail, never by the capacitor's value**.
 
     **The board model is still read first** (164b's discipline: the drawing's own
     declaration decides, and the candidate's echo of it is not consulted while
@@ -610,12 +623,12 @@ def capacitor_role(candidate: object, model: object) -> CapRole:
     # A float tolerance at both boundaries, and it is not decoration:
     # ``parse_capacitance_farads("10uF")`` returns 9.999999999999999e-06, which
     # is *below* ``10e-06``. Without the epsilon a part whose value is exactly
-    # the threshold would fall into the band between the pools and be silently
-    # treated as neither — which is exactly the boundary case the pin exists to
-    # settle. 1e-12 F is a picofarad, four orders below the smallest value any
-    # real drawing states, and it is the same epsilon
-    # :func:`boardwise.rules.decap.decide_required_cap` already uses for this
-    # exact comparison.
+    # the threshold would fall into the mid band (or out of it, at the HF end)
+    # and be graded one role away from the one the table says — which is exactly
+    # the boundary case the pin exists to settle. 1e-12 F is a picofarad, four
+    # orders below the smallest value any real drawing states, and it is the same
+    # epsilon :func:`boardwise.rules.decap.decide_required_cap` already uses for
+    # this exact comparison.
     if farads + _BOUNDARY_FARADS >= BULK_FARADS:
         return CapRole(
             designator=designator,
@@ -630,14 +643,20 @@ def capacitor_role(candidate: object, model: object) -> CapRole:
             farads=farads,
             reason=f"{basis} = {farads * 1e6:g} µF <= {HF_FARADS * 1e6:g} µF — high-frequency decoupling",
         )
+    # 529: the band is a role, not a hole. It is reached only for a value that
+    # is strictly above the HF ceiling and strictly below the bulk floor, and
+    # that is what `CAP_ROLE_MID` means — no new farad constant, no new distance
+    # tier: the four rail tiers (200/300/800/200) grade it exactly as they grade
+    # a 100 nF part, because the question a tier answers is 「how close to this
+    # rail」 and not 「how big is this capacitor」.
     return CapRole(
         designator=designator,
-        role=CAP_ROLE_UNKNOWN,
+        role=CAP_ROLE_MID,
         farads=farads,
         reason=(
-            f"{basis} = {farads * 1e6:g} µF, between the "
-            f"{HF_FARADS * 1e6:g} µF high-frequency ceiling and the "
-            f"{BULK_FARADS * 1e6:g} µF bulk floor — neither pool"
+            f"{basis} = {farads * 1e6:g} µF, above the "
+            f"{HF_FARADS * 1e6:g} µF high-frequency ceiling and below the "
+            f"{BULK_FARADS * 1e6:g} µF bulk floor — mid-band decoupling"
         ),
     )
 
@@ -833,17 +852,19 @@ class DecapDistance(PcbRule):
 
     **What is an IC is now the schematic's own device facts**, not a pin
     count — see :func:`classify_device`, and 岳裁定 1 for the case that forced
-    it. **The candidate pool is the high-frequency pool** — bulk capacitors are
-    named and excluded, and an IC whose pool is entirely bulk gets an INFO
-    saying so rather than a distance complaint; see :func:`capacitor_role` and
-    岳裁定 5b.
+    it. **The candidate pool is the decoupling pool — high-frequency *and* mid**
+    (529): bulk capacitors are named and excluded, and an IC whose pool is
+    entirely bulk gets an INFO saying so rather than a distance complaint; see
+    :func:`capacitor_role` and 岳裁定 5b. A 2.2 µF / 4.7 µF part is in the pool,
+    on the same four rail tiers, because 「is it big enough to be bulk」 is a
+    question about the rail's energy and not about whether the part filters it.
 
     Measured on 毕设FOC's PCB1 (105 components) **after 127b**: 4 (IC, net)
     pairs, all INFO, **no WARN**. The 126b claim of 「one true positive, U6 on
     ``+24V`` at 556 mil」 is what the blind review rejected, and the schematic
     says why: U6 is a 2x6 排针 (``HX PZ2.54-2x6P TP``), and the single ``+24V``
-    capacitor it was measured against is C17, a 4.7 µF part in the band between
-    the HF ceiling and the bulk floor. On the 1.0.0 export — the board 岳
+    capacitor it was measured against is C17, a 4.7 µF part (a mid-band
+    decoupling candidate since 529). On the 1.0.0 export — the board 岳
     actually uses — ``U6`` is the ``TPLP2981-30DBVR`` LDO and *is* judged an IC,
     which is the same rule reading two different boards correctly.
     """
@@ -904,14 +925,18 @@ class DecapDistance(PcbRule):
         ``VCC`` into one net and count a capacitor from the other board as this
         one's decoupling (issue #19's shape).
 
-        **The candidate pool is the high-frequency pool only** (127b, 岳裁定 5b).
-        A ``330uF`` aluminium can sitting 508 mil from a MOSFET is not a
-        mis-placed bypass capacitor — bulk energy storage belongs near the power
-        entry, and asking for it to hug a chip pin was the second half of the
-        blind review's complaint. Only a candidate the schematic declares at
-        ``<= HF_FARADS`` is measured; a bulk one is named and excluded, and an
-        IC whose whole candidate pool is bulk gets the INFO row below saying so
+        **The candidate pool is the decoupling pool — high-frequency *and* mid**
+        (127b, 岳裁定 5b; 529 widened it by the band between the two farad
+        boundaries). A ``330uF`` aluminium can sitting 508 mil from a MOSFET is
+        not a mis-placed bypass capacitor — bulk energy storage belongs near the
+        power entry, and asking for it to hug a chip pin was the second half of
+        the blind review's complaint. So a bulk candidate is named and excluded,
+        and an IC whose whole pool is bulk gets the INFO row below saying so
         rather than a WARN about a distance it should never have been asked for.
+        A ``2.2uF`` / ``4.7uF`` input ceramic is a different part: it *is* the
+        input filter, so it is measured against the same rail tiers the ``100nF``
+        parts are — the tier answers 「how close to this rail」, and only
+        :data:`CAP_ROLE_BULK` is excluded from the question.
 
         **Which rail is measured, and on which side of this part (189B ⑨).**
         Every row names the net it measured, and the reading is *on that net*
@@ -945,10 +970,13 @@ class DecapDistance(PcbRule):
             candidate.designator: capacitor_role(candidate, ic_model)
             for candidate in candidates
         }
+        # 529: the pool is HF **and mid**. The name stays `high_freq` for the
+        # diff, but what it lists is every candidate the classifier called a
+        # decoupling part — a mid-band part earns the same four rail tiers.
         high_freq = [
             candidate.designator
             for candidate in candidates
-            if roles[candidate.designator].role == CAP_ROLE_HF
+            if roles[candidate.designator].role in (CAP_ROLE_HF, CAP_ROLE_MID)
         ]
         bulk = [
             candidate.designator
@@ -969,9 +997,12 @@ class DecapDistance(PcbRule):
                 return [
                     Finding(
                         rule_id=self.id,
-                        # INFO even on the regulator-input tier: bulk is still a
-                        # capacitor, and "the pool is all bulk" is a statement
-                        # about its size, not about the rail having no filtering.
+                        # INFO even on the regulator-input tier, and 529 keeps it
+                        # that way: bulk is still a capacitor, and 「the pool is all
+                        # bulk」 is a statement about its size, not about the rail
+                        # having no filtering (127b, 岳裁定 5b). `_no_candidate_severity`
+                        # grades the branch below — the pool with no HF/mid *and* no
+                        # bulk-only reading to make — not this one.
                         severity="INFO",
                         level=self.level,
                         message=(
@@ -980,13 +1011,13 @@ class DecapDistance(PcbRule):
                             f"bulk ({', '.join(sorted(bulk))}) — bulk energy "
                             f"storage belongs near the power entry or inside the "
                             f"big-current loop, not against a chip pin, so there "
-                            f"is no high-frequency decoupling candidate here to "
-                            f"measure. Whether one is required at all is the "
-                            f"datasheet's required_caps question "
+                            f"is no high-frequency or mid-band decoupling "
+                            f"candidate here to measure. Whether one is required "
+                            f"at all is the datasheet's required_caps question "
                             f"(decap-required-caps)；{attribution.short}"
                         ),
                         evidence=[
-                            f"{designator} @ {net} (no high-frequency candidate)",
+                            f"{designator} @ {net} (no high-frequency or mid-band candidate)",
                             f"{designator} judged an IC because {why_ic}",
                             attribution.evidence,
                             *role_evidence,
@@ -997,25 +1028,28 @@ class DecapDistance(PcbRule):
             return [
                 Finding(
                     rule_id=self.id,
-                    # A regulator-input rail with **no bridging capacitor at all**
-                    # is the one case this rule may raise: see
-                    # `_no_candidate_severity`. Every other emptiness stays INFO —
-                    # including "four capacitors, all between the HF ceiling and
-                    # the bulk floor", which is a statement about the classifier
-                    # (measured on 毕设FOC's +5V: C23 22uF bulk, three 2.2uF in the
-                    # band, C30 with no value) and must not be reported as a rail
-                    # with no filtering.
-                    severity=(
-                        _no_candidate_severity(tier) if not candidates else "INFO"
-                    ),
+                    # 529: the temporary 191D narrowing — 「only WARN when the pool
+                    # is *empty*」 — is **withdrawn** here. It existed because the
+                    # classifier had no role for 1 µF < c < 10 µF, so a rail with
+                    # three 2.2 µF ceramics *had* candidates and would have been
+                    # graded 「no filtering」 on a classifier artefact. The band is
+                    # `CAP_ROLE_MID` now, so what is left in this branch is 「no
+                    # HF/mid decoupling」 — a bulk or unreadable capacitor is not
+                    # one, and its presence no longer mutes the input tier. That is
+                    # the difference between 「no decoupling part」 and 「no part at
+                    # all」: on the regulator-input tier the first is the defect
+                    # 岳 asked about (智能药箱's U11@+5V is bulk + no value). The
+                    # **bulk-only** pool is not this branch — it keeps its own INFO
+                    # above (岳裁定 5b), and 529 leaves that特例 alone.
+                    severity=_no_candidate_severity(tier),
                     level=self.level,
                     message=(
                         f"{designator} sits on the supply net {net!r}, and no "
-                        f"high-frequency decoupling capacitor bridging it to "
-                        f"ground was found on the net — whether one is required "
-                        f"is the datasheet's required_caps question "
-                        f"(decap-required-caps); this row says only that the "
-                        f"layout has none to place"
+                        f"high-frequency or mid-band decoupling capacitor "
+                        f"bridging it to ground was found on the net — whether "
+                        f"one is required is the datasheet's required_caps "
+                        f"question (decap-required-caps); this row says only "
+                        f"that the layout has none to place"
                         + (
                             "；this is a **regulator input** rail, where the "
                             "input capacitor is what the regulator's loop stands "
@@ -1025,7 +1059,7 @@ class DecapDistance(PcbRule):
                         + f"；{attribution.short}"
                     ),
                     evidence=[
-                        f"{designator} @ {net} (no high-frequency capacitor)",
+                        f"{designator} @ {net} (no high-frequency or mid-band capacitor)",
                         f"{designator} judged an IC because {why_ic}",
                         attribution.evidence,
                         *role_evidence,

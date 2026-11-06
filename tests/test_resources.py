@@ -222,11 +222,15 @@ def test_a_frozen_process_writes_and_reads_the_user_shelf(frozen, monkeypatch, t
     )
 
 
-def test_a_checkout_still_writes_the_relative_shelf_spelling(monkeypatch, tmp_path):
-    """The checkout answer is unchanged: the repo's own `blocklib/parts.json`.
+def test_a_checkout_writes_and_reads_the_repositorys_own_shelf(monkeypatch, tmp_path):
+    """The checkout answer: this checkout's ``blocklib/parts.json``, absolute.
 
-    186-H2 moved only the frozen write. From a checkout the curated shelf *is*
-    the repository's file, and `parts add` without `--library` keeps editing it.
+    186-H2 moved only the frozen write. 038X made the checkout spelling the file
+    itself rather than the relative *name* (``DEFAULT_LIBRARY_PATH``): the name
+    resolved against the working directory, and a run started anywhere else read
+    a missing file as an empty shelf. `parts add` without ``--library`` still
+    edits the repository's own shelf — just whatever directory it was started
+    from.
     """
     from boardwise.cli import _parts_library_path
     from boardwise.rules.facts import DEFAULT_LIBRARY_PATH, default_library_path
@@ -234,19 +238,22 @@ def test_a_checkout_still_writes_the_relative_shelf_spelling(monkeypatch, tmp_pa
     monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
     args = type("Args", (), {"library": None})()
     assert resources.is_frozen() is False
-    assert _parts_library_path(args, writable=True) == DEFAULT_LIBRARY_PATH
-    assert _parts_library_path(args) == default_library_path() == DEFAULT_LIBRARY_PATH
+    assert _parts_library_path(args, writable=True) == str(resources.parts_library())
+    assert _parts_library_path(args) == default_library_path() == str(
+        resources.parts_library()
+    )
+    assert _parts_library_path(args) != DEFAULT_LIBRARY_PATH
     # `--library` wins over both, in both directions.
     args.library = "some/where/parts.json"
     assert _parts_library_path(args, writable=True) == "some/where/parts.json"
     assert _parts_library_path(args) == "some/where/parts.json"
 
 
-def test_a_checkout_still_uses_the_relative_shelf_spelling():
-    from boardwise.rules.facts import DEFAULT_LIBRARY_PATH, default_library_path
+def test_a_checkout_still_uses_an_absolute_shelf_spelling():
+    from boardwise.rules.facts import default_library_path
 
     assert resources.is_frozen() is False
-    assert default_library_path() == DEFAULT_LIBRARY_PATH
+    assert default_library_path() == str(resources.parts_library())
 
 
 def test_a_frozen_process_without_an_extraction_root_keeps_the_old_answer(monkeypatch, tmp_path):

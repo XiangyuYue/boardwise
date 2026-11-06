@@ -350,16 +350,19 @@ def test_an_unreadable_capacitance_is_in_neither_pool():
 
 
 def test_the_pool_boundary_disagrees_with_126b_exactly_where_the_ruling_says():
-    """``4.7uF`` is UNKNOWN under 127b's split and **storage** here.
+    """``4.7uF`` is ``mid`` under the decap split and **storage** here.
 
     That disagreement is 裁定 ③, not a bug in either reader — and it is why the
-    U11/C89 anchor exists at all.
+    U11/C89 anchor exists at all. 529 moved the decap side's *name* for this
+    value (``unknown`` -> ``mid``, a decoupling candidate), not the disagreement:
+    a part can be a decoupling candidate for the distance question and the
+    energy-storage one for the regulator's own pool, and both rows say so.
     """
     model = _model([
         _comp("C89", value="4.7uF", pins=[Pin("1", "1", "+24V"), Pin("2", "2", "PGND")])
     ])
     candidate = type("Candidate", (), {"designator": "C89"})()
-    assert capacitor_role(candidate, model).role == "unknown"
+    assert capacitor_role(candidate, model).role == "mid"
     assert regulator_role(candidate, model) == POOL_STORAGE
 
 

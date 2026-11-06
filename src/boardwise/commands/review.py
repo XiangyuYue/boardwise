@@ -19,6 +19,13 @@ from ..engines.checkup import (
 )
 from ..engines.reviewread import REVIEW_READ_SECTIONS
 
+#: The reasons a `checkup --strict` run may declare for being new evidence (541 R2).
+#: One value only: the project archive's bytes changed. Any other spelling is
+#: refused by argparse, because a free-form "this is a new look" sentence is the
+#: exact claim the guard exists to stop taking on trust.
+NEW_EVIDENCE_ARCHIVE_BYTES = "archive-bytes-changed"
+NEW_EVIDENCE_CHOICES = (NEW_EVIDENCE_ARCHIVE_BYTES,)
+
 
 def register_review_parser(sub: Any) -> None:
     """Register the historical `review` command surface."""
@@ -125,6 +132,24 @@ def register_review_parser(sub: Any) -> None:
             "review ignores this flag."
         ),
     )
+    review.add_argument(
+        "--strict-partial",
+        dest="strict_partial",
+        action="store_true",
+        help=(
+            "**Only for `review finalize`** (541 R4). Also require the four-class "
+            "evidence disclosure: a `partial` delivery must carry "
+            "`partialVersion=1` and `partialCategories` with all four classes "
+            "(`confirmed` / `suspected` / `unverified` / `uncovered`), each "
+            "`count` equal to its `items` length, every class equal to what the "
+            "channel rows derive, every required disclosure placed exactly once, "
+            "and the summary must name `needs-manual` / an open item. A "
+            "`complete` delivery must carry no such field. This is a disclosure "
+            "gate only — it never raises `report.conclusion`, so exit 0 is still "
+            "not a board pass. Off by default: old partial reports validate as "
+            "before. A plain file review ignores this flag."
+        ),
+    )
 
 
 def register_checkup_parser(sub: Any) -> None:
@@ -209,6 +234,39 @@ def register_checkup_parser(sub: Any) -> None:
             "~/.boardwise/design-intent/<projectUuid>.json when that file exists. "
             "checkup only **reads** it (regeneration is `boardwise arch --intent`), "
             "and the report's `intent` section names every slot it still owes."
+        ),
+    )
+    checkup.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Opt-in re-computation guard for the offline path (541 R2): before this "
+            "run reads a model, take an output lock or write a report, compare the "
+            "frozen `run.json` baseline in `--out` (project archive + library + "
+            "interconnect digests, the engine's ruleset/rulebody fingerprints and "
+            "the DesignIntent contract) with the one this invocation would use. "
+            "No manifest yet → run. Same baseline → the run is **refused** with exit "
+            "2 (`reject-use-existing`; `reject-needs-new-evidence` once that "
+            "baseline already has two reviews) instead of re-deciding the same "
+            "board. New evidence → new run, and `run-diff.json` says which variable "
+            "moved. Only `checkup --file` supports it: the online tiers refuse it "
+            "with exit 2 before reaching the daemon, and without this flag nothing "
+            "is read or written differently."
+        ),
+    )
+    checkup.add_argument(
+        "--new-evidence",
+        dest="new_evidence",
+        choices=NEW_EVIDENCE_CHOICES,
+        default="",
+        metavar="REASON",
+        help=(
+            "Declare why this `--strict` run is new evidence over the previous one "
+            "(541 R2). Only `archive-bytes-changed` exists: the project archive was "
+            "re-exported. The declaration is **checked**, never trusted — the current "
+            "file's SHA-256 must differ from the previous run's, otherwise the run is "
+            "refused with exit 2 (`reject-evidence-not-new`). Requires `--strict`; "
+            "any other reason is refused by the argument parser."
         ),
     )
     aesthetics = checkup.add_mutually_exclusive_group()

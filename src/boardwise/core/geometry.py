@@ -1495,6 +1495,18 @@ class ParseStats:
     #: entirely — it stays whole and lands on
     #: :attr:`consistency_unresolved`, which does gate.
     deleted_documents: int = 0
+    #: ``build_pads`` found the ``PAD_NET.padNum`` beside a pad element id
+    #: disagreeing with the footprint template's own ``num`` for that pad
+    #: (038W B5 repair). One per mismatching pad. The pad-id reading stays:
+    #: replacing it with the per-pin winner would write one pin's net onto
+    #: another pin's pad, so this counter **discloses** the disagreement rather
+    #: than pretending to know which record the board means.
+    #:
+    #: Attribute-only, like the counters that are still being characterised: it
+    #: is **not** in :meth:`as_dict`, **not** summed into
+    #: ``coverage.recordsDropped`` and moves no verdict. Nothing was dropped
+    #: here; two records disagreed and both readings were preserved.
+    pad_net_pin_mismatch: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable view (keys sorted for stable output)."""

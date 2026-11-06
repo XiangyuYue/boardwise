@@ -1843,6 +1843,51 @@ def _fill_board_model(
         for other in nodes[1:]:
             uf.union(nodes[0], other)  # wires touching at a point
 
+    # --- 527C2: the geometry itself, per page, for a cross-view reader
+    #
+    # The netlist above decides *whether* a pin is connected; this block only
+    # records *where the drawing put things*, because "is this pin on a line at
+    # all?" is a question no netlist answers and a cross-view check has to ask.
+    # It is generated here, inside this board's ``split``: ``BoardModel.raw`` is
+    # the whole file's blocks (and later pages silently lose to the first at
+    # equal keys) and :func:`collect_page_layout` drops the page dimension
+    # outright, so neither can be projected back into this shape.
+    #
+    # ``wire_groups`` is 040 §WI-2's gate reused verbatim: only a group a
+    # ``WIRE`` head owns is a wire, so a placed symbol's own graphic cannot make
+    # a pin look drawn-on. ``segments`` already holds these in canvas space,
+    # rounded once at the parse boundary, so no coordinate is negated here.
+    #
+    # Every page of *this board* is a key even when it carries no wire: "this
+    # sheet has no lines" is a reading, and a reader that has to guess between
+    # "no wires" and "never looked" cannot tell an empty sheet from a missing one.
+    wires_by_page: dict[str, list[tuple[Point, Point]]] = {
+        page: []
+        for page in (*getattr(model.board, "page_uuids", ()),
+                     *(inst.page for inst in instances))
+    }
+    for group in sorted(split.wire_groups):
+        page = split.pages.get(group, "")
+        wires_by_page.setdefault(page, []).extend(segments.get(group) or [])
+    # (designator, pin number) -> page + posed point. Only the placement the
+    # model **keeps** writes here, the same rule 049/105 set for net members: a
+    # second placement of one designator is not in this netlist, so it must not
+    # claim the pin's position either. ``setdefault`` states that: the first
+    # placement seen wins, exactly as ``components`` does.
+    pin_points: dict[tuple[str, str], tuple[str, float, float]] = {}
+    for inst, component, pins in placed:
+        if components.get(component.designator) is not component:
+            continue
+        for number, point, _ez, _pin_name in pins:
+            pin_points.setdefault(
+                (component.designator, number), (inst.page, point[0], point[1])
+            )
+    model.pin_wires = {
+        "binding": "endpoint",
+        "pins": pin_points,
+        "wires": wires_by_page,
+    }
+
     # --- no-connect pins: ``NO_CONNECT`` parents are
     # ``"<instance container id>-e<pin element id>"``; the container id is the
     # common parentId of that instance's trailing attributes.

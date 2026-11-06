@@ -109,23 +109,31 @@ LEVEL = "L2-facts"
 #: — so that this module and the PCB-side rules cannot answer the same question
 #: two ways, which is what 岳's ⑦ measured on the ``U``-designated resistors.
 #:
-#: Where the lazy library loads from when a test does not inject one, spelled
-#: relative to the repository root — the CLI's documented working directory and
-#: the spelling every ``--library`` default and doc quotes. **Frozen there is no
-#: repository**: a friend's exe has no ``blocklib/`` beside it, so the relative
-#: spelling resolved to a *missing* file, which `core.parts.load_parts`
-#: deliberately reads as an empty shelf — the exe silently lost every
-#: facts-driven rule. A process-dependent default belongs in
-#: :func:`default_library_path`, not in a module constant.
+#: The shelf's name inside the repository, kept for the two jobs that still want
+#: the *name* rather than a location: the CLI's help text and docs quote it, and a
+#: frozen process that cannot name its extraction root falls back to it (a broken
+#: bootstrap behaves exactly as it did before 186-H2). It is **not** what a
+#: checkout reads any more: 038X made the checkout default the absolute file in
+#: *this* checkout (:func:`boardwise.resources.parts_library`), because the
+#: relative spelling was resolved against the process working directory and
+#: `core.parts.load_parts` reads a missing file as an empty shelf — so any CWD
+#: other than the repository root turned "the shelf does not exist here" into "the
+#: shelf is empty", which is a different (and false) claim the review then printed.
 DEFAULT_LIBRARY_PATH = "blocklib/parts.json"
 
 
 def default_library_path() -> str:
     """The shelf this process reads when no caller named one.
 
-    From a checkout that is :data:`DEFAULT_LIBRARY_PATH` — unchanged, because
-    the constant is what the CLI's help text, docs and `--library` defaults are
-    all written against. Frozen it is, in order (186-H2):
+    From a **checkout** that is the absolute file in this checkout, resolved
+    through :func:`boardwise.resources.parts_library` (038X). It used to be
+    :data:`DEFAULT_LIBRARY_PATH` — a *relative* spelling, resolved against the
+    process working directory — which meant a run started anywhere but the
+    repository root asked `core.parts.load_parts` for a file that is not there,
+    and that function deliberately reads a missing file as an empty shelf. The
+    review then printed "the shelf has nothing" about every part, which is a
+    claim about the shelf rather than about where the process happened to stand.
+    Frozen it is, in order (186-H2):
 
     1. **the user's own shelf**, ``~/.boardwise/parts.json``, when it exists —
        the file `parts add` / `parts fetch` write, and the reason a curated
@@ -135,20 +143,27 @@ def default_library_path() -> str:
     2. otherwise the copy the exe carries, resolved through
        :mod:`boardwise.resources` the same way the connector bundle is.
 
-    A frozen process that cannot name its extraction directory is a broken
-    bootstrap: the constant is returned so the caller behaves exactly as it did
-    before (an empty shelf, and every caller that cares already reports the path
-    it looked at) rather than raising out of a rule run.
+    A process that cannot name its resolution root is a broken bootstrap (a
+    frozen one without ``sys._MEIPASS``): the constant is returned so the caller
+    behaves exactly as it did before (and 038X's read-side check now **reports**
+    that missing file instead of reading it as an empty shelf) rather than
+    raising out of a rule run.
 
     **A reader that reports this path reports the shelf the run used**, which is
     why `report.json` carries it as `shelfPath` and the report's clearing
     instruction quotes it back: a curation write into a *different* file is
-    exactly the hole 186-H2 closed.
+    exactly the hole 186-H2 closed. This is also the **write** target, which is
+    why the checkout answer is the repository's own file rather than a second
+    location: `parts add` without ``--library`` must edit the file this function
+    hands the rules, whatever directory it was started from.
     """
     from .. import resources
 
     if not resources.is_frozen():
-        return DEFAULT_LIBRARY_PATH
+        try:
+            return str(resources.parts_library())
+        except RuntimeError:
+            return DEFAULT_LIBRARY_PATH
     user = resources.user_parts_library()
     if user.is_file():
         return str(user)
@@ -165,8 +180,9 @@ def default_library_paths() -> tuple[str, ...]:
     ``(bundled,)`` before it does, and ``(DEFAULT_LIBRARY_PATH,)`` when the
     bootstrap cannot name its extraction root — :func:`default_library_path`'s
     three answers, spelled as a *list* so the whole shelf can be read rather
-    than the front of it. From a checkout it is the one repo-relative path,
-    unchanged.
+    than the front of it. From a checkout it is the one absolute path
+    :func:`default_library_path` now answers with (038X), here and in the write
+    path both.
 
     Why a second function instead of a second return value: 186-H2's
     ``default_library_path()`` is also the **write** target and the path

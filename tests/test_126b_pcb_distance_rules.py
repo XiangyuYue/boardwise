@@ -794,8 +794,8 @@ def foc_findings():
     return findings, section
 
 
-def test_foc_pcb1_the_decap_readings_are_two_infos_and_one_warn(foc_findings):
-    """毕设FOC PCB1 anchor: **one WARN and two INFO rows** after issue #86.
+def test_foc_pcb1_the_decap_readings_are_one_info_after_529(foc_findings):
+    """毕设FOC PCB1 anchor: **one INFO row, no WARN** after 529.
 
     **This is the 127b flip, and it is the whole point of the exercise.** 126b
     reported one WARN here — ``U6`` at 555.8 mil on ``+24V`` — and 岳's blind
@@ -817,25 +817,25 @@ def test_foc_pcb1_the_decap_readings_are_two_infos_and_one_warn(foc_findings):
     ``104`` = 100 nF. The pool read only the field, so ``C30`` entered it with no
     readable capacitance, was counted in neither pool, and the rule reported
     「no high-frequency decoupling capacitor found」 on a rail that has one. #86
-    recovers the value from the part's identity, and two rows move as a result:
+    recovers the value from the part's identity, and two rows moved as a result
+    (``U11``/``+5V`` to WARN at 561.3 mil, ``U13``/``+5V`` to silence).
 
-    * ``U11`` on ``+5V`` — **INFO -> WARN**. The pool is now non-empty, so the
-      distance is measured: ``C30`` is **561.3 mil** from ``U11``'s pad on the
-      net, over that rail's own tier (``U11`` pin 1 is ``VIN``, so the rail is
-      graded at the 稳压器输入档's 300 mil — 191D). A true row that the false
-      「no HF capacitor」 INFO was hiding;
-    * ``U13`` on ``+5V`` — **INFO -> silence**. ``U13`` is the other
-      ``+5V``-input regulator on this board, and its ``VIN`` pad sits **113.97
-      mil** from ``C30``'s pad, inside the same tier's 300 mil. The old INFO
-      claimed the rail had no high-frequency capacitor to place; it has one, and
-      it is close enough.
+    **529 retired that WARN, and the retirement is a false positive of #86's own
+    premise.** 561.3 mil was ``C30``'s distance — the nearest part the pool could
+    *read* — not the nearest decoupling part: ``C28`` declares ``2.2uF`` and sits
+    **31.7 mil** from ``U11``'s ``VIN`` pad. With the 1 µF..10 µF band recognized
+    as :data:`~boardwise.rules.pcb.distance.CAP_ROLE_MID`, ``U11``/``+5V`` is
+    inside its 300 mil input tier and says nothing. ``U7``/``+24V`` goes the same
+    way: ``C17`` (``4.7UF``) is **26.4 mil** away, inside the same tier.
 
-    What is left is the two pairs where the pool really is empty — ``U11`` on
-    ``NET10`` and ``U7`` on ``+24V`` — and both are INFO, for the reason 127b
-    gave: whether a rail *needs* a capacitor is the datasheet's ``required_caps``
-    question (``decap-required-caps``). The IC judgement and every candidate's
-    role are still quoted, so 「why is there no U6 row」 stays answerable from the
-    report rather than from this file.
+    What is left is the one pair where the pool really is unreadable — ``U11`` on
+    ``NET10`` — and it is INFO: whether a rail *needs* a capacitor is the
+    datasheet's ``required_caps`` question (``decap-required-caps``). 529 changed
+    which pairs those are: ``+5V`` and ``+24V`` are **measured** now, because the
+    2.2 µF / 4.7 µF parts are decoupling candidates, and both are inside their
+    tier (`outputs/529/` and ``test_529_decap_mid_band.py``). The IC judgement and
+    every candidate's role are still quoted, so 「why is there no U6 row」 stays
+    answerable from the report rather than from this file.
 
     The unit-level half of #86 is ``tests/test_86_legacy_value.py``; the mapping
     from ``C30``'s MPN to 100 nF is pinned there and in ``recovered_capacitance``.
@@ -845,34 +845,28 @@ def test_foc_pcb1_the_decap_readings_are_two_infos_and_one_warn(foc_findings):
         f for f in findings
         if f.board == "PCB1" and f.rule_id == "pcb-decap-distance"
     ]
-    assert pcb1, "the three supply nets still produce (IC, net) pairs"
+    assert pcb1, "the supply nets still produce (IC, net) pairs"
     pairs = {(f.target.component_ref, tuple(f.target.net_refs)) for f in pcb1}
-    assert pairs == {
-        ("U11", ("+5V",)),
-        ("U11", ("NET10",)),
-        ("U7", ("+24V",)),
-    }, (
+    assert pairs == {("U11", ("NET10",))}, (
         "the pairs 126b examined, minus U6 (the schematic says it is a 2x6 "
-        "header, not an IC) and minus U13/+5V, which is now *measured* rather "
-        "than reported as a rail with no candidate"
+        "header, not an IC) and minus U13/+5V, U11/+5V and U7/+24V, whose pools "
+        "are measured and inside their tiers since 529"
     )
     by_pair = {(f.target.component_ref, tuple(f.target.net_refs)): f for f in pcb1}
-    warn = by_pair[("U11", ("+5V",))]
-    assert warn.severity == "WARN", (
-        "C30 reads 100nF once its MPN is decoded, so this pool is a "
-        "high-frequency one and the 561.3 mil gap is judged"
+    unreadable = by_pair[("U11", ("NET10",))]
+    assert unreadable.severity == "INFO", (
+        "C26/C27 state 'C104'/'C103' — net names, not capacitances — so there is "
+        "no distance to judge and the rail is not called unfiltered"
     )
-    assert warn.target.measurement["value"] == pytest.approx(561.3)
-    assert warn.target.counterpart_ref == "C30"
-    assert "C30" in warn.message and "561.3" in warn.message
-    assert "recovered '100nF'" in " | ".join(warn.evidence), (
-        "and the row says the value was recovered from the MPN rather than "
-        "declared — the disclosure #86 asks for"
-    )
-    for pair in (("U11", ("NET10",)), ("U7", ("+24V",))):
+    assert unreadable.target.measurement is None
+    assert any(
+        "candidate C26 unknown" in line and "C104" in line
+        for line in unreadable.evidence
+    ), "the unreadable values are quoted, not assumed"
+    for pair in (("U11", ("NET10",)),):
         assert by_pair[pair].severity == "INFO", pair
         assert by_pair[pair].target.measurement is None, (
-            "a rail with no high-frequency candidate has no distance to report"
+            "a rail with no HF/mid candidate has no distance to report"
         )
     # The IC judgement is quoted, so 「why is there no U6 row」 is answerable from
     # the report rather than from this file.

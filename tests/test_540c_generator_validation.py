@@ -190,3 +190,100 @@ def test_manifest_schema_hashes_still_match_the_files_it_validates_with() -> Non
         assert manifest["schemas"][relative] == hashlib.sha256(
             (ROOT / relative).read_bytes()
         ).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# 038X made the checkout's default shelf an absolute path; the golden may not
+# carry it. These are the negative controls for that: the default shelf and the
+# checkout root publish as placeholders, and anything else absolute is refused.
+# ---------------------------------------------------------------------------
+
+
+def _published_text(payload: object) -> str:
+    return json.dumps(fixtures._sanitize(payload), ensure_ascii=False)
+
+
+def test_the_default_checkout_shelf_publishes_by_its_repository_relative_name() -> None:
+    """`shelfPath` is a location, and a location on *this* machine is not a golden.
+
+    038X (``rules/facts.py``) made the checkout default
+    ``<this checkout>/blocklib/parts.json``; it used to be the repository-relative
+    ``blocklib/parts.json``, resolved against the working directory. Publishing
+    the absolute spelling would have changed a byte of the golden and named
+    ``E:/boardwise`` — the exact failure the generator now refuses to publish.
+    """
+    absolute_default = str(fixtures.ROOT / fixtures.DEFAULT_SHELF)
+    assert absolute_default != fixtures.DEFAULT_SHELF  # the input is really absolute
+    published = fixtures._sanitize({"shelfPath": absolute_default})
+    assert published == {"shelfPath": "blocklib/parts.json"}
+    fixtures._assert_clean("default shelf", _published_text(published))
+
+
+def test_the_checkout_root_in_free_text_publishes_as_a_placeholder() -> None:
+    """Free text is where the root leaks: 038X's triage note prints paths."""
+    note = f"curate the shelf, then re-run against {fixtures.ROOT}/blocklib/parts.json"
+    published = fixtures._sanitize({"source": {"notes": [note]}})
+    text = _published_text(published)
+    assert text.count("<REPO>/blocklib/parts.json") == 1
+    for marker in fixtures._forbidden_markers():
+        assert marker not in text, marker
+    assert not fixtures.RESIDUAL_ABSOLUTE_PATH.search(text)
+    fixtures._assert_clean("checkout root in a note", text)
+
+
+@pytest.mark.parametrize(
+    "explicit",
+    ["D:/elsewhere/parts.json", "/home/someone/parts.json", "F:\\shelves\\parts.json"],
+)
+def test_another_absolute_shelf_path_is_refused_rather_than_rewritten(
+    explicit: str,
+) -> None:
+    """An explicit `--library` is the caller's own string, so it is never guessed.
+
+    The path is sanitized like any other text and then **refused** by the same net
+    that guards every artifact: publishing it would name a file that exists on one
+    machine only, and rewriting it into `blocklib/parts.json` would state a shelf
+    the run did not read.
+    """
+    published = fixtures._sanitize({"shelfPath": explicit})
+    assert published == {"shelfPath": explicit.replace("\\", "/")}
+    with pytest.raises(RuntimeError, match="residual absolute path"):
+        fixtures._assert_clean("explicit shelf", _published_text(published))
+
+
+def test_a_repository_relative_shelf_path_passes_through_verbatim() -> None:
+    """The default's *name*, and any other relative spelling, is already publishable."""
+    for shelf in (fixtures.DEFAULT_SHELF, "shelves/my-parts.json"):
+        published = fixtures._sanitize({"shelfPath": shelf})
+        assert published == {"shelfPath": shelf}
+        fixtures._assert_clean("relative shelf", _published_text(published))
+
+
+def test_an_absolute_default_shelf_and_a_root_note_still_render_a_clean_report(
+    tmp_path: Path,
+) -> None:
+    """End to end on the real report shape, which is what the generator renders.
+
+    The producer now states an absolute shelf and can print the checkout root in
+    `source.notes`; `_render` has to answer both without naming this machine and
+    without touching any other field.
+    """
+    report = json.loads(
+        GOLDEN_INPUTS["review-report-projection"].read_text(encoding="utf-8")
+    )
+    report["shelfPath"] = str(fixtures.ROOT / fixtures.DEFAULT_SHELF)
+    report["source"]["notes"].append(
+        f"the shelf read by this run: {fixtures.ROOT}/blocklib/parts.json"
+    )
+    poisoned = tmp_path / "review-report.json"
+    poisoned.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    produced = dict(GOLDEN_INPUTS)
+    produced["review-report-projection"] = poisoned
+
+    rendered = fixtures._render(produced)
+    text = rendered[INPUTS / "review-report.json"]
+    assert json.loads(text)["shelfPath"] == fixtures.DEFAULT_SHELF
+    assert f"<REPO>/{fixtures.DEFAULT_SHELF}" in text
+    assert not fixtures.RESIDUAL_ABSOLUTE_PATH.search(text)
+    for marker in fixtures._forbidden_markers():
+        assert marker not in text, marker

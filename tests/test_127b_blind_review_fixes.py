@@ -45,6 +45,7 @@ from boardwise.rules.pcb.distance import (
     BULK_FARADS,
     CAP_ROLE_BULK,
     CAP_ROLE_HF,
+    CAP_ROLE_MID,
     CAP_ROLE_UNKNOWN,
     HF_FARADS,
     NON_IC_DESIGNATOR_PREFIXES,
@@ -445,8 +446,8 @@ def test_the_designator_is_the_fallback_not_the_test():
         ("1uF", CAP_ROLE_HF),          # the boundary is inclusive
         ("100nF", CAP_ROLE_HF),
         ("47nF", CAP_ROLE_HF),
-        ("2.2uF", CAP_ROLE_UNKNOWN),   # between the two bands — neither pool
-        ("4.7UF", CAP_ROLE_UNKNOWN),   # PCB1's C17, the one 126b measured
+        ("2.2uF", CAP_ROLE_MID),       # 529: the band is a role, not a hole
+        ("4.7UF", CAP_ROLE_MID),       # PCB1's C17, the one 126b measured
         ("", CAP_ROLE_UNKNOWN),        # nobody wrote a value down
         ("C104", CAP_ROLE_UNKNOWN),    # a net name, not a capacitance
     ],
@@ -456,9 +457,11 @@ def test_the_capacitor_role_boundaries_are_inclusive_and_named(declared, expecte
 
     Both thresholds are **inclusive** (``>= BULK_FARADS``, ``<= HF_FARADS``) so a
     part sitting exactly on a boundary is a decision rather than a coin toss.
-    The band between them is neither pool, and that is stated rather than rounded
-    into one — it is where the fixture's 2.2 µF and 4.7 µF parts sit, and
-    「is it bulk or is it bypass」 is a question about the loop, not the part.
+    The band between them is its own role since 529 — :data:`CAP_ROLE_MID` —
+    because that is where the fixture's 2.2 µF and 4.7 µF parts sit and calling
+    them ``unknown`` said 「nobody wrote a value」 about a value that *was*
+    written. ``unknown`` is kept for the two cases it really covers: no value at
+    all, and a string that is not a capacitance.
     """
     from boardwise.rules.decap import CapCandidate
 
@@ -496,9 +499,13 @@ def test_a_bulk_capacitor_is_not_a_high_frequency_candidate():
     findings = DecapDistance().check(_ctx(board, model))
     assert len(findings) == 1
     finding = findings[0]
-    assert finding.severity == "INFO", "a bulk-only pool is an INFO, never a WARN"
+    assert finding.severity == "INFO", (
+        "a bulk-only pool on a **consumer** rail is an INFO, never a WARN — "
+        "whether the part needs a ceramic at all stays the datasheet's question "
+        "(529 keeps 127b's all-bulk INFO exception; VCC is 消耗端供电脚)"
+    )
     assert "bulk" in finding.message and "C1" in finding.message
-    assert "no high-frequency decoupling candidate" in finding.message
+    assert "no high-frequency or mid-band decoupling candidate" in finding.message
     joined = " | ".join(finding.evidence)
     assert "judged an IC because" in joined, "the IC judgement is stated"
     assert "330uF" in joined, "so is the declared value that made C1 bulk"
@@ -673,24 +680,25 @@ def test_the_bishe_foc_board_under_both_distance_rules(foc_project):
     pairs, each carrying the IC judgement and every candidate's role with the
     value that decided it.
 
-    **Issue #86 moved this board's decap rows, and the reason is a bug it
-    fixed.** The paragraph above used to end 「four INFO rows ... with no
-    high-frequency candidate」, and that premise was false: ``C30`` on ``+5V`` is
-    a 100 nF capacitor whose ``Value`` field is **empty** on this fixture while
-    its MPN ``CC0805KRX7R9BB104`` states ``104``. The pool read only the field,
-    so the rail was reported as having no high-frequency decoupling at all. With
-    the value recovered from the part's identity the pools are real, and the two
-    rows move as ``tests/test_126b_pcb_distance_rules.py`` derives:
+    **Issue #86 moved this board's decap rows, and 529 moved them again — both
+    movements are the same lesson.** The paragraph above used to end 「four INFO
+    rows ... with no high-frequency candidate」, and that premise was false:
+    ``C30`` on ``+5V`` is a 100 nF capacitor whose ``Value`` field is **empty** on
+    this fixture while its MPN ``CC0805KRX7R9BB104`` states ``104``. The pool
+    read only the field, so the rail was reported as having no high-frequency
+    decoupling at all; #86 recovered the value and the rows became three with one
+    WARN (``U11``/``+5V`` at 561.3 mil against ``C30``). 529 then widened the
+    pool by the 1 µF..10 µF band, and that WARN **retires as a false positive of
+    its own**: ``C28`` is a declared ``2.2uF`` mid-band candidate **31.7 mil**
+    from ``U11``'s ``VIN`` pad, well inside the 300 mil 稳压器输入档 — ``C30`` was
+    only ever the nearest *readable-HF* part, not the nearest decoupling part.
+    ``U7``/``+24V`` retires the same way (``C17`` ``4.7UF`` at **26.4 mil**).
 
-    * ``U11``/``+5V`` — INFO -> **WARN** at **561.3 mil** (``C30``), over that
-      rail's 稳压器输入档 of 300 mil. A true row, previously hidden by the false
-      「no candidate」 INFO;
-    * ``U13``/``+5V`` — INFO -> **silence** (``C30`` is **113.97 mil** from its
-      VIN pad, inside 300).
-
-    So this pin is now three rows with **one** WARN, and the WARN's own evidence
-    carries the disclosure ``recovered '100nF'`` — the value was not declared on
-    the schematic, and the row says so (岳's #86 third ask). The nineteen false
+    So this pin is now **one** row: ``U11``/``NET10``, INFO, no measurement —
+    both its capacitors (``C26``/``C27``) state ``C104``/``C103``, net names
+    rather than capacitances. The #86 disclosure is still pinned, at unit level,
+    by ``tests/test_86_legacy_value.py`` and by the ``recovered`` reason text;
+    what this board no longer has is a row that depends on it. The nineteen false
     positives 岳 rejected are untouched by any of this: they are the *spacing*
     population, and that count is still 4.
     """
@@ -708,17 +716,23 @@ def test_the_bishe_foc_board_under_both_distance_rules(foc_project):
     )
     assert not [f for f in spacing if f.target.measurement["value"] == 0.0]
 
-    assert len(decap) == 3, (
-        "two pools with no high-frequency candidate and one measured rail "
-        f"(issue #86): {[(f.target.component_ref, f.target.net_refs, f.severity) for f in decap]}"
+    assert len(decap) == 1, (
+        "529: on this board the decoupling pools are real on ``+5V`` and ``+24V`` "
+        "now that the 2.2 µF / 4.7 µF parts are measured, so both rails are "
+        "silent; what is left is ``U11``/``NET10``, whose two capacitors state "
+        f"no readable value: {[(f.target.component_ref, f.target.net_refs, f.severity) for f in decap]}"
     )
-    assert [f.severity for f in decap] == ["WARN", "INFO", "INFO"]
-    warn = decap[0]
-    assert (warn.target.component_ref, tuple(warn.target.net_refs)) == ("U11", ("+5V",))
-    assert warn.target.counterpart_ref == "C30"
-    assert warn.target.measurement["value"] == pytest.approx(561.3)
-    assert "recovered '100nF'" in " | ".join(warn.evidence), (
-        "the WARN is measured on a value the pool recovered, and says so"
+    assert [f.severity for f in decap] == ["INFO"]
+    only = decap[0]
+    assert (only.target.component_ref, tuple(only.target.net_refs)) == (
+        "U11",
+        ("NET10",),
+    )
+    assert only.target.measurement is None, (
+        "an unreadable pool has no distance to report; it says so instead"
+    )
+    assert any("candidate C26 unknown" in line for line in only.evidence), (
+        "and it names the two capacitors whose value nobody wrote down"
     )
     assert all(f.board == "PCB1" for f in decap)
     for finding in decap:

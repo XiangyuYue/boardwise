@@ -92,7 +92,12 @@ DISCLOSURE_CODES = {
 STATUSES = {"ok", "failed", "missing", "unavailable", "not-applicable"}
 CLOSED_STATUSES = {"ok", "not-applicable"}
 
-EVIDENCE_KEYS = {"schema", "channels", "coverage", "delivery"}
+#: 541 R4 adds the two versioned disclosure keys, and only on a `partial`
+#: delivery — a frozen shape can grow additively, it may not grow silently.
+EVIDENCE_KEYS = {
+    "schema", "channels", "coverage", "delivery",
+    "partialVersion", "partialCategories",
+}
 CHANNEL_KEYS = {"status", "source", "detail", "artifacts", "errors", "steps"}
 DELIVERY_KEYS = {"status", "note", "requiredDisclosures"}
 DISCLOSURE_KEYS = {"code", "channel", "status", "message"}

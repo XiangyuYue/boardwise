@@ -64,11 +64,12 @@ BRIDGE = "AGND"
 # ---------------------------------------------------------------------------
 
 
-def _comp(designator: str, *, value: str = "", pins=()) -> Component:
+def _comp(designator: str, *, value: str = "", footprint: str = "", pins=()) -> Component:
     return Component(
         uid=f"u-{designator}",
         designator=designator,
         value=value,
+        footprint=footprint,
         pins=[Pin(str(number), str(name), net) for number, name, net in pins],
     )
 
@@ -438,47 +439,120 @@ def test_a_consumer_rail_with_no_capacitor_stays_info():
     assert "regulator input" not in row.message
 
 
-def test_a_pool_that_is_all_bulk_or_unclassified_stays_info_even_on_the_input_tier():
-    """毕设FOC's ``+5V`` — four capacitors, none of them in either pool.
+def _pool_board(xs: list[float]) -> BoardGeometry:
+    """One IC on ``RAIL`` (``VIN``) and one bridging capacitor per (value, x)."""
+    pads = [
+        _pad("U1", "1", x=0.0, y=0.0, net=RAIL),
+        _pad("U1", "2", x=0.0, y=20.0, net="SIG"),
+        _pad("U1", "3", x=0.0, y=40.0, net="GND"),
+    ]
+    for index, x in enumerate(xs, start=1):
+        pads.append(_pad(f"C{index}", "1", x=x, y=0.0, net=RAIL))
+        pads.append(_pad(f"C{index}", "2", x=x, y=20.0, net=BRIDGE))
+    return BoardGeometry(
+        source="synthetic",
+        name="SYNTH",
+        components=[_place("U1", 0.0, 0.0)]
+        + [_place(f"C{index}", x, 0.0) for index, x in enumerate(xs, start=1)],
+        pads=pads,
+    )
 
-    ``C23`` is 22 uF (bulk), three 2.2 uF sit between the 1 uF HF ceiling and the
-    10 uF bulk floor, and ``C30`` states no value. That is a statement about the
-    classifier, not about the rail having no filtering, so it must not be raised
-    to WARN — measured 2026-10-19 while landing the input-tier rule.
-    """
+
+def _one_pool(values: list[str], xs: list[float]):
     ic = _comp(
         "U1",
         pins=[("1", "VIN", RAIL), ("2", "OUT", "SIG"), ("3", "GND", "GND")],
     )
     caps = [
-        _comp("C1", value="22uF", pins=[("1", "1", RAIL), ("2", "2", BRIDGE)]),
-        _comp("C2", value="2.2uF", pins=[("1", "1", RAIL), ("2", "2", BRIDGE)]),
-        _comp("C3", value="", pins=[("1", "1", RAIL), ("2", "2", BRIDGE)]),
+        # ``0603`` so a capacitor whose value is *not* a capacitance is still
+        # identified as one (529: ``unknown`` is a role, not a missing part) —
+        # ``core.decap.looks_like_capacitor``'s C + chip-size shape.
+        _comp(
+            f"C{index}",
+            value=value,
+            footprint="0603",
+            pins=[("1", "1", RAIL), ("2", "2", BRIDGE)],
+        )
+        for index, value in enumerate(values, start=1)
     ]
     model = _model([ic, *caps])
-    board = BoardGeometry(
-        source="synthetic",
-        name="SYNTH",
-        components=[
-            _place("U1", 0.0, 0.0),
-            _place("C1", 400.0, 0.0),
-            _place("C2", 500.0, 0.0),
-            _place("C3", 600.0, 0.0),
-        ],
-        pads=[
-            _pad("U1", "1", x=0.0, y=0.0, net=RAIL),
-            _pad("U1", "2", x=0.0, y=20.0, net="SIG"),
-            _pad("U1", "3", x=0.0, y=40.0, net="GND"),
-            _pad("C1", "1", x=400.0, y=0.0, net=RAIL),
-            _pad("C1", "2", x=400.0, y=20.0, net=BRIDGE),
-            _pad("C2", "1", x=500.0, y=0.0, net=RAIL),
-            _pad("C2", "2", x=500.0, y=20.0, net=BRIDGE),
-            _pad("C3", "1", x=600.0, y=0.0, net=RAIL),
-            _pad("C3", "2", x=600.0, y=20.0, net=BRIDGE),
-        ],
-    )
-    rows = DecapDistance().check(_ctx(board, model))
-    assert rows, "the (IC, net) pair still produces a row"
-    assert all(row.severity == "INFO" for row in rows), [
-        (row.severity, row.message) for row in rows
-    ]
+    return DecapDistance().check(_ctx(_pool_board(xs), model))
+
+
+def test_the_band_between_the_two_farad_boundaries_is_measured_not_unknown():
+    """529: ``2.2uF`` on the input rail is a candidate, and its distance is read.
+
+    This is the blank band 528 §4 measured: ``HF_FARADS`` is 1 µF and
+    ``BULK_FARADS`` is 10 µF, so 2.2 µF used to be ``unknown`` — and an
+    ``unknown`` candidate is no candidate, which is how 毕设FOC's ``+5V`` came to
+    be reported as a rail with no filtering. Now it is :data:`CAP_ROLE_MID`, in
+    the measured pool, on the rail's own 300 mil input tier. At 460 mil
+    (``500 - 40``) it is over the line, so the row is a WARN and its evidence
+    names the role that put it in the pool.
+    """
+    (row,) = _one_pool(["2.2uF"], [500.0])
+    assert row.severity == "WARN"
+    assert row.target.counterpart_ref == "C1"
+    assert row.target.measurement["value"] == 460.0
+    assert "稳压器输入档 300 mil，实测 460.0 mil" in row.message, row.message
+    joined = " | ".join(row.evidence)
+    assert "candidate C1 mid:" in joined, joined
+    assert "2.2 µF" in joined and "mid-band decoupling" in joined
+
+
+def test_the_band_inside_the_tier_is_silence_and_that_is_the_fake_warn_gone():
+    """The same part 31.7 mil away says nothing — the real-board reading.
+
+    ``C28`` on 毕设FOC's ``+5V`` declares ``2.2uF`` and sits 31.7 mil from
+    ``U11``'s ``VIN`` pad; before 529 the pool could not see it at all and the
+    rule measured the nearest *readable-HF* part instead (561.3 mil, a false
+    WARN). The synthetic case puts a ``2.2uF`` at 60.0 mil (``100 - 40``).
+    """
+    assert _one_pool(["2.2uF"], [100.0]) == []
+
+
+def test_an_input_rail_whose_pool_is_only_bulk_keeps_its_info():
+    """127b's 岳裁定 5b 特例 survives 529, on the input tier too.
+
+    The message is 127b's (「the only capacitors bridging it to ground are bulk …
+    bulk energy storage belongs near the power entry」) and the severity is INFO:
+    a rail with a capacitor the reader *can* report as bulk is a statement about
+    that capacitor's size, not 岳's 输入侧 defect. What 529 withdraws is the
+    narrowing over the **general** 「no HF/mid」 branch — bulk + unreadable,
+    unreadable-only, nothing at all — which is the next two tests.
+    """
+    (row,) = _one_pool(["22uF"], [500.0])
+    assert row.severity == "INFO", row.message
+    assert "bulk (C1)" in row.message
+    assert "regulator input" not in row.message
+    assert row.target.measurement is None
+    assert "no high-frequency or mid-band candidate" in " | ".join(row.evidence)
+
+
+def test_an_input_rail_whose_pool_is_bulk_plus_unreadable_warns():
+    """智能药箱's ``U11@+5V``: a bulk can and a capacitor whose value is no value.
+
+    191D's narrowing said 「有候选就不 WARN」, and every candidate counted —
+    including a capacitor whose ``value`` is a net name rather than a
+    capacitance. That is the difference between 「no HF/mid decoupling」 and
+    「no capacitor at all」, and after 529 the first is what this rail has, so the
+    input tier speaks.
+    """
+    (row,) = _one_pool(["22uF", "C104"], [500.0, 600.0])
+    assert row.severity == "WARN", row.message
+    assert "regulator input" in row.message
+    joined = " | ".join(row.evidence)
+    assert "candidate C1 bulk:" in joined and "candidate C2 unknown:" in joined
+    assert row.target.measurement is None
+
+
+def test_an_input_rail_with_only_unreadable_capacitors_warns():
+    """The same withdrawal with no bulk in sight: unknown-only is still nothing.
+
+    A value nobody wrote down is not evidence that the part decouples anything —
+    the argument :func:`boardwise.rules.decap.decide_required_cap` makes — so it
+    cannot mute the input tier either.
+    """
+    (row,) = _one_pool(["C104", "C103"], [500.0, 600.0])
+    assert row.severity == "WARN", row.message
+    assert row.target.measurement is None

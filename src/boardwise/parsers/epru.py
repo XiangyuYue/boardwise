@@ -42,6 +42,7 @@ from .epru_stream import (
     PCB_DOC_TYPE,
     ParseStats,
     SYMBOL_DOC_TYPE,
+    _resolve_group,
     iter_epru_records,
     load_epru_text,
     read_project_meta,
@@ -1684,6 +1685,58 @@ def pad_net_key(record: EpruRecord) -> tuple[str, str, str | None] | None:
     return str(comp_id), str(pin), None if pad_id is None else str(pad_id)
 
 
+def _pad_net_pin_projection(
+    document: Document, stats: ParseStats
+) -> dict[tuple[str, str], str | None]:
+    """The per-pin net of ``document``'s **live** ``PAD_NET`` records (038W).
+
+    A ``PAD_NET``'s atomic id carries the *pad element id* besides
+    ``(component, pin)``, so a board edit leaves the pre-edit and the post-edit
+    record of one pin as two independent survivors of the consistency view —
+    two different elements, not two versions of one. The pin key is narrower
+    than that, and :attr:`PcbContext.pad_nets_by_pin` is what both consumers
+    (``build_pads`` and ``build_design_model``) read, so the narrower key is
+    adjudicated here — by the **same** :func:`epru_stream._resolve_group`
+    (highest ticket, then largest source client, identical copies collapse)
+    the consistency view uses for atomic ids. Never by stream order: a later
+    line is not a newer edit, and 038U already measured tickets running
+    backwards inside one file.
+
+    One live record for a pin keeps the historic answer verbatim, with or
+    without a ticket. Several records the rule cannot order leave the pin
+    **absent** — no inherited value, no guessed one — and add one
+    ``stats.consistency_unresolved`` diagnosis; the pin then reads 「未判优」,
+    never 「已断开」. A winner whose net is empty is written as ``None`` on
+    purpose: a pad removed from its net must override the pre-edit name rather
+    than fall back to it.
+    """
+    records: list[EpruRecord] = []
+    nets: list[str | None] = []
+    groups: dict[tuple[str, str], list[int]] = {}
+    for record in document.records:
+        if record.type != "PAD_NET" or record.body is None:
+            continue
+        key = pad_net_key(record)
+        if key is None:
+            continue
+        component_id, pin, _pad_id = key
+        groups.setdefault((component_id, pin), []).append(len(records))
+        records.append(record)
+        nets.append(_net_name(record.body.get("padNet")))
+
+    projection: dict[tuple[str, str], str | None] = {}
+    for pin_key, indexes in groups.items():
+        if len(indexes) == 1:
+            projection[pin_key] = nets[indexes[0]]
+            continue
+        winner, resolved = _resolve_group(indexes, records, document)
+        if winner is None or not resolved:
+            stats.consistency_unresolved += 1
+            continue
+        projection[pin_key] = nets[winner]
+    return projection
+
+
 #: The factor between a ``POURED`` record's stored coordinates and board
 #: coordinates: **1:10**, origin (0, 0), no axis flip. 135 measured this on
 #: every board fixture in ``tests/fixtures`` against a parent ``POUR``
@@ -2228,6 +2281,7 @@ def build_pads(
     pad_nets_by_pin: dict[tuple[str, str], str | None],
     stats: ParseStats,
     copper_layers: Sequence[int] = (),
+    pad_pin_by_pad: dict[tuple[str, str], str] | None = None,
 ) -> list[PadGeometry]:
     """Instantiate footprint pads at their placed, rotated positions.
 
@@ -2240,11 +2294,39 @@ def build_pads(
     ``None`` when this reader had nothing to say about the pad (which the
     consumers read as 「fall back to your own derivation」, never as 「no
     copper」).
+
+    Which net a pad gets: ``pad_nets_by_pad`` is keyed by the pad **element
+    id**, ``pad_nets_by_pin`` by the **pin number**, and the pad-id table is
+    the one this pad is read from — it is the reading the file wrote *for this
+    element*, and ``None`` from it falls through to the per-pin table, so an
+    adjudicated 「now empty」 net still overrides and a pad the id table never
+    mentions still gets its pin's net.
+
+    The two keys are not always about the same pin (B5 fixA): a board edit that
+    renumbers a pad leaves the live ``PAD_NET`` record naming the **old**
+    ``padNum`` beside that pad element id, so the footprint's own ``num`` for
+    the pad can disagree with it. ``pad_pin_by_pad`` carries that ``padNum``
+    per pad element id, and the disagreement is **disclosed** through
+    ``stats.pad_net_pin_mismatch`` — counted once per pad, and nothing else.
+
+    Disclosed, not corrected (B5 repair ruling): handing the pad the per-pin
+    winner instead reads one pin's net onto another pin's pad, and both public
+    consumers follow — the netlist
+    (:func:`boardwise.parsers.epro2_model.build_design_model`) puts two pins of
+    one part on one net that the schematic keeps apart, and the pour
+    connectivity then counts an extra island on ``GND``. A count says 「these
+    two records disagree」 without claiming which one the board means; the pad-id
+    reading stays, the geometry and the netlist stay in step with each other,
+    and no caller — with the mapping or without it — loses the pad-id path.
     """
     pads: list[PadGeometry] = []
     for comp in placements:
         templates = footprints.get(comp.footprint or "", [])
         for template in templates:
+            if pad_pin_by_pad is not None:
+                pad_pin = pad_pin_by_pad.get((comp.id, template.id))
+                if pad_pin is not None and template.num and pad_pin != template.num:
+                    stats.pad_net_pin_mismatch += 1
             net = pad_nets_by_pad.get((comp.id, template.id))
             if net is None:
                 net = pad_nets_by_pin.get((comp.id, template.num))
@@ -2338,7 +2420,21 @@ class PcbContext:
     outline_fragments: int = 0
     #: (component id, pad id) -> net name, as written by ``PAD_NET``.
     pad_nets_by_pad: dict[tuple[str, str], str | None] = field(default_factory=dict)
-    #: (component id, pin number) -> net name. First writer wins.
+    #: (component id, pad element id) -> the ``padNum`` that ``PAD_NET`` wrote
+    #: beside it (B5 fixA). The two keys a ``PAD_NET`` record hands over are not
+    #: always about the same pin: the pad **element id** is the wider key (it
+    #: survives a pad edit as a new id, 038W §1) and the **pin number** is the
+    #: one both public consumers project on. Keeping the pairing lets
+    #: :func:`build_pads` **disclose** — ``stats.pad_net_pin_mismatch``, once per
+    #: pad — when a footprint's own ``num`` for that pad disagrees with the
+    #: ``padNum`` the net record named; the pad keeps its pad-id net either way
+    #: (B5 repair ruling: the count reports the disagreement, it does not pick a
+    #: winner).
+    pad_pin_by_pad: dict[tuple[str, str], str] = field(default_factory=dict)
+    #: (component id, pin number) -> net name, adjudicated once per pin from
+    #: every live ``PAD_NET`` record naming it — see
+    #: :func:`_pad_net_pin_projection` (038W). A pin whose records the rule
+    #: cannot order is simply **absent**: absence is 「未判优」, never 「未连接」.
     pad_nets_by_pin: dict[tuple[str, str], str | None] = field(default_factory=dict)
     #: Component id -> DEVICE document uuid, from the ``Device`` attribute.
     #: The join key into the library metadata (Value / LCSC / Manufacturer);
@@ -2371,6 +2467,10 @@ def collect_pcb_context(
     this module makes.
     """
     context = PcbContext()
+    # 038W: the per-pin net is a fact about **all** the document's live
+    # `PAD_NET` records, not about whichever one the stream writes first, so it
+    # is adjudicated once here rather than accumulated record by record.
+    context.pad_nets_by_pin = _pad_net_pin_projection(document, stats)
     # Element id -> net, so POURED regions can borrow the net of the region
     # they were poured from.
     net_by_element: dict[str, str | None] = {}
@@ -2488,7 +2588,14 @@ def collect_pcb_context(
                 net = _net_name(body.get("padNet"))
                 if pad_id is not None:
                     context.pad_nets_by_pad[(comp_id, pad_id)] = net
-                context.pad_nets_by_pin.setdefault((comp_id, pin), net)
+                    # B5 fixA: keep the pad element id's own pin number, so
+                    # `build_pads` can disclose 「this pad id's net was written
+                    # beside another pin」 (stats.pad_net_pin_mismatch). The pad
+                    # keeps its pad-id net; the count reports the disagreement.
+                    context.pad_pin_by_pad[(comp_id, pad_id)] = pin
+                # 038W: no per-pin write here. `pad_nets_by_pin` was filled
+                # once, above, by `_pad_net_pin_projection` — accumulating it
+                # in stream order would let the first (pre-edit) record win.
         elif rtype == "VIA":
             net = _net_name(body.get("netName"))
             context.vias.append(
@@ -2753,6 +2860,7 @@ def collect_pcb_context(
         context.pad_nets_by_pin,
         stats,
         copper_layers,
+        pad_pin_by_pad=context.pad_pin_by_pad,
     )
     # 152: legend, last, because it depends on nothing else here and on the
     # layer table (which the walk above has by now finished reading). 162b: the

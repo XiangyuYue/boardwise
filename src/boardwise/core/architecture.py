@@ -298,7 +298,7 @@ def _part(text: str) -> str:
     return folded or "_"
 
 
-def _project_uuid(model: object, given: str = "") -> tuple[str, str]:
+def project_uuid(model: object, given: str = "") -> tuple[str, str]:
     """``(projectUuid, where it came from)`` for the slot ids.
 
     The live tiers read the real one out of `doc.list`'s focused project
@@ -317,6 +317,12 @@ def _project_uuid(model: object, given: str = "") -> tuple[str, str]:
         digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
         return f"file-{digest}", f"离线档按文件名折叠（{name}）"
     return "project", "无来源（空模型）"
+
+
+#: Backwards-compatible private alias for callers inside this module. Public
+#: consumers (including the CLI) use :func:`project_uuid` instead of reaching
+#: across a layer boundary for a private name.
+_project_uuid = project_uuid
 
 
 def _board_uuid(board: object, title: str) -> str:

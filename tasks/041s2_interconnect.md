@@ -86,7 +86,7 @@
 | 维度 | S2 覆盖 | 必须不变 / 未覆盖 |
 |---|---|---|
 | V3/V4 宿主 | 不跑真机；仅离线文件 | 不声称宿主网表、ERC/DRC 已验证 |
-| `.epro2` | 真实 3 板夹具跑显式声明；内存 2 板覆盖解析；S1 的真实 2 板夹具仅复验无参旧路径 | 真实 2 板的声明路径未单独跑；给出 projectUuid 必须拒绝；不新增电气结论 |
+| `.epro2` | 真实 3 板与真实 2 板夹具各跑显式声明，均双报告对照 | 给出 projectUuid 必须拒绝；不新增电气结论 |
 | `.eprj2` | 未覆盖 | 不声称多板互联兼容 |
 | `.eprj3` | 内存/合成模型与既有身份、重复 PCB、分歧库守卫 | 真实多板线束未覆盖 |
 | 在线/离线 | 仅离线 | live/在线 checkup 明确拒绝，不扩张 |
@@ -106,7 +106,8 @@
 ## 8. 实施与聚焦验收记录
 
 - 纯解析首批 112 项测试通过；报告批累计 173 项通过；CLI 与对抗复核收尾后的九文件聚焦集为 **322 passed**。这些集合有重叠，不相加成全量。
-- 真实三板 `.epro2` 上，不同网名与同名 GND 两类声明均进入 checkup/review 的同一段披露；checkup 保持 241 findings、50E/21W/170I 和 `completion.verdict="incomplete"`，review 保持 45、30E/1W/14I，退出码均仍为 1。`review --json` 仍只有 findings/summary。
+- 真实三板 `.epro2` 上，不同网名与同名 GND 两类声明均进入 checkup/review 的同一段披露；S2 当时记的基线是 checkup 241 findings、50E/21W/170I 加 `completion.verdict="incomplete"`，review 45 findings、30E/1W/14I，两者退出码均仍为 1。`review --json` 仍只有 findings/summary。
+  **2026-11-06 计数更新（529，不是 S2 的改动）**：529 把 2.2/4.7µF 纳入 mid 近距离去耦池后，checkup 读数为 **239 findings、50E/20W/169I**（少一条 `decap-required-caps` WARN 与随它的 INFO）。`CHECKUP_COUNTS` 已同步为 `(50, 20, 169)`，`test_a_declared_tie_reaches_both_reports_and_moves_no_number` 的 239 同步；review 45、30E/1W/14I 与 `incomplete` 一字未动 —— 声明的合同（只披露、不增不减）不变。
 - 显式空 `edges` 披露 `provenCount=0`；缺文件、坏 JSON、无真实身份却给 projectUuid 均退 2 且不写报告。live、PCB view、finalize、在线 checkup、单板均拒绝；在线拒绝发生在锁与在线加载器之前。
 - 只读对抗复核发现显式 `--interconnect ""` 曾被当成未给参数。两个 parser 的默认值改为 None、六处闸门改为 `is not None` 后，空字符串在离线/在线/finalize 均拒绝，并新增 10 项回归。另修复空白 BOARD uuid 漏出裸 ValueError、重复 BOARD uuid 首板命中和报告渲染器 return 后重复死代码。
 - 两次解析器变异均被测试抓住：布尔版本被误接受（1 failed / 111 passed）、正反重复边未拒绝（2 failed / 110 passed）；随后用 cp 备份恢复并核对 SHA-256。日志在 `.tmp_041s2_core/mutation1.log`、`mutation2.log`。
@@ -117,4 +118,7 @@
 - 第二轮全量 Python 为 **9681 passed / 25 skipped / 2 failed / 1 warning，1064.46 s**。仅剩既有的 `test_193_process_guards.py::test_whole_suite_run_queues_behind_two_slots`（`~/.boardwise/pytest-slots` 权限）与 `test_193_secrecy_hooks.py::test_the_posix_installer_sets_hooks_path_and_the_exec_bit`（Git/MSYS `0xC0000022`）；不宣称全量全绿。
 - finalize 修复后的最终聚焦集为 **327 passed**；文档声明与仓库卫生测试 **43 passed**，`tools/check_repo_hygiene.py` 和 `git diff --check` 通过。
 - connector **576 passed**、typecheck 通过；DSH **129 passed / 1 skipped**、typecheck/build 通过；Rust **111 passed / 4 ignored**，fmt/clippy/test 通过。
-- 未提交、未推送、未发布、未跑真机。仍未覆盖 V3/V4 宿主、eprj2 多板、真实多板 eprj3 与 projectUuid 实测、真实 2 板声明路径、CBB 和板间线束；S3/S4 不自动接续。
+- 真实 2 板 `.epro2`（`ProPrj_高速电机控制器_2026-09-16.epro2`）的声明路径由 `test_real_two_board_declaration_preserves_both_report_baselines` 覆盖，模块级 model fixture 复用解析器。声明文件在 tmp 里按模型动态生成（两板各自独有的真实网名），不写死 uuid/net，不给 projectUuid。读数：`review --json` 无参与带声明**逐字节相同**（仍只有 `findings/summary`），两次退出码均 1，基线 71 findings / 22E-1W-48I；`checkup --file` 两次退出码均 1，findings **229**、summary **22E-14W-193I**、`completion.verdict="incomplete"`、`warning_triage` **14** 行，四者在两跑间完全相等（该夹具的 checkup 数字由测试比对给出，未硬编码）。带声明 section `count=38` 且 `nets` 与无参逐项相同（无 E0 组被移动、合并或删除）、`provenCount=1`、proven 行两端（uuid/title/netName）/`declaredBy`/note/`evidenceLevel="engineer-declared"`/`merged=false` 全部正确；无参 section 无 `proven`/`provenCount` 键。`review --md` 与 checkup `report.md` 的跨板段逐字相同。
+- 本轮只新增这 1 个测试，聚焦命令 `.venv/Scripts/python.exe -m pytest tests/test_041s2_interconnect.py tests/test_041_cross_board_nets.py -q -n 4 --dist loadfile --basetemp=.tmp_pt_041s2_motor` 为 **173 passed**（45.86 s）；主代理独立复跑该测试为 **1 passed / 139 deselected**。
+- 本轮最终全量 Python 为 **9682 passed / 25 skipped / 2 failed / 1 warning，1299.75 s**。仍只有上述两个既有 Windows 环境失败，不宣称全量全绿；connector **576 passed**、typecheck 通过，DSH **129 passed / 1 skipped**、typecheck/build 通过，Rust **111 passed / 4 ignored**，fmt/clippy/test 通过。文档与卫生测试 **43 passed**。
+- 未提交、未推送、未发布、未跑真机。仍未覆盖 V3/V4 宿主、eprj2 多板、真实多板 eprj3 与 projectUuid 实测、CBB 和板间线束；S3/S4 不自动接续。

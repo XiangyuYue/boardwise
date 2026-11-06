@@ -909,13 +909,27 @@ def test_the_very_edge_first_board_wins_would_have_accepted_is_refused() -> None
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FOC = FIXTURES / "ProPrj_毕设FOC驱动板_2026-09-17.epro2"
+MOTOR = FIXTURES / "ProPrj_高速电机控制器_2026-09-16.epro2"
 GOLDEN = FIXTURES / "ch340_golden.epro2"
 
 #: The two numbers this fixture measured before S2 (S1 froze them): the review's
-#: 45 rows / 30-1-14 and checkup's 241 rows / 50-21-170 with `incomplete`. A
+#: 45 rows / 30-1-14 and checkup's **239** rows / 50-20-169 with `incomplete`. A
 #: declaration is disclosure only, so not one of them may move.
+#:
+#: 241 / 50-21-170 was S1's reading and is **no longer** the fixture's: 529 put
+#: the mid-distance decoupling band in (2.2 µF / 4.7 µF count as mid-range caps
+#: now), so one `decap-required-caps` WARN and the INFO that carried it left the
+#: run — 239 = 50 E + 20 W + 169 I. That move belongs to 529's rule change, and
+#: S2's own claim is narrower: the declaration neither adds a row nor moves one,
+#: which is why the review reading (30/1/14) is untouched.
 REVIEW_SUMMARY = {"ERROR": 30, "WARN": 1, "INFO": 14}
-CHECKUP_COUNTS = (50, 21, 170)
+CHECKUP_COUNTS = (50, 20, 169)
+
+#: The two-board fixture's review reading, frozen by S1 in
+#: `test_041_cross_board_nets.py` (22 ERROR / 1 WARN / 48 INFO = 71 rows). Its
+#: checkup numbers are *not* written down here: only the declaration path is new,
+#: and the test compares the two checkup runs instead of guessing a constant.
+REVIEW_MOTOR_SUMMARY = {"ERROR": 22, "WARN": 1, "INFO": 48}
 
 
 @pytest.fixture(scope="module")
@@ -923,6 +937,13 @@ def foc_model():  # noqa: ANN201 — the parser's own ProjectModel
     from boardwise.parsers.schematic import build_project_model
 
     return build_project_model(FOC)
+
+
+@pytest.fixture(scope="module")
+def motor_model():  # noqa: ANN201 — the parser's own ProjectModel
+    from boardwise.parsers.schematic import build_project_model
+
+    return build_project_model(MOTOR)
 
 
 def _pair_with_distinct_names(model):  # noqa: ANN001, ANN202
@@ -970,7 +991,7 @@ def _section_text(markdown: str) -> str:
 def test_a_declared_tie_reaches_both_reports_and_moves_no_number(tmp_path, foc_model):
     """Requirement 1: one declaration, two products, the same reading.
 
-    ``checkup --file`` keeps its exit 1, its 241 findings and its 50/21/170 with
+    ``checkup --file`` keeps its exit 1, its 239 findings and its 50/20/169 with
     ``completion.verdict == incomplete``; ``review`` keeps its exit 1 and its 45
     findings with 30/1/14. What is *added* is ``provenCount: 1`` and one row
     naming both real ends — in `report.json`, in `report.md` and in
@@ -998,7 +1019,7 @@ def test_a_declared_tie_reaches_both_reports_and_moves_no_number(tmp_path, foc_m
     ) == 1, "exit 1 = ERROR findings present, measured on this fixture before S2"
 
     report = json.loads((out / "report.json").read_text(encoding="utf-8"))
-    assert len(report["findings"]) == 241, "041 adds a channel, not findings"
+    assert len(report["findings"]) == 239, "041 adds a channel, not findings"
     summary = report["summary"]
     assert (summary["errorCount"], summary["warnCount"], summary["infoCount"]) == (
         CHECKUP_COUNTS
@@ -1048,6 +1069,121 @@ def test_a_declared_tie_reaches_both_reports_and_moves_no_number(tmp_path, foc_m
     assert _section_text(review_md) == _section_text(markdown), (
         "one renderer, two reports: the disclosed section must be identical"
     )
+
+
+def test_real_two_board_declaration_preserves_both_report_baselines(tmp_path, motor_model):
+    """The same contract on the real two-board fixture, where every group is a pair.
+
+    The FOC project is three boards, so its section mixes 34 pairs with 5 triples.
+    This one is the pure pair case (2 boards, 156 instances, 38 shared names, 38
+    unproven edges), and the declared pair is read out of the model — never a
+    literal uuid or net name — so a changed fixture cannot pass by coincidence.
+
+    What must hold: `review --json` is **byte-identical** with and without the
+    declaration (it is still the findings array, no field, no row), both commands
+    keep their exit code, checkup's `findings`/`summary`/`completion`/
+    `warning_triage` are equal run-to-run, and the declared reading adds one
+    `proven` row *beside* the 38 E0 groups without moving, merging or deleting
+    one of them. The two Markdown reports print that section verbatim.
+    """
+    from boardwise import cli
+
+    first, first_net, second, second_net = _pair_with_distinct_names(motor_model)
+    note = "CN2 pin1-pin4 线束"
+    decl = _declaration(
+        tmp_path / "declaration.json",
+        [
+            {
+                "from": _end_of(first.board.uuid, first_net),
+                "to": _end_of(second.board.uuid, second_net),
+                "declaredBy": DECLARED_BY_ENGINEER,
+                "note": note,
+            }
+        ],
+    )
+
+    plain_json, declared_json = tmp_path / "plain.json", tmp_path / "declared.json"
+    plain_rc = cli.main(["review", str(MOTOR), "--json", str(plain_json)])
+    review_md = tmp_path / "review.md"
+    declared_rc = cli.main([
+        "review", str(MOTOR), "--md", str(review_md), "--json", str(declared_json),
+        "--interconnect", str(decl),
+    ])
+    assert plain_rc == declared_rc == 1, "ERROR findings present either way"
+    assert declared_json.read_bytes() == plain_json.read_bytes(), (
+        "review --json is still the findings array: a declaration adds no field "
+        "and no row, so the two runs must agree byte for byte"
+    )
+    payload = json.loads(declared_json.read_text(encoding="utf-8"))
+    assert set(payload) == {"findings", "summary"}
+    assert payload["summary"] == REVIEW_MOTOR_SUMMARY
+    assert len(payload["findings"]) == 71, "22 + 1 + 48, the pre-S2 row count"
+
+    declared_rows = [
+        line
+        for line in _section_text(review_md.read_text(encoding="utf-8")).splitlines()
+        if line.startswith("- 已声明：")
+    ]
+    assert len(declared_rows) == 1, "one declared tie, one row"
+    (declared_row,) = declared_rows
+    for piece in (
+        first.board.uuid[-6:], second.board.uuid[-6:],
+        first.board.title, second.board.title,
+        f"`{first_net}`", f"`{second_net}`", note,
+    ):
+        assert piece in declared_row, piece
+
+    out_plain = tmp_path / "checkup-plain"
+    out_declared = tmp_path / "checkup-declared"
+    assert cli.main(
+        ["checkup", "--file", str(MOTOR), "--out", str(out_plain)]
+    ) == plain_rc
+    assert cli.main([
+        "checkup", "--file", str(MOTOR), "--interconnect", str(decl),
+        "--out", str(out_declared),
+    ]) == declared_rc, "a declaration is disclosure, not a re-measurement"
+
+    plain = json.loads((out_plain / "report.json").read_text(encoding="utf-8"))
+    declared = json.loads((out_declared / "report.json").read_text(encoding="utf-8"))
+    for key in ("findings", "summary", "completion", "warning_triage"):
+        assert declared[key] == plain[key], key
+
+    plain_section = plain["source"]["crossBoardNets"]
+    assert "proven" not in plain_section and "provenCount" not in plain_section, (
+        "the no-argument path keeps S1's key set exactly"
+    )
+    assert plain_section["count"] == 38, "two boards: one group per shared name"
+
+    section = declared["source"]["crossBoardNets"]
+    assert section["count"] == 38
+    assert section["nets"] == plain_section["nets"], (
+        "not one E0 group moved, merged or disappeared"
+    )
+    assert section["boards"] == plain_section["boards"]
+    assert section["provenCount"] == 1
+    (row,) = section["proven"]
+    assert row["from"] == {
+        "boardUuid": first.board.uuid,
+        "boardTitle": first.board.title,
+        "netName": first_net,
+    }
+    assert row["to"] == {
+        "boardUuid": second.board.uuid,
+        "boardTitle": second.board.title,
+        "netName": second_net,
+    }
+    assert row["declaredBy"] == DECLARED_BY_ENGINEER
+    assert row["note"] == note
+    assert row["evidenceLevel"] == "engineer-declared"
+    assert row["merged"] is False
+    for net in section["nets"]:
+        assert net["evidenceLevel"] == "E0", net["name"]
+        assert net["merged"] is False, net["name"]
+
+    checkup_md = (out_declared / "report.md").read_text(encoding="utf-8")
+    assert _section_text(checkup_md) == _section_text(
+        review_md.read_text(encoding="utf-8")
+    ), "one renderer, two reports: the disclosed section cannot drift"
 
 
 def test_a_declared_same_name_group_upgrades_only_the_named_endpoints(tmp_path, foc_model):

@@ -1,10 +1,22 @@
-# 审查分阶段交付的运行时闸 — 规划（本批未实施）
+# 审查分阶段交付的运行时闸（R1/R2/R4 strict 已实施，R3 待授权）
 
-> 状态：**规划/本批未实施**。这份文件只写「缺口是什么、验收怎么打」，
-> 仓库里**没有任何一行**代码在做下面的事。SOP 的 [`docs/review-sop.md`](../docs/review-sop.md)
-> §3.0a 已把 AI 侧纪律写死，但纪律不是闸：同一基准重复 checkup 照样跑，
-> 第三次 DRC 照样跑，私有动作照样能调。本文列的四件是把纪律变成机器行为的候选，
-> **全部未落地**，不得在报告或交付里写成「已实施/已拦住」。
+> 状态：**部分实施（2026-11-06）**。R1 版本化 RunManifest 与语义 diff、R2
+> `checkup --file --strict` / `--new-evidence` 重算 guard、R4 `review finalize --strict-partial`
+> 四档披露校验**已实现**（各自为显式 opt-in，工作树未提交；任务书与证据见
+> [`tasks/541_offline_runtime_gates.md`](541_offline_runtime_gates.md)）；
+> R3 的 harness pre-execute 闸需 DSH profile 重启与独立加载授权，**未实施**；
+> 公开接口 allowlist 也**未实施**。本文其余部分仍是缺口与验收口径，不因 R1/R2/R4 落地而变。
+
+| 项 | 状态 | 落点 |
+|---|---|---|
+| R1 版本化 RunManifest 与语义 diff | 已实施（shared 切片，未接 CLI） | `src/boardwise/core/runmanifest.py`；`tests/test_541_run_manifest.py` |
+| R2 `--strict` 重算 guard | 已实施（opt-in，默认行为不变） | `src/boardwise/cli.py`；`commands/review.py`；`tests/test_541_strict_reuse.py` |
+| R3 DSH pre-execute 硬闸 | **未实施**（等 profile 重启授权） | 无 |
+| R4 `--strict-partial` 四档披露 | 已实施（opt-in 披露闸） | `engines/evidence.py`；`tests/test_541_partial_categories.py` |
+| 公开接口 allowlist | **未实施** | 无 |
+
+> SOP 的 [`docs/review-sop.md`](../docs/review-sop.md) §3.0a 仍是纪律，不是闸：只有显式 strict
+> 路径才有机器行为，默认 `checkup` / `finalize` 不变。本文的四件不得据此写成「全部已落地」。
 
 ## 背景（现状，可核对）
 
@@ -110,5 +122,6 @@ pre-execute 检查：没有 `initial/partial` 检查点就发起的第二批深�
 
 R1 是 R2/R4 的数据基础（manifest 里才有 baseline 与次数）；R3 独立于 CLI，可与 R2 并行
 但不同批。任何 `shared`/CLI 改动走 [`tasks/shared-platform.md`](shared-platform.md)
-集成锁，串行落地；每项落地前先在对应任务书里写清本批边界与匿名验收，落地后把本文
-对应小节改成「已实施 + 证据路径」——**在那之前，这四项都只是规划**。
+集成锁，串行落地。R1/R2/R4 的 strict 切片已实施（R1 未接 CLI，R2/R4 是显式 opt-in）——
+证据在 [`tasks/541_offline_runtime_gates.md`](541_offline_runtime_gates.md)；
+**R3 与公开接口 allowlist 仍未实施**，本文相应小节保持缺口口径。

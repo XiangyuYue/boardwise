@@ -842,6 +842,18 @@ NOT_WIRED: dict[str, str] = {
         "on purpose -- not a lost record, so not summed here; disclosed instead "
         "through coverage.deletedDocuments (non-zero only), which gates nothing"
     ),
+    # --- B5 fixA: the two PAD_NET keys disagreeing --------------------------
+    # A pad whose `PAD_NET.padNum` names a different pin than the footprint's own
+    # `num` for that pad element id. Nothing was dropped and nothing was
+    # rewritten: the pad keeps the net the file wrote for its element id and the
+    # counter only reports that the two records disagree (B5 repair ruling). Not
+    # a coverage loss, so not summed into recordsDropped; not a verdict mover
+    # either — the review already sees both readings through its own rules.
+    "pad_net_pin_mismatch": (
+        "B5 fixA: pads whose PAD_NET padNum disagrees with the footprint's num "
+        "-- a numbering disclosure, not a record loss (the pad keeps its pad-id "
+        "net), so it neither sums into recordsDropped nor moves the verdict"
+    ),
 }
 
 

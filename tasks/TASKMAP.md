@@ -23,7 +23,7 @@
   540 平台准备、CH343 示例、V4 首批适配和 #89 同网测量修复也已进入本版。
 - **V4 / #89 最近四笔**：`e431e94`（V4 工作流）、`ba4fbae`（同网测量）、
   `1a7e4a1`（测量状态文案）、`643cf6d`（V4 证据边界）。V4 归档已从单 PCB 走到**逐板**
-  （038P 工作树，未提交；`test V4` 两空板对账）；**多板 + 库文档同名、部分跨视图语义和
+  （038P 已随 `a4fc387` 提交；`test V4` 两空板对账）；**多板 + 库文档同名、部分跨视图语义和
   实时 PCB 位图缺口不关闭、不隐瞒**。原生 CBB 另立独立方向 038Q（调研/任务书，待真实样本）。
 - **540 最终候选证据已产生**：`evidence/540/candidate-regression.md` 记录 Python
   **8132 passed / 94 skipped / 5 xfailed / 0 failed**，其他门禁与差分结果见同文件；
@@ -89,7 +89,7 @@
 | 039批② | 审查流程升级（schema /3） | 已落 | tasks/039b-review-flow-upgrade.md；outputs/039c_* |
 | 040 | 解析器页归属修复 | 已落 | tasks/040-parser-page-scope.md |
 | 040b | 一板一模型 | 已落 | tasks/040b-per-board-model.md |
-| 041 | 跨板网络 | S1/S2 已落，S3 暂缓，S4 待真实样本 | tasks/041-cross-board-net-DRAFT.md；tasks/041s1_net_instances.md；tasks/041s2_interconnect.md |
+| 041 | 跨板网络 | S1/S2 已落（`6253a0b`），S3 暂缓，S4 待真实样本 | tasks/041-cross-board-net-DRAFT.md；tasks/041s1_net_instances.md；tasks/041s2_interconnect.md |
 | 042 | 解析器 parentId 双程挂载 | 已落 | `5f7cd58`；tasks/042-parser-attr-parentid.md |
 | 043 | MPN 阻值解码偏差 | 已落 | tasks/043-mpn-value-decode.md |
 | 044 | arch 骨架生成器 | 已落 | tasks/044-architecture-self-consistency.md |
@@ -288,7 +288,7 @@
 | 189A1 | 撤 PadGeometry.layer_id | 已落 | `e97c0fb`；tasks/189a1_layer_id.md |
 | 189A2 | 原理图视图伪网（镜像引脚落位） | 已落 | `e97c0fb`；tasks/189a2_schematic_nets.md |
 | 189A2c | 跨视图检查读数复核（527C）：**旧 7/8/6/2 是错配探针**（没走 154 板链），真读数 34 条/5 板入口，A 0 / B 34 / C 0；`min_pins` 保持 3 | 已落（本批 v0.5.18） | outputs/189a2c/evidence.md；tasks/527_pre060_loose_ends.md §527C |
-| 189A2d | 跨视图 note 按**几何**分成「没画线 / 网名不同 / 落位嫌疑」，并点名全部位号（现在只列前 6） | 规划（527C2） | tasks/527_pre060_loose_ends.md §527C |
+| 189A2d | 跨视图 note 按**几何**分成「没画线 / 网名不同 / 落位嫌疑」，并点名全部位号（原来只列前 6） | 工作树（2026-11-06 完成，未提交） | tasks/527c2_cross_view_geometry.md；tasks/527_pre060_loose_ends.md §527C |
 | 189B | 中危打包（intent/stale/判型） | 已落 | `e97c0fb`；tasks/189b_mid_pack.md |
 | 189C | 离线几何渲染 canvas-svg | 已落 | `e9e914c`；tasks/189c_canvas_render.md |
 | 189Cf | 底层位号丝印画出视窗 | 已落 | `de2116c`；（无独立任务书） |
@@ -338,9 +338,9 @@
 | 527 | **v0.6.0 之前必须收口的尾巴**（527A `IntentSource` 转发三小节 / 527B connector 页型守卫 `/` 信封文档 / 527C 189A2 分类裁定 / 527D = 523 / 527E 文档收口） | 已落（v0.5.18 内测） | tasks/527_pre060_loose_ends.md |
 | 527D2 | `parts classify` 的证据**不落货架**（`machine_verified` 的分类事后无法追溯出处，与 521 口径不一致）；冻结态下内置架条目改不了的提示也没有 | 规划 | tasks/527_pre060_loose_ends.md §527D「已知边界」 |
 | 527D3 | **`entry.category` 的直读点**（`rules/pcb/mcureset`/`mcusupply`/`crystal`/`regulator`/`fbplacement`/`foc`/`focground`、`rules/params`/`paramspec`/`decap`/`archclosure`/`railratings`、`core/architecture`/`power_domains`）绕过 `shelf_declaration`，机器档分类仍能驱动结论规则 | **已落**（2026-10-19，工作树待发） | `partkind.declared_category` + `partkind.category_verdict`（ACCEPTED/GATED/ABSENT）+ `facts.category_gate_finding`；17 个读点逐条判档；证据 `outputs/527d3/evidence.md`；指纹 `b05d3384` / `674e07e1` |
-| 528 | **0.6.0 门槛重写 + 四条裁决落地**（R4-C `update-connector --no-reload`；191D 数值不动；绘图线做硬门槛；527D2/D3 升为 0.6.0 阻塞项） | 在途 | tasks/528_060_gate.md |
-| 529 | 191D 的**分类空白带**（`HF ≤ 1µF` 与 `bulk ≥ 10µF` 之间的 2.2µF/4.7µF 落 unknown → 假 WARN；补档后撤销 191D 的「输入侧无候选才 WARN」收窄） | 规划（非阻塞） | tasks/528_060_gate.md §4 |
-| 528A | `bridge update-connector --no-reload`：写记录不 reload，点一次扩展菜单生效（R4 实验④的产物） | 在途 | tasks/528_060_gate.md §1 |
+| 528 | **0.6.0 门槛重写 + 四条裁决落地**（R4-C `update-connector --no-reload`；191D 数值不动；绘图线做硬门槛；527D2/D3 升为 0.6.0 阻塞项） | 已落 | tasks/528_060_gate.md |
+| 529 | 191D 的**分类空白带**（`HF ≤ 1µF` 与 `bulk ≥ 10µF` 之间的 2.2µF/4.7µF 落 unknown → 假 WARN；补档后撤销 191D 的「输入侧无候选才 WARN」收窄） | 工作树（2026-11-06 完成，未提交；mid 档补齐，全 bulk 输入档保留 INFO 特例） | tasks/529_decap_mid_band.md；tasks/528_060_gate.md §4 |
+| 528A | `bridge update-connector --no-reload`：写记录不 reload，点一次扩展菜单生效（R4 实验④的产物） | 已落（`6a563e3`） | tasks/528_060_gate.md §1；tests/test_528a_no_reload.py |
 | 530A | **岛页旗标**：`IslandBlock.power_symbols`（加性）+ 跨岛地/电源一律旗标（S-16），旗标进 `bbox`；真机 10 旗标落 `test` 新页，连通 44 脚 0 失配。设计见 `evidence/523/DESIGN.md` | 工作树 | evidence/530a/（报告 + probes + raw + 落图 PNG/SVG） |
 | 530B | **岛内布局核心**：主器件居中（S-03）+ 两脚件贴它服务的引脚（S-04）+ 去耦贴供电脚 ≤30（S-05）+ 同规格成排（S-06）；单岛路径几何逐字节不变 | 工作树 | evidence/530b/ |
 | 530C | **岛内连线修订**：`_route` 加 `bends` / `true_crossings` 两键与「压外来针尖 / 落在外来导体上」两档过滤（S-09/S-11）；导线网名清空档实测硬违反 8→0 并查出开关 | 工作树 | evidence/530c/ |
@@ -357,26 +357,28 @@
 | 538 | archipelago 独立子岛编译与局部回滚（不含组装配/页级 pack/整页交付） | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/538_island_compile.md；Python 7708 passed；connector 536 passed；dsh-plugin 113 passed/1 skipped |
 | 539 | 537/538 对抗审查、真机只读验收与交付证据修复（F1–F9） | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/539_adversarial_real_acceptance.md；真机 incomplete/partial 如实交付；最终 Python 7731 / connector 536 / DSH 113+1 |
 | 540 | 0.6.0 前工作区整理、审查/绘制解耦、Rust 迁移平台准备；不改业务算法、不批量翻译 | 已落（A/B/C + 对抗修复 + 只读真机追加验收；最终候选 8132 passed / 94 skipped / 5 xfailed） | tasks/540_pre060_platform.md；tasks/540b_review_draw_decoupling.md；tasks/540c_rust_platform.md；**evidence/540/candidate-regression.md**；outputs/review/540/ |
-| 541 | **审查分阶段交付与可中断流程**：initial/partial 检查点、冻结输入、同基准复读、中止只读已有产物出 partial；RunManifest / 重算 guard / harness 硬闸仍为规划 | 已落 | docs/review-sop.md §3.0a；tasks/review-stage-runtime-gates.md；tests/test_review_stage_delivery.py；两份 SKILL 的 3.0a 路由 |
+| 541 | **审查分阶段交付与可中断流程**：initial/partial 检查点、冻结输入、同基准复读、中止只读已有产物出 partial；运行时闸 R1 RunManifest、R2 `--strict` 重算 guard、R4 `--strict-partial` 已实施（显式 opt-in），R3 DSH pre-execute 与公开接口 allowlist 未实施 | 已落（§3.0a 纪律层）；R1/R2/R4 strict 工作树（2026-11-06，未提交） | docs/review-sop.md §3.0a；tasks/review-stage-runtime-gates.md；tasks/541_offline_runtime_gates.md；tests/test_review_stage_delivery.py、test_541_run_manifest.py、test_541_strict_reuse.py、test_541_partial_categories.py |
 | 542 | **原理图绘制 3.0**：drawing-line 集成、反激整页三关、四缝挖洞修复、RC 冻结与 V4 交接；CH343 示例 | **P0 完成并纳入 0.6.0**：P4 三关、岳人眼与重开 `saved_verified` 全过 | tasks/542_schematic_3_0_nov01.md；evidence/542/final-p4.md；evidence/201h/live/ |
-| 543 | **拓扑角色驱动的构造式布局**：去耦服务关系、文字/旗标/通道硬预留、成对信号与同拓扑自动基准；**agent 语义分岛，解释器负责几何**；自动、参考重放和 agent 微调分开验收 | **543K/L 工作树，P38=`0ec4dc022ef38563` 已过三关**：可见贴名、绕行距离分簇、并联去耦双端同策略、信号支路横向与成对文字同侧、D± 联合等长已落地；R7/R8 横向且文字在左，CC 各130直连，D± 为40/40、60/60、40/40；C9/C10共地、R7/R8独立地旗。11 器件/49 计划导线/19 旗，lint 0E/0W/0I、两种逐脚均55/55+3 NC、主代理逐岛目检通过；旧 P37 已删，Board2 P1 不动，DRC 仅规格 NC+库属性 WARN；持久化未重开验证，第二拓扑未做 | tasks/543_semantic_layout.md；evidence/543j/、evidence/543kl/ |
+| 543 | **拓扑角色驱动的构造式布局**：去耦服务关系、文字/旗标/通道硬预留、成对信号与同拓扑自动基准；**agent 语义分岛，解释器负责几何**；自动、参考重放和 agent 微调分开验收 | **543K/L 已随 `924a180` 提交，P38=`0ec4dc022ef38563` 已过三关**：可见贴名、绕行距离分簇、并联去耦双端同策略、信号支路横向与成对文字同侧、D± 联合等长已落地；R7/R8 横向且文字在左，CC 各130直连，D± 为40/40、60/60、40/40；C9/C10共地、R7/R8独立地旗。11 器件/49 计划导线/19 旗，lint 0E/0W/0I、两种逐脚均55/55+3 NC、主代理逐岛目检通过；旧 P37 已删，Board2 P1 不动，DRC 仅规格 NC+库属性 WARN；持久化未重开验证，第二拓扑未做 | tasks/543_semantic_layout.md；evidence/543j/、evidence/543kl/ |
 | 544 | **checkup / arch 写盘失败边界**：目录不可写、`--out` 为普通文件、`arch --out` 为目录或骨架写不进去，均 exit 2 + 人话、无 traceback；部分产物已落盘时如实报未完整交付 | **已落**：8 条专项测试，主代理含邻域 213 passed；其它命令写盘合同不改，真实 ACL 只用 monkeypatch 等效分支覆盖 | tasks/544_checkup_output_errors.md；tests/test_544_output_errors.py；.tmp_544/ |
 | 544P | **DSH 命令行凭据打码**：`commandLine` 在正常返回与 spawn 异常进入模型前统一过 `redactSecrets`，实际 spawn argv 不变 | **已落**：新增 2 回归；DSH 129 passed / 1 skipped + typecheck/build；原 T-E07 rawOccurrences=0、maskedOccurrences=2 | dsh-plugin/src/cli.ts；dsh-plugin/tests/cli.spec.ts；.tmp_test_run/T-E07/ |
 | 545 | **checkup 同目录 OS 互斥与串行重跑提示**：并发后到者在模型/daemon/报告前 exit 2，锁不可用也失败关闭；崩溃由内核释放，串行续审保留并打印 rerun | **已落**：13 条专项含真实跨进程/崩溃释放；主代理含 544 与邻域 226 passed；POSIX 分支未实测 | tasks/545_checkup_output_lock.md；tests/test_545_checkup_output_lock.py；.tmp_545/ |
-| V4 | **立创 EDA Pro 4.x 适配**：归档与 `.eprj3` 单 PCB 审查、在线容器/page、主机 ERC 与证据边界 | **首批已随 `e431e94` 落入 0.6.0**；**归档多 PCB 逐板已在 038P 工作树完成（未提交）**；多板 + 库文档同名、真实 NC、缺省 `yAxisDirection`、部分跨视图语义、实时 PCB 位图与后续真样本仍开放。**边界口径见 `docs/v3-v4-boundary.md`** | tasks/038-eprj3-tierA.md；tasks/038_v4_live_gaps.md；tests/test_038p_eprj3_multi_pcb.py；docs/v3-v4-boundary.md |
+| V4 | **立创 EDA Pro 4.x 适配**：归档与 `.eprj3` 单 PCB 审查、在线容器/page、主机 ERC 与证据边界 | **首批已随 `e431e94` 落入 0.6.0**；**归档多 PCB 逐板已随 `a4fc387` 提交（038P）**；多板 + 库文档同名、真实 NC、缺省 `yAxisDirection`、部分跨视图语义、实时 PCB 位图与后续真样本仍开放。**边界口径见 `docs/v3-v4-boundary.md`** | tasks/038-eprj3-tierA.md；tasks/038_v4_live_gaps.md；tests/test_038p_eprj3_multi_pcb.py；docs/v3-v4-boundary.md |
 | 038R | **V4 审查线差分调研**：容器/在线通道与 P0–P2 顺序、共享模型边界 | 调研完成，首批已实施 | tasks/038_v4_review_line_research.md；outputs/review/v4-review-line-research.md |
-| 038S | **真实 eprj3 样本只读差分**：证实原理图一致与 PCB builder 复用，发现 EOF、覆盖、版本与 POUR/POURED 单位差 | 样本调研完成，首批适配已实施；POURED 1:10 与旋转矩形已由 038K 关闭，归档多 PCB 已由 038P 工作树关闭（未提交）；真实 NC、缺省 yAxisDirection 与 eprj3 在线容器仍开放 | tasks/038_v4_sample_research.md；outputs/review/v4-review-line-research.md §6；.tmp_v4_sample_20261031/REPORT.md |
-| 038F | **V3/V4 容器隔离与单 PCB Tier-B**：F1 EOF、F2 版本、F3 覆盖、F4 source、F5 CLI/checkup；共享规则/报告 | **已随 `e431e94` 落入候选**；**归档多 PCB 逐板已由 038P 工作树关闭（未提交；`test V4` 两空板对账，真实多板 + 库工程未实测）**；单模型 `review --view pcb` 多板仍拒绝，真实 NC 与 eprj3 在线容器未关闭，POURED 单位与旋转矩形不再列为开放项 | tasks/038_v4_isolation_plan.md；outputs/review/v4-eof-frame.md；v4-eprj3-version.md；v4-eprj3-pcb-coverage.md；v4-eprj3-pcb-source.md；v4-eprj3-tierb.md；tests/test_038p_eprj3_multi_pcb.py |
+| 038S | **真实 eprj3 样本只读差分**：证实原理图一致与 PCB builder 复用，发现 EOF、覆盖、版本与 POUR/POURED 单位差 | 样本调研完成，首批适配已实施；POURED 1:10 与旋转矩形已由 038K 关闭，归档多 PCB 已由 038P 关闭并于 `a4fc387` 提交；真实 NC、缺省 yAxisDirection 与 eprj3 在线容器仍开放 | tasks/038_v4_sample_research.md；outputs/review/v4-review-line-research.md §6；.tmp_v4_sample_20261031/REPORT.md |
+| 038F | **V3/V4 容器隔离与单 PCB Tier-B**：F1 EOF、F2 版本、F3 覆盖、F4 source、F5 CLI/checkup；共享规则/报告 | **已随 `e431e94` 落入候选**；**归档多 PCB 逐板已由 038P 关闭并随 `a4fc387` 提交（`test V4` 两空板对账，真实多板 + 库工程未实测）**；单模型 `review --view pcb` 多板仍拒绝，真实 NC 与 eprj3 在线容器未关闭，POURED 单位与旋转矩形不再列为开放项 | tasks/038_v4_isolation_plan.md；outputs/review/v4-eof-frame.md；v4-eprj3-version.md；v4-eprj3-pcb-coverage.md；v4-eprj3-pcb-source.md；v4-eprj3-tierb.md；tests/test_038p_eprj3_multi_pcb.py |
 | 038O | **V4.1.93 在线只读验收与 O1–O3 修复**：doctor 9/9、page 采集、PCB render 不适用、逐条 ERC 与证据缺口披露 | **已随 `e431e94`/`643cf6d` 落入候选**；板级仍 incomplete，多 PCB/全格式语义未关闭 | tasks/038_v4_online_acceptance.md；tasks/038_v4_live_gaps.md；outputs/review/v4-online-acceptance.md；outputs/review/v4-live-gaps-acceptance.md |
 | 038G | **Short-Symbol 网表语义**：跳线不再产生假 `Symbol` 网，按页并网；冗余跳线不再翻转普通簇的显式标签/电源旗标优先级 | 已落 `466ca6e`，冗余守卫随 `d542f14` 收口；合成回归含跨页隔离、悬空脚与命名优先级 | tests/test_038g_short_symbol.py；tests/test_040_page_scope.py |
 | 038J | **V4 分歧库副本诊断**：SYMBOL/DEVICE 同 UUID 的模型可见定义不同才计数，纯元素重编号不误报；first-wins 不变，冲突进入 console/md 与 coverage 闸 | 已落 `d542f14`；相同复制 0、真实冲突逐份计数，`coverage.recordsDropped` 含第四项 | tests/test_038_eprj3.py；tests/test_020_parse_drops.py；tests/test_072_coverage_gate.py |
 | 038K | **旋转矩形与 POURED 几何**：R 路径按存储 `(x,y)` pivot、声明角度 CCW 读取；空 POURED supersession 语义不变 | 已落 `d542f14`；54 父区域/1843 点 containment 全过，PGND 铜岛 30→12 有元素与面积证据；旋转圆角和 BOARD_OUTLINE 不扩支持 | tests/test_038k_rotated_rectangles.py；tests/test_135_poured_result.py；tests/test_131f_mcu_crystal_keepout.py |
 | 038L | **Rust SYMBOL 垂直迁移**：V3 zIndex/V4 pin_id、两阶段 ATTR、重复脚号逐字段合并、重编号不参与冲突判断 | 已落 `d542f14`；Python/Rust 9-case 差分一致，工作区 74 passed/4 ignored | rust/crates/boardwise-core/src/symbol.rs；tests/test_038l_symbol_differential.py；docs/rust-platform.md |
-| 038M | **Rust DEVICE 垂直迁移**：`device-library-sample` 成为第 8 个 kind，首 `META`、重复 uuid first-wins、模型可见差异才计冲突 | 工作树完成，未提交；case book 9→11，Python/Rust 投影一致，旧 9 case 不变；**属性浮点溢出的文本差分已修**（与 Python 对齐 `inf`/`-inf`，`json.dumps` 的 `NaN`/`Infinity` 拼写保留、有限值不变） | rust/crates/boardwise-core/src/device.rs；tests/test_038m_device_differential.py；docs/rust-platform.md |
-| 038N | **Rust FOOTPRINT 库垂直迁移**：`footprint-library-sample` 成为第 9 个 kind，首 `META` 生效、重复 uuid first-wins（空标题占位）、字面 `"null"` 标题保留；输出只有 `schema`+`footprints`，无 stats、无冲突计数 | 工作树完成，未提交；case book 11→13，Python/Rust 投影一致，旧 11 input 不变 | rust/crates/boardwise-core/src/footprint.rs；tests/test_038n_footprint_differential.py；docs/rust-platform.md |
-| 038P | **eprj3 多 PCB 逐板审查**：同一 `source`/`runner` 逐板出 `boards`（title/boardUuid/components/checksRun/findings），`checkup --file` 逐板落地；`_load_model(view=pcb)` 多板**列出板名后拒绝**并指向 `checkup`，单板历史形状不变；**合流守卫见 038P1**（重复板拒绝、分歧库拒绝、相同副本允许、无 uuid 板按 stem 命名） | 工作树完成，未提交；`test V4` 两个空 PCB 在线/离线 `boards`、32 checks、40 findings 一致；**真实多板 + 库工程未实测**（守卫只有合成证据）；`review --view pcb` 多板仍拒绝 | tests/test_038p_eprj3_multi_pcb.py；src/boardwise/parsers/eprj3.py；src/boardwise/engines/pcbreview.py；docs/v3-v4-boundary.md |
-| 038P1 | **多文件合流的三处说谎面**：① 无 `DOCHEAD.uuid` 的板按文件 stem 命名（`pcbTitles` 改为按 PCB 文档顺序的列表，不做 uuid 查表）；② 两份文件同一个 PCB 文档 uuid **明确拒绝**（同一块板导出两次不审两遍、不按标题聚合、不静默去重）；③ `FOOTPRINT`/`DEVICE`/`SYMBOL` 同 uuid 只有**记录序列签名相同**（保留顺序/id/body，仅剔 `DOCHEAD` 的 editVersion/updateTime/version/client/user）才允许合流，**分歧拒绝**、不串板 | 工作树完成，未提交；单文件旧行为不变，旧差分 case 与两空板读数不变；**合成样本证据**，真实多板 + 库工程未实测 | tests/test_038p1_eprj3_multi_guards.py；src/boardwise/parsers/eprj3.py；docs/v3-v4-boundary.md；本地探针 `.tmp_joint_audit/`（ignored，非已提交产物） |
-| 038T | **Rust 声明解析投影垂直迁移**：`footprint-declared-sample` 成为第 10 个 kind，输入 `text`+`value` 走同一对 Python 阅读器（`_collect_footprint_titles` → `_resolve_declared_footprint`），只回答原理图 `Footprint` 字段声明了什么；输出 `schema`+`footprint`+`libraryId`，三个分支不单独出字段 | 工作树完成，未提交；case book 13→15，Python/Rust 15/15 一致，旧 13 input 不变 | rust/crates/boardwise-core/src/footprint.rs；tests/test_038t_footprint_declared.py；docs/rust-platform.md |
+| 038M | **Rust DEVICE 垂直迁移**：`device-library-sample` 成为第 8 个 kind，首 `META`、重复 uuid first-wins、模型可见差异才计冲突 | 已落 `a4fc387`；case book 9→11，Python/Rust 投影一致，旧 9 case 不变；**属性浮点溢出的文本差分已修**（与 Python 对齐 `inf`/`-inf`，`json.dumps` 的 `NaN`/`Infinity` 拼写保留、有限值不变） | rust/crates/boardwise-core/src/device.rs；tests/test_038m_device_differential.py；docs/rust-platform.md |
+| 038N | **Rust FOOTPRINT 库垂直迁移**：`footprint-library-sample` 成为第 9 个 kind，首 `META` 生效、重复 uuid first-wins（空标题占位）、字面 `"null"` 标题保留；输出只有 `schema`+`footprints`，无 stats、无冲突计数 | 已落 `a4fc387`；case book 11→13，Python/Rust 投影一致，旧 11 input 不变 | rust/crates/boardwise-core/src/footprint.rs；tests/test_038n_footprint_differential.py；docs/rust-platform.md |
+| 038P | **eprj3 多 PCB 逐板审查**：同一 `source`/`runner` 逐板出 `boards`（title/boardUuid/components/checksRun/findings），`checkup --file` 逐板落地；`_load_model(view=pcb)` 多板**列出板名后拒绝**并指向 `checkup`，单板历史形状不变；**合流守卫见 038P1**（重复板拒绝、分歧库拒绝、相同副本允许、无 uuid 板按 stem 命名） | 已落 `a4fc387`；`test V4` 两个空 PCB 在线/离线 `boards`、32 checks、40 findings 一致；**真实多板 + 库工程未实测**（守卫只有合成证据）；`review --view pcb` 多板仍拒绝 | tests/test_038p_eprj3_multi_pcb.py；src/boardwise/parsers/eprj3.py；src/boardwise/engines/pcbreview.py；docs/v3-v4-boundary.md |
+| 038P1 | **多文件合流的三处说谎面**：① 无 `DOCHEAD.uuid` 的板按文件 stem 命名（`pcbTitles` 改为按 PCB 文档顺序的列表，不做 uuid 查表）；② 两份文件同一个 PCB 文档 uuid **明确拒绝**（同一块板导出两次不审两遍、不按标题聚合、不静默去重）；③ `FOOTPRINT`/`DEVICE`/`SYMBOL` 同 uuid 只有**记录序列签名相同**（保留顺序/id/body，仅剔 `DOCHEAD` 的 editVersion/updateTime/version/client/user）才允许合流，**分歧拒绝**、不串板 | 已落 `a4fc387`；单文件旧行为不变，旧差分 case 与两空板读数不变；**合成样本证据**，真实多板 + 库工程未实测 | tests/test_038p1_eprj3_multi_guards.py；src/boardwise/parsers/eprj3.py；docs/v3-v4-boundary.md；本地探针 `.tmp_joint_audit/`（ignored，非已提交产物） |
+| 038T | **Rust 声明解析投影垂直迁移**：`footprint-declared-sample` 成为第 10 个 kind，输入 `text`+`value` 走同一对 Python 阅读器（`_collect_footprint_titles` → `_resolve_declared_footprint`），只回答原理图 `Footprint` 字段声明了什么；输出 `schema`+`footprint`+`libraryId`，三个分支不单独出字段 | 已落 `a4fc387`；case book 13→15，Python/Rust 15/15 一致，旧 13 input 不变 | rust/crates/boardwise-core/src/footprint.rs；tests/test_038t_footprint_declared.py；docs/rust-platform.md |
+| 038W | **`PAD_NET` 增量日志的每脚判优**：PCB 每脚投影键只有 `(component, pin)`，旧实现用 `setdefault` 让文件靠前的旧网获胜；改为复用 038U 原子视图的同一 ticket/client 判优，不复制第二套比较规则 | 工作树（2026-11-06 完成，未提交）；最终全量在途 | tasks/038w_pad_net_journal.md；tests/test_038w_pad_net_journal.py |
+| 038X | **默认货架路径与缺失披露**：非 frozen 的默认读写改用 `resources.parts_library()` 绝对路径，只读入口不再把「文件不存在」静默读成「货架为空」；`load_parts` 的「缺文件可建空架」合同不变 | 工作树（2026-11-06 完成，未提交）；最终全量在途 | tasks/038x_shelf_resolution.md；tests/test_038x_shelf_resolution.py |
 | 038Q | **原生 CBB（`block_symbol`）接入调研**：库搜索/身份/归档 → 受控个人库样件与放置 → 写后回读真实 `block_symbol` → 块端口规则；仓库当前无原生实现，`core/blocks.py` 的 `BlockSymbol` 是绘图模板域不是宿主原生块 | **调研/任务书完成（11-03），未开工**；**待真实 CBB 样本**，无样本不开阶段 A；**type 17 待证实**，不得写成事实；不承诺版本/发布日期 | tasks/038q_cbb_native.md；tests/test_doc_claims.py；docs/v3-v4-boundary.md |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）
@@ -432,4 +434,6 @@
 5. **`defect-μ`**：PROGRESS 里唯一无编号的修复条（希腊 μ KeyError），已按原文标题收录。
 
 > **已核（2026-10-17，主代理跑 `git log`）**：草稿中 182–191 长尾、190S、193、193D、201A/201B、R2、R4a 的「工作树」判定**全部升级为 `已落`**，提交号见上表；
-> `515B`（`337f742`）与 `516`（`6ef9ded`）已随 v0.5.15 落账——**全表当前零「工作树」**。
+> `515B`（`337f742`）与 `516`（`6ef9ded`）已随 v0.5.15 落账。**2026-11-06 新增 `工作树` 行的有
+> 038W/038X、189A2d（527C2）、529 与 541 的 R1/R2/R4 strict——均未提交，最终全量在途**；
+> 表内其他仍标 `工作树` 的老行按各自证据列自述，未逐条复核提交状态。

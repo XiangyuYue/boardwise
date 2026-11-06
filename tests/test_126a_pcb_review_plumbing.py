@@ -1605,8 +1605,21 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `producerVersions.rulebody`（541db813）、`contracts/differential/inputs/
     # review-report.json` 的 `completion.sourceVersions.rulebody` 一致，均由官方
     # `tools.build_differential_fixtures` 重生成同步。
-    assert old_digest == "1854fea9"
-    assert recursive == "541db813", (
+    # **038X + 529（B5 收尾按实测重钉）两个值都动**：工作树里 `rules/facts.py`
+    # （038X：checkout 默认货架改走 `resources.parts_library()` 的绝对路径，连同
+    # docstring 与 `DEFAULT_LIBRARY_PATH` 语义说明）与 `rules/pcb/distance.py`
+    # （529：新增 `CAP_ROLE_MID`，1 µF–10 µF 不再归 unknown）各有一处未提交改动。
+    # direct 只看见 `facts.py`（顶层文件，按本配方进直接摘要；`distance.py` 在
+    # `rules/pcb/` 下只进递归摘要）——direct 1854fea9 -> 626e16ef、recursive
+    # 541db813 -> 424e2fd2。两个值都在**当前这棵工作树**上按上方同一配方直接量得
+    # （527c2 曾量得直接值 626e16ef，但按文件域未改断言，见其任务书）；recursive 与
+    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
+    # （424e2fd2）、`contracts/differential/inputs/review-report.json` 的
+    # `completion.sourceVersions.rulebody` 一致，均由官方
+    # `tools.build_differential_fixtures` 重生成同步。B5 本批只动生成器的脱敏
+    # （`shelfPath` 与 checkout 根路径），`rules/` 下一个文件都没碰。
+    assert old_digest == "626e16ef"
+    assert recursive == "424e2fd2", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

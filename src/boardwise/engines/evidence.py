@@ -29,6 +29,14 @@ collected and what was not:
   ``liveCapture`` (outside ``channels``), and derives two **non-channel**
   disclosures after the six: unverified identity and a failed focus restore.
   Neither can be cancelled by ``capture.ok``.
+* 541 R4: :func:`partial_categories` splits those same rows into the four
+  disclosure classes — ``confirmed`` (a real reading, or a confirmed
+  nothing-to-read), ``suspected`` (a failed read, or a capability limit behind a
+  closed channel), ``unverified`` (not collected, plus a capture's identity /
+  focus rows) and ``uncovered`` (the run did not go looking) — and
+  ``partialVersion`` / ``partialCategories`` carry them on the section, derived
+  on every build and **absent** when the delivery is ``complete``. It is
+  opt-in-checked: only ``review finalize --strict-partial`` reads it.
 
 What this module is not: a gate. ``delivery`` is a *reading*. The old
 ``completion.verdict``, ``summary.exitCode`` and the process exit code do not
@@ -170,6 +178,33 @@ DISCLOSURE_FOCUS_RESTORE_FAILED = "live-focus-restore-failed"
 #: The ``source`` an extra disclosure row carries. A reader can tell it apart
 #: from a channel row without a `channel` value to dereference.
 LIVE_CAPTURE_SOURCE = LIVE_CAPTURE_KEY
+
+#: 541 R4: the four disclosure classes. `partial` tells a reader *that* coverage
+#: is short; these say **how** each gap stands — a real reading (confirmed), a
+#: lead that is not enough (suspected), a read that failed or was never taken
+#: (unverified), and evidence this run did not go looking for (uncovered). Frozen
+#: order: every renderer, the strict validator and the tests walk it.
+PARTIAL_CONFIRMED = "confirmed"
+PARTIAL_SUSPECTED = "suspected"
+PARTIAL_UNVERIFIED = "unverified"
+PARTIAL_UNCOVERED = "uncovered"
+
+PARTIAL_CLASSES: tuple[str, ...] = (
+    PARTIAL_CONFIRMED,
+    PARTIAL_SUSPECTED,
+    PARTIAL_UNVERIFIED,
+    PARTIAL_UNCOVERED,
+)
+
+#: The version of the disclosure field. A reader that sees an unknown version
+#: must stop rather than read the classes with a different meaning.
+PARTIAL_VERSION = 1
+
+#: The two section keys. They live on the evidence section (root), beside
+#: `delivery` — not inside it: `delivery` is the status reading every consumer
+#: already reads, and a consumer that compares its three keys stays compatible.
+PARTIAL_VERSION_KEY = "partialVersion"
+PARTIAL_CATEGORIES_KEY = "partialCategories"
 
 #: The offline tier id. A literal, not an import from `cli`, so this module has
 #: no dependency on the CLI (the import would be circular and the id is frozen).
@@ -786,6 +821,99 @@ def evidence_delivery(
 
 
 # ---------------------------------------------------------------------------
+# 541 R4: the four-class disclosure a `partial` delivery owes
+# ---------------------------------------------------------------------------
+
+
+def _partial_class(status: str, limits: list) -> str:
+    """Which of the four classes a channel's own reading belongs to.
+
+    Derived from the status this ledger already computed, plus the capability
+    limit a `not-applicable` row may carry — never from a board name, a file
+    name or a guess:
+
+    * ``ok`` / ``not-applicable`` without a capability limit → ``confirmed``
+      (a real reading, or a confirmed nothing-to-read);
+    * ``failed`` → ``suspected``; ``not-applicable`` **with** a capability
+      limit → also ``suspected`` (the host could not produce this evidence, so
+      the channel is not confirmed even though it is closed — 537C4);
+    * ``missing`` → ``unverified`` (not collected);
+    * ``unavailable`` → ``uncovered`` (this run did not look).
+    """
+    if status == STATUS_OK:
+        return PARTIAL_CONFIRMED
+    if status == STATUS_NOT_APPLICABLE:
+        return PARTIAL_SUSPECTED if limits else PARTIAL_CONFIRMED
+    if status == STATUS_FAILED:
+        return PARTIAL_SUSPECTED
+    if status == STATUS_MISSING:
+        return PARTIAL_UNVERIFIED
+    return PARTIAL_UNCOVERED
+
+
+def partial_categories(
+    channels: dict | None, live_capture: dict | None = None
+) -> dict:
+    """The four classes, derived from the channels **and** the live capture.
+
+    One row per channel in the frozen order — ``{code, status, detail}`` quoted
+    from the channel's own row, its status from :func:`evidence_coverage` — then,
+    when a capture is present, its non-channel disclosures (unverified identity,
+    failed focus restore) under ``unverified``, quoted from the disclosure rows
+    ``evidence_delivery`` already emitted. Nothing is invented: a row a caller
+    did not record is not promoted to ``confirmed``.
+
+    Every ``requiredDisclosures`` code therefore appears here exactly once (the
+    closed channels that owe no disclosure are the ``confirmed`` rows). This is
+    still a **reading**: it never says the board passed or failed.
+    """
+    channels = channels or {}
+    coverage = evidence_coverage(channels)
+    buckets: dict[str, list[dict]] = {name: [] for name in PARTIAL_CLASSES}
+    for name in CHANNEL_ORDER:
+        status = coverage[name]
+        row = channels.get(name) or {}
+        limits = _capability_limits(row, status)
+        buckets[_partial_class(status, limits)].append({
+            "code": DISCLOSURE_CODES[name],
+            "status": status,
+            "detail": str(row.get("detail") or ""),
+        })
+    for disclosure in _live_capture_disclosures(live_capture):
+        buckets[PARTIAL_UNVERIFIED].append({
+            "code": str(disclosure.get("code") or ""),
+            "status": str(disclosure.get("status") or ""),
+            "detail": str(disclosure.get("message") or ""),
+        })
+    return {
+        name: {"count": len(items), "items": items}
+        for name, items in buckets.items()
+    }
+
+
+def _apply_partial_categories(section: dict) -> dict:
+    """Set the versioned classes from the section's own rows, or clear them.
+
+    A `complete` delivery has nothing to classify, so both keys are **removed**:
+    a re-gate that recomputed to `complete` must not leave last run's classes
+    behind (a stale `confirmed` list is exactly the drift this field would
+    otherwise introduce). Every builder in this module goes through here, so the
+    section is never hand-patched.
+    """
+    delivery = section.get("delivery")
+    status = delivery.get("status") if isinstance(delivery, dict) else None
+    if status != DELIVERY_PARTIAL:
+        section.pop(PARTIAL_VERSION_KEY, None)
+        section.pop(PARTIAL_CATEGORIES_KEY, None)
+        return section
+    section[PARTIAL_VERSION_KEY] = PARTIAL_VERSION
+    section[PARTIAL_CATEGORIES_KEY] = partial_categories(
+        section.get("channels"), section.get(LIVE_CAPTURE_KEY)
+    )
+    return section
+
+
+# ---------------------------------------------------------------------------
 # 537C3b2: merging one live capture into an existing section
 # ---------------------------------------------------------------------------
 
@@ -892,13 +1020,13 @@ def merge_live_capture(evidence: dict | None, capture: dict) -> dict:
     }
     for name in LIVE_CHANNEL_ORDER:
         channels[name] = _merged_live_row(name, capture_rows[name])
-    return {
+    return _apply_partial_categories({
         "schema": EVIDENCE_SCHEMA,
         "channels": channels,
         "coverage": evidence_coverage(channels),
         "delivery": evidence_delivery(channels, live_capture=live_capture),
         LIVE_CAPTURE_KEY: live_capture,
-    }
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -948,12 +1076,12 @@ def evidence_section(
             needs_datasheet=needs_datasheet,
         ),
     }
-    return {
+    return _apply_partial_categories({
         "schema": EVIDENCE_SCHEMA,
         "channels": channels,
         "coverage": evidence_coverage(channels),
         "delivery": evidence_delivery(channels),
-    }
+    })
 
 
 def refresh_datasheets(
@@ -980,6 +1108,9 @@ def refresh_datasheets(
     passed to :func:`evidence_delivery`, so the identity / focus disclosures a
     re-gate did not re-collect are not silently dropped when delivery is
     recomputed.
+
+    541 R4: ``partialVersion`` / ``partialCategories`` are derived from the rows
+    on every call — and **removed** when the delivery comes back ``complete``.
     """
     if not isinstance(evidence, dict) or not evidence:
         return evidence
@@ -998,7 +1129,11 @@ def refresh_datasheets(
     evidence["delivery"] = evidence_delivery(
         channels, live_capture=evidence.get(LIVE_CAPTURE_KEY)
     )
-    return evidence
+    # 541 R4: the classes are a derivation of the rows, so a re-gate that moved
+    # `datasheets` recomputes them — and a delivery that came back `complete`
+    # drops last run's field entirely. Passing the old dict on unchanged would
+    # re-deliver a `confirmed` row for a channel that has since moved.
+    return _apply_partial_categories(evidence)
 
 
 def default_evidence(

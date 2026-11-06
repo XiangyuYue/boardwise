@@ -207,9 +207,11 @@ def test_the_frozen_read_prefers_the_users_own_shelf(frozen, monkeypatch, tmp_pa
         "用户货架存在时读侧没优先它——写完读不到，清闸指令就是废话"
     )
     # A checkout ignores the user shelf entirely: the repository's own file is
-    # the answer there, `parts add` writes it, and nothing changed.
+    # the answer there, `parts add` writes it, and nothing changed — except that
+    # the answer is now the *file* (038X), not the working-directory-relative
+    # name it used to be.
     monkeypatch.delattr(sys, "frozen", raising=False)
-    assert default_library_path() == "blocklib/parts.json"
+    assert default_library_path() == str(resources.parts_library())
 
 
 def test_the_report_names_the_shelf_it_read_and_quotes_it_back(tmp_path, monkeypatch):

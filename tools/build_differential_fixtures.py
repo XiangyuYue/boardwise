@@ -138,6 +138,12 @@ FOOTPRINT_DECLARED_SAMPLE_CASE_IDS = frozenset(
     {"footprint-declared-v3-hit", "footprint-declared-v4-empty"}
 )
 
+#: The shelf a checkout reads when no caller named one, spelled the way every
+#: checkout spells it. 038X made the checkout default an absolute path, so the
+#: report's `shelfPath` now carries one; this is the name it publishes as (see
+#: :func:`_shelf_path`), and the value the golden carried before that change.
+DEFAULT_SHELF = "blocklib/parts.json"
+
 # An absolute path that survived sanitization, whatever machine it came from: a
 # Windows drive (D:/..., E:\... as it appears inside JSON) or a POSIX home/temp
 # root. The markers in `_forbidden_markers` know this checkout and this user; this
@@ -429,6 +435,7 @@ def _clean_text(value: str) -> str:
     text = value.replace("\\", "/")
     home = str(Path.home()).replace("\\", "/")
     work = str(WORK).replace("\\", "/")
+    root = str(ROOT).replace("\\", "/")
     replacements = []
     if RUN_ROOT is not None:
         # Before WORK: the run directory lives under it, so replacing WORK first
@@ -439,14 +446,50 @@ def _clean_text(value: str) -> str:
         ("tests/fixtures/", "<FIXTURES>/"),
         (home + "/.boardwise/", "<HOME>/"),
     ]
+    # The checkout root goes last: every path inside it starts with this prefix, so
+    # the run directory, the work directory and the fixture tree are narrower
+    # statements about the same string and have to win first. 038X made the default
+    # shelf an absolute path in *this* checkout, so `report.json` now quotes the
+    # checkout root back in `shelfPath` and in free text; a golden generated here and
+    # read on someone else's machine must not name ours. Skipped for a checkout at a
+    # drive/filesystem root, where the "prefix" is a bare separator and replacing it
+    # would rewrite every path in every string (the same floor `_forbidden_markers`
+    # applies).
+    if len(root) > 3:
+        replacements.append((root, "<REPO>"))
     for old, new in replacements:
         text = text.replace(old, new)
     return text
 
 
+def _shelf_path(value: str) -> str:
+    """The report's `shelfPath`, published as a *name* where it is a name.
+
+    `shelfPath` is a location a reader acts on — the report's clearing
+    instruction tells them to write verified facts into exactly this file — so
+    038X's absolute checkout default is right *in* the report and wrong in a
+    public golden: the golden is generated on one machine and read on another.
+    The default shelf of this checkout therefore publishes as
+    :data:`DEFAULT_SHELF`, the repository-relative name every checkout shares,
+    which is also what the golden published before 038X made the default
+    absolute. Everything else is only sanitized, never guessed at: an explicit
+    `--library` is the caller's own string, a path inside this checkout loses the
+    checkout root (`<REPO>/...`) like every other path, and one that names
+    another machine's drive survives as an absolute path so that
+    :func:`_assert_clean` **refuses** it rather than the generator silently
+    publishing a location that does not exist.
+    """
+    normalized = value.replace("\\", "/")
+    if normalized == str(ROOT / DEFAULT_SHELF).replace("\\", "/"):
+        return DEFAULT_SHELF
+    return _clean_text(value)
+
+
 def _sanitize(value: Any, key: str = "") -> Any:
     if key == "generatedAt":
         return "<GENERATED_AT>"
+    if key == "shelfPath" and isinstance(value, str):
+        return _shelf_path(value)
     if isinstance(value, dict):
         return {name: _sanitize(item, name) for name, item in value.items()}
     if isinstance(value, list):
@@ -609,6 +652,8 @@ def _render(produced: Mapping[str, Path]) -> dict[Path, str]:
         "sanitization": [
             "generatedAt -> <GENERATED_AT>",
             "repository work paths -> <OUT>",
+            "this checkout's root path -> <REPO>",
+            "the default shelf path (report shelfPath) -> its repository-relative name blocklib/parts.json; any other absolute shelf path is refused, not rewritten",
             "tests/fixtures paths -> <FIXTURES>",
             "user .boardwise paths -> <HOME>",
             "backslashes in strings -> forward slashes",

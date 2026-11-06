@@ -12,12 +12,12 @@
 | #87① 引擎版本 | **已实现，候选集成证据通过** | 不等于另外四项完成 |
 | #87② PCB `export.render` / 目视 | **未解决**；本批未改 connector，也未完成 PCB 真机复测 | SOP 披露不是渲染修复，几何读取不是视觉通过 |
 | #87③ summary 重跑合并 | **已实现，真实 CLI 重跑证据通过** | 不把 finalize 校验当成整板结论 |
-| #87④ finding 元素身份 | **部分完成，结构化目标未达成** | 不能宣称所有 finding 或 kind+component+pin+layer 已结构化 |
+| #87④ finding 元素身份 | **已完成（限 `pcb-voltage-spacing`；`d2130b7`，2026-11-06 复核）** | 不外推到所有 finding，也不包含 `element_ids` 唯一性 |
 | #87⑤ readback value/mpn | **离线归档替代已完成**；在线取档未复测 | `sch.readback` 本身未新增 value/mpn |
 | #88 rings / void / 性能 | **代码主体与集成证据完成，提出人已验收并授权关单** | element_ids 唯一性另立，不混入本项 |
 | #88 岛数锚 | **已接受 1 岛 / 295 成员及四视图**：pre-#83 15=281+14 / bd5809f 50 / rings 边+弦 containment 56 / HEAD 1=295；差账 55=14+35+6 | 15 不是 rings 原型值；历史更正已显式确认，不是暗中改锚 |
 
-#87 整单不能关闭：②、④仍开放，⑤只完成离线替代。#88 的 1/295 验收锚和四视图
+#87 整单不能关闭：②仍开放，⑤只完成离线替代。#88 的 1/295 验收锚和四视图
 已获提出人确认，issue 已按授权关闭；`element_ids` 唯一性另立。
 
 ## 2. 基准、范围与证据纪律
@@ -177,8 +177,8 @@ Rust **45 passed / 4 ignored** + fmt/clippy；Python/Rust 5 case 的 normalized 
 ## 7. 后续边界
 
 1. #87②：授权测试 PCB + 可复现宿主上的 render/视觉验证；不能拿 readback 或 SOP 替代。
-2. #87④：若要达到 issue 建议的结构化目标，另立合同批定义 element 对象、pin/layer
-   字段及 UNKNOWN 行的身份边界；本批不以文字说明冒充结构变更。
+2. #87④：已由 `d2130b7` 落地并于 2026-11-06 复核（§8.5），仅覆盖 `pcb-voltage-spacing`；
+   不外推其他 finding，不包含 `element_ids` 唯一性。
 3. #87⑤：在线取档单独立项复测；不修改 `sch.readback` 的既有结论。
 4. #88：1/295 与四视图已获确认并已关单；`element_ids` 唯一性另立，不在本关单中扩改。
 5. 三条评论已按授权发布：#88 已按明确授权关闭，#87 仍为 OPEN；未 push。
@@ -252,3 +252,15 @@ Rust **45 passed / 4 ignored** + fmt/clippy；Python/Rust 5 case 的 normalized 
 - 本轮未改生产行为，既有两处有效变异及其恢复证据继续有效；当前 schema SHA-256
   仍为 `644470549812db3d440fd72966b99801da58e845514eb163890f407e48b7ea20`。
   #87②、#87⑤及其他规则边界不变，#87 不关闭。
+
+### 8.5 主线复核（2026-11-06）
+
+- 实现已由 `d2130b7` 集成进主线，`git log -S'element_a_detail'` 可核。当前 `core.measure.ClearanceResult`
+  提供 `element_a_detail/b_detail={kind,component,pin,layers}`，`ipc._clearance_measurement` 提供
+  `shared_layer_ids` 与对应 `external_*` 第二读数；缺 detail 表示未记录，不表示无元素。
+- 本轮只复核，**未新增生产改动**。Python 聚焦 **289 passed**（87d/85/126c/125b/133c/
+  finding_target/540c generator+schema），Rust `cargo test --test review_element_identity`
+  **2 passed**。四类几何、跨层、UNKNOWN、旧报告无 detail、partial identity 与内部层 sentinel
+  均有负例。
+- 因此 #87④ 按既定「仅 `pcb-voltage-spacing`」垂直切片记为完成；`element_ids` 唯一性、其他规则、
+  #87② render 与 #87⑤ 在线取档不因此关闭。#87 整单仍保持 OPEN。

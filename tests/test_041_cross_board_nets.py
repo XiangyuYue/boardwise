@@ -671,7 +671,10 @@ def test_the_markdown_spells_short_uuids_with_titles_and_claims_nothing():
 def test_the_checkup_report_json_and_markdown_carry_the_section(tmp_path, foc):
     """End to end on the real three-board archive: `report.json` gets
     `source.crossBoardNets`, `report.md` gets its own section, and the findings
-    count is the pre-041-S1 reading (241, measured before this batch)."""
+    count is **239** — S1 measured 241, and 529's mid-distance decoupling band
+    (2.2 µF / 4.7 µF now count as mid-range caps) took one `pcb-decap-distance`
+    WARN and the INFO beside it out of the run since. This channel adds neither,
+    and the 2 that moved are 529's, not 041's."""
     from boardwise import cli
 
     out = tmp_path / "checkup"
@@ -687,25 +690,28 @@ def test_the_checkup_report_json_and_markdown_carry_the_section(tmp_path, foc):
         (board.board.uuid, board.board.title) for board in foc.boards
     ]
     assert section["nonAddressablePages"] == []
-    assert len(report["findings"]) == 241, "041-S1 adds a channel, not findings"
+    assert len(report["findings"]) == 239, "041-S1 adds a channel, not findings"
     summary = report["summary"]
     assert (summary["errorCount"], summary["warnCount"], summary["infoCount"]) == (
-        50, 21, 170,
-    ), "frozen from the pre-041-S1 checkup run on this fixture"
+        50, 20, 169,
+    ), "frozen from the 529 checkup run on this fixture (S1 read 50-21-170)"
     assert report["completion"]["verdict"] == "incomplete", (
-        "measured on this fixture: parts missing datasheets plus 21 untriaged "
+        "measured on this fixture: parts missing datasheets plus 20 untriaged "
         "WARNs, so the gate cannot claim complete — 041 must not move that word"
     )
     attributed = [
         row for row in report["warning_triage"]
         if (row.get("attribution") or {}).get("module")
     ]
-    assert len(attributed) == 7, (
-        "the pre-fix run had 8: the one that went away was "
+    assert len(attributed) == 6, (
+        "Two rows left the 8-row pre-fix run, for two unrelated reasons: "
         "`pcb-component-spacing` on R18, filed under 'Board1/P1' by "
-        "first-board-wins. R18 is placed on Board1 *and* Board3 (an A1 repeat) "
-        "and the PCB finding names 'PCB1', not a schematic board — so the honest "
-        "answer is no module, and 7 is what per-board reading measures"
+        "first-board-wins — R18 is placed on Board1 *and* Board3 (an A1 repeat) "
+        "and the PCB finding names 'PCB1', not a schematic board, so the honest "
+        "answer is no module — and 529's `pcb-decap-distance` WARN on U11, which "
+        "is not in the run any more (2.2 µF is mid-band now), taking its one "
+        "attributed row with it. 6 is what per-board reading measures on the "
+        "remaining 6+14 WARNs"
     )
     r18 = [
         row for row in report["warning_triage"]

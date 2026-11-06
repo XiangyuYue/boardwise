@@ -3,7 +3,7 @@
 > **这份文件是路由，不是规格。** 它只回答三件事：这是什么项目、三条线现在各在哪、
 > 干活要去读哪份权威文件。细节一律不在这里复制；两处说法冲突时以它指的文件为准。
 > 写它的场合：从 Kimi Code 迁到 DeepSeek Harness（dsh）这类**换 harness**、开新会话、
-> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-01**。
+> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-06**。
 
 ## 1. 一句话
 
@@ -34,7 +34,7 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 [`docs/pits.md`](pits.md)｜V3/V4 边界 [`docs/v3-v4-boundary.md`](v3-v4-boundary.md)｜
 测试与保密闸地图 [`docs/testing-doctrine.md`](testing-doctrine.md)。
 
-## 3. 三条线的当前状态（核对日期 2026-11-01）
+## 3. 三条线的当前状态（核对日期 2026-11-06）
 
 ### 3.0 0.6.0与派单路由（先看这里）
 
@@ -44,30 +44,30 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   最终候选读数见 `evidence/540/candidate-regression.md`（Python **8132/94/5/0 failed**），
   不再等待该文件；它是 540 的历史读数，0.6.0 发布验收另记。
 - **V4 / #89 已进入候选**：`e431e94`、`ba4fbae`、`1a7e4a1`、`643cf6d` 覆盖 V4 单 PCB、
-  主机 ERC、同网测量与证据边界。归档**多 PCB 逐板**已在 038P 工作树完成（未提交）；
+  主机 ERC、同网测量与证据边界。归档**多 PCB 逐板**已随 `a4fc387` 提交（038M/N/P/T 同批）；
   真实多板 + 库工程、部分跨视图语义和实时 PCB 位图缺口仍公开；
   `incomplete/partial` 不解释为板级通过。
 - **038G–038L 已随 `d542f14` 收口**：Short-Symbol 不再造假网；分歧库副本有第四类覆盖计数，
   纯重编号不误报；旋转 R 矩形按 `(x,y)` pivot 读取（54 父区域/1843 点全过，PGND 30→12）；
   Rust SYMBOL 与 Python 9-case 差分一致，重复脚号逐字段合并。真机 `test` doctor 9/9、
   evidence 与焦点恢复正常，`conflicting_library_documents=0`；在线没有这些专项实例，不冒充覆盖。
-- **038M 工作树已完成，尚未提交**：Rust DEVICE 库垂直迁移——`device-library-sample` 成为
+- **038M 已随 `a4fc387` 提交**：Rust DEVICE 库垂直迁移——`device-library-sample` 成为
   第 8 个 kind，case book 9→11（新增 `device-library-v3-meta`、`device-library-v4-copies`），
   Python/Rust 投影一致、旧 9 case 不变。输入只有 `text`（无 `pinKey`），输出
   `boardwise.device-library/1`，合并语义对齐 `_collect_device_meta`（首 `META`、重复 uuid
   first-wins、模型可见差异才计冲突）。
-- **038N 工作树已完成，尚未提交**：Rust FOOTPRINT 库垂直迁移——`footprint-library-sample`
+- **038N 已随 `a4fc387` 提交**：Rust FOOTPRINT 库垂直迁移——`footprint-library-sample`
   成为第 9 个 kind，case book 11→13（新增 `footprint-library-v3-title`、
   `footprint-library-v4-copies`），Python/Rust 投影一致、旧 11 input 不变。输入只有 `text`，
   输出 `boardwise.footprint-library/1`，形状只有 `schema` + `footprints`（uuid→title），
   **没有** `stats`、也没有冲突计数：首个 `META` 生效、重复 uuid first-wins（空标题同样占位），
   字面 `"null"` 标题原样保留（DEVICE 属性值的排除规则不适用于这里）。
-- **038P 工作树已完成，尚未提交**：eprj3 **多 PCB 逐板审查**——同一 `source`/`runner` 逐板
+- **038P 已随 `a4fc387` 提交**：eprj3 **多 PCB 逐板审查**——同一 `source`/`runner` 逐板
   出 `boards`（title/boardUuid/components/checksRun/findings，索引不串板），`checkup --file`
   逐板落地；`_load_model(view="pcb")` 对多板**列出板名后拒绝**并指向 `checkup`（一模型一板），
   单板历史形状不变。实测 `test V4` 两个**空 PCB**：在线/离线 `boards`、32 checks、
   40 findings 一致；空板读 0 器件是读数不是缺板。**未覆盖**：真实多板 + 库工程（只有合成证据）。
-- **联合挖洞修复（工作树，未提交；四类）**：多板合流那道缝挖出的四类问题一次修掉——
+- **联合挖洞修复（038P1，已随 `a4fc387` 提交；四类）**：多板合流那道缝挖出的四类问题一次修掉——
   ① **Rust DEVICE 属性浮点溢出**与 Python 对齐成 `inf`/`-inf`（`json.dumps` 的
   `NaN`/`Infinity` 拼写保留，有限值读数不变）；② 板文档 **`DOCHEAD` 无 uuid** 时按文件
   stem 命名，不再出无名板（板名改按 PCB 文档顺序逐位消费，不再用 uuid 查表）；③ **重复 PCB
@@ -77,23 +77,35 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   `tests/test_038p1_eprj3_multi_guards.py` 与 Rust 侧 `device_library` 差分；本地探针在
   `.tmp_joint_audit/`（ignored，未提交，不是已提交产物）。单文件工程与旧差分 case 读数不变；
   真实多板 + 库工程仍未实测，分歧/重复守卫是**合成证据**。
-- **038T 工作树已完成，尚未提交**：`footprint-declared-sample` 成为第 10 个 kind，case book
+- **038T 已随 `a4fc387` 提交**：`footprint-declared-sample` 成为第 10 个 kind，case book
   13→15（新增 `footprint-declared-v3-hit`、`footprint-declared-v4-empty`），Python/Rust
   15/15 一致、旧 13 input 不变。输入 `{schema,name,text,value}`——`text` 是一份 `.epru`
   记录流，`value` 是器件 `Footprint` 字段原文；输出
   `{schema:"boardwise.footprint-declared/1",footprint,libraryId}`：`value` 先 trim，只有
   命中且该标题非空才返回标题 + 原始库 id，空标题/未命中都保留 raw text、`libraryId` 为空；
   普通名称 trim 后不解析。
+- **038U / 038V 已提交**：记录一致性与文档 tombstone 随 `d0275ae`，焊盘形状间距修正随
+  `683a526`；两者的共同缺口（真实多板 + 库、原始 PCB-A、真机）仍在，不因提交消失。
 - **2026-11-04 测试反馈**：544P 已堵住 DSH `commandLine` 正常返回与
   spawn 异常的凭据形状泄露；544 已把 checkup/arch 写盘失败统一为局部 exit 2 人话；545 已为
   同一 `--out` 加 OS 互斥（锁失败关闭）与串行 `rerun:` 提示。专项 8+13 条、主代理邻域
   213/226 passed；DSH 129 passed / 1 skipped。任务书 `tasks/544_checkup_output_errors.md`、
   `tasks/545_checkup_output_lock.md`，证据 `.tmp_544/`、`.tmp_545/`。
-- **审查线下一步**：eprj3 在线容器、真实 NO_CONNECT、`down` 与 envelope marker（信封字段
-  缺省形态）、缺省 `yAxisDirection`、旋转几何样本；多板 + 库组合另需样本。041 S1/S2 均已完成
-  离线验收（S2 入口 `tasks/041s2_interconnect.md`）：全量 9681 passed / 25 skipped /
-  2 个既有 Windows 环境失败，connector/DSH/Rust 通过。S3 宿主交叉验证与语义网表函数层继续暂缓，
-  S4 正式规则必须先有真实板间证据，不自动接续。
+- **审查线下一步（真实外部依赖，逐项不合并）**：eprj3 在线容器、真实 NO_CONNECT、`down` 与
+  envelope marker（信封字段缺省形态）、缺省 `yAxisDirection`、旋转几何样本需明确的 4.1.94+
+  测试环境；真实多板 + 库工程 / CBB 样本 / 原始 PCB-A 复核 / 真机复测各自单独排期，缺样本
+  不开工；541 R3 的 DSH profile 重启授权未拿到，pre-execute 闸不算已加载；R6 资料获取、Rust
+  迁移、绘制线各自独立，不并进审查线。041 S1/S2 均已完成离线验收（S2 入口
+  `tasks/041s2_interconnect.md`，已随 `6253a0b` 提交），真实 3 板与 2 板声明均已双报告对拍；
+  全量 9682 passed / 25 skipped / 2 个既有 Windows 环境失败，connector/DSH/Rust 通过。
+  S3 宿主交叉验证与语义网表函数层继续暂缓，S4 正式规则必须先有真实板间证据，不自动接续。
+- **工作树新完成（未提交）**：038W PAD_NET 每脚判优、038X 默认货架绝对路径与
+  缺失披露、527C2 跨视图几何分类与全部位号、529 mid 容值带、541 R1/R2/R4 strict；
+  任务书 `tasks/038w_pad_net_journal.md`、`tasks/038x_shelf_resolution.md`、
+  `tasks/527c2_cross_view_geometry.md`、`tasks/529_decap_mid_band.md`、
+  `tasks/541_offline_runtime_gates.md`。最终全量 **9893 passed / 25 skipped / 14 failed /
+  1 warning**（12 条工作树既有货架数据漂移 + 2 条既有 Windows 环境失败，不宣称全量全绿）；
+  connector、DSH、Rust 均通过。541 R3 与公开接口 allowlist 仍未实施，不写成 R3/R4 全部完成。
 - **原生 CBB 已排为独立方向（038Q，11-03 调研/任务书完成）**：仓库当前**没有**原生 CBB
   实现；`core/blocks.py` 的 `BlockSymbol` 是绘图模板域，不是宿主原生块。type 17 只是线索，
   **待证实**，不得写成事实。**需真实 CBB 样本**才开阶段 A（离线只读），先读后写；
@@ -164,7 +176,7 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
     不是通用自动布局；`draw lint` 0E/0W/0I，清理失败实验页后全工程 DRC 通过，
     独立逐脚 **55/55 连接 + 3/3 NC = 58/58**。证据 `evidence/534ab/`、
     `evidence/534ac/`，任务账 `tasks/534b_v4_layout.md` 续十一/053AD；关闭重开持久化未验。
-  - **543I–L 当前交付页为 P38（2026-11-05，工作树）**：543I/J 完成可见连接、真实墨迹、
+  - **543I–L 当前交付页为 P38（2026-11-05；543K/L 已随 `924a180` 提交）**：543I/J 完成可见连接、真实墨迹、
     支路走廊、格点与并联去耦双端共旗；543K/L 修正岳指出的成对姿态与桩长不一致。
     信号型成对二端支路横向且 shared pin 朝宿主，成对文字联合选同侧；电源去耦不一律
     旋转。两网 localLabelObligation 按几何配对，共同长度同时验两脚，伙伴回放同一决定。

@@ -499,8 +499,19 @@ def test_the_apply_hands_the_facts_shelf_to_the_idempotence_probe(monkeypatch, t
 
 
 def test_the_facts_shelf_loader_never_raises_and_names_what_is_missing(monkeypatch, tmp_path):
-    """An absent shelf is a *note*, not silence: `load_parts` reads "missing" as "empty"."""
-    monkeypatch.chdir(tmp_path)  # no blocklib/parts.json here
+    """An absent shelf is a *note*, not silence: `load_parts` reads "missing" as "empty".
+
+    The absence is spelled by pointing the loader's own default at a file that is
+    not there (``rules.facts.default_library_path``), not by changing directory:
+    since 038X that default is an **absolute** path into this checkout, so a
+    `chdir` would no longer hide anything and this test would read the real
+    shelf while claiming there is none.
+    """
+    absent = tmp_path / "blocklib" / "parts.json"
+    assert not absent.exists()
+    monkeypatch.setattr(
+        "boardwise.rules.facts.default_library_path", lambda: str(absent)
+    )
     library, note = cli._facts_library()
     assert library is not None and library.parts == []
     assert "parts.json" in note and "no facts" in note
@@ -1253,11 +1264,18 @@ def test_the_probe_uses_the_shelf_where_only_the_shelf_can_decide(monkeypatch, t
       its value is not readable → `unreadable`, naming C5 (029 §二.1: no value
       evidence is UNKNOWN, never "nothing there").
 
-    Both runs are the real `edit apply` with the real `_facts_library()` reading
-    a temporary `blocklib/parts.json`; only the bridge and the project export are
-    stood in for.
+    Both runs are the real `edit apply` with the real `_facts_library()`, and the
+    shelf it reads is a temporary file named by patching
+    ``rules.facts.default_library_path`` itself — the loader's own default, since
+    038X made that an absolute path into this checkout and a `chdir` no longer
+    reaches it. Only the bridge and the project export are stood in for.
     """
     from boardwise.core.parts import PartEntry, PartLibrary, save_parts
+
+    shelf = tmp_path / "blocklib" / "parts.json"  # nothing there yet: no shelf
+    monkeypatch.setattr(
+        "boardwise.rules.facts.default_library_path", lambda: str(shelf)
+    )
 
     def boarded():
         model = _model(components={"U1": "IC", "C5": ""},
@@ -1287,8 +1305,6 @@ def test_the_probe_uses_the_shelf_where_only_the_shelf_can_decide(monkeypatch, t
         assert code == 0, out
         return json.loads(out_path.read_text(encoding="utf-8")), out
 
-    monkeypatch.chdir(tmp_path)  # `_facts_library()` reads blocklib/parts.json here
-
     without, out = apply_once("without-shelf")
     assert without["idempotence"]["state"] == "missing", (
         "with no shelf the weaker route really cannot tell — and the report says so"
@@ -1306,7 +1322,7 @@ def test_the_probe_uses_the_shelf_where_only_the_shelf_can_decide(monkeypatch, t
             # (core/parts.py:911-916), which is why they are spelled out here.
             deviceUuid="a" * 32, libraryUuid="b" * 32,
         )]),
-        tmp_path / "blocklib" / "parts.json",
+        shelf,
     )
     with_shelf, _out = apply_once("with-shelf")
     assert with_shelf["idempotence"]["state"] == "unreadable", (

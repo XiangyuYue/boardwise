@@ -446,11 +446,13 @@ def test_the_frozen_paths_helper_does_not_invent_a_second_shelf(monkeypatch, tmp
     pair is a merge of nothing, and a report would then say "two shelves" about
     a run that read one.
     """
-    from boardwise.rules.facts import DEFAULT_LIBRARY_PATH, default_library_paths
+    from boardwise.rules.facts import default_library_paths
 
     monkeypatch.delenv("BOARDWISE_HOME", raising=False)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
-    assert default_library_paths() == (DEFAULT_LIBRARY_PATH,)
+    # 038X: the checkout answer is the absolute file in this checkout, not the
+    # repo-relative constant — still exactly one shelf.
+    assert default_library_paths() == (str(resources.parts_library()),)
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)

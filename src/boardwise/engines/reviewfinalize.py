@@ -92,12 +92,20 @@ from .checkup import (
 from .evidence import (
     CHANNEL_ORDER,
     CHANNEL_STATUSES,
+    DELIVERY_COMPLETE,
+    DELIVERY_PARTIAL,
     DISCLOSURE_FOCUS_RESTORE_FAILED,
     EVIDENCE_HEADING,
+    LIVE_CAPTURE_KEY,
+    PARTIAL_CATEGORIES_KEY,
+    PARTIAL_CLASSES,
+    PARTIAL_VERSION,
+    PARTIAL_VERSION_KEY,
     STATUS_NOT_APPLICABLE,
     STATUS_OK,
     evidence_coverage,
     evidence_delivery,
+    partial_categories,
     render_evidence_markdown,
 )
 
@@ -209,6 +217,18 @@ _MANUAL_CLAIM_ALT_RE = re.compile(
 )
 #: The words that count as the needs-manual disclosure at all.
 _MANUAL_WORD_RE = re.compile(r"needs[-_ ]?manual|needsManual|需人工|人工复核", re.IGNORECASE)
+
+#: 541 R4: a `partial` delivery that owes disclosures must name the fact that
+#: they are **not resolved** somewhere in the text — `needs-manual` or an
+#: open-item verdict, hyphenation / case as the existing vocabulary writes them.
+#: The disclosure gate asks for the token, never for a board verdict: a summary
+#: carrying it still is not a pass, and one without it is exactly the silence
+#: that reads as「都是干净的」.
+_PARTIAL_DISCLOSURE_TOKEN_RE = re.compile(
+    r"needs[-_ ]?manual|needsManual|需人工|人工复核"
+    r"|open[-_ ]?item|complete-with-open-items|开口项",
+    re.IGNORECASE,
+)
 
 #: The sentence that must not appear while anything is still pending.
 _ALL_TRIAGED = "全部已分诊"
@@ -1553,7 +1573,14 @@ def _check_container_fields(
                 )
 
 
-def _check_evidence(report: dict, summary: str, issues: list[dict]) -> None:
+def _check_evidence(
+    report: dict,
+    summary: str,
+    issues: list[dict],
+    *,
+    strict_partial: bool = False,
+    gate_evidence: object = None,
+) -> None:
     """Recompute coverage/delivery, and require every disclosure code to appear.
 
     An **existing** channel row must be a dict whose ``status`` is one of the
@@ -1769,6 +1796,319 @@ def _check_evidence(report: dict, summary: str, issues: list[dict]) -> None:
             )
 
     _check_datasheet_wording(report, summary, coverage, issues)
+    if strict_partial:
+        # 541 R4: the classes are judged on the section the caller handed over
+        # (`gate_evidence`) when one was named — the CLI does that so a re-gate's
+        # own recompute cannot wash away the field this delivery arrived with. A
+        # direct caller passes nothing and the report's own section is used, which
+        # is exactly the pre-existing behaviour.
+        section = gate_evidence if isinstance(gate_evidence, dict) else evidence
+        raw_channels = section.get("channels")
+        gate_channels = (
+            {
+                name: row
+                for name, row in raw_channels.items()
+                if isinstance(row, dict)
+            }
+            if isinstance(raw_channels, dict)
+            else {}
+        )
+        gate_capture = section.get(LIVE_CAPTURE_KEY)
+        _check_partial_categories(
+            section,
+            gate_channels,
+            gate_capture,
+            evidence_delivery(gate_channels, gate_capture),
+            section.get("delivery"),
+            summary,
+            issues,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 5b. 541 R4: the opt-in four-class disclosure gate
+# ---------------------------------------------------------------------------
+
+#: One item's frozen shape. `detail` quotes the source row, so a class row is
+#: always traceable back to the channel / disclosure it came from.
+_PARTIAL_ITEM_KEYS = frozenset({"code", "status", "detail"})
+
+
+def _check_partial_categories(
+    evidence: dict,
+    channels: dict,
+    live_capture: object,
+    recomputed_delivery: dict,
+    stored_delivery: object,
+    summary: str,
+    issues: list[dict],
+) -> None:
+    """``--strict-partial``: the four classes must be there, and be the derivation.
+
+    Only called when the caller asked for it — the default validator keeps
+    reading old ``partial`` reports exactly as it always did (they have no such
+    field, and that stays compatible). What this gate asks:
+
+    * a ``complete`` delivery carries **no** field (a leftover class list is
+      last run's reading, not this one's);
+    * a ``partial`` delivery carries ``partialVersion == 1`` and all four
+      classes, each ``{count, items[]}`` with ``count == len(items)``;
+    * every item is ``{code, status, detail}`` with a status from the frozen
+      vocabulary, no code twice, and the class contents equal to what
+      :func:`evidence.partial_categories` derives from the same rows — a class
+      can neither gain nor lose a row;
+    * every ``requiredDisclosures`` code is covered exactly once;
+    * the text names ``needs-manual`` / an open item, so a reader cannot read the
+      delivery as closed.
+
+    It never raises a board verdict: raising the classes to four complete ones
+    is a disclosure statement, and ``report.conclusion`` stays the board
+    authority.
+    """
+    path = f"report.evidence.{PARTIAL_CATEGORIES_KEY}"
+    recomputed_status = recomputed_delivery.get("status")
+    stored_status = (
+        stored_delivery.get("status") if isinstance(stored_delivery, dict) else None
+    )
+    has_version = PARTIAL_VERSION_KEY in evidence
+    has_categories = PARTIAL_CATEGORIES_KEY in evidence
+
+    if DELIVERY_COMPLETE in (stored_status, recomputed_status) and (
+        has_version or has_categories
+    ):
+        issues.append(
+            _issue(
+                "partial-categories-on-complete",
+                path,
+                f"存的是 {stored_status!r}，重算 {recomputed_status!r}：delivery 为 "
+                "complete 时不许带 partialVersion/partialCategories——残留字段是"
+                "上一轮的分类，会被读成本轮的结论。",
+            )
+        )
+        if recomputed_status != DELIVERY_PARTIAL:
+            return
+
+    stored_version = evidence.get(PARTIAL_VERSION_KEY)
+    if not has_version:
+        issues.append(
+            _issue(
+                "partial-version-missing",
+                f"report.evidence.{PARTIAL_VERSION_KEY}",
+                f"delivery 是 partial，但缺 {PARTIAL_VERSION_KEY}：四类披露是版本化"
+                f"字段，读者必须先确认版本（本棒是 {PARTIAL_VERSION}）。",
+            )
+        )
+    elif isinstance(stored_version, bool) or stored_version != PARTIAL_VERSION:
+        issues.append(
+            _issue(
+                "partial-version-invalid",
+                f"report.evidence.{PARTIAL_VERSION_KEY}",
+                f"必须是整数 {PARTIAL_VERSION}，实际是 {stored_version!r}：版本对不上的"
+                "四类不能按本棒的语义签发。",
+            )
+        )
+
+    categories = evidence.get(PARTIAL_CATEGORIES_KEY)
+    expected = partial_categories(channels, live_capture)
+    if not isinstance(categories, dict):
+        issues.append(
+            _issue(
+                "partial-categories-missing",
+                path,
+                "delivery 是 partial，但 evidence.partialCategories 缺失或不是 dict："
+                f"四类（{'/'.join(PARTIAL_CLASSES)}）没有可读记录。",
+            )
+        )
+        categories = None
+
+    item_codes: list[str] = []
+    for class_name in PARTIAL_CLASSES:
+        class_path = f"{path}.{class_name}"
+        if categories is None:
+            continue
+        if class_name not in categories:
+            issues.append(
+                _issue(
+                    "partial-category-missing",
+                    class_path,
+                    f"四档缺 {class_name!r}：缺少这一类等于把这一批通道从披露里"
+                    "抹掉，读者无从知道它们怎么站。",
+                )
+            )
+            continue
+        entry = categories[class_name]
+        if not isinstance(entry, dict):
+            issues.append(
+                _issue(
+                    "partial-category-not-dict",
+                    class_path,
+                    f"{class_name!r} 必须是 {{count, items[]}} 的 dict，实际是 "
+                    f"{type(entry).__name__}：分类内容读不出来。",
+                )
+            )
+            continue
+        count = entry.get("count")
+        items = entry.get("items")
+        if isinstance(count, bool) or not isinstance(count, int):
+            issues.append(
+                _issue(
+                    "partial-category-count-invalid",
+                    f"{class_path}.count",
+                    f"count 必须是整数，实际是 {count!r}：count 是 len(items) 的派生值。",
+                )
+            )
+        if not isinstance(items, list):
+            issues.append(
+                _issue(
+                    "partial-category-items-invalid",
+                    f"{class_path}.items",
+                    f"items 必须是 list，实际是 {type(items).__name__}：分类内容读不出来。",
+                )
+            )
+            continue
+        if isinstance(count, int) and not isinstance(count, bool) and count != len(items):
+            issues.append(
+                _issue(
+                    "partial-category-count-mismatch",
+                    f"{class_path}.count",
+                    f"count 是 {count}，items 有 {len(items)} 项：count 不能与条目数不一致。",
+                )
+            )
+        class_codes: list[str] = []
+        class_triples: list[tuple[str, object, object]] = []
+        for position, item in enumerate(items):
+            item_path = f"{class_path}.items[{position}]"
+            if not isinstance(item, dict):
+                issues.append(
+                    _issue(
+                        "partial-item-not-dict",
+                        item_path,
+                        f"每一类条目必须是 dict，实际是 {type(item).__name__}：这一条读不出"
+                        "来源通道。",
+                    )
+                )
+                continue
+            if set(item) != _PARTIAL_ITEM_KEYS:
+                issues.append(
+                    _issue(
+                        "partial-item-shape",
+                        item_path,
+                        f"条目必须恰好是 {sorted(_PARTIAL_ITEM_KEYS)}，实际是 "
+                        f"{sorted(map(str, item))}：形状外的键/缺键都读不出派生依据。",
+                    )
+                )
+            code = item.get("code")
+            if not isinstance(code, str) or not code:
+                issues.append(
+                    _issue(
+                        "partial-item-code-invalid",
+                        f"{item_path}.code",
+                        f"code 必须是非空字符串，实际是 {code!r}：没有 code 就不知道"
+                        "这一条对应哪份披露。",
+                    )
+                )
+            else:
+                class_codes.append(code)
+                item_codes.append(code)
+                class_triples.append((code, item.get("status"), item.get("detail")))
+            status = item.get("status")
+            if status not in CHANNEL_STATUSES:
+                issues.append(
+                    _issue(
+                        "partial-item-status-invalid",
+                        f"{item_path}.status",
+                        f"status 是 {status!r}，不在固定词表 {CHANNEL_STATUSES} 内："
+                        "词表外状态不能归入四档。",
+                    )
+                )
+            if not isinstance(item.get("detail"), str):
+                issues.append(
+                    _issue(
+                        "partial-item-detail-invalid",
+                        f"{item_path}.detail",
+                        f"detail 必须是字符串（引用原通道/披露的 detail），实际是 "
+                        f"{type(item.get('detail')).__name__}。",
+                    )
+                )
+        expected_rows = expected[class_name]["items"]
+        expected_codes = [row["code"] for row in expected_rows]
+        expected_triples = [
+            (row["code"], row["status"], row["detail"]) for row in expected_rows
+        ]
+        if class_codes != expected_codes:
+            issues.append(
+                _issue(
+                    "partial-category-stale",
+                    class_path,
+                    f"存的是 {class_codes}，按 channels/liveCapture 派生是 "
+                    f"{expected_codes}：四档是派生物，不能与通道状态不一致。",
+                )
+            )
+        elif class_triples != expected_triples:
+            issues.append(
+                _issue(
+                    "partial-category-stale",
+                    class_path,
+                    f"{class_name!r} 的 code 序列与派生一致，但 status/detail 与派生"
+                    "不一致：每一行必须原样引用通道/披露的 status 与 detail，不能改"
+                    "写成别的话。",
+                )
+            )
+
+    if categories is not None:
+        for class_name in categories:
+            if class_name not in PARTIAL_CLASSES:
+                issues.append(
+                    _issue(
+                        "partial-category-unknown",
+                        f"{path}.{class_name}",
+                        f"{class_name!r} 不是四档之一（{'/'.join(PARTIAL_CLASSES)}）："
+                        "多出来的分类没有语义。",
+                    )
+                )
+
+    duplicated = sorted({code for code in item_codes if item_codes.count(code) > 1})
+    for code in duplicated:
+        issues.append(
+            _issue(
+                "partial-item-duplicate",
+                path,
+                f"{code!r} 在四档里出现 {item_codes.count(code)} 次：每条披露恰好归"
+                "一类一次，重复会让计数互相矛盾。",
+            )
+        )
+
+    disclosures = recomputed_delivery.get("requiredDisclosures") or []
+    for row in disclosures:
+        code = str(row.get("code") or "")
+        occurrences = item_codes.count(code)
+        if occurrences == 0:
+            issues.append(
+                _issue(
+                    "partial-disclosure-uncovered",
+                    path,
+                    f"必披露 {code!r} 没有出现在任何一类里：partial 交付必须把它"
+                    "归入四档之一。",
+                )
+            )
+        elif occurrences > 1:
+            issues.append(
+                _issue(
+                    "partial-disclosure-duplicated",
+                    path,
+                    f"必披露 {code!r} 出现了 {occurrences} 次：每条必披露恰好归一类一次。",
+                )
+            )
+
+    if disclosures and not _PARTIAL_DISCLOSURE_TOKEN_RE.search(summary):
+        issues.append(
+            _issue(
+                "summary-partial-token-missing",
+                "summary",
+                "有必披露，但 summary 没有写 needs-manual 或 open-item：四档齐全也只是"
+                "披露，读者必须看到这些项尚未结案；不得把 partial 读成板级通过。",
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1884,7 +2224,13 @@ def _check_cross_view(report: dict, summary: str, issues: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def validate_review_summary(report: dict, summary: str) -> list[dict]:
+def validate_review_summary(
+    report: dict,
+    summary: str,
+    *,
+    strict_partial: bool = False,
+    partial_evidence: object = None,
+) -> list[dict]:
     """Every disagreement between the filled summary and the report it quotes.
 
     ``report`` is the ``report.json`` dict, ``summary`` the text of the
@@ -1902,6 +2248,20 @@ def validate_review_summary(report: dict, summary: str) -> list[dict]:
     board passed: a review with pending warnings (「待分诊」), ``needs-manual``
     rows and a ``partial`` evidence delivery is exactly what a consistent
     delivery looks like, and it validates clean.
+
+    ``strict_partial=True`` (541 R4) adds the four-class disclosure gate: a
+    ``partial`` delivery's ``partialVersion`` / ``partialCategories`` must be
+    present, complete, arithmetically consistent and equal to the derivation,
+    every required disclosure must sit in exactly one class, and the text must
+    name ``needs-manual`` / an open item. It is opt-in, so a delivery written
+    before the field existed keeps validating by default; and a pass here is
+    still a **disclosure** statement — it never raises the board verdict.
+
+    ``partial_evidence`` is for a caller whose ``report`` is a **recomputation**
+    of the delivery rather than the delivery itself (``review finalize``): pass
+    the evidence section as it was on disk, and the four classes are judged
+    there. ``None`` (the direct-call default) keeps reading ``report.evidence``.
+    Non-strict callers are unaffected either way.
     """
     if not isinstance(report, dict):
         return [
@@ -1928,7 +2288,20 @@ def validate_review_summary(report: dict, summary: str) -> list[dict]:
     _check_conclusion(report, summary, issues)
     _check_triage(report, summary, issues)
     _check_environment(report, summary, issues)
-    _check_evidence(report, summary, issues)
+    # 541 R4: a named `partial_evidence` is the delivery's **original** section,
+    # judged as it arrived. The CLI names it because its own re-gate recomputes
+    # the field — without this, a missing or wrong `partialCategories` would be
+    # repaired in memory and the strict gate could never refuse it.
+    gate_evidence = report.get("evidence")
+    if isinstance(partial_evidence, dict) and partial_evidence:
+        gate_evidence = partial_evidence
+    _check_evidence(
+        report,
+        summary,
+        issues,
+        strict_partial=strict_partial,
+        gate_evidence=gate_evidence,
+    )
     _check_cross_view(report, summary, issues)
     return _dedupe(issues)
 

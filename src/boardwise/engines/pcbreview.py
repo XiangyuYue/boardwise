@@ -36,10 +36,15 @@ rules themselves arrive in 126b/126c.
 from __future__ import annotations
 
 import copy
+import math
 from pathlib import Path
 from typing import Any
 
-from ..core.geometry import FRAGMENT_KIND_EXTRA_RECORDS, FRAGMENT_KIND_STROKE_PIECE
+from ..core.geometry import (
+    FRAGMENT_KIND_EXTRA_RECORDS,
+    FRAGMENT_KIND_STROKE_PIECE,
+    Point,
+)
 from ..core.measure import read_stackup
 from ..core.model import ProjectModel
 from ..core.netdomains import is_auto_net
@@ -487,6 +492,159 @@ def cross_view_lonely_pins(
     return rows
 
 
+#: 527C2：``crossView.geometry.unresolved[].reason`` 的两档。都**不进** ``noWire``
+#: ——「模型里没有这个脚的坐标」不是「图纸没画线」，把前者读成后者就是把「没看」
+#: 当成「看了，没有」。
+GEOMETRY_MISSING_PIN = "missingPin"
+GEOMETRY_MISSING_PAGE = "missingPage"
+
+
+def cross_view_geometry(schematic_board: Any, lonely: list[dict]) -> dict | None:
+    """Where the drawing put the feet of 189A2's lonely rows (527C2 片 2).
+
+    The lonely row answers a **netlist** question (「原理图说这个脚是单成员网，
+    PCB 视图说它的网有同伴」); it cannot answer the question the next reader asks
+    first: *is this pin on a line at all?* A pin the drawing never put on a wire
+    and a pin that sits on a wire whose name the two views disagree about are two
+    different stories, and a row that only carries net names cannot tell them
+    apart. The parser hands the geometry over in
+    :attr:`~boardwise.core.model.DesignModel.pin_wires` (527C2 片 1); this reads
+    it.
+
+    ``None`` means 「没有几何可读」 —— a KiCad/``.enet``/manual model states no
+    ``pin_wires`` (and ``core.compare.reconcile`` drops it on a rebuild), so the
+    section keeps its old shape and the note keeps its old wording. It is **not**
+    「图纸没画线」: that reading is a ``noWire`` row.
+
+    Otherwise ``{binding, noWire, differentNet, allOffWire, unresolved, counts}``:
+
+    * ``noWire`` — the nearest wire-segment **endpoint on that sheet** is
+      further than 0 (``distance`` in the schematic's canvas units, **not** a
+      PCB-mil conversion). The measurement is the smallest
+      :func:`math.hypot` from the pin point to either end of any segment on
+      that sheet — **not** the distance to the segment's interior — because
+      ``binding`` stays the parser's own ``endpoint`` connectivity rule: a pin
+      sitting in the *middle* of a drawn line is exactly the case that rule
+      says is not connected, so it is 图纸没画线 here rather than a landed
+      alias (B5 fixA: the interior used to read as distance 0 and turned these
+      feet into ``differentNet``). A pin's sheet that carries no wire at all is
+      also ``noWire`` (``distance: None``, the reading 「该页无导线」 — not
+      a distance of 0, and not a miss);
+    * ``differentNet`` — ``distance == 0`` (the foot is exactly on a segment
+      **end**) and ``schematicNet != pcbNet``: the
+      foot is on a line, and the two archives call that line two different
+      things. Same distance with the **same** name is not a difference here and
+      is not listed (the row is already disclosed by ``lonely`` itself);
+    * ``allOffWire`` — a designator whose lonely feet are **every one** of them
+      off a wire, with the raw ``offWire/pins`` counts. Written as a **hint**
+      (「整块落位嫌疑」), never a verdict: a part half on the drawing is not this
+      shape, and no ratio threshold is applied anywhere, so a high-speed part
+      with 10/16 feet on lines stays out of it;
+    * ``unresolved`` — the model carries no coordinate for that foot
+      (:data:`GEOMETRY_MISSING_PIN`), or carries one on a sheet the geometry never
+      projected (:data:`GEOMETRY_MISSING_PAGE`). Both are knowledge gaps, so they
+      may not be counted as ``noWire`` **and** may not be counted as 「在线上」:
+      they appear in neither list, and the third state is the reading.
+
+    A pin's sheet is read from its own coordinate (the page the placement landed
+    on), never from the file's whole wire list: two sheets sharing coordinates
+    are two sheets (片 1's negative control), and welding them here would turn
+    「另一个页上有一条同坐标的线」 into 「这个脚落在线上」.
+
+    This states observations only. It does **not** conclude the board is stale,
+    does not rank the two views, and changes no finding, severity or verdict —
+    189A2's two readings (a pose/parse artifact versus a board copy that was
+    never re-synced, 017) both stay open.
+    """
+    pin_wires = getattr(schematic_board, "pin_wires", None)
+    if not pin_wires:
+        return None
+    pins = pin_wires.get("pins") or {}
+    wires = pin_wires.get("wires") or {}
+    no_wire: list[dict] = []
+    different_net: list[dict] = []
+    unresolved: list[dict] = []
+    off_wire: set[tuple[str, str]] = set()
+    for row in lonely:
+        designator = str(row.get("designator"))
+        number = str(row.get("pin"))
+        place = pins.get((designator, number))
+        if place is None:
+            unresolved.append({
+                "designator": designator,
+                "pin": number,
+                "page": None,
+                "reason": GEOMETRY_MISSING_PIN,
+            })
+            continue
+        page = str(place[0])
+        if page not in wires:
+            unresolved.append({
+                "designator": designator,
+                "pin": number,
+                "page": page,
+                "reason": GEOMETRY_MISSING_PAGE,
+            })
+            continue
+        segments = wires.get(page) or []
+        point = Point(float(place[1]), float(place[2]))
+        # Endpoint distance, not segment distance: `binding` is the parser's
+        # `endpoint` rule (a pin connects only at a segment's end), so a pin in
+        # the middle of a drawn line must read 图纸没画线 instead of sharing the
+        # line's net — measuring to the segment's interior would state a
+        # differentNet that the netlist never says (B5 fixA).
+        distance = min(
+            (
+                math.hypot(point.x - float(end[0]), point.y - float(end[1]))
+                for a, b in segments
+                for end in (a, b)
+            ),
+            default=None,
+        )
+        if distance is None or distance > 0:
+            no_wire.append({
+                "designator": designator,
+                "pin": number,
+                "page": page,
+                "distance": distance,
+            })
+            off_wire.add((designator, number))
+        elif row.get("schematicNet") != row.get("pcbNet"):
+            different_net.append({
+                "designator": designator,
+                "pin": number,
+                "page": page,
+                "schematicNet": row.get("schematicNet"),
+                "pcbNet": row.get("pcbNet"),
+            })
+    order: dict[str, list[tuple[str, str]]] = {}
+    for row in lonely:
+        key = (str(row.get("designator")), str(row.get("pin")))
+        order.setdefault(key[0], []).append(key)
+    all_off_wire = [
+        {
+            "designator": designator,
+            "offWire": sum(1 for key in keys if key in off_wire),
+            "pins": len(keys),
+        }
+        for designator, keys in order.items()
+        if keys and all(key in off_wire for key in keys)
+    ]
+    return {
+        "binding": str(pin_wires.get("binding") or ""),
+        "noWire": no_wire,
+        "differentNet": different_net,
+        "allOffWire": all_off_wire,
+        "unresolved": unresolved,
+        "counts": {
+            "noWire": len(no_wire),
+            "differentNet": len(different_net),
+            "allOffWire": len(all_off_wire),
+            "unresolved": len(unresolved),
+        },
+    }
+
+
 #: 537C1：``crossView.candidateMappings[].evidence`` 的三段出处。
 #:
 #: 两侧都是**归档**读数——``checkup --file`` 读的就是这两份归档导出，谁都不是
@@ -787,6 +945,18 @@ def cross_view_section(
     confirmation that the two nets are one, and it rewrites no rule message —
     ``Net.name`` and the findings keep the names they were read with.
 
+    **527C2 adds a fourth optional key, ``geometry``**, and only when all three
+    hold: ``checked: true``, ``lonely`` non-empty, and the schematic model
+    carries :attr:`~boardwise.core.model.DesignModel.pin_wires` (片 1's per-page
+    projection). It is assembled by :func:`cross_view_geometry` from those rows
+    alone and is appended **after every existing key** — the three old shapes
+    (``checked: false``, empty ``lonely``, a model with no geometry) are
+    character-for-character what they were, and the ``lonely`` rows themselves
+    gain no field at all (they keep their six keys). What it adds is the
+    observation the netlist rows cannot carry: whether each lonely foot is on a
+    line at all, and whether the line it sits on is called two things by the two
+    archives.
+
     Both sides of a mapping are **archive** readings (``checkup --file`` reviews
     the exported schematic and PCB documents; neither is live evidence), so the
     mapping is a machine-assembled candidate list for a person to check — it does
@@ -826,6 +996,9 @@ def cross_view_section(
             else None
         )
         aliases = _cross_view_auto_net_aliases(schematic_board, pcb_model)
+        geometry = (
+            cross_view_geometry(schematic_board, lonely) if lonely else None
+        )
     except Exception as exc:  # noqa: BLE001 — named below, never silently dropped
         return {
             "checked": False,
@@ -842,6 +1015,11 @@ def cross_view_section(
         section["candidateMappings"] = mappings
     if aliases:
         section["autoNetAliases"] = aliases
+    if geometry is not None:
+        # 527C2：geometry 永远排在**所有**既有键之后（加性，不挪位），且只在
+        # `checked: true` + `lonely` 非空 + 模型真带 `pin_wires` 时出现。
+        # `checked: false`、空 `lonely`、无几何模型三种旧形状一个字符都不动。
+        section["geometry"] = geometry
     return section
 
 

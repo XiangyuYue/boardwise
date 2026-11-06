@@ -60,7 +60,10 @@
       "poured_without_fill": 0,
       "conflicting_library_documents": 0,
       "edit_version": null,
-      "editor_version": "3.2.149.88089769"
+      "editor_version": "3.2.149.88089769",
+      "consistency_duplicate_groups": 0,
+      "consistency_unresolved": 0,
+      "deleted_documents": 0
     },
     "moduleBasis": "connectivity",
     "pageAttribution": "archive",
@@ -1258,6 +1261,58 @@
           "message": "手册证据未齐/待核：仍有器件缺已核验的手册事实（含工程师接受未审、审查者标记与空模型），相关规格结论只能待核，不能写成已与手册核对。"
         }
       ]
+    },
+    "partialVersion": 1,
+    "partialCategories": {
+      "confirmed": {
+        "count": 3,
+        "items": [
+          {
+            "code": "archive-pcb-evidence",
+            "status": "not-applicable",
+            "detail": "已确认没有 PCB 文档（pcb_had_documents=false 且没有 pcb_review 一节）：没有可审的 PCB 版面，归档 PCB 通道不适用。"
+          },
+          {
+            "code": "live-pcb-evidence",
+            "status": "not-applicable",
+            "detail": "已确认没有 PCB：没有可实时回读的 PCB，本通道不适用。"
+          },
+          {
+            "code": "pcb-visual-review",
+            "status": "not-applicable",
+            "detail": "已确认没有 PCB：没有可复核的 PCB 版面，本通道不适用。"
+          }
+        ]
+      },
+      "suspected": {
+        "count": 0,
+        "items": []
+      },
+      "unverified": {
+        "count": 2,
+        "items": [
+          {
+            "code": "live-schematic-evidence",
+            "status": "missing",
+            "detail": "离线文件（--file）：没有连编辑器，模型来自归档而不是实时回读，实时原理图证据未采集。"
+          },
+          {
+            "code": "schematic-visual-review",
+            "status": "missing",
+            "detail": "离线文件（--file）：离线几何 SVG 画的是 PCB 版面几何，不是实时原理图图，不能当作原理图视觉复核。"
+          }
+        ]
+      },
+      "uncovered": {
+        "count": 1,
+        "items": [
+          {
+            "code": "datasheet-evidence",
+            "status": "unavailable",
+            "detail": "手册证据未齐/待核：未审 2 条 / 工程师接受未审（本轮缺口）0 条 / 审查者标记 0 个器件（三类是不同来源的欠账，不相加，也不等于手册已核）；相关规格结论只能待核。"
+          }
+        ]
+      }
     }
   },
   "architecture": {
@@ -1951,7 +2006,7 @@
     },
     "sourceVersions": {
       "ruleset": "a0c5e0a0",
-      "rulebody": "541db813"
+      "rulebody": "424e2fd2"
     },
     "verdict": "incomplete",
     "verdictWhy": [
