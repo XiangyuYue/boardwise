@@ -12,8 +12,9 @@ So every report now carries a top-level ``environment`` section:
 * ``tier`` — the data tier the run actually used;
 * ``expectedConnectorVersion`` / ``runningConnectorVersion`` — a plain string
   comparison (no semver inference), either side may be ``null``;
-* ``connectorVersionStatus`` — ``not-applicable`` (offline), ``match``,
-  ``mismatch``, ``unknown``;
+* ``connectorVersionStatus`` — ``not-applicable`` (offline), ``match`` (exact
+  equality), ``compatible`` (same ``major.minor`` series, patch numbers
+  independent — the release discipline), ``mismatch``, ``unknown``;
 * ``writeAllowed: false`` — **this review is not authorised to write** (not a
   claim about the daemon's global configuration);
 * ``allowedNextActions`` — exactly three safe next steps, in a fixed order, none
@@ -25,7 +26,9 @@ What these tests pin, in order:
 
 1. the section is always present and additive (``source`` untouched);
 2. each status is derived the way the contract says, including "offline is
-   never a mismatch" and "a missing side is unknown, not match";
+   never a mismatch", "a missing side is unknown, not match", "the same
+   major.minor is compatible in both directions", and "a cross-series or
+   malformed version is still a mismatch";
 3. the per-tier limitations, and that a ``match`` invents none;
 4. the three next actions are frozen, in order, and never offer a real-project
    apply;
@@ -78,6 +81,7 @@ LIVE_AFFECTS = ["liveSchematic", "livePcb"]
 LIMITATION_CODES = {
     "offline-no-live-evidence",
     "connector-version-mismatch",
+    "connector-version-compatible",
     "connector-version-unverified",
     "per-page-connectivity-limit",
     "connectivity-only-model",
@@ -144,12 +148,12 @@ def _codes(environment: dict) -> list[str]:
 
 
 def test_the_report_always_carries_the_environment_and_leaves_source_alone(monkeypatch):
-    report = _report(monkeypatch, "project-file", running="0.5.18", expected="0.5.21")
+    report = _report(monkeypatch, "project-file", running="0.5.18", expected="0.6.21")
 
     environment = report["environment"]
     assert set(environment) == ENVIRONMENT_KEYS
     assert environment["tier"] == "project-file"
-    assert environment["expectedConnectorVersion"] == "0.5.21"
+    assert environment["expectedConnectorVersion"] == "0.6.21"
     # The running version is the *same reading* `source` already carries: one
     # source of truth, two readers.
     assert environment["runningConnectorVersion"] == report["source"]["connectorVersion"] == "0.5.18"
@@ -173,7 +177,7 @@ def test_an_explicit_environment_argument_costs_no_second_computation(monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# 2. the four statuses
+# 2. the five statuses
 # ---------------------------------------------------------------------------
 
 
@@ -201,9 +205,9 @@ def test_matching_versions_are_match_and_invent_no_version_limitation(monkeypatc
     assert environment["limitations"] == []
 
 
-def test_a_version_mismatch_is_named_with_both_versions_and_blocks_confirmation(monkeypatch):
+def test_a_cross_series_version_is_named_with_both_versions_and_blocks_confirmation(monkeypatch):
     environment = _report(
-        monkeypatch, "project-file", running="0.5.18", expected="0.5.21"
+        monkeypatch, "project-file", running="0.5.18", expected="0.6.21"
     )["environment"]
 
     assert environment["connectorVersionStatus"] == "mismatch"
@@ -213,7 +217,7 @@ def test_a_version_mismatch_is_named_with_both_versions_and_blocks_confirmation(
     assert row["affects"] == ["liveSchematic", "livePcb", "schematicImage", "pcbImage"]
     # Both strings are in the message, because a reader cannot chase a version
     # difference the report only points at.
-    assert "0.5.21" in row["message"] and "0.5.18" in row["message"]
+    assert "0.6.21" in row["message"] and "0.5.18" in row["message"]
     assert "confirmed" in row["message"], "受影响实时结论不得标 confirmed"
 
 
@@ -239,6 +243,108 @@ def test_a_missing_running_version_is_unknown_not_a_pass(monkeypatch):
     assert environment["runningConnectorVersion"] is None
     assert environment["connectorVersionStatus"] == "unknown"
     assert _codes(environment) == ["connector-version-unverified"]
+
+
+def test_a_same_series_patch_difference_is_compatible_and_only_costs_attribute_moves(monkeypatch):
+    """0.6.0 running against 0.6.1 in the repo: `compatible`, narrow blast radius.
+
+    The series rule says patches are independent, so the routine live review
+    channels must stay undowngraded — a row listing `liveSchematic` / `livePcb`
+    would discard an entire live review over actions this run never calls. What a
+    patch difference can actually cost (`attributeMoves`) is named, together with
+    the explicit `UNKNOWN_ACTION` boundary: an older patch does not pretend to
+    have the actions it lacks.
+    """
+    environment = _report(
+        monkeypatch, "project-file", running="0.6.0", expected="0.6.1"
+    )["environment"]
+
+    assert environment["connectorVersionStatus"] == "compatible"
+    assert _codes(environment) == ["connector-version-compatible"]
+    assert "connector-version-mismatch" not in _codes(environment)
+    row = environment["limitations"][0]
+    assert set(row) == {"code", "affects", "message"}
+    assert row["affects"] == ["attributeMoves"]
+    assert set(row["affects"]).isdisjoint(LIVE_AFFECTS), "常规 live 证据不得再被降级"
+    assert "0.6.0" in row["message"] and "0.6.1" in row["message"]
+    assert "major.minor" in row["message"]
+    assert "sch.list_attributes" in row["message"] and "sch.move_attribute" in row["message"]
+    assert "UNKNOWN_ACTION" in row["message"], "旧 connector 不是伪装支持，而是明确答不认识"
+
+
+@pytest.mark.parametrize(
+    ("running", "expected"),
+    [
+        ("0.6.0", "0.6.2"),  # either side may be the older patch
+        ("0.6.2", "0.6.0"),
+        ("0.6.1", "0.6.0"),
+        ("0.6.0", "0.6.1"),
+        ("0.5.18", "0.5.21"),  # two-digit patches in one series
+    ],
+)
+def test_same_series_pairs_are_compatible_in_both_directions(monkeypatch, running, expected):
+    """The series is the same from either side, so both orders are compatible."""
+    environment = _report(
+        monkeypatch, "project-file", running=running, expected=expected
+    )["environment"]
+
+    assert environment["connectorVersionStatus"] == "compatible", (running, expected)
+    assert _codes(environment) == ["connector-version-compatible"]
+    assert environment["limitations"][0]["affects"] == ["attributeMoves"]
+
+
+def test_the_compatible_row_leaves_the_tier_limitations_in_place(monkeypatch):
+    """The compatible row replaces the version row only — tier limits stay."""
+    environment = _report(
+        monkeypatch, "per-page", running="0.6.0", expected="0.6.2"
+    )["environment"]
+
+    assert _codes(environment) == [
+        "connector-version-compatible", "per-page-connectivity-limit",
+    ]
+    assert environment["limitations"][-1]["affects"] == ["crossPageConnectivity", "archivePcb"]
+
+
+@pytest.mark.parametrize(
+    ("running", "expected"),
+    [
+        ("0.6.0", "0.7.0"),  # a series bump is done on both sides together
+        ("0.7.0", "0.6.0"),
+        ("0.5.21", "0.6.1"),
+        ("0.6.1", "0.5.21"),
+        ("0.6", "0.6.1"),  # malformed: not a strict x.y.z
+        ("0.6.0", "0.6"),
+        ("v0.6.0", "0.6.1"),
+        ("0.6.0-beta", "0.6.1"),
+        ("0.6.x", "0.6.1"),
+    ],
+)
+def test_a_cross_series_or_malformed_pair_is_still_a_mismatch(monkeypatch, running, expected):
+    """Compatibility is a series rule with a strict spelling — nothing more.
+
+    A different `major.minor` is a mismatch in both directions, and a version
+    with a missing segment, a prefix or a suffix is not parsed into a series at
+    all: no capability is inferred from an unreadable string.
+    """
+    environment = _report(
+        monkeypatch, "project-file", running=running, expected=expected
+    )["environment"]
+
+    assert environment["connectorVersionStatus"] == "mismatch", (running, expected)
+    assert _codes(environment) == ["connector-version-mismatch"]
+    assert "connector-version-compatible" not in _codes(environment)
+
+
+def test_the_compatible_status_renders_its_own_explanation(monkeypatch):
+    """The status label travels with the status: a bare `compatible` is not
+    self-explaining, and the Markdown is where a reader meets it."""
+    report = _report(monkeypatch, "project-file", running="0.6.0", expected="0.6.1")
+
+    text = render_report_markdown(report)
+    assert "`compatible`" in text
+    assert "同系列" in text
+    assert "connector-version-compatible" in text
+    assert "attributeMoves" in text
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +379,7 @@ def test_netlist_tier_declares_connectivity_only_model(monkeypatch):
 
 def test_limitations_never_repeat_and_every_row_is_a_chinese_impact_statement(monkeypatch):
     environment = _report(
-        monkeypatch, "per-page", running="0.5.18", expected="0.5.21"
+        monkeypatch, "per-page", running="0.5.18", expected="0.6.21"
     )["environment"]
 
     codes = _codes(environment)
@@ -413,7 +519,7 @@ def test_an_offline_run_discloses_the_environment_in_every_artifact(
 
 
 def test_report_md_and_the_review_summary_show_a_mismatch_and_its_limitation(monkeypatch):
-    report = _report(monkeypatch, "project-file", running="0.5.18", expected="0.5.21")
+    report = _report(monkeypatch, "project-file", running="0.5.18", expected="0.6.21")
 
     markdown = render_report_markdown(report)
     review = render_review_summary(report, [])
@@ -421,7 +527,7 @@ def test_report_md_and_the_review_summary_show_a_mismatch_and_its_limitation(mon
     for text in (markdown, review):
         assert "审查环境与权限" in text
         assert "mismatch" in text
-        assert "0.5.21" in text and "0.5.18" in text
+        assert "0.6.21" in text and "0.5.18" in text
         assert "connector-version-mismatch" in text
         assert "writeAllowed" in text and "`false`" in text
         for action_id in ACTION_IDS:

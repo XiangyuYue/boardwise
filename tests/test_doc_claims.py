@@ -1151,3 +1151,234 @@ def test_the_general_sop_and_the_agents_route_still_lead_to_the_draw_skill():
     assert "开工前必须加载" in draw_line, (
         "tasks/draw-line.md lost the hard loading requirement"
     )
+
+
+# ============================ 543O：roadmap 稳定层与任务账同步（2026-11-06）
+#: 543 的权威验收账（两拓扑真机读数）与总索引（543/201x 状态）。路线图是稳定层，
+#: 它对 543 的每句话都必须能在这两处源头里找到同一句——否则稳定层就成了二手转述。
+_543_LEDGER = "tasks/543_semantic_layout.md"
+_TASKMAP = "tasks/TASKMAP.md"
+
+
+def _squash(document: str) -> str:
+    """声明钉按整句对拍：换行是排版不是语义，先把空白归一再比。"""
+    return re.sub(r"\s+", " ", document)
+
+
+def _table_row(document: str, key: str) -> str:
+    """`| <key> | ...` 的整行；索引/表格里那行就是源头，找不到即失败。"""
+    match = re.search(rf"^\|\s*{re.escape(key)}\s*\|.*$", document, re.MULTILINE)
+    assert match, f"no table row starting with | {key} |"
+    return match.group(0)
+
+
+def test_the_roadmap_keeps_543_states_roles_and_non_revivals_in_sync():
+    """护 `docs/roadmap.md` §1/§4 与 543 权威验收账、TASKMAP 索引的同一句话。
+
+    稳定层必须让只读路线图的人看到：543 有**两个各自不同**的持久化状态——CH343 P38 已关闭
+    重开 `saved_verified`，CH340 P39 仍 `saved_unverified`、待关闭重开；agent 声明功能岛/
+    核心/阅读关系而解释器负责确定性几何；201C/201D 经 543H 裁不复活、201E 已落；
+    Board2/P1 是用户参考页而不是试验场；201x 读数只是诊断基线、不冒充 P38/P39 当前读数。
+
+    失效时的样子：只写「两个拓扑都过了」而抹平 P39 仍待重开（或反过来把 P39 写成已重开/
+    已 `saved_verified`）；删掉 agent/解释器分工，让「构造式布局」退化成一句空话；把
+    201C/201D 写回「待复活」，或把 201E 写回「规划/在途」；再把 Board2/P1 写成试验场；
+    把 201x 的历史读数当成当前页读数。状态与裁决先从任务账/索引读出来再要求路线图说同一句，
+    防止两处各说各话。
+    """
+    ledger_raw = (REPO / _543_LEDGER).read_text(encoding="utf-8")
+    taskmap_raw = (REPO / _TASKMAP).read_text(encoding="utf-8")
+    roadmap_raw = (REPO / "docs" / "roadmap.md").read_text(encoding="utf-8")
+    ledger = _squash(ledger_raw)
+    roadmap = _squash(roadmap_raw)
+    map_543 = _table_row(taskmap_raw, "543")
+
+    # --- 源头：哈希在场，持久化状态钉死为具体事实（不是「两者只要不同」）。
+    instances = {"P38": "0ec4dc022ef38563", "P39": "62e4828acc56a307"}
+    for designator, instance in instances.items():
+        for name, text in (
+            ("tasks/TASKMAP.md", map_543),
+            ("tasks/543_semantic_layout.md", ledger),
+        ):
+            assert f"{designator}=`{instance}`" in text, (
+                f"{name} lost the {designator} instance hash"
+            )
+    assert "P39持久化未重开验证" in map_543, (
+        "tasks/TASKMAP.md 543 row stopped disclosing that P39 was not reopened"
+    )
+
+    states: dict[str, str] = {}
+    match = re.search(
+        rf"P38=`{instances['P38']}`[^；。]*?`(saved_verified|saved_unverified)`",
+        map_543,
+    )
+    assert match, "tasks/TASKMAP.md 543 row no longer states P38's persistence state"
+    states["P38"] = match.group(1)
+    match = re.search(r"P39[^。]{0,40}`(saved_verified|saved_unverified)`", ledger)
+    assert match, "tasks/543_semantic_layout.md no longer states P39's persistence state"
+    states["P39"] = match.group(1)
+    assert states == {"P38": "saved_verified", "P39": "saved_unverified"}, (
+        "the source ledger/index must record CH343 P38 as saved_verified and CH340 P39 as "
+        f"saved_unverified awaiting a reopen; got {states!r}"
+    )
+
+    # --- 路线图：两个拓扑都要在场，且各自的持久化状态与源头逐字一致。
+    roadmap_543 = _table_row(roadmap_raw, "543")
+    assert "两拓扑三关" in roadmap_543, (
+        "docs/roadmap.md 543 row lost the two-topology three-gate verdict"
+    )
+    for topology, designator in (("CH343", "P38"), ("CH340", "P39")):
+        assert topology in roadmap_543, (
+            f"docs/roadmap.md 543 row dropped the {topology} topology"
+        )
+        match = re.search(
+            rf"{topology}[^；。|]*?{designator}[^；。|]*?`(saved_verified|saved_unverified)`",
+            roadmap_543,
+        )
+        assert match, (
+            f"docs/roadmap.md 543 row no longer pairs {topology} {designator} with a "
+            "persistence state"
+        )
+        assert match.group(1) == states[designator], (
+            f"docs/roadmap.md says {designator}={match.group(1)!r} but the source "
+            f"ledger/index says {states[designator]!r}"
+        )
+    assert "待关闭重开" in roadmap_543, (
+        "docs/roadmap.md 543 row stopped naming P39's pending close-and-reopen"
+    )
+
+    # --- P39 不许被写成已重开（状态对拍已挡 saved_verified，这里再挡散文说法）。
+    for match in re.finditer("P39", roadmap):
+        window = roadmap[match.start(): match.start() + 80]
+        assert not re.search(r"已关闭重开|重开验证通过|重开完成", window), (
+            "docs/roadmap.md describes P39 as reopened/verified although the ledger keeps "
+            "it saved_unverified awaiting a close-and-reopen"
+        )
+
+    # --- agent / 解释器分工：路线图与索引都要保留，且分工方向不能反。
+    assert "agent 声明功能岛" in roadmap, (
+        "docs/roadmap.md lost 'agent declares functional islands' — the constructive "
+        "layout claim becomes content-free"
+    )
+    assert "解释器负责确定性几何" in roadmap, (
+        "docs/roadmap.md lost 'the interpreter owns deterministic geometry'"
+    )
+    assert "agent 语义分岛" in map_543 and "解释器负责几何" in map_543, (
+        "tasks/TASKMAP.md 543 row lost the agent/interpreter division of labour"
+    )
+    assert not re.search(r"解释器[^；。]{0,20}声明功能岛", roadmap), (
+        "docs/roadmap.md inverted the division of labour: the interpreter does not "
+        "declare islands"
+    )
+
+    # --- 201C/201D 不复活、201E 已落：裁决从索引读出，再要求路线图同判。
+    for key, verdict in (("201C", "不复活"), ("201D", "不复活"), ("201E", "已落")):
+        source_row = _table_row(taskmap_raw, key)
+        assert verdict in source_row, (
+            f"tasks/TASKMAP.md {key} row no longer carries the {verdict!r} verdict"
+        )
+        roadmap_row = _table_row(roadmap_raw, key)
+        assert verdict in roadmap_row, (
+            f"docs/roadmap.md {key} row no longer carries the {verdict!r} verdict"
+        )
+        assert "待复活" not in roadmap_row, (
+            f"docs/roadmap.md {key} row was written back to 'pending revival'"
+        )
+        if key == "201E":
+            assert "规划" not in roadmap_row and "在途" not in roadmap_row, (
+                "docs/roadmap.md 201E row was written back to planning/in-flight although "
+                "the index records it as landed"
+            )
+
+    # --- Board2/P1 是用户参考页，不是试验场；任何提到它的窗口都不许反过来。
+    assert "Board2/P1 是用户参考页，不是试验场" in roadmap, (
+        "docs/roadmap.md lost the ruling that Board2/P1 is the user's reference page, "
+        "not a proving ground"
+    )
+    for match in re.finditer("Board2", roadmap):
+        window = roadmap[match.start(): match.start() + 60]
+        if "试验场" in window:
+            assert "不是试验场" in window, (
+                "docs/roadmap.md calls Board2 a proving ground again"
+            )
+
+    # --- 201x 历史读数只能当基线，不许冒充 P38/P39 的当前读数。
+    assert "不是 P38/P39 的当前读数" in roadmap, (
+        "docs/roadmap.md stopped marking the 201x readings as historical baselines rather "
+        "than the current P38/P39 readings"
+    )
+
+
+# ==================================== 549：`role-not-allowed` 属于 BAD_REQUEST，不属于 UNAUTHENTICATED
+
+
+def test_bridge_doc_files_role_not_allowed_under_bad_request():
+    """护 549 §4 的 `pair.authorize` 行与 §5 的错误码表（第二轮复核第 3 条）。
+
+    失效时的样子（就是修之前的两处）：`bridge.md` 的 `pair.authorize` 行写着
+    「connector-role caller gets `UNAUTHENTICATED` with `reason: role-not-allowed`」，
+    §5 的 `UNAUTHENTICATED` 行把 `role-not-allowed` 列进 reason 清单。daemon 实际上
+    在 `_local_action` 的角色闸就抛 `ErrorCodes.BAD_REQUEST`——帧已经认证过了，错的
+    是「这个角色没资格调这个动作」。照错的那份读，读者会去 revoke + 重新配对，而正确
+    的处置是改用 CLI。
+
+    钉子读三处：文档不许把两个词写进同一行；`pair.authorize` 那一行必须写明
+    `BAD_REQUEST`；daemon 源码那段角色闸抛的也必须是 `BAD_REQUEST`（文档跟着代码走，
+    不是反过来）。
+    """
+    doc = (REPO / "docs" / "bridge.md").read_text(encoding="utf-8")
+
+    # 1) 任何一行都不许再用「gets `UNAUTHENTICATED`」这种归属句式挂 role-not-allowed。
+    attributed = [
+        line
+        for line in doc.splitlines()
+        if "role-not-allowed" in line and "gets `UNAUTHENTICATED`" in line
+    ]
+    assert attributed == [], (
+        "docs/bridge.md attributes `role-not-allowed` to UNAUTHENTICATED again; the "
+        "daemon answers BAD_REQUEST for a wrong role on `pair.authorize`. Offending "
+        "lines: " + " || ".join(attributed)
+    )
+
+    # 2) `pair.authorize` 那一行必须把真正的错误码写出来。
+    rows = [line for line in doc.splitlines() if line.startswith("| `pair.authorize`")]
+    assert len(rows) == 1, "docs/bridge.md lost its `pair.authorize` row"
+    row = rows[0]
+    assert "role-not-allowed" in row and "gets `BAD_REQUEST`" in row, (
+        "the `pair.authorize` row must say a connector-role caller gets BAD_REQUEST with "
+        "reason role-not-allowed; it is a role refusal, not an authentication one"
+    )
+
+    # 3) §5 的 `UNAUTHENTICATED` 行里那句 reason 清单不许再收 role-not-allowed
+    #    （这一行可以提到它，但只能用来把读者指向 BAD_REQUEST）。
+    unauth = [line for line in doc.splitlines() if line.startswith("| `UNAUTHENTICATED`")]
+    assert len(unauth) == 1, "docs/bridge.md lost its §5 `UNAUTHENTICATED` row"
+    enumerated = re.search(r"`reason` is one of ([^.]*?)\.", unauth[0])
+    assert enumerated, "the §5 `UNAUTHENTICATED` row no longer lists its reasons"
+    reasons = set(re.findall(r"`([a-z0-9-]+)`", enumerated.group(1)))
+    assert "role-not-allowed" not in reasons, (
+        f"the §5 reason list is {sorted(reasons)}; role-not-allowed is BAD_REQUEST (§4)"
+    )
+    assert reasons == {
+        "no-grant",
+        "grant-expired",
+        "code-missing",
+        "code-mismatch",
+        "record-changed",
+        "connector-attached",
+    }, f"the documented pairing-refusal reasons are {sorted(reasons)}"
+
+    # 4) 文档跟着代码走：daemon 的角色闸抛的必须仍是 BAD_REQUEST。
+    daemon = (REPO / "src" / "boardwise" / "bridge" / "daemon.py").read_text(
+        encoding="utf-8"
+    )
+    gate_start = daemon.index('if action == "pair.authorize":')
+    gate = daemon[gate_start: daemon.index("return self._authorize_pairing", gate_start)]
+    assert "ErrorCodes.BAD_REQUEST" in gate, (
+        "the daemon no longer refuses a connector-role `pair.authorize` with BAD_REQUEST; "
+        "docs/bridge.md and its §5 table are now describing something else"
+    )
+    assert "ErrorCodes.UNAUTHENTICATED" not in gate, (
+        "the role gate now raises UNAUTHENTICATED — that is the doc defect the 549 review "
+        "fixed, and it has come back in the code"
+    )

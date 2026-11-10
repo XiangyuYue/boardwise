@@ -27,6 +27,12 @@
  * dislikes the trade-off can see it in `About…` and in the log panel and decide
  * — which is the opposite of the silent `?? someGlobal` failure that cost two
  * hardware sessions.
+ *
+ * **The pair code gets no fallback at all (549).** `generatePairCode` is a
+ * separate function with a stricter policy than `generateToken`: it uses Web
+ * Crypto or it fails, because a pair code authorises a pairing and a guessable
+ * one would authorise the wrong connector. That is why the two values are not
+ * one function with a flag.
  */
 
 export type RandomSource =
@@ -154,7 +160,7 @@ export function describeRandom(host: RandomHost = {}): string {
  * The ambient host, packaged for injection.
  *
  * `index.ts` never reaches for `crypto` itself: it takes this from the facade and
- * hands it to `ensureConnectorToken`. That is what lets the test suite drive the
+ * hands it to `ensureConnectorConfig`. That is what lets the test suite drive the
  * *no-Web-Crypto* path end to end — the exact path a real editor took on
  * 2026-09-13, and the one 0.2.0 shipped without any test for.
  */
@@ -195,4 +201,107 @@ export function generateToken(host: RandomHost = {}): GeneratedToken {
   }
 
   return { token: '', source: 'none', detail };
+}
+
+// --------------------------------------------------------------------------
+// the public pair code (549)
+// --------------------------------------------------------------------------
+
+/**
+ * The characters a pair code is built from: Crockford base32 — the ten digits
+ * and the upper-case letters without `I`, `L`, `O` and `U`, the four a human
+ * reads back wrong. The daemon keeps the same list
+ * (`bridge/daemon.py`'s `PAIR_CODE_ALPHABET`) so a code read off the editor
+ * screen can be typed into `boardwise bridge pair` without a translation table.
+ */
+export const PAIR_CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/** Eight characters, i.e. 40 bits: ~1.1e12 codes, shown as two groups of four. */
+export const PAIR_CODE_LENGTH = 8;
+
+/**
+ * `ABCD1234` → `ABCD-1234`, for display only.
+ *
+ * The hyphen is a reading aid, never part of the code: the daemon strips it (and
+ * spaces, and the case) before comparing, so displaying the groups and sending
+ * the bare form cannot disagree. A value that is not a code at all is returned
+ * untouched rather than sliced into a shape it does not have.
+ */
+export function formatPairCode(code: string): string {
+  const text = typeof code === 'string' ? code : '';
+  if (text.length !== PAIR_CODE_LENGTH) return text;
+  return `${text.slice(0, 4)}-${text.slice(4)}`;
+}
+
+export type GeneratedPairCode = {
+  /** Eight characters from {@link PAIR_CODE_ALPHABET}, or `''` when there is no CSPRNG. */
+  pairCode: string;
+  /** `webcrypto` only. There is deliberately no weak source for this value. */
+  source: 'webcrypto' | 'none';
+  /** One readable line about the host, e.g. `crypto=unavailable`. Never a secret. */
+  detail: string;
+};
+
+/**
+ * Mint the public code that authorises this connector's **first** pairing (549).
+ *
+ * Two decisions are load-bearing here, and both are about what this value is
+ * *for*:
+ *
+ * **Web Crypto or nothing.** `generateToken` above may fall back to
+ * `Math.random`, and that trade-off is defensible for the token (see this
+ * file's docstring). It is not defensible for the pair code: the code is what
+ * convinces the daemon to write the pairing record, so it is the one secret the
+ * user types *into a command*, and it is shown on screen while a grant is live.
+ * A predictable code would let anyone who can guess it pair their own connector.
+ * So this function never touches `Math.random`, and when the platform CSPRNG is
+ * missing or throws it answers `''` — the caller omits the field from `hello`
+ * and tells the user plainly that a first pairing is impossible on this host,
+ * instead of minting something weak and calling it authorised.
+ *
+ * **Uniform without rejection sampling.** Each character needs 5 bits, and 256
+ * is an exact multiple of 32, so `byte & 31` is uniform — no modulo bias, and no
+ * variable-length loop that could read more bytes than it needs. The bytes come
+ * from one `getRandomValues` call, which is also what makes the source provable
+ * in a test.
+ *
+ * **Output that cannot be random is not accepted either.** "The function exists
+ * and did not throw" is not the same claim as "the buffer holds entropy": a
+ * sandbox can hand back a stub that fills nothing (leaving the buffer's zeros)
+ * or fills one repeated value, and either would mint `00000000`/`ZZZZZZZZ` —
+ * eight characters a guesser gets in one try. Eight identical bytes from a real
+ * CSPRNG has probability 2^-56, so refusing the shape costs nothing honest and
+ * closes the stubbed-host hole. Same policy as the missing-CSPRNG branch: `''`,
+ * and the detail names what the host actually did.
+ */
+export function generatePairCode(host: RandomHost = {}): GeneratedPairCode {
+  const cryptoGlobal = pickCrypto(host);
+  const detail = describeRandomHost(cryptoGlobal);
+  const rng = (cryptoGlobal as CryptoLike | undefined)?.getRandomValues;
+  if (typeof rng !== 'function') return { pairCode: '', source: 'none', detail };
+
+  try {
+    const bytes = new Uint8Array(PAIR_CODE_LENGTH);
+    rng.call(cryptoGlobal, bytes);
+    const first = bytes[0];
+    let constant = true;
+    let zero = true;
+    for (const byte of bytes) {
+      if (byte !== first) constant = false;
+      if (byte !== 0) zero = false;
+    }
+    // Checked before the alphabet is applied: `00000000` is a code, and this is
+    // the one place that can tell it apart from a real draw of eight zero bytes.
+    if (zero) return { pairCode: '', source: 'none', detail: `${detail}, getRandomValues=zeros` };
+    if (constant) {
+      return { pairCode: '', source: 'none', detail: `${detail}, getRandomValues=constant` };
+    }
+    let pairCode = '';
+    for (const byte of bytes) pairCode += PAIR_CODE_ALPHABET[byte & 31];
+    return { pairCode, source: 'webcrypto', detail };
+  } catch {
+    // `detail` already records that the call threw and why. Fail closed: there
+    // is no weaker source to fall back to for this value.
+    return { pairCode: '', source: 'none', detail };
+  }
 }

@@ -248,8 +248,15 @@ ACTIONS: tuple[Action, ...] = (
         name="hello",
         summary="Handshake. Must be the first frame on every connection.",
         owner="daemon",
-        params=("token", "role", "protocol", "client"),
+        params=("token", "role", "protocol", "client", "pairCode"),
         returns="{ok: true, data: {role, protocol, serverTime}}",
+        params_schema=(
+            "pairCode: optional, and only a connector sends it — the public "
+            "8-character code the connector shows, which an active "
+            "`pair.authorize` grant must match before this handshake may write the "
+            "pairing record (549). A connector that already presents the paired "
+            "token does not need it."
+        ),
         risk="read",
     ),
     Action(
@@ -258,6 +265,38 @@ ACTIONS: tuple[Action, ...] = (
         owner="daemon",
         returns="{ok: true, data: {pong: true, connector: bool}}",
         risk="read",
+    ),
+    Action(
+        name="pair.authorize",
+        summary=(
+            "CLI ONLY: authorise the next connector pairing for five minutes. "
+            "The daemon keeps one in-memory grant — the normalised code, a "
+            "monotonic deadline, the pairing fingerprint it was issued against and "
+            "a failure count — and a connector may write `~/.boardwise/"
+            "connector-token` only by presenting that code in `hello.pairCode`. A "
+            "second authorisation replaces the first; a wrong code is counted for "
+            "the audit and does not void the grant; a successful pairing spends it; "
+            "`bridge revoke`, or any pairing in between, changes the record and so "
+            "voids it; a daemon restart drops it. Refusals use "
+            "UNAUTHENTICATED with `detail.pairCodeRequired` and a `reason`. The "
+            "answer never carries a token and never the code in full."
+        ),
+        owner="daemon",
+        params=("code",),
+        returns="{authorized: true, pairCode, expiresIn, fingerprint, replaced}",
+        params_schema=(
+            "code: the pair code shown in the connector (case, spaces and hyphens "
+            "are ignored)"
+        ),
+        # `write`, not `read` (549). Nothing on disk moves here, but the thing it
+        # changes is *authority*: after this call a connector that arrives holding
+        # the code may write the pairing record. Filing that as a read would let a
+        # caller promised read-only (`bridge call --read-only`, the DSH tool's
+        # default) mint the one grant the whole pairing gate rests on — a risk
+        # label that says "harmless" about the decision that admits a peer.
+        # `design_write` stays False: no project byte, no page, no focus.
+        risk="write",
+        design_write=False,
     ),
     Action(
         name="document.current",

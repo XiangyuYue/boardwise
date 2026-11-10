@@ -285,3 +285,28 @@ def test_the_rendered_table_shows_every_action_and_its_risk():
         assert action.name in rendered, f"{action.name} is missing from --help"
         assert action.risk in rendered
     assert rendered.count("doc.list") == 1, "the rendered table has duplicates"
+
+
+def test_pair_authorize_is_a_daemon_owned_write_that_takes_a_code():
+    """549: the one action that lets a connector write the pairing record.
+
+    Pinned here because the entry is the whole surface: if it became
+    connector-owned the editor could authorise its own pairing (exactly the
+    trust-on-first-use hole 549 closes), and if it stopped declaring `code` the
+    refusal for a missing one would read like an accident.
+
+    `write`, not `read`: no project byte moves, but the answer to "may this
+    connector in?" changes, and that is what the risk field is read for. Filing
+    it as a read would hand a caller that was promised read-only (`bridge call
+    --read-only`, which the DSH tool always sets) the one grant the pairing gate
+    rests on. `design_write` is still False — no schematic, no page, no focus —
+    so the project whitelist stays out of it, and `confirm` is not declared: the
+    typed code *is* the confirmation, and a `write` needs none.
+    """
+    action = next(a for a in ACTIONS if a.name == "pair.authorize")
+    assert action.owner == "daemon"
+    assert action.risk == "write"
+    assert action.params == ("code",)
+    assert action.design_write is False
+    assert "confirm" not in action.params
+    assert "pairCodeRequired" in action.summary

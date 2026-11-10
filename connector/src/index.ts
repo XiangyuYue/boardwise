@@ -15,13 +15,15 @@
 import {
   DEFAULT_URL,
   describeStoredToken,
-  ensureConnectorToken,
+  ensureConnectorConfig,
+  forgetPairCode,
   resolveConfig,
+  rotatePairCode,
   STORAGE_KEYS,
   type ResolvedConfig,
 } from './config';
 import { createFacade, hasHost, hostObject, type EditorFacade } from './facade';
-import { describeRandom } from './random';
+import { describeRandom, formatPairCode } from './random';
 import { buildHandlers, currentProjectIdentity, currentResponseContext } from './actions';
 import { ActionError } from './protocol';
 import {
@@ -31,6 +33,7 @@ import {
   readSharedRuntime,
   releaseSharedRuntime,
   sharedRuntimeImplementation,
+  type HandshakeRefusal,
   type TransportState,
 } from './transport';
 import { VERSION, isVersionOlder } from './version';
@@ -330,6 +333,20 @@ let status: {
    * be advice that cannot work.
    */
   refusedCode?: string;
+  /**
+   * Why the daemon refused to write a pairing record, in its own vocabulary
+   * (`detail.reason` on a 549 daemon): `no-grant`, `grant-expired`,
+   * `code-missing`, `code-mismatch`, `record-changed`, `connector-attached`.
+   *
+   * A wrong code deliberately does **not** void the authorisation, so there is
+   * no "attempts exhausted" reason to report: the refusal is `code-mismatch`
+   * however many times it arrives, and the user's five minutes stay theirs.
+   *
+   * Present only when the refusal actually carried `pairCodeRequired` — its
+   * absence is how a *pre-549* daemon looks, and the two need different advice
+   * (`bridge pair` versus `bridge revoke`).
+   */
+  refusedPairCodeReason?: string;
   fingerprint?: string;
   /**
    * The oldest connector build the daemon accepts, from the `hello` answer.
@@ -442,6 +459,15 @@ let bootstrapRetries = 0;
 let bootstrapTimer: ReturnType<typeof setTimeout> | undefined;
 /** The next-macrotask half of the bootstrap pair; see {@link scheduleNextMacrotaskAttempt}. */
 let nextMacrotaskTimer: ReturnType<typeof setTimeout> | undefined;
+/**
+ * The pair-code rotation a `hello` answer started, if one ever has (549).
+ *
+ * Held so nothing has to guess: a `hello` arrives on the transport's synchronous
+ * message path, so the mint-and-store cannot be awaited there — but a *later*
+ * step that must not race it (an explicit re-pair clearing both keys) can and
+ * does wait for this promise, and the tests can too.
+ */
+let pairCodeRotation: Promise<void> | undefined;
 
 /** A rejected promise here is invisible in the editor, so always render it. */
 function describeError(error: unknown): string {
@@ -506,6 +532,10 @@ export function __setFacadeForTests(next: EditorFacade | undefined): void {
     if (nextMacrotaskTimer) clearTimeout(nextMacrotaskTimer);
     nextMacrotaskTimer = undefined;
     bootstrapRetries = 0;
+    // This process's pair code belongs to the run that minted it: a later test
+    // (or a genuinely fresh evaluation) has to be able to mint its own, and a
+    // leftover would make "a new code per re-pair" untestable.
+    forgetPairCode();
     // Clearing the stand-in returns the module to its pre-activation state, so
     // one test's activation cannot bleed into the next one's `About…` box. The
     // 024 lifecycle counters are part of that state: they describe *this*
@@ -601,6 +631,9 @@ function buildTransport(current: ResolvedConfig): Transport {
     connectorVersion: VERSION,
     // Told apart from the other editor windows (018 §A) — see INSTANCE_ID.
     instanceId: INSTANCE_ID,
+    // The public code a *first* pairing is authorised by (549). Omitted when
+    // this host has no CSPRNG, which the daemon reports as `code-missing`.
+    ...(current.pairCode ? { pairCode: current.pairCode } : {}),
     // Which project *this window* has open, read at handshake time (021 §2.3).
     // The daemon cannot ask: `eda` is window-scoped, so the only way it learns
     // about the other editor windows is each one saying so as it connects.
@@ -631,15 +664,25 @@ function buildTransport(current: ResolvedConfig): Transport {
       // surfaces have to say so together, and each of them was silent before
       // this callback existed: `paired: false` (the About box's REFUSED line),
       // the code and the daemon's own message (`lastError`), and the log panel.
+      //
+      // 549 adds the detail the *advice* is built from: a pairing refusal now
+      // carries `pairCodeRequired` and a `reason`, and "revoke the pairing" is
+      // no longer the answer to it — the answer is the code this window shows
+      // plus `boardwise bridge pair`. The raw code and message stay first, so
+      // the log line still quotes the daemon.
       const line = `daemon refused the handshake: ${refusal.code || 'no code given'}`
         + (refusal.message ? ` — ${refusal.message}` : '');
+      const reason = pairCodeReason(refusal.detail);
+      const advice = refusalAdvice(refusal, reason);
       status = {
         ...status,
         paired: false,
         refusedCode: refusal.code,
-        lastError: line,
+        refusedPairCodeReason: reason,
+        lastError: advice ? `${line} — ${advice}` : line,
       };
       logLine(line);
+      if (advice) logLine(advice);
       // The transport has stopped itself, so the alarm goes with it — the same
       // rule `runStop` keeps, and what `watchdogLine()` reads out from
       // `state: 'stopped'`. A Worker left running would watch a connection that
@@ -656,6 +699,9 @@ function buildTransport(current: ResolvedConfig): Transport {
         // behind would keep the About box's refusal line in front of a window
         // that is talking to the daemon (issue #57 §12).
         refusedCode: undefined,
+        // Same for the pairing reason (549): a stale one would tell the user to
+        // re-authorise a pairing the daemon has just accepted.
+        refusedPairCodeReason: undefined,
       };
       // The fingerprint goes in the log so the value the user reads in the
       // editor can be compared with `boardwise bridge status` on the daemon
@@ -666,6 +712,11 @@ function buildTransport(current: ResolvedConfig): Transport {
           : 'connected to the daemon, not paired yet',
       );
       checkMinimumVersion(data.minConnectorVersion);
+      // 549: `pairCodeUsed: true` means this handshake is what wrote the pairing
+      // record, so the code it carried is spent. Started here, not awaited: this
+      // callback sits inside the transport's message path, and the rotation is a
+      // storage write — it never needs to gate the frames that follow.
+      if (data.pairCodeUsed === true) startPairCodeRotation();
     },
     // The alarm is told about every sign of life by the transport itself
     // (`noteActivity` at the heartbeat, on inbound traffic, on a connect
@@ -722,9 +773,91 @@ function checkMinimumVersion(minimum: unknown): void {
   );
 }
 
-/** Resolve a config with a token in it, generating one on first use. */
+/**
+ * Retire the public pair code the daemon has just spent, and show the next one.
+ *
+ * Only reached from a `hello` answer carrying `pairCodeUsed: true` — the daemon's
+ * per-handshake statement that *this* connection wrote the pairing record, and
+ * therefore that the code it presented has done its one job. Three outcomes, and
+ * every one of them is said out loud, because a code the user cannot see is a
+ * code they cannot type:
+ *
+ * - the new code exists and was stored: it goes in the log panel with the command
+ *   that authorises it, exactly as a freshly minted code always does;
+ * - it exists but the store refused it: same line, plus the note that it will not
+ *   survive a reload (it stays stable for this process, see `rotatePairCode`);
+ * - no CSPRNG, or the mint failed: the pairing itself is untouched — the token on
+ *   file still reconnects — and the line says what could not be minted rather
+ *   than implying the connection is in trouble;
+ * - a re-pair got there first: this rotation's code was never kept, so nothing is
+ *   announced and the panel says which code is current.
+ *
+ * The last case is why this runs beside a live connection as an unawaited promise:
+ * a re-pair can supersede it at any await (see `pairCodeGeneration` in
+ * `config.ts`). It never throws and never touches the transport, because a failure
+ * here must cost the user a code, not the pairing that just succeeded.
+ */
+async function rotatePairCodeAfterPairing(): Promise<void> {
+  try {
+    const rotated = await rotatePairCode(host().storage, host().random);
+    if (rotated.superseded) {
+      // A re-pair replaced everything while this rotation was waiting for the
+      // store to answer. The re-pair has already shown its own code, so
+      // announcing this one would send the user to type a value that is not on
+      // the wire (`config.ts` put the winner back).
+      logLine(
+        'the pair code this handshake retired was replaced by a re-pair before the '
+          + 'store answered; the re-pair\'s code is the current one',
+      );
+      return;
+    }
+    if (!rotated.pairCode) {
+      logLine(
+        'the daemon accepted this pairing, but no replacement pair code could be '
+          + `minted (${rotated.detail ?? 'no secure random source'}); the pairing `
+          + 'itself is fine — only the next first pairing needs a code',
+      );
+      return;
+    }
+    const shown = formatPairCode(rotated.pairCode);
+    logLine(
+      `the daemon accepted this pairing, so the code it spent is retired; new pair code `
+        + `${shown} — run "boardwise bridge pair ${shown}" on the daemon host for the next `
+        + 'pairing',
+    );
+    if (rotated.note) logLine(`the new pair code is not stored: ${rotated.note}`);
+  } catch (error) {
+    // Unreachable in practice (`rotatePairCode` catches its own storage errors),
+    // and kept because an unhandled rejection in an extension is invisible.
+    logLine(`pair code rotation failed: ${describeError(error)}`);
+  }
+}
+
+/**
+ * Start the rotation this `hello` answer asks for, if any (549).
+ *
+ * `pairCodeUsed === true` and nothing else: an absent field is a daemon that
+ * predates it, and `false` is a reconnect with the token already on file — in
+ * both cases nothing was spent, so rotating would invalidate an authorisation
+ * the user never got to use.
+ *
+ * The promise is kept, not cleared when it settles: the only consumer is a later
+ * step that must not race the write (`rePair`, and the tests), and awaiting an
+ * already-settled promise is the correct "it finished, nothing to do" answer.
+ * A rotation that never settles is handled on the consumer's side
+ * ({@link waitForPairCodeRotation}), not here: this runs on the message path and
+ * has no business waiting for anything.
+ */
+function startPairCodeRotation(): void {
+  pairCodeRotation = rotatePairCodeAfterPairing();
+}
+
+/**
+ * Resolve a config with a token and a pair code in it, generating them on first
+ * use.
+ */
 async function connectableConfig(): Promise<ResolvedConfig> {
-  const current = await ensureConnectorToken(host().storage, host().random);
+  const current = await ensureConnectorConfig(host().storage, host().random);
   if (!current.token) {
     // 0.2.0 hit this and said only "the editor has no crypto.getRandomValues",
     // which was a guess dressed as a fact. The diagnosis now comes from
@@ -741,6 +874,29 @@ async function connectableConfig(): Promise<ResolvedConfig> {
     logLine(
       `generated a token with Math.random — ${current.tokenNote ?? 'no Web Crypto'}; ` +
         'usable on loopback, but not a CSPRNG (docs/bridge.md §9)',
+    );
+  }
+  if (current.pairCode) {
+    // The code is public, so it is safe in the log panel — and the log panel is
+    // where a user who cannot read the About box will look. The instruction
+    // travels with it: a code without the one command that authorises it is a
+    // number with no meaning (549).
+    logLine(
+      `pair code ${formatPairCode(current.pairCode)} — run `
+        + `"boardwise bridge pair ${formatPairCode(current.pairCode)}" on the daemon host `
+        + 'to authorise the first pairing',
+    );
+    if (current.pairCodeNote) {
+      // Minted but not persisted: stable for this process, gone after a reload.
+      logLine(`pair code is not stored: ${current.pairCodeNote}`);
+    }
+  } else {
+    // Not a network problem, and it must not be read as one: without a CSPRNG
+    // there is no code to authorise, so a *first* pairing cannot happen here.
+    logLine(`no pair code — ${current.pairCodeNote ?? 'no secure random source'}`);
+    logLine(
+      'this is not a connection failure: an existing pairing still reconnects, but a '
+        + 'first pairing needs the code this host cannot mint',
     );
   }
   return current;
@@ -1008,22 +1164,118 @@ export async function toggleAutoConnect(): Promise<void> {
 }
 
 /**
+ * How long a re-pair waits for the rotation a `hello` started (549).
+ *
+ * Bounded because the store it waits on is the editor host's, and a host call
+ * that is accepted and never answered is a shape we have already been bitten by
+ * (an unbounded `await` on a host promise is exactly how a menu item comes to
+ * look dead: no new code, no reconnect, nothing in the panel). Half a second is
+ * far longer than a real `setExtensionUserConfig` takes and short enough that a
+ * user clicking Re-pair does not wonder whether the click registered. Giving up
+ * costs nothing: `forgetPairCode` below retires that rotation, so its write can
+ * no longer override the code this re-pair mints.
+ */
+const PAIR_ROTATION_SETTLE_MS = 500;
+
+/**
+ * Wait for a rotation to settle, or stop waiting for it (549).
+ *
+ * `true` means "it finished" — including the case where it rejected, which
+ * `rotatePairCodeAfterPairing` is written never to do but which must not become
+ * an unhandled rejection here. `false` means the deadline passed, and the caller
+ * has to carry on without it.
+ */
+async function waitForPairCodeRotation(pending: Promise<void> | undefined): Promise<boolean> {
+  if (!pending) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), PAIR_ROTATION_SETTLE_MS);
+      }),
+    ]);
+  } finally {
+    // The loser of the race must not keep the event loop (or a test file) alive.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
  * Menu: Re-pair on next connect
  *
- * Forgets this editor's token, then reconnects — which generates a fresh one
- * and offers it to the daemon. The daemon has to be willing to pair again
- * (`boardwise bridge revoke` on the host), otherwise it refuses: that is the
- * point of pairing, and pretending otherwise would be a lie in the UI.
+ * Forgets this editor's token **and** its pair code, mints both fresh, shows the
+ * new code, and only then reconnects (549).
+ *
+ * The order is the point. A re-pair is now authorised by the code the connector
+ * shows, so the code has to exist *before* the user is told to run anything: the
+ * old wording ("run `boardwise bridge revoke` first") described a flow where the
+ * daemon trusted whoever arrived next, and following it today would leave the
+ * user waiting on a handshake that keeps being refused. Minting the code up
+ * front also means the About box and the `hello` frame carry the same value by
+ * the time the socket goes up.
+ *
+ * Nothing here weakens pairing: the daemon still refuses a connector that
+ * presents neither the paired token nor a matching grant, and the new code only
+ * becomes an authorisation when the user runs `boardwise bridge pair` on the
+ * daemon host.
  */
 export async function rePair(): Promise<void> {
   transport?.stop();
-  try {
-    await host().storage?.setExtensionUserConfig(STORAGE_KEYS.token, '');
-  } catch {
-    /* storage refused; the reconnect below will re-pair with the old token */
+  // A rotation started by the last `hello` must not land after the clears below:
+  // it writes the same key, and a late write would put a code back that this
+  // re-pair has just removed. Waiting is bounded — a host store that never
+  // answers must cost the ordering, not the re-pair.
+  const rotation = pairCodeRotation;
+  if (!(await waitForPairCodeRotation(rotation))) {
+    // Retired, not merely skipped: this re-pair owns the key from here on, and
+    // `forgetPairCode` below is what makes the late write recognisable as stale
+    // (see `pairCodeGeneration` in `config.ts`) — so it is dropped, or corrected
+    // back to the code minted here if it lands after it.
+    if (pairCodeRotation === rotation) pairCodeRotation = undefined;
+    logLine(
+      `re-pair: the pair code rotation from the last handshake did not finish within `
+        + `${PAIR_ROTATION_SETTLE_MS} ms — carrying on; the code minted below is the one `
+        + 'to authorise, and a late write from that rotation cannot replace it',
+    );
   }
-  logLine('re-pair: dropped the stored token; a new one will be offered');
-  host().notify('boardwise: re-pairing — run "boardwise bridge revoke" on the daemon host first');
+  // Retires whatever is still in flight *before* the clears, so no window exists
+  // in which a late rotation write is still considered current.
+  forgetPairCode();
+  try {
+    // Two keys, cleared one call each: the token and the code have different
+    // lifetimes (see `STORAGE_KEYS.pairCode`), so re-pairing replaces both.
+    await host().storage?.setExtensionUserConfig(STORAGE_KEYS.token, '');
+    await host().storage?.setExtensionUserConfig(STORAGE_KEYS.pairCode, '');
+  } catch {
+    /* storage refused; the reconnect below re-pairs with whatever is still there */
+  }
+  logLine('re-pair: dropped the stored token and pair code; both will be minted fresh');
+
+  // Minted before the reconnect, so the user is told the new code and the one
+  // command that authorises it in the same breath.
+  const fresh = await ensureConnectorConfig(host().storage, host().random);
+  if (fresh.pairCode) {
+    const shown = formatPairCode(fresh.pairCode);
+    logLine(
+      `re-pair: new pair code ${shown} — run "boardwise bridge pair ${shown}" on the daemon host`,
+    );
+    host().notify(
+      `boardwise: new pair code ${shown} — run "boardwise bridge pair ${shown}" on the daemon host`,
+    );
+    if (fresh.pairCodeNote) logLine(`re-pair: the pair code is not stored — ${fresh.pairCodeNote}`);
+  } else {
+    // The same fail-closed statement the connect path makes: no CSPRNG means no
+    // authorisation is possible, and that is not a network symptom.
+    const why = fresh.pairCodeNote ?? 'no secure random source';
+    logLine(`re-pair: no pair code — ${why}; the first pairing cannot be completed`);
+    host().notify(
+      'boardwise: no secure random source — the first pairing cannot be completed from this window',
+    );
+  }
   await reconnect();
 }
 
@@ -1071,11 +1323,13 @@ function runAbout(): void {
       token: '',
       tokenSource: 'missing',
       tokenNote: `reading the config threw: ${describeError(error)}`,
+      pairCode: '',
+      pairCodeSource: 'missing',
+      pairCodeNote: `reading the config threw: ${describeError(error)}`,
       autoConnect: true,
     };
   }
 
-  const pairing = pairingLine();
   const lines = [
     // First thing in the box: *which build is this*? On 2026-09-14 a sideload
     // that did not take was indistinguishable from one that did, and the only
@@ -1096,7 +1350,11 @@ function runAbout(): void {
     `url: ${current.url}`,
     // The token itself is never shown, here or anywhere else.
     `token: ${tokenLine(current)}`,
-    `pairing: ${pairing}`,
+    // The pair code IS shown: it is public by design, it is what the user has to
+    // read out to authorise a first pairing, and a box that hid it would send
+    // them hunting for a number the connector never displayed (549).
+    `pair code: ${pairCodeLine(current)}`,
+    `pairing: ${pairingLine()}`,
     // Only when the daemon actually stated a minimum (018 §B3): an absent
     // field means "no minimum", and a line about it would read as a verdict.
     ...(status.minConnectorVersion
@@ -1224,10 +1482,17 @@ function storageLine(): string {
  * can act on (issue #57 §12).
  *
  * A refusal is not "not connected yet": the daemon answered, and every refusal
- * has its own remedy. Only the **pairing** refusal is answered by
- * `boardwise bridge revoke` — the sideloaded-build case the Re-pair menu item
- * describes — so every other code says its own name and points at `last error`
- * instead of advising a command that cannot help.
+ * has its own remedy. Three shapes have to stay apart, and 549 changed the
+ * second one:
+ *
+ * - any other code — its own name, and `last error` carries the instruction;
+ * - `UNAUTHENTICATED` **with** `pairCodeRequired` — the daemon wants an explicit
+ *   authorisation for *this* code, so the answer is `boardwise bridge pair`
+ *   (the code is printed on its own line right above this one);
+ * - `UNAUTHENTICATED` **without** it — either a pairing record that no longer
+ *   matches, or a daemon from before 549. `bridge revoke` is then the only move
+ *   that daemon understands, and saying so is honest as long as it also says
+ *   that such a daemon has no `pair` step to offer.
  */
 function pairingLine(): string {
   if (status.fingerprint) return `paired with the daemon (fingerprint ${status.fingerprint})`;
@@ -1235,7 +1500,95 @@ function pairingLine(): string {
   if (status.refusedCode && status.refusedCode !== 'UNAUTHENTICATED') {
     return `REFUSED — the daemon refused this connector (${status.refusedCode}); see the last error`;
   }
-  return 'REFUSED — the daemon holds a different pairing; run "boardwise bridge revoke"';
+  if (status.refusedPairCodeReason) {
+    return `REFUSED — the daemon needs an explicit authorisation for this pair code `
+      + `(${status.refusedPairCodeReason}); see the pair code above`;
+  }
+  return 'REFUSED — the daemon holds a different pairing, or it predates explicit pairing: '
+    + 'run "boardwise bridge revoke" on a daemon that has no "bridge pair" step';
+}
+
+/**
+ * The public pair code, and the one command that authorises it (549).
+ *
+ * Safe to print: the code is shown deliberately, is useless without the daemon
+ * host's CLI token, and expires five minutes after `bridge pair` is run. The
+ * token never appears here or anywhere else in the box.
+ */
+function pairCodeLine(current: ResolvedConfig): string {
+  if (!current.pairCode) {
+    if (current.pairCodeNote) {
+      // Fail-closed, and named as such: this is not a connection problem, so it
+      // must not be read as one — no amount of reconnecting produces a code.
+      return `NONE — ${current.pairCodeNote}`;
+    }
+    // Nothing has minted one yet. Saying "NONE" here without a reason is the
+    // exact misreading 0.2.3 taught us to avoid for the token: the box may be
+    // opened before the first connect, and "no code" then means "not yet", not
+    // "impossible". Ask the host what it *offers* instead of guessing.
+    const why = describeRandom(host().random);
+    return why === 'crypto=ok'
+      ? 'not minted yet — created on the first connect; this box does not mint one'
+      : `NONE — no secure random source (${why}), so the first pairing cannot be completed`;
+  }
+  const shown = formatPairCode(current.pairCode);
+  const origin = current.pairCodeSource === 'storage' ? 'stored' : 'minted for this process';
+  const caveat = current.pairCodeNote ? `; ${current.pairCodeNote}` : '';
+  return `${shown} (public, ${origin}${caveat}) — run "boardwise bridge pair ${shown}" on the daemon host`;
+}
+
+/**
+ * The refusal detail a 549 daemon attaches, reduced to its reason.
+ *
+ * Absent (`undefined`) on a daemon that predates the field, which is a fact the
+ * caller must keep: `code-missing` on *this* side means something different from
+ * "the daemon never asked".
+ */
+function pairCodeReason(detail: unknown): string | undefined {
+  if (!detail || typeof detail !== 'object') return undefined;
+  const fields = detail as { pairCodeRequired?: unknown; reason?: unknown };
+  if (fields.pairCodeRequired !== true) return undefined;
+  return typeof fields.reason === 'string' && fields.reason ? fields.reason : 'unspecified';
+}
+
+/**
+ * What the user should do about a refused handshake, in one sentence — or `''`
+ * when the daemon's own message already says it and there is nothing to add.
+ *
+ * The pairing family is the case 549 exists for: before it, *every*
+ * `UNAUTHENTICATED` was answered with "run `bridge revoke`", which neither
+ * authorises anything nor explains why. A first pairing is now opened by the
+ * connector's own code, so that is what the advice names — and when this window
+ * has no code at all, the advice says *that*, because a user told to run
+ * `bridge pair` with no code to type would be chasing a network fault that does
+ * not exist.
+ */
+function refusalAdvice(refusal: HandshakeRefusal, reason: string | undefined): string {
+  if (refusal.code !== 'UNAUTHENTICATED') return '';
+  if (reason === undefined) {
+    // A daemon without the field: either the record really is someone else's, or
+    // it predates explicit pairing. Both are cleared by `revoke`, and neither is
+    // served by pretending `bridge pair` exists there.
+    return 'run "boardwise bridge revoke" on the daemon host (a daemon that predates '
+      + 'explicit pairing has no "bridge pair" step to offer)';
+  }
+
+  const current = resolveConfig(host().storage);
+  const shown = current.pairCode ? formatPairCode(current.pairCode) : '<CODE>';
+  if (reason === 'code-missing') {
+    return 'this connector sent no pair code, so a first pairing cannot be completed from '
+      + `this window (${current.pairCodeNote ?? 'no secure random source'}); this is not a `
+      + 'network fault — an existing pairing still reconnects';
+  }
+  if (reason === 'record-changed') {
+    return 'the pairing record changed after the authorisation was issued — it was revoked or '
+      + `replaced; read the pair code in this window and run "boardwise bridge pair ${shown}" again`;
+  }
+  const suffix = reason === 'connector-attached'
+    ? ' — close the other editor window first, the authorisation stays valid for five minutes'
+    : '';
+  return `read the pair code in this window and run "boardwise bridge pair ${shown}" on the `
+    + `daemon host${suffix}`;
 }
 
 function tokenLine(current: ResolvedConfig): string {
@@ -1477,6 +1830,18 @@ export function __bootstrapForTests(): Promise<void> {
 /** Test seam: run the menu safety-net arm now, instead of from a menu click. */
 export function __selfArmForTests(options?: { hostPresent?: boolean }): Promise<void> {
   return runtime().selfArm('test', options?.hostPresent) ?? armPromise ?? Promise.resolve();
+}
+
+/**
+ * Test seam: the pair-code rotation a `hello` started, if one is running (549).
+ *
+ * The rotation is deliberately not awaited by the message path, so the only way
+ * to assert on its result is to wait for it — and waiting on the real promise
+ * (rather than on a timer) is what makes the test say "after the rotation
+ * finished", not "after 50 ms".
+ */
+export function __pairCodeRotationForTests(): Promise<void> | undefined {
+  return pairCodeRotation;
 }
 
 /**

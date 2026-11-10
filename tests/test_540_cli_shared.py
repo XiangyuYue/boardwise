@@ -48,7 +48,7 @@ def test_bridge_config_and_intent_subcommand_order_is_frozen():
     top = _subparsers(cli.build_parser())
     bridge = _subparsers(top.choices["bridge"])
     expected_bridge = [
-        "start", "status", "revoke", "screenshot", "export-fab", "call",
+        "start", "status", "revoke", "pair", "screenshot", "export-fab", "call",
         "highlight", "update-connector",
     ]
     assert list(bridge.choices) == expected_bridge

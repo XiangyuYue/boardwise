@@ -55,8 +55,8 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 ```
 
 - 编辑器是**主动外连**的（扩展不能监听端口），所以 daemon 是服务端。
-- 配对是 TOFU：第一次连上就信，之后只认那个 token（`~/.boardwise/connector-token`）。
-  换环境/清过配对用 `boardwise bridge revoke`。
+- 配对是**显式授权**（549 起，不再 TOFU）：扩展面板/`About…` 显示 8 位**公开**编号（`XXXX-XXXX`），本机敲 `boardwise bridge pair <CODE>` 才放行**一个** Connector 写记录；grant 只在 daemon 内存、5 分钟、一次性、重启失效，**token 永不显示**；有效旧配对任意 Origin 可重连，未授权的 `pro.lceda.cn`/`https://client`/无 Origin 都不行。
+- 错码**不作废** grant（红队 2026-11-10 推翻"10 次作废"，次数只进服务端审计）；re-pair 换新编号、需再 `bridge pair`，普通 Reconnect 不需要；`revoke` 后不再自动信任。
 - 审计日志 `~/.boardwise/audit/`：每个动作都有记录。工程出了怪事，先看当天的日志。
 - **多窗口：用 `--project` 或 `--instance` 指哪打哪（023 起）。** 一个工程一个窗口、各连各的，
   daemon 全部登记；`bridge call --project <工程名或uuid>` 只落到那个窗口，`bridge status` 列出所有
@@ -188,8 +188,8 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 `sch.place_*`（画板流，见 `docs/draw.md`）、`lib.device.search` / `lib.recommend`、
 `sch.component_pins`、`doc.rename`、`sys.self_update`（`boardwise bridge update-connector`）。
 
-错误码（`docs/bridge.md` §5）：`UNAUTHENTICATED` 配对不对 / `PROTOCOL_VIOLATION` 两个编辑器
-/ `NO_CONNECTOR` 编辑器没连上 / `UNKNOWN_ACTION` 动作不在目录（多为 daemon 版本旧）
+错误码（`docs/bridge.md` §5）：`UNAUTHENTICATED` 配对不对——549 起配对拒绝带 `detail.pairCodeRequired` + `reason`（`no-grant`/`grant-expired`/`code-missing`/`code-mismatch`/`record-changed`/`connector-attached`/`role-not-allowed`），照 reason 去 `bridge pair`、升级 Connector 或关掉另一窗口
+/ `PROTOCOL_VIOLATION` 两个编辑器 / `NO_CONNECTOR` 编辑器没连上 / `UNKNOWN_ACTION` 动作不在目录（多为 daemon 版本旧）
 / `PAGE_MISMATCH` 焦点不在你以为的那页 / `NOT_FOUND`、`NOT_IMPLEMENTED`、`TIMEOUT`。
 
 ## 6. 真机事实坑表（每条都真机踩过，出处可查）

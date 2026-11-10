@@ -174,8 +174,24 @@ checklist — nothing to install.
   `boardwise bridge start` in the foreground and read what it says;
   `BOARDWISE_NO_AUTO_DAEMON=1` turns the automatic start off for the
   setups that manage it themselves.
+- **First pairing — the editor shows a code, you authorise it.** Since 549 a
+  connector no longer pairs itself by arriving first. Open the extension's
+  **boardwise** panel / **About…**, read the 8-symbol pair code it displays
+  (`7K3M-9QXZ`), and run `boardwise bridge pair 7K3M-9QXZ` on the daemon host.
+  That authorises **one** connector for **five minutes** (daemon memory only:
+  a restart drops it) and the window then pairs and prints the announcement.
+  The code is public and safe to read out; the token is never shown. After
+  that, ordinary reconnects need nothing — an existing pairing reconnects on
+  any `Origin`. `bridge revoke` and the connector's **Re-pair on next connect**
+  both make a new authorisation necessary; a re-pair also mints a **new** code,
+  so an ordinary *Reconnect* is what you want unless you are deliberately resetting.
 - **Several project windows open** — name one: `--project <name>`. It
   refuses to guess.
+- **Daemon / connector versions** — only the `major.minor` series must match;
+  patch numbers are independent. A 0.6.1 daemon can use a 0.6.0 connector for
+  established actions, but a newer action may require the connector that provides
+  it and otherwise answers `UNKNOWN_ACTION`. A series bump such as 0.6.x → 0.7.0
+  requires both sides to upgrade together.
 - **Encrypted `.epro2` export** — unreadable; re-export with encryption
   off.
 - **A `.eprj2` file holds no drawing** — it's just the project shell.
@@ -343,7 +359,17 @@ daemon + 编辑器扩展      读工程数据，写之前先预览、你授权�
   `${BOARDWISE_HOME:-~/.boardwise}/log/daemon-<日期>.log`，拉起失败时报错会点名这个文件）。
   还是没起来就跑 `boardwise bridge start`（前台运行，原因直接打在窗口里）；
   自己管 daemon 的部署（计划任务/服务）用 `BOARDWISE_NO_AUTO_DAEMON=1` 关掉自动拉起。
+- **首次配对：编辑器给编号，你在终端授权**（549 起）。Connector 不再"谁先连上就信谁"：
+  打开扩展的 **boardwise** 面板 / **About…**，读出 8 位配对编号（形如 `7K3M-9QXZ`），在 daemon
+  所在机器上敲 `boardwise bridge pair 7K3M-9QXZ`。这一条授权只放行**一个** Connector、只活
+  **5 分钟**、只存在 daemon 内存里（重启即失效），随后那个窗口自己完成配对并打印公告。
+  编号是公开值，可以照抄；token 永不显示。授权过之后普通重连什么都不用做——有效旧配对在任何
+  Origin 都直接重连。`bridge revoke` 与编辑器里的 **Re-pair on next connect** 都会让下一次需要
+  重新授权；re-pair 还会换**新编号**，所以除非你就是想重置，否则点普通 **Reconnect**。
 - **开了好几个工程窗口**：命令要指名，`--project <名字>`，否则它拒绝猜。
+- **daemon / connector 版本**：只要求 major.minor 系列相同，补丁号独立。
+  0.6.1 daemon 可以配 0.6.0 connector 做既有动作；较新的动作需要支持它的 connector，
+  否则明确返回 `UNKNOWN_ACTION`。进入新系列（如 0.6.x → 0.7.0）时两边必须一起升级。
 - **`.epro2` 导出时勾了加密**：读不了，重新导一次别勾加密。
 - **`.eprj2` 单文件里没有图纸**：那只是工程壳，图纸要么在线走桥读，
   要么导出 `.epro2` 备份。

@@ -975,13 +975,44 @@ ENVIRONMENT_KEY = "environment"
 #: 3 would renumber four sections a reader already knows.
 ENVIRONMENT_HEADING = "## 审查环境与权限（environment）"
 
-#: The four states of the version comparison. A plain string comparison: this
-#: tool does not infer capability compatibility from semver ordering, so equal
-#: strings are the only thing that may be called `match`.
+#: The five states of the version comparison. ``match`` is exact equality of the
+#: two strings; ``compatible`` is "same ``major.minor`` series, different patch",
+#: the release discipline this tool now follows (patches ship independently, a
+#: series bump is the thing both sides must do together). Anything else is
+#: ``mismatch``. No capability is inferred from the numbers beyond that: the
+#: series says the *protocol* lines up, never that the action sets are equal.
 CONNECTOR_VERSION_NOT_APPLICABLE = "not-applicable"
 CONNECTOR_VERSION_MATCH = "match"
+CONNECTOR_VERSION_COMPATIBLE = "compatible"
 CONNECTOR_VERSION_MISMATCH = "mismatch"
 CONNECTOR_VERSION_UNKNOWN = "unknown"
+
+#: The release discipline behind ``compatible``: daemon and connector are only
+#: required to be in the **same ``major.minor`` series**; patch numbers are
+#: independent (daemon 0.6.2 may be paired with connector 0.6.0, and both may
+#: stay on 0.6.x for as long as the series does not move). A series bump
+#: (0.6.x → 0.7.0) is done on both sides together, so a cross-series pair is a
+#: plain ``mismatch`` — in either direction.
+#:
+#: What "compatible" means, and what it does **not**:
+#:
+#: * it means the protocol major and the series agree, so the actions that
+#:   existed when both were built behave the same;
+#: * it does **not** mean every action exists on the older patch. New actions are
+#:   added inside a series (0.6.1 added ``sch.list_attributes`` /
+#:   ``sch.move_attribute`` over 0.6.0), and on a patch that lacks one the call
+#:   answers an explicit ``UNKNOWN_ACTION`` — never a pretend success. A caller
+#:   that needs a newer action has to prove it exists (capability detection / the
+#:   documented method list), not read the series number as a promise;
+#: * so the only conclusion a series difference costs is the one that depends on
+#:   such new actions — ``attributeMoves`` — and the routine live review evidence
+#:   is *not* downgraded because of it.
+#:
+#: Versions must be strict ``x.y.z`` (all three segments numeric, nothing else):
+#: a missing segment, a suffix (``0.6.0-beta``), a prefix (``v0.6.0``) or a
+#: non-numeric segment is never compatible — it stays ``mismatch`` when both
+#: sides are readable and ``unknown`` when one is not.
+SERIES_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 #: The tier ids the environment section has something tier-specific to say about.
 #: They are the same ids `CHECKUP_TIERS` (in `cli.py`) spells; kept as literals so
@@ -1035,19 +1066,59 @@ def _version_text(value: object) -> str | None:
     return text or None
 
 
+def release_series(value: object) -> tuple[int, int] | None:
+    """``(major, minor)`` of a strict ``x.y.z`` version, or ``None``.
+
+    Strict on purpose: three numeric segments and nothing else. A missing
+    segment (``0.6``), a suffix (``0.6.0-beta``), a prefix (``v0.6.0``) or a
+    non-numeric segment (``0.6.x``) is not a version this tool will read a series
+    out of — the caller then says `mismatch`, never `compatible`.
+    """
+    if not isinstance(value, str):
+        return None
+    match = SERIES_VERSION_RE.match(value.strip())
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def connector_versions_compatible(*, expected: str | None, running: str | None) -> bool:
+    """Whether the two versions are in the same ``major.minor`` series.
+
+    The single judgement both surfaces share: ``cli doctor`` prints it and the
+    review report records it, so the two can never disagree about the same
+    versions. Symmetric — the series is the same from either side — and it says
+    only what the release discipline says: patches travel independently inside a
+    series, a series bump is done on both sides at once. Both sides must be
+    strict ``x.y.z``; a missing or malformed side is never compatible.
+    """
+    left = release_series(expected)
+    right = release_series(running)
+    if left is None or right is None:
+        return False
+    return left == right
+
+
 def connector_version_status(*, tier: str, expected: str | None, running: str | None) -> str:
-    """The four-state comparison, decided in one place.
+    """The five-state comparison, decided in one place.
 
     The offline tier is answered **first**: it has no connector, so an empty
     running version there is not a mismatch and not an unknown — the comparison
     simply does not apply. Everything else needs both sides to be readable
-    strings; equality is the only `match` this tool can honestly certify.
+    strings; equality is the only `match` this tool can honestly certify, and
+    `compatible` means only "same ``major.minor`` series" (see
+    :func:`connector_versions_compatible`). A different series — either
+    direction — and every unreadable shape stay `mismatch`.
     """
     if tier == OFFLINE_TIER:
         return CONNECTOR_VERSION_NOT_APPLICABLE
     if not expected or not running:
         return CONNECTOR_VERSION_UNKNOWN
-    return CONNECTOR_VERSION_MATCH if expected == running else CONNECTOR_VERSION_MISMATCH
+    if expected == running:
+        return CONNECTOR_VERSION_MATCH
+    if connector_versions_compatible(expected=expected, running=running):
+        return CONNECTOR_VERSION_COMPATIBLE
+    return CONNECTOR_VERSION_MISMATCH
 
 
 def environment_limitations(
@@ -1071,13 +1142,33 @@ def environment_limitations(
                 "不是实时检查成功；受影响的实时结论不得当作已确认。"
             ),
         })
+    elif status == CONNECTOR_VERSION_COMPATIBLE:
+        # Deliberately narrow: same series is a statement about the *protocol*,
+        # not about the action set. Downgrading `liveSchematic` / `livePcb` / the
+        # two images here would throw away a live review's routine evidence over
+        # actions this run may not even call. What a patch difference can
+        # actually cost is the newer actions — attribute reads/writes among them.
+        rows.append({
+            "code": "connector-version-compatible",
+            "affects": ["attributeMoves"],
+            "message": (
+                f"连接器版本同系列但补丁不同：期望 {expected}，运行 {running}。"
+                "major.minor 系列相同（protocol 主版本一致），按系列同步纪律视为兼容——"
+                "补丁号独立发布，两边既有动作的行为一致，常规实时审查结论不因此降级；"
+                "兼容不等于动作全集相同：新增动作（如属性读写的 "
+                "sch.list_attributes / sch.move_attribute）只在支持它的 connector 上存在，"
+                "旧补丁调用会明确答 UNKNOWN_ACTION，要按能力探测确认，不能靠系列号推定；"
+                "受影响的只有属性读写（attributeMoves）。"
+            ),
+        })
     elif status == CONNECTOR_VERSION_MISMATCH:
         rows.append({
             "code": "connector-version-mismatch",
             "affects": list(LIVE_EVIDENCE_AND_IMAGES_AFFECTS),
             "message": (
-                f"连接器版本不一致：期望 {expected}，运行 {running}；两者只是字符串对拍"
-                "（本工具不做 semver 推断），受影响的实时结论（含两张实时图）不得标 confirmed。"
+                f"连接器版本不同系列（或版本号无法解析）：期望 {expected}，运行 {running}；"
+                "daemon 与 connector 必须同 major.minor 系列（补丁号可各自独立），"
+                "跨系列或读不出系列号时，受影响的实时结论（含两张实时图）不得标 confirmed。"
             ),
         })
     elif status == CONNECTOR_VERSION_UNKNOWN:
@@ -1152,6 +1243,9 @@ def _environment_status_label(status: str) -> str:
     return {
         CONNECTOR_VERSION_NOT_APPLICABLE: "离线，没有可对拍的运行连接器",
         CONNECTOR_VERSION_MATCH: "期望与运行逐字相同",
+        CONNECTOR_VERSION_COMPATIBLE: (
+            "同系列（major.minor 相同）但补丁不同：常规结论仍可用，较新的动作需按能力探测确认"
+        ),
         CONNECTOR_VERSION_MISMATCH: "期望与运行不同，实时结论不得标 confirmed",
         CONNECTOR_VERSION_UNKNOWN: "任一侧版本缺失，能力兼容未证实",
     }.get(status, "")

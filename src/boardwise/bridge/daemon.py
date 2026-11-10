@@ -6,7 +6,8 @@ client (see :mod:`boardwise.bridge.protocol`) and does four jobs:
 1. **Authenticate** — every connection must open with ``hello``; anything else
    is closed immediately. The two roles use *different* secrets:
    ``cli`` presents ``~/.boardwise/token`` (written by ``bridge start``, copied
-   by the user), while ``connector`` uses trust-on-first-use pairing (below).
+   by the user), while ``connector`` pairs once, on an explicit authorisation
+   the CLI hands the daemon (below).
 2. **Register** — every authenticated connector joins a **hub**: one entry per
    editor window, keyed by the instance id it claims, carrying its socket and
    what that window has told us about itself (project, page, build).
@@ -48,24 +49,60 @@ Security posture, stated plainly because it is the whole threat model:
   authenticated caller can reach. The token is the only gate, which is why the
   file is never logged or echoed.
 
-**Connector pairing (trust on first use).** An editor extension cannot read
-``~/.boardwise/token``, and making the user paste a 64-hex secret into a dialog
-was the worst part of the v0 experience. So the connector generates its *own*
-random token and the daemon stores it in ``~/.boardwise/connector-token`` the
-first time one arrives:
+**Connector pairing (explicit authorisation, 549).** An editor extension cannot
+read ``~/.boardwise/token``, and making the user paste a 64-hex secret into a
+dialog was the worst part of the v0 experience. So the connector generates its
+*own* random token and the daemon stores it in ``~/.boardwise/connector-token``
+— but only once a pairing has been **authorised**, and only that exact token is
+honoured afterwards:
 
-- no ``connector-token`` file → the first connector to say ``hello`` is trusted
-  and its token is written down (audited as ``pairing``);
-- file present → the presented token must match it exactly, or the connection
-  is refused with ``UNAUTHENTICATED``;
-- ``boardwise bridge revoke`` deletes the file, so the next connector re-pairs.
+- a connector presenting the stored token is let straight through: whatever its
+  ``Origin``, whether or not a grant is active, and whether or not a window is
+  already attached (that is the "valid old pairing" case);
+- anything else may only **write** the pairing record while an authorisation
+  grant is active. The grant is created by the user, from the CLI: the
+  connector shows a public 8-character pair code and
+  ``boardwise bridge pair <CODE>`` hands that code to the daemon
+  (``pair.authorize``, CLI role only). The grant lives in this process's memory
+  alone — nothing is persisted, so a daemon restart drops it — and it is
+  single-slot (a later authorisation replaces it), expires five minutes after it
+  was minted, records the pairing fingerprint it was issued against, and counts
+  wrong codes for the audit — a count, never a lockout: a wrong code does not
+  destroy the grant, because anything that could void it is something an
+  unauthenticated socket can trigger on demand, which would turn the guard into
+  the attack;
+- the connector presents that code in ``hello`` as ``pairCode``. A wrong code,
+  an expired or consumed grant, a pairing record that changed since the
+  authorisation (``bridge revoke``, or a pairing made in between), a connector
+  that sent no code at all, and a stranger arriving while another window is
+  attached are all refused with ``UNAUTHENTICATED``, carrying
+  ``detail.pairCodeRequired: true`` and a machine-readable ``reason`` — and
+  nothing else: the refusal detail is an allowlist (:meth:`BridgeDaemon._close`),
+  so no fingerprint, attempt count or other internal state reaches a socket that
+  never authenticated;
+- the grant is consumed **after** the record is on disk, so a write that fails
+  leaves it usable for the rest of its window;
+- the ``hello`` ack answers ``pairCodeUsed``: true only for the handshake that
+  actually wrote the record, false on the early return where a working pairing
+  simply reconnected with its token. The connector mints its next public code on
+  ``true`` — a code authorises exactly one write, so leaving the spent one on
+  screen would leave a working authorisation lying around — and nothing rotates
+  on ``false``, because nothing was spent.
+
+``Origin`` no longer authorises anything (549). It used to be the only thing
+standing between a page in the user's browser and the pairing record, which is
+why the gate had to exempt the editor's own ``https://client`` — and that
+exemption is exactly what refused a real editor reporting
+``https://pro.lceda.cn`` (EDA 4.1.71). The grant replaces it: it can only be
+minted over the CLI token, which no page holds, and it is what the write
+requires regardless of who opened the socket.
 
 That is the correct strength for this threat model, and the threat model is the
 reason: the daemon is loopback-only, so what pairing has to resist is *another
 local process or a web page* getting there first — not a process that can
-already read the user's home directory, which has won regardless. The window
-is therefore the first connection only, it is announced loudly on the console,
-and it is one command to undo.
+already read the user's home directory, which has won regardless. The window is
+therefore one explicit ``bridge pair`` the user runs, it is announced loudly on
+the console, and it is one command to undo.
 
 Run it with :func:`serve_forever`, or drive it in-process with
 :func:`start_server` (used by the tests).
@@ -78,6 +115,7 @@ import hashlib
 import json
 import os
 import secrets
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -114,6 +152,12 @@ __all__ = [
     "AUDIT_PAIRING",
     "AUDIT_REVOKE",
     "AUDIT_REPAIRING",
+    "AUDIT_PAIR_AUTHORIZE",
+    "PAIR_GRANT_TTL",
+    "PAIR_CODE_ALPHABET",
+    "normalise_pair_code",
+    "mask_pair_code",
+    "PairGrant",
     "AUDIT_DRAW_PERSISTENCE",
     "AUDIT_PERSISTENCE_VERIFIED",
     "MIN_CONNECTOR_VERSION",
@@ -155,6 +199,47 @@ AUDIT_REVOKE = "revoke"
 #: reactions: the first is "check this is yours", the second is "yes, you just
 #: reinstalled".
 AUDIT_REPAIRING = "re-pairing"
+#: The user authorised one pairing attempt (549). Separate from ``pairing`` /
+#: ``re-pairing`` because it is the *permission*, not the result: the two are
+#: written by different actors (CLI vs connector) and usually minutes apart, so
+#: folding them would make "who let that connector in?" unanswerable.
+AUDIT_PAIR_AUTHORIZE = "pair-authorize"
+
+#: How long an explicit pairing authorisation stays usable, in seconds (549).
+#: Five minutes is long enough to walk from the CLI to the editor and short
+#: enough that a grant forgotten about is not a standing hole; the clock is
+#: :func:`time.monotonic`, so a wall-clock jump neither extends nor shortens it.
+PAIR_GRANT_TTL = 300.0
+
+#: The characters the connector's pair code is built from: Crockford base32 —
+#: the ten digits and the upper-case letters except ``I``, ``L``, ``O`` and
+#: ``U``, which are the ones a human reads back wrong. ``pair.authorize``
+#: validates against this list (549): the code is the *only* thing the user
+#: types, so a typo that is not even a symbol of the alphabet is a refusal at
+#: the CLI, where the user can still fix it — not a five-minute grant that
+#: nothing can match. (Before the validation existed, ``>64`` was the whole
+#: check, so ``bridge pair abcdefgh-xyz`` minted a grant no connector could
+#: ever present.)
+PAIR_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+#: How long a pair code is, after normalisation. Fixed by the Connector's
+#: generator (eight symbols, displayed ``XXXX-XXXX``); the daemon checks it
+#: rather than trusting the wire, so a static grant can never be matched by a
+#: prefix or by a longer string that happens to start with it.
+PAIR_CODE_LENGTH = 8
+
+#: What a human may type between the groups of a displayed ``XXXX-XXXX`` code.
+#: Stripped by :func:`normalise_pair_code` before any comparison, so the daemon
+#: and the person reading the editor screen cannot disagree about the same code.
+#:
+#: The *whitespace* half of this is deliberately not enumerated here (549 review):
+#: the Connector folds its own input with the JS class ``[-_\s]``, and ``\s`` there
+#: is Unicode whitespace — a code pasted out of a web page arrives with U+00A0
+#: between the groups, and a 9-character "code" is refused while the connector
+#: would have shown 8. So the predicate is :meth:`str.isspace`, which is Python's
+#: Unicode whitespace, and this set keeps only the two characters that are not
+#: whitespace at all.
+_PAIR_CODE_SEPARATORS = frozenset("-_")
 
 #: How far a `draw` run's write actually got, recorded by the CLI process
 #: (M0-P0d). The daemon's own per-action records say `ok` and nothing about
@@ -251,12 +336,42 @@ def load_token(home: Path | None = None) -> str | None:
 
 
 def _write_secret(path: Path, value: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(value, encoding="utf-8")
+    """Write a credential so that the old one either survives or is replaced.
+
+    ``Path.write_text`` truncates first: a failure halfway through (a full disk,
+    a quota, a scanner holding the file) leaves a *short* record behind, and for
+    ``connector-token`` that means the paired connector's credential is gone —
+    precisely the state 549 exists to make the user's decision rather than an
+    accident. So the bytes go to a temporary file **in the same directory** (a
+    different filesystem would make the rename a copy), are flushed, and only
+    then replace the record with :func:`os.replace`, which is atomic on both
+    POSIX and Windows. A write that fails leaves the old file byte-for-byte as
+    it was, and the temp file is removed.
+
+    0600 is applied to the *temporary* file, before it becomes the record, so
+    the finished record is never briefly world-readable — and Windows, which
+    maps the mode onto its read-only bit, keeps its own ACLs either way.
+    """
+    directory = path.parent
+    directory.mkdir(parents=True, exist_ok=True)
+    handle_fd, temporary = tempfile.mkstemp(
+        dir=directory, prefix=f".{path.name}.", suffix=".tmp"
+    )
     try:
-        os.chmod(path, 0o600)
-    except OSError:  # POSIX-only; Windows silently keeps default ACLs
-        pass
+        with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+            handle.write(value)
+            handle.flush()
+            try:
+                os.chmod(temporary, 0o600)
+            except OSError:  # POSIX-only; Windows silently keeps default ACLs
+                pass
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
 
 
 def ensure_token(home: Path | None = None) -> str:
@@ -297,9 +412,12 @@ def store_connector_token(token: str, home: Path | None = None) -> None:
 def revoke_connector_token(home: Path | None = None) -> str | None:
     """Delete the pairing record. Returns the fingerprint it had, if any.
 
-    The next connector to connect re-pairs automatically, so this is a reset
-    rather than a lockout — there is no way to lock the user out of their own
-    editor, which is why it is a plain command and not a confirmation dialog.
+    A reset rather than a lockout — there is no way to lock the user out of their
+    own editor, which is why it is a plain command and not a confirmation
+    dialog. Since 549 it is no longer enough on its own to get the editor back:
+    a deleted record also **voids** any authorisation grant that was issued
+    against the old one (the grant carries the fingerprint it was minted for),
+    so the connector that follows needs its own ``bridge pair``.
     """
     path = connector_token_path(home)
     previous = load_connector_token(home)
@@ -337,6 +455,155 @@ def connector_fingerprint(token: str | None) -> str | None:
     if not token:
         return None
     return hashlib.sha256(token.encode("utf-8")).hexdigest()[:8]
+
+
+def normalise_pair_code(code: Any) -> str:
+    """The one spelling of a pair code the daemon compares (549).
+
+    The connector shows ``XXXX-XXXX``; a user typing it may add or drop the
+    hyphen, the space, or use lower case. All of those are the same code, so
+    they are folded here — once, in the one function every comparison goes
+    through — rather than at each call site. Anything that is not a string
+    normalises to the empty string, which never matches a grant: an absent code
+    is a refusal, not a wildcard.
+
+    Whitespace is *any* Unicode whitespace, not a hand-written list, because the
+    Connector folds its own side with the JS class ``[-_\\s]`` (549 review): a code
+    copied out of a web page or a chat window carries U+00A0 (or U+3000) between
+    the groups, and a daemon that only knew ``" \\t\\n\\r"`` would count that as
+    eight symbols plus one and refuse a code the editor had just displayed.
+    ``str.isspace`` is Python's Unicode whitespace; the two non-whitespace
+    separators stay in :data:`_PAIR_CODE_SEPARATORS`.
+    """
+    if not isinstance(code, str):
+        return ""
+    return "".join(
+        char
+        for char in code.upper()
+        if char not in _PAIR_CODE_SEPARATORS and not char.isspace()
+    )
+
+
+def mask_pair_code(code: str) -> str:
+    """The most of a pair code that may appear in an audit line (549).
+
+    The code is public — it is shown in the editor's own UI — so this is not a
+    secret being protected. It is masked anyway because the audit log outlives
+    the five-minute window by years, and a full code in the log would let a
+    reader who later finds an old grant line pair against a daemon that is still
+    holding that grant. First two and last two characters are enough to match a
+    log line against what the user read out.
+    """
+    if len(code) <= 4:
+        return "*" * len(code)
+    return f"{code[:2]}{'*' * (len(code) - 4)}{code[-2:]}"
+
+
+@dataclass
+class PairGrant:
+    """One explicit permission to write the pairing record (549).
+
+    Held in this daemon's memory and nowhere else: a restart must drop it (the
+    user's next move is to run ``bridge pair`` again), and no file may survive
+    as a standing authorisation.
+
+    ``fingerprint`` is the pairing record **as it was when the user authorised**
+    — ``None`` when nothing was paired yet. It is what makes the grant
+    single-use against a *specific* state: revoke the pairing, or pair something
+    in between, and the grant no longer describes the record it was issued for.
+    ``failures`` counts wrong codes presented against this grant and is a
+    **diagnostic only**: it goes into the audit line, and nothing is invalidated
+    when it grows. A limit was tried and taken out again (549 red-team,
+    2026-11-10): the counter cannot tell one peer from another — a port is free
+    to change — so ten wrong codes could be spent by any unauthenticated socket,
+    which turned the "guard" into a remote way to cancel the user's own
+    authorisation. What actually bounds guessing is the grant's own shape: 8
+    symbols over a 32-symbol alphabet, one code, one five-minute window, one
+    pairing.
+    """
+
+    #: Normalised (see :func:`normalise_pair_code`) code the user authorised.
+    code: str
+    #: :func:`time.monotonic` deadline. Monotonic on purpose: a wall-clock jump
+    #: (or a laptop suspending across a timezone change) must not stretch the
+    #: window, and the audit's own ``ts`` is wall-clock for humans.
+    expires_at: float
+    #: ``connector_fingerprint`` of the record this grant was issued against.
+    fingerprint: str | None
+    #: Wall-clock time the grant was minted, for the audit line.
+    authorized_at: float = 0.0
+    #: Wrong codes seen against this grant. Audit material, not a budget.
+    failures: int = 0
+
+    def remaining(self, now: float) -> float:
+        """Seconds left in the window, negative once it has closed."""
+        return self.expires_at - now
+
+
+def _pair_code_refusal(reason: str, message: str) -> BridgeError:
+    """The one refusal shape for a pairing write nobody authorised (549).
+
+    ``UNAUTHENTICATED`` is reused rather than a new code added: the connector
+    builds in the field already switch on it, and the fact is the same one — this
+    handshake did not prove it may proceed. What is new is the detail: every
+    refusal carries ``pairCodeRequired`` and a machine-readable ``reason``, so
+    the connector can show the right instruction (read the code, upgrade the
+    build, close the other window) instead of a generic "not authenticated", and
+    ``message`` always names the command that fixes it, because the old refusal's
+    advice ("run bridge revoke") neither authorises anything nor explains why.
+
+    **Those two keys are the whole detail, and there is no ``**extra`` to add
+    more.** A refusal goes to a socket that has authenticated nothing, so
+    everything in it is a gift to whoever asked: the fingerprints of the record
+    before and after an authorisation describe the pairing state, and the
+    attempt count says how far along someone else is. The reasons already
+    distinguish the cases; the numbers belong in the audit, which is
+    server-side. :meth:`BridgeDaemon._close` enforces the same allowlist on the
+    way out, so a future caller cannot widen this by accident either.
+    """
+    return BridgeError(
+        ErrorCodes.UNAUTHENTICATED,
+        f"{message}. No pairing record was written.",
+        {"pairCodeRequired": True, "reason": reason},
+    )
+
+
+#: What a **refused handshake** may say in ``detail``, per error code — an
+#: allowlist, because the socket receiving it has authenticated nothing.
+#:
+#: ``UNAUTHENTICATED`` is the 549 pairing refusal and carries exactly the two
+#: keys the connector switches on: ``pairCodeRequired`` (this is a pairing
+#: problem, not a bad token) and ``reason`` (which one — read the code, upgrade
+#: the connector, close the other window). ``PROTOCOL_VIOLATION`` keeps the
+#: ``action`` it has always carried, which is the *client's own* frame field and
+#: says nothing about the daemon's state. Everything else carries none: no
+#: fingerprints, no attempt counts, no record state, no grant state.
+_HANDSHAKE_DETAIL_ALLOWLIST: dict[str, frozenset[str]] = {
+    ErrorCodes.UNAUTHENTICATED: frozenset({"pairCodeRequired", "reason"}),
+    ErrorCodes.PROTOCOL_VIOLATION: frozenset({"action"}),
+}
+
+#: The value types a key on that allowlist may hold. Deliberately primitive: an
+#: allowed *name* is not a licence to carry a structure, so a nested object
+#: smuggled in under ``reason`` is dropped rather than forwarded.
+_DETAIL_VALUE_TYPES = (bool, str, int, type(None))
+
+
+def _wire_detail(code: str, detail: Any) -> dict[str, Any] | None:
+    """Filter a refused handshake's ``detail`` down to what may reach the wire.
+
+    Returns ``None`` when nothing survives — and the frame then carries no
+    ``detail`` key at all, which is what every refusal but a pairing one has
+    always done.
+    """
+    if not isinstance(detail, dict):
+        return None
+    allowed = _HANDSHAKE_DETAIL_ALLOWLIST.get(code, frozenset())
+    kept = {
+        key: value for key, value in detail.items()
+        if key in allowed and isinstance(value, _DETAIL_VALUE_TYPES)
+    }
+    return kept or None
 
 
 def append_audit(home: Path | None, **fields: Any) -> None:
@@ -609,87 +876,15 @@ def check_origin(headers: Any) -> bool:
     the extension host's own) is written from a measured pair rather than from
     inference. So 004c records and 004d decides.
 
-    One function, one decision: 004d changes this body and nothing else. The
-    *narrower* question this module now answers elsewhere (#57 security note) is
-    a different decision from this one and does not pre-empt it: :func:`_origin_is_a_web_page`
-    decides only whether a newcomer may **write a pairing record**, and leaves
-    ``check_origin``'s "may this socket talk to us at all" exactly as it was.
+    One function, one decision: 004d changes this body and nothing else. It is
+    **not** the pairing gate, and it never was the right place for one: since
+    549 a connector may write the pairing record only with an explicit
+    CLI-issued grant (see :meth:`BridgeDaemon._authenticate_connector`), which
+    makes the handshake's ``Origin`` irrelevant to that decision. An ``Origin``
+    can be omitted by anyone who wants to, so it could only ever have named the
+    *browser* case — and a browser holds neither the CLI token nor a grant.
     """
     return True
-
-
-#: The one ``Origin`` measured on the editor's own socket, and the only
-#: ``http(s)`` value the pairing-write gate lets through. EasyEDA Pro 3.2.186's
-#: extension host sends exactly this — 0.2.5's acceptance run recorded
-#: ``origin: "https://client"`` (docs/bridge.md §12 item 4), and 540 measured it
-#: again on the same build.
-_EASYEDA_EDITOR_ORIGIN = "https://client"
-
-
-def _is_editor_host_origin(origin: Any) -> bool:
-    """Whether ``origin`` is exactly the editor's measured Origin — and nothing near it.
-
-    Compared as an origin rather than as a string: scheme and host are
-    case-insensitive in a URL (``HTTPS://Client`` is the same origin). The
-    measured value carries no credentials, no port, no path, no query and no
-    fragment, and this matches only that shape. Everything else is a spelling
-    nobody measured and stays on the refusing side of the gate, including
-    ``https://client:443`` (whose default port a URL parser would normalise
-    away), ``https://client/`` (the same origin only *looks* inert with a
-    trailing slash) and ``https://client.evil.example`` (a different host).
-    """
-    if not isinstance(origin, str) or not origin:
-        return False
-    scheme, sep, rest = origin.partition("://")
-    if not sep:
-        return False
-    # An origin is a scheme, a host and (optionally) a port — nothing else. The
-    # measured value has no credentials, no port, no path, no query and no
-    # fragment, so anything that introduces one of those, including the bare
-    # trailing slash of `https://client/`, is a spelling nobody measured.
-    if any(mark in rest for mark in "/?#@:"):
-        return False
-    return f"{scheme.lower()}://{rest.lower()}" == _EASYEDA_EDITOR_ORIGIN
-
-
-def _origin_is_a_web_page(origin: Any) -> bool:
-    """Whether a handshake's ``Origin`` is a page we must not let write a pairing.
-
-    The one control that tells a browser page apart from the editor's own
-    socket at this layer. **A browser always sends ``Origin`` on a WebSocket
-    handshake**, while ``curl``-class clients and ``websockets`` itself send
-    none (asserted in the suite).
-
-    Deliberately narrow, and the narrowness is the rule:
-
-    - a **missing** ``Origin`` passes — refusing it would refuse the editor
-      itself (and it is what a ``websockets``-based caller sends);
-    - every **non-``http(s)``** scheme passes (``chrome-extension://…``): a page
-      served over the web cannot carry one, and 004d owns whatever the editor
-      might send;
-    - ``http(s)://`` is refused, with exactly one measured exception:
-      :data:`_EASYEDA_EDITOR_ORIGIN`, the value the editor's extension host
-      really sends, matched as narrowly as :func:`_is_editor_host_origin` does.
-
-    The exception exists because the gate guards the **pairing write**, and the
-    editor itself has to be able to perform it: #57 refused every ``http(s)``
-    Origin, so the editor's *first* pairing (no token on file yet, which is why
-    the known-token early return in :meth:`BridgeDaemon._authenticate_connector`
-    never covered it) and every re-pair after a storage reset were refused with
-    ``UNAUTHENTICATED``. Found on the machine in 540, on 3.2.186.
-
-    Two honest limits, stated rather than implied. ``Origin: null`` passes: it
-    is what a sandboxed frame sends, and it is also what a client with no origin
-    to name sends, and 004d decides that one from measurements. And this is not
-    a boundary against local processes at all — a non-browser attacker simply
-    omits the header; that boundary is the token (docs/bridge.md §9).
-    """
-    if not isinstance(origin, str) or not origin:
-        return False
-    if _is_editor_host_origin(origin):
-        return False
-    scheme = origin.split("://", 1)[0].strip().lower() if "://" in origin else ""
-    return scheme in ("http", "https")
 
 
 # --------------------------------------------------------------------------
@@ -720,21 +915,24 @@ class PairingNotice:
 
         Fixed here rather than in the CLI so that the message the user is
         *told to act on* ("run: boardwise bridge revoke") and the message the
-        tests assert cannot drift apart.
+        tests assert cannot drift apart. Since 549 every pairing is one the user
+        authorised with ``bridge pair``, so the notice says so: the line is the
+        second half of that story, and a console that only said "paired" would
+        leave "but I did not ask for that" unanswered.
         """
         if self.repaired:
             return [
                 f"boardwise bridge: re-paired connector (fingerprint {self.fingerprint}"
                 + (f", replacing {self.replaced}" if self.replaced else "")
-                + ") — no connector was attached, so this is the usual sign of a "
-                "sideloaded build whose extension storage was reset",
+                + ") — authorised with 'boardwise bridge pair'",
                 f"  client: {self.client or 'unknown'}  peer: {self.peer}",
                 "  if this was not you, run: boardwise bridge revoke",
             ]
         return [
-            f"boardwise bridge: paired new connector (fingerprint {self.fingerprint}); "
-            "if this was not you, run: boardwise bridge revoke",
+            f"boardwise bridge: paired new connector (fingerprint {self.fingerprint}) "
+            "— authorised with 'boardwise bridge pair'",
             f"  client: {self.client or 'unknown'}  peer: {self.peer}",
+            "  if this was not you, run: boardwise bridge revoke",
         ]
 
 
@@ -1017,6 +1215,11 @@ class BridgeDaemon:
     #: cannot disagree, and so ``*`` — the legacy full-allow switch — is one
     #: membership test rather than a special case in every caller.
     write_projects: frozenset[str] | None = None
+    #: The one active pairing authorisation (549), or ``None``. Memory only, by
+    #: design: a restart must drop it, so there is no file to leave behind and
+    #: nothing for a later process to inherit. A second ``pair.authorize``
+    #: replaces it (single slot) and each replacement is audited.
+    pair_grant: PairGrant | None = None
 
     def __post_init__(self) -> None:
         # Resolved here, not at each use: the policy is a property of this daemon
@@ -1026,8 +1229,18 @@ class BridgeDaemon:
 
     # -- handshake ------------------------------------------------------
 
-    async def _handshake(self, websocket: ServerConnection, peer: str = "-") -> Connection:
-        """Validate the opening ``hello`` and return the authenticated role.
+    async def _handshake(
+        self, websocket: ServerConnection, peer: str = "-"
+    ) -> tuple[Connection, bool]:
+        """Validate the opening ``hello`` and return what the daemon learned.
+
+        The pair is the connection plus ``pair_code_used``: whether **this**
+        handshake wrote the pairing record through a grant (549). It is returned
+        rather than kept on the daemon because "the last pairing was
+        authorised" is exactly the kind of process-global that goes wrong the
+        first time two sockets arrive together — the caller has to be told
+        about its own handshake, and the value rides out to the connector in the
+        ``hello`` ack for the same reason.
 
         Order matters, and is not the historical order: **role, then the empty
         token check, then protocol version, then the secret.** Version comes
@@ -1074,12 +1287,21 @@ class BridgeDaemon:
         # recorded as "(version unknown)" rather than treated as a fault.
         version = params.get("connectorVersion")
         version = version.strip() if isinstance(version, str) else ""
+        pair_code_used = False
         if role == ROLE_CLI:
             if not _tokens_equal(provided, self.token):
                 raise BridgeError(ErrorCodes.UNAUTHENTICATED, "bad or missing token")
         else:
-            self._authenticate_connector(
-                provided, client, peer, client_headers(websocket)["origin"]
+            # ``pairCode`` (549) is optional on the wire and required in fact
+            # for anyone who is not already the paired connector: a build that
+            # predates it sends nothing, and the refusal then has to say
+            # "upgrade the connector", not pretend the field was never needed.
+            pair_code_used = self._authenticate_connector(
+                provided,
+                client,
+                peer,
+                client_headers(websocket)["origin"],
+                params.get("pairCode"),
             )
 
         connection = Connection(
@@ -1104,7 +1326,7 @@ class BridgeDaemon:
             # absent value is recorded as absent rather than filled with the
             # focused project — which would be the project of a different window.
             connection.project_name, connection.project_uuid = _project_identity(params)
-        return connection
+        return connection, pair_code_used
 
     def _authenticate_connector(
         self,
@@ -1112,83 +1334,242 @@ class BridgeDaemon:
         client: str,
         peer: str,
         origin: Any = None,
-    ) -> None:
-        """Trust the first connector; require an exact match afterwards.
+        pair_code: Any = None,
+    ) -> bool:
+        """Let the paired connector in; everything else needs an explicit grant.
+
+        Returns whether **this** call wrote the pairing record — the fact the
+        connector needs in order to rotate its public code. ``False`` on the
+        early return below, where a working pairing simply reconnected with the
+        token it already had: that code was not spent by this handshake, so
+        retiring it would invalidate the user's authorisation for no reason.
 
         Reads the pairing record from disk every time (see
         :func:`load_connector_token`) so a ``revoke`` from another process
         takes effect on the very next connection.
 
-        One exception, added 2026-09-16 (004f item 2). **Sideloading a new
-        connector build resets the editor's extension storage**, so the new
-        build generates a fresh token and is then refused by the pairing it
-        itself wrote on the previous run — an ``UNAUTHENTICATED`` loop that
-        cost several manual ``bridge revoke`` round trips. The fix keys on the
-        one fact that makes the new connector legitimate: **no connector is
-        currently attached**. The paired one is gone (editor closed, or its
-        storage — and therefore its socket — was reset), so the newcomer is
-        not displacing a live peer; it is the only candidate there is.
+        **Two cases, and they are not symmetric (549).**
 
-        When a connector *is* attached the refusal stands. Displacing a live,
-        correctly-paired connector would let anything on loopback steal the
-        pairing, which is precisely what pairing exists to prevent. That case
-        is also self-explanatory to the user, so the error names it.
+        *The connector that already holds the pairing secret* is let straight
+        through: whatever its ``Origin``, whether or not a grant is active, and
+        whether or not another window is attached. A working pairing has to
+        survive an upgrade, and that token is the one credential in the system a
+        page cannot learn.
 
-        **"Attached" means any window (023).** With a hub there is no single
-        active instance to ask, so the test is :meth:`has_connector` — one live
-        connector socket, any number of them. The strength of the rule is
-        unchanged: an unknown token may only take over a pairing **nobody** is
-        using, never one a live window is connected with. What changed is only
-        that "live" is now a set rather than a slot.
+        *Anything else may write the pairing record only while a grant is
+        active* — the grant the user minted with ``boardwise bridge pair``
+        (:meth:`_authorize_pairing`). This replaces trust-on-first-use, which
+        was exploitable in both of its branches: with no record, any local
+        newcomer (a page in the user's browser included) could take the pairing,
+        which is why #57 added an ``Origin`` gate; with a record but no window
+        attached, any newcomer could silently **replace** it — 004f's sideload
+        self-heal, and the hole this task closes. An ``Origin`` cannot carry
+        that weight: it is a header the client chooses whether to send, and the
+        single measured value (``https://client``) is not what every editor
+        build reports — EDA 4.1.71 sends ``https://pro.lceda.cn``, which the
+        gate refused, so a real editor could not pair at all.
 
-        **Both ways of writing a pairing now also need a non-web ``Origin``**
-        (#57 security note). "No connector attached" is exactly the state
-        between ``bridge start`` and the editor attaching, and again every time
-        the editor's windows all close — and in that state the rule above let
-        *any* newcomer write the pairing record, including a page in the user's
-        browser, which would then hold the pairing the real connector cannot
-        take back (``UNAUTHENTICATED``, dressed up as a heartbeat timeout until
-        #12). The origin is the only thing that tells the two apart here, so it
-        is required to be absent, non-``http(s)``, or the editor's own measured
-        ``https://client`` (see :func:`_origin_is_a_web_page`) before either
-        pairing write happens. The refusal is deliberately the *same* code —
-        this connector did not prove it may write the pairing — with
-        ``detail.origin`` so the log says which handshake it was.
+        The grant is therefore the only way in, and it is checked in full:
+        present in this process's memory, unexpired, equal to the code the
+        connector sent, and recorded against the pairing fingerprint that is
+        still current (:meth:`_require_pair_grant`). Every refusal is
+        ``UNAUTHENTICATED`` with ``detail.pairCodeRequired`` and a
+        machine-readable ``detail.reason`` — and with nothing else, because the
+        caller has authenticated nothing yet. A wrong code is counted for the
+        audit and refuses this handshake; it does not void the grant, which would
+        hand any local socket a way to cancel the user's authorisation on demand.
+
+        A live window is still never displaced. That check comes *after* the
+        grant check and does not spend the grant: an authorised re-pair arriving
+        while the old editor window is still attached is refused, and the user's
+        next move — close that window and retry inside the five minutes — works.
         """
         paired = load_connector_token(self.home)
         # A caller that already presents the pairing secret is the paired
-        # connector as far as this daemon can tell, whatever its Origin says:
-        # the gate below guards the **write**, not the token check, and refusing
-        # a known secret would buy nothing (a page cannot learn it).
+        # connector as far as this daemon can tell, whatever its Origin says.
         if paired is not None and _tokens_equal(provided, paired):
-            return
-        if _origin_is_a_web_page(origin):
-            raise BridgeError(
-                ErrorCodes.UNAUTHENTICATED,
-                "this handshake came from a web page and would have written the "
-                f"pairing record (Origin: {origin}); the pairing is only ever "
-                "taken by the editor's own connector. If that connector cannot "
-                "connect, run 'boardwise bridge revoke' on the daemon host and "
-                "let it pair again",
-                {"origin": origin, "pairedFingerprint": connector_fingerprint(paired)},
-            )
-        if paired is None:
-            self._pair(provided, client, peer, repaired=False)
-            return
+            return False
+        record = connector_fingerprint(paired)
+        self._require_pair_grant(pair_code, record)
         # Liveness read from the sockets themselves (:meth:`live_windows`), not
         # from whether the handler has cleared its bookkeeping yet: a reload
         # closes the old socket and the next instance arrives while that
         # `finally` is still pending, and that path has to work (018 §A).
         if self.has_connector():
-            raise BridgeError(
-                ErrorCodes.UNAUTHENTICATED,
+            raise _pair_code_refusal(
+                "connector-attached",
                 "this connector is not the paired one and a connector is already "
-                "connected; if you just sideloaded a new build, close it (or run "
-                "'boardwise bridge revoke' on the daemon host) and try again",
-                {"pairedFingerprint": connector_fingerprint(paired)},
+                "connected; close that editor window and retry while the "
+                "'boardwise bridge pair' authorisation is still valid",
             )
-        previous = connector_fingerprint(paired)
-        self._pair(provided, client, peer, repaired=True, previous=previous)
+        self._pair(
+            provided,
+            client,
+            peer,
+            repaired=paired is not None,
+            previous=record,
+        )
+        # Only now is the code spent: `_pair` raises if the write failed, and the
+        # grant is kept in that case, so a true here always means "a record is on
+        # disk and this handshake is what put it there".
+        return True
+
+    def _require_pair_grant(self, pair_code: Any, record: str | None) -> PairGrant:
+        """Return the grant that permits this pairing write, or refuse (549).
+
+        A check with exactly the side effects the design asks for: an **expired**
+        grant and one whose recorded fingerprint no longer describes the pairing
+        record are dropped outright, because neither can become valid again. A
+        **wrong code** is counted (:attr:`PairGrant.failures`) and nothing else:
+        it does not spend, weaken or void the grant.
+
+        That last point is a reversal, and the reason is the red team's: with a
+        failure count that voids the grant, *any* local socket could present ten
+        wrong codes and cancel the user's authorisation — and the count cannot be
+        pinned to a peer to stop it, because a port is free and a page can open
+        one. Refusing to pair is already what a wrong code achieves; a guard that
+        also destroys the user's decision is a denial-of-service dressed as
+        defence. The user's five minutes stay the user's five minutes.
+
+        Nothing is consumed here either. :meth:`_pair` spends the grant only after
+        the record is on disk, so a write that fails can be retried inside the
+        same window.
+        """
+        grant = self.pair_grant
+        if grant is None:
+            raise _pair_code_refusal(
+                "no-grant",
+                "no pairing authorisation is active. Read the 8-character pair "
+                "code in the connector's own panel, then run "
+                "'boardwise bridge pair <CODE>' on the daemon host",
+            )
+        if time.monotonic() >= grant.expires_at:
+            self.pair_grant = None
+            raise _pair_code_refusal(
+                "grant-expired",
+                "the pairing authorisation expired — it is valid for "
+                f"{PAIR_GRANT_TTL:.0f} seconds; run 'boardwise bridge pair <CODE>' "
+                "again",
+            )
+        code = normalise_pair_code(pair_code)
+        if not code:
+            raise _pair_code_refusal(
+                "code-missing",
+                "this connector sent no pairCode, so it cannot be authorised; "
+                "update the connector to a build that shows a pair code, then run "
+                "'boardwise bridge pair <CODE>'",
+            )
+        if not secrets.compare_digest(code, grant.code):
+            # Counted for the audit only — see the docstring. The count stays on
+            # the grant and never reaches the wire (the refusal detail is two
+            # fixed keys), because "how far along is someone else's guessing" is
+            # not something an unauthenticated socket gets to ask.
+            grant.failures += 1
+            raise _pair_code_refusal(
+                "code-mismatch",
+                "the pair code does not match the authorised one; check the code "
+                "shown in the connector against the one this authorisation was "
+                "minted for",
+            )
+        if grant.fingerprint != record:
+            self.pair_grant = None
+            raise _pair_code_refusal(
+                "record-changed",
+                # No fingerprints in the sentence either: `reason` is enough for
+                # the connector to instruct the user, and the record's identity
+                # is something this socket has not earned. The audit line for this
+                # refusal carries `pairedFingerprint`, and `bridge status` shows
+                # the current one to whoever holds the home directory.
+                "the pairing record changed after this authorisation was issued "
+                "(it was revoked, or another connector was paired in between), so "
+                "the authorisation no longer applies; run 'boardwise bridge pair "
+                "<CODE>' again",
+            )
+        return grant
+
+    def _authorize_pairing(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Mint the single permission a pairing write needs (549).
+
+        Called only from :meth:`_local_action` for ``pair.authorize``, and that
+        action is CLI-only. One slot: a later authorisation replaces the earlier
+        one (and both are audited, so the console narrative survives), because
+        two live grants would mean two connectors could each write the record
+        and the loser would be told nothing.
+
+        ``fingerprint`` is pinned to the pairing record **as it is right now**.
+        That is what makes the grant single-use against one specific state:
+        ``bridge revoke``, or a pairing made in between, changes the record and
+        the grant stops applying (:meth:`_require_pair_grant`).
+
+        Never returns the code in full and never returns a token: the response
+        is a receipt (masked code, deadline, fingerprint), and the audit line
+        holds the same masked form.
+
+        The code is validated **here**, strictly, before anything is replaced:
+        after normalisation it must be exactly :data:`PAIR_CODE_LENGTH` symbols
+        and every one of them must be in :data:`PAIR_CODE_ALPHABET`. The old
+        check was ``len(code) > 64``, which let ``bridge pair abcdefgh-xyz`` —
+        or a pasted sentence, or a code typed with an ``O`` where the connector
+        shows a ``0`` — mint a five-minute grant that no connector could ever
+        match, *replacing* the good grant the user had just made. A typo has to
+        cost a retype, not the authorisation, so every malformed code is
+        ``BAD_REQUEST`` and the existing grant (if any) is left exactly as it
+        was.
+        """
+        raw = params.get("code")
+        code = normalise_pair_code(raw)
+        if not code:
+            raise BridgeError(
+                ErrorCodes.BAD_REQUEST,
+                "pair.authorize needs params.code — the pair code shown in the "
+                "connector. Nothing was authorised",
+                {"field": "code"},
+            )
+        if len(code) != PAIR_CODE_LENGTH:
+            raise BridgeError(
+                ErrorCodes.BAD_REQUEST,
+                f"params.code is {len(code)} characters after normalisation; a "
+                f"pair code is exactly {PAIR_CODE_LENGTH} (shown XXXX-XXXX). "
+                "Nothing was authorised",
+                {"field": "code", "length": len(code)},
+            )
+        stray = sorted({char for char in code if char not in PAIR_CODE_ALPHABET})
+        if stray:
+            raise BridgeError(
+                ErrorCodes.BAD_REQUEST,
+                "params.code contains characters a pair code never uses "
+                f"({', '.join(stray)!s}); the alphabet is 0-9 and A-Z without "
+                "I, L, O and U. Nothing was authorised",
+                {"field": "code", "characters": stray},
+            )
+        record = connector_fingerprint(load_connector_token(self.home))
+        previous = self.pair_grant
+        grant = PairGrant(
+            code=code,
+            expires_at=time.monotonic() + PAIR_GRANT_TTL,
+            fingerprint=record,
+            authorized_at=time.time(),
+        )
+        self.pair_grant = grant
+        self.audit(
+            action=AUDIT_PAIR_AUTHORIZE,
+            role=ROLE_CLI,
+            ok=True,
+            pairCode=mask_pair_code(code),
+            fingerprint=record,
+            expiresAt=grant.authorized_at + PAIR_GRANT_TTL,
+            **({"replacedPairCode": mask_pair_code(previous.code)} if previous else {}),
+        )
+        return {
+            "authorized": True,
+            # The receipt, not the secret: the code was typed by the user and is
+            # shown in the editor, so a masked copy is enough to match this
+            # answer against the console line above.
+            "pairCode": mask_pair_code(code),
+            "expiresIn": int(PAIR_GRANT_TTL),
+            "fingerprint": record,
+            "replaced": previous is not None,
+        }
 
     def _pair(
         self,
@@ -1199,13 +1580,51 @@ class BridgeDaemon:
         repaired: bool,
         previous: str | None = None,
     ) -> None:
-        """Write the pairing record and announce it, for a first or a re-pair."""
-        store_connector_token(provided, self.home)
+        """Write the pairing record, then spend the grant that allowed it (549).
+
+        That order is the design: a write that fails leaves the authorisation
+        usable, so the user retries inside the same five minutes instead of
+        walking back to the CLI for a code that was never wrong.
+
+        Nothing in this method or in :meth:`_authenticate_connector` awaits, and
+        that is what makes check-then-write one step: the daemon runs a single
+        event loop, so no second connector can slip its own check into the gap
+        between the grant check and this write. No cross-process lock is
+        involved, and none is needed.
+        """
+        authorisation = self.pair_grant
+        try:
+            store_connector_token(provided, self.home)
+        except OSError as exc:
+            self.audit(
+                action=AUDIT_REPAIRING if repaired else AUDIT_PAIRING,
+                role=ROLE_CONNECTOR, ok=False, client=client, peer=peer,
+                error="pairing record not written",
+                pairCodeRequired=True,
+            )
+            raise BridgeError(
+                ErrorCodes.INTERNAL,
+                "the pairing record could not be written "
+                f"({type(exc).__name__}); the authorisation is untouched, so "
+                "retry after fixing "
+                f"{connector_token_path(self.home)}",
+            ) from exc
+        # Spent here — after the record is on disk — and only if it is still the
+        # grant this write was checked against.
+        if self.pair_grant is authorisation:
+            self.pair_grant = None
         fingerprint = connector_fingerprint(provided) or ""
         self.audit(
             action=AUDIT_REPAIRING if repaired else AUDIT_PAIRING,
             role=ROLE_CONNECTOR, ok=True, client=client, peer=peer,
             fingerprint=fingerprint,
+            # 549: a pairing now has an author, so "who let this connector in?"
+            # is answerable from the pairing line itself rather than by lining
+            # up two records minutes apart.
+            authorizedBy="pair.authorize",
+            **({"pairCode": mask_pair_code(authorisation.code),
+                "authorizedAt": authorisation.authorized_at}
+               if authorisation is not None else {}),
             **({"replacedFingerprint": previous} if repaired and previous else {}),
         )
         if self.on_pairing is not None:
@@ -1652,7 +2071,7 @@ class BridgeDaemon:
         if spec is None:
             raise BridgeError(ErrorCodes.UNKNOWN_ACTION, f"unknown action {action!r}")
         if spec.owner == "daemon":
-            return self._local_action(action)
+            return self._local_action(action, role=role, params=params)
         params = self._gate_confirmation(spec, params)
         window = self.route(target_project, action, target_instance)
         # 537A3: the project gate sits between routing and the write lock. After
@@ -1784,16 +2203,35 @@ class BridgeDaemon:
             {"action": spec.name, "risk": spec.risk, "confirm": params.get("confirm")},
         )
 
-    def _local_action(self, action: str) -> dict[str, Any]:
-        """Answer a daemon-owned action (``ping``). **No hint is consulted.**
+    def _local_action(
+        self,
+        action: str,
+        role: str = "",
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Answer a daemon-owned action (``ping``, ``pair.authorize``).
 
-        Owner ``daemon`` is checked before routing (`handle_request`), so a
-        daemon-owned action never resolves `targetProject`/`targetInstance` — and
-        that is a fact callers have to know (188B 低6): ``ping`` carrying a
-        **stale instance id** still answers `pong`, because nothing about the id
-        was ever looked at. A pong is therefore evidence that *the daemon* is up,
-        never that the named window is: window liveness is ``windows[]`` below,
-        which is what `boardwise bridge status` prints.
+        **No hint is consulted.** Owner ``daemon`` is checked before routing
+        (`handle_request`), so a daemon-owned action never resolves
+        `targetProject`/`targetInstance` — and that is a fact callers have to
+        know (188B 低6): ``ping`` carrying a **stale instance id** still answers
+        `pong`, because nothing about the id was ever looked at. A pong is
+        therefore evidence that *the daemon* is up, never that the named window
+        is: window liveness is ``windows[]`` below, which is what
+        `boardwise bridge status` prints.
+
+        ``role`` and ``params`` exist because ``pair.authorize`` needs both, and
+        they are **not** how the role is decided: `handle_request` passes the
+        role the handshake authenticated, and that is the only caller with a role
+        worth trusting. The default here is therefore the empty string — *no
+        role* — and not ``ROLE_CLI``: a default of "the role that may authorise a
+        pairing" is a hole waiting for the next daemon-owned action, because a
+        helper that simply forgot to thread the role through would authorise one.
+        ``ping`` is immune (it consults no role at all), and every other action
+        below is guarded explicitly against a role it was not told, so a
+        role-less call can only ever be refused. Callers that deliberately pass
+        ``role="cli"`` — the tests' helper, and the socket path through
+        `handle_request` — are unaffected.
         """
         if action == "ping":
             return {
@@ -1820,6 +2258,23 @@ class BridgeDaemon:
                 # that were not.
                 "windows": [window.as_status() for window in self.live_windows()],
             }
+        if action == "pair.authorize":
+            # 549: the grant is the user's decision, so only the CLI token may
+            # mint it. A connector authorising its own pairing would be
+            # trust-on-first-use with an extra step — and a *page* holding the
+            # CLI token is a different (already lost) game.
+            if role != ROLE_CLI:
+                self.audit(action=AUDIT_PAIR_AUTHORIZE, role=role or "-", ok=False,
+                           error="role may not authorise a pairing")
+                raise BridgeError(
+                    ErrorCodes.BAD_REQUEST,
+                    f"role {role!r} may not authorise a connector pairing; "
+                    "'pair.authorize' belongs to the CLI ('boardwise bridge pair "
+                    "<CODE>'). Nothing was authorised",
+                    {"pairCodeRequired": True, "reason": "role-not-allowed",
+                     "role": role},
+                )
+            return self._authorize_pairing(params or {})
         # 192C §7: any daemon-owned action this build does not know used to get
         # the hello handshake's sentence ("hello may only be sent once"), which is
         # a fact about a *protocol phase* — and about `hello`. The honest answer
@@ -1998,7 +2453,7 @@ class BridgeDaemon:
             return
 
         try:
-            authenticated = await self._handshake(websocket, peer)
+            authenticated, pair_code_used = await self._handshake(websocket, peer)
         except asyncio.TimeoutError:
             # Silence now means something specific: the client got our banner
             # and did not answer, so the fault is on its side of the wire.
@@ -2008,8 +2463,15 @@ class BridgeDaemon:
             await self._close(websocket, ErrorCodes.UNAUTHENTICATED, reason)
             return
         except BridgeError as exc:
-            self.audit(action="hello", role="-", ok=False, peer=peer, error=exc.code)
-            await self._close(websocket, exc.code, exc.message)
+            # The refusal's machine-readable half goes into the *audit* as well
+            # as to the socket: `reason` is what an operator greps for, and (for
+            # a pairing refusal) it is the only place the failure count is
+            # written down now that the count is no longer a budget — see
+            # :meth:`_require_pair_grant`. Server-side only; the wire copy is
+            # filtered by :meth:`_close`.
+            self.audit(action="hello", role="-", ok=False, peer=peer, error=exc.code,
+                       **self._refusal_audit_fields(exc))
+            await self._close(websocket, exc.code, exc.message, exc.detail)
             return
         except (websockets.ConnectionClosed, OSError):
             self.audit(action="hello", role="-", ok=False, peer=peer,
@@ -2071,6 +2533,16 @@ class BridgeDaemon:
             # checked, and a version comparison is not a reason to hang up on a
             # connector that still works.
             "minConnectorVersion": MIN_CONNECTOR_VERSION,
+            # Whether **this** handshake wrote the pairing record through a
+            # grant (549), which is the only moment the connector's public code
+            # is spent. The connector answers by minting the next code; a
+            # reconnect with the token it already held says `false`, so a
+            # working pairing is not asked to retire a code nobody used. An
+            # older daemon does not send the field at all, and "absent" must keep
+            # meaning "nothing was claimed" — a connector that read absence as
+            # `true` would rotate on every reconnect, and one that read it as
+            # `false` (which it is) simply keeps the code it has.
+            "pairCodeUsed": pair_code_used,
             # How many windows this daemon is holding after this one joined
             # (023), so the extension can *tell the user* that other windows are
             # connected instead of discovering it when a call comes back
@@ -2145,9 +2617,51 @@ class BridgeDaemon:
         await websocket.send(response_frame(
             frame_id, data, context=self.context_for_frame(routed)))
 
-    async def _close(self, websocket: ServerConnection, code: str, message: str) -> None:
+    def _refusal_audit_fields(self, exc: BridgeError) -> dict[str, Any]:
+        """The server-side half of a refused handshake, for the audit line.
+
+        A pairing refusal says why in its ``detail.reason``, and that reason plus
+        the record's fingerprint and the current failure count are what an
+        operator needs to answer "why is my editor not pairing?" from the log
+        alone. None of it is on the wire — :meth:`_close` filters the detail to
+        two keys — because the socket that gets it has authenticated nothing.
+        """
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        if not detail.get("pairCodeRequired"):
+            return {}
+        fields: dict[str, Any] = {
+            "pairCodeRequired": True,
+            "reason": detail.get("reason"),
+            "pairedFingerprint": connector_fingerprint(
+                load_connector_token(self.home)
+            ),
+        }
+        grant = self.pair_grant
+        if grant is not None:
+            # Diagnostic only (549 red-team): the count never invalidates the
+            # grant, so it is recorded rather than acted on.
+            fields["pairCodeFailures"] = grant.failures
+        return fields
+
+    async def _close(self, websocket: ServerConnection, code: str, message: str,
+                     detail: Any = None) -> None:
+        # `detail` reaches the wire through an **allowlist**, and this is the one
+        # place that decides what a refused handshake may say. The connector acts
+        # on it, not on the sentence — a pairing refused for a missing
+        # authorisation says so in `detail.pairCodeRequired` / `detail.reason`
+        # (549), and a frame that dropped them would leave the editor showing a
+        # bare "not authenticated" for a problem whose fix is one command away.
+        #
+        # But this frame goes to a socket that has authenticated *nothing*, so
+        # everything in it is handed to whoever asked. The fingerprints of the
+        # record before and after an authorisation describe the pairing state;
+        # an attempt count says how far along someone else's guessing is. Those
+        # were in the detail once, which is why the filter is here and not at the
+        # call sites: one gate cannot be forgotten by the next refusal, and a
+        # refusal that grows a new field still ships only what is listed.
+        detail = _wire_detail(code, detail)
         try:
-            await websocket.send(error_frame(None, BridgeError(code, message)))
+            await websocket.send(error_frame(None, BridgeError(code, message, detail)))
         except (websockets.ConnectionClosed, OSError):
             return
         try:

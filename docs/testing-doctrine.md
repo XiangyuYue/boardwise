@@ -101,11 +101,12 @@ G4（文档说向下、代码向上，测试钉的是代码）。
 背景：v0.5.9/v0.5.10 同日连发，现场机器当天就踩中 165/166 两个真 bug——
 「发出去再被用户测出来」到此为止。
 
-**版本号纪律（岳 2026-10-13 立）**：connector 版本与发布版本一致（v0.5.11 起
-`connector/package.json` = `connector/extension.json` = 发布号），且
-`src/boardwise/__init__.py` / `pyproject.toml` 同号（此前恒 0.1.0 是老 wart，
-`--version` 报不出真版本）。历史散文里的版本语义随之改写——不存在过的中间号
-（如 0.4.31）不许出现在对外文档。
+**版本号纪律（岳 2026-11-06 修订）**：daemon 与 connector 只要求 **major.minor 系列同步**，
+补丁号各自独立。connector 无改动时不因 daemon 的补丁发布而升号；进入新系列（如 0.6.x →
+0.7.0）时，connector 即使无改动也必须同步升号。`src/boardwise/__init__.py` / `pyproject.toml`
+仍与 daemon 外部版本同号，`connector/package.json` / `extension.json` 与 connector 自身补丁同号。
+doctor 和审查报告按同系列判定 `compatible`，不把补丁差当作失效；较新的动作仍以能力探测为准，
+旧补丁缺少动作时明确 `UNKNOWN_ACTION`。DSH 插件与 boardwise 外部版本的同号策略不受本条影响。
 
 ## 进程闸与保密闸的地图（193 立，2026-10-17）
 

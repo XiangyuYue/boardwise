@@ -6,7 +6,7 @@
 
 发版规矩不变：挖洞 swarm + 上机 + 实测三闸全过才发；**正式版一周最多一发、何时发由岳定**，其余一律按**内测（prerelease）**发；同一天只发一版；daemon 与 connector 只要求 major.minor 系列同步、补丁号独立，系列升级时两边必须同升；**dsh 插件从 0.6.0 起与 boardwise 外部版本同号**（`0.1.x` 到 `0.1.3` 止；插件改动用固定 commit 复检到达，不为此挪 tag）。
 
-> **549 首次配对显式授权（工作树，未提交、未发版）：本地实现与离线验收完成，待真机/发布**——
+> **549 首次配对显式授权（工作树，未提交、未发版）：本地实现、离线验收及 4.1.93 真机/回滚验收完成，待发布；4.1.71 仍只有模拟证据**——
 > `boardwise bridge pair <CODE>` 用 CLI token 调 daemon-owned `pair.authorize`（政策测试第四个
 > `design_write=False` 例外，`risk=write` 不变），daemon 内存单槽 5 分钟 grant，取消 Origin+TOFU
 > 授权；错码不作废 grant（红队裁定），失败只进服务端审计；Connector 编号 Web Crypto only，
@@ -14,7 +14,11 @@
 > **608 passed** + typecheck、DSH **137 passed / 1 skipped** + build、Rust **111 passed / 4 ignored**、
 > CLI 合同一致；**全量一轮 10611 passed / 25 skipped / 1 xfailed / 23 failed / 5 errors，不是全绿**
 > （两条 537A 政策红已补登记、聚焦 126 passed 关闭；4 处 549 测试审计写根目录已改 `tmp_path`；
-> 其余为既有货架数据、绘制线在途与 MSYS 环境错误，未跑第二轮）。4.1.71 只有模拟 Origin 证据；
+> 其余为既有货架数据、绘制线在途与 MSYS 环境错误，未跑第二轮）。**真机（EDA 4.1.93 `test V4`）**：
+> 独立 home 首次 `bridge pair` 成功、`authorizedBy=pair.authorize`，`checkup` 得 77 components /
+> 225 nets（exit 1 是工程自身 85 项 ERROR、`incomplete`），daemon 重启后旧 token 自动重连，
+> 回滚后 Connector 0.6.0 / daemon 0.6.1 两窗口 connected、指纹不变；证据
+> `outputs/review/549_real/ACCEPTANCE.md`。4.1.71 只有模拟 Origin 证据；
 > 部署时 daemon 与 Connector 必须同步。版本号与 Release 另批。
 
 | 版本 | 内容 | 状态 | 依赖 |

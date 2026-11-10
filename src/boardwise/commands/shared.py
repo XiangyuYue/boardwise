@@ -30,7 +30,37 @@ def register_bridge_parser(sub: Any, *, help_epilog: Callable[[], str]) -> None:
     bridge_sub.add_parser("status", help="Report whether the daemon and connector are up.")
     bridge_sub.add_parser(
         "revoke",
-        help="Forget the paired connector; the next one to connect is trusted instead.",
+        help=(
+            "Forget the paired connector. Nothing is trusted automatically "
+            "afterwards: the next connector needs `bridge pair <CODE>` (549)."
+        ),
+    )
+    pair = bridge_sub.add_parser(
+        "pair",
+        help="Authorise one connector pairing with the code it shows (549).",
+        description=(
+            "Authorise **one** connector pairing: the editor's boardwise panel "
+            "shows an 8-character pair code (XXXX-XXXX) and this command hands it "
+            "to the daemon, which then allows a connector presenting that code to "
+            "write the pairing record. It replaces trust-on-first-use: an arrival "
+            "— with or without an Origin — can no longer pair itself, and no file "
+            "is written as a standing authorisation. The grant lives in the "
+            "daemon's memory only: five minutes and one successful pairing, and "
+            "it is spent; a daemon restart drops it, and `bridge revoke` (or any "
+            "pairing made in between) voids it by changing the record it was "
+            "issued against. A wrong code refuses that handshake and is counted "
+            "for the audit only — it does **not** void the grant, so the rest of "
+            "the five minutes stays yours. The answer names the code in masked "
+            "form and the record the authorisation was issued against; a token "
+            "never appears."
+        ),
+    )
+    pair.add_argument(
+        "code",
+        help=(
+            "The pair code shown in the connector (e.g. 7K3M-9QXZ). Case, spaces "
+            "and hyphens are ignored; only this one pairing is authorised."
+        ),
     )
     shot = bridge_sub.add_parser("screenshot", help="Export the current canvas as PNG.")
     shot.add_argument("out", help="Where to write the PNG.")
@@ -223,7 +253,8 @@ def register_doctor_parser(
             "/health — the daemon is a WebSocket server), the extension's "
             "WebSocket is registered, five methods the harness depends on answer "
             "`typeof === function` (sys.probe), the running daemon version matches "
-            "this install, the connector build in the editor matches the repo, the "
+            "this install, the connector build in the editor matches or shares a "
+            "major.minor series with the repo, the "
             f"editor is ≥ {floor_text}, and the focused project is readable. Green exits "
             "0; anything else exits 1 with one fix per failing line. Built for the "
             "unplugged case: no daemon, no extension and an old editor are all "

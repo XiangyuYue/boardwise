@@ -51,9 +51,17 @@ TOKEN = "test-token-not-a-real-secret"
 REAL_NAME = "我的真实工程"
 REAL_UUID = "uuid-real-0001"
 
-#: The three catalogue entries that are **not** design writes, and nothing else.
-#: Pinned as a set so adding a fourth is a review decision, not an accident.
-NOT_DESIGN_WRITES = frozenset({"doc.open", "doc.focus", "sys.self_update"})
+#: The four catalogue entries that are **not** design writes, and nothing else.
+#: Pinned as a set so adding a fifth is a review decision, not an accident.
+#: `pair.authorize` (549) is the exception that is not navigation: it changes
+#: *authority* — after it, a connector holding the code may write the pairing
+#: record — but no project byte, page or focus moves, which is why the
+#: catalogue files it `design_write=False`. Its `risk` stays `write` for
+#: exactly that authority change, so listing it here does not let a read-only
+#: caller mint the one grant the pairing gate rests on.
+NOT_DESIGN_WRITES = frozenset(
+    {"doc.open", "doc.focus", "sys.self_update", "pair.authorize"}
+)
 
 
 # --------------------------------------------------------------------------
@@ -383,7 +391,7 @@ def test_an_injected_policy_wins_over_the_environment(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_only_navigation_and_self_update_are_not_design_writes():
+def test_only_the_pinned_exceptions_are_not_design_writes():
     """The exceptions are a reviewed list, not whatever was convenient."""
     actual = {action.name for action in ACTIONS if not action.design_write}
     assert actual == set(NOT_DESIGN_WRITES), (
@@ -397,7 +405,7 @@ def test_every_other_action_is_a_design_write_including_new_ones():
     """A forgotten registration must fail **closed**.
 
     `design_write` defaults to `True`, so this asserts two things at once: the
-    field exists on every entry, and nothing but the pinned trio opted out.
+    field exists on every entry, and nothing but the pinned four opted out.
     """
     for action in ACTIONS:
         assert isinstance(action.design_write, bool), action.name

@@ -137,6 +137,20 @@ export type TransportOptions = {
    */
   instanceId?: string;
   /**
+   * This window's **public** pair code, announced in `hello` (549).
+   *
+   * The daemon's `pair.authorize` grant has to match this value before the
+   * handshake may write the pairing record, so a first pairing is authorised by
+   * something the user read off the screen and typed into `boardwise bridge pair`
+   * — not by an `Origin` header or by arriving first.
+   *
+   * Optional in both senses: an absent value is left out of the frame entirely
+   * (a connector with no CSPRNG, or a build from before this field), and a
+   * connector that already presents the paired token connects without it. The
+   * transport never refuses to connect over it, and never invents one.
+   */
+  pairCode?: string;
+  /**
    * Reads the project this editor window has open, for `hello` (021 §2.3).
    *
    * Injected rather than imported: the reader lives in `actions.ts`, which this
@@ -237,6 +251,18 @@ export type TransportOptions = {
 export type HandshakeRefusal = {
   code: string;
   message: string;
+  /**
+   * The daemon's machine-readable detail, when it sent any.
+   *
+   * 549 attaches `{pairCodeRequired: true, reason}` to every
+   * `UNAUTHENTICATED` it refuses a *pairing write* with, and the caller needs it
+   * to give the right instruction: "read the code and run `bridge pair`",
+   * "update the connector", or "close the other window" are three different
+   * answers that all arrive with the same error code. `undefined` on daemons
+   * that predate the field — which is what "this daemon has no explicit pairing
+   * step" looks like from here.
+   */
+  detail?: unknown;
 };
 
 /**
@@ -608,6 +634,11 @@ export class Transport {
             // editor windows apart instead of letting them take turns
             // (018 §A). Omitted when the caller has none.
             ...(this.options.instanceId ? { instanceId: this.options.instanceId } : {}),
+            // The public pair code a first pairing is authorised by (549). Left
+            // out entirely when this window has none — the daemon's refusal then
+            // says `pairCodeRequired: code-missing`, which is a fact about this
+            // host (no CSPRNG), not a frame that should carry a blank string.
+            ...(this.options.pairCode ? { pairCode: this.options.pairCode } : {}),
             // Which project this window has open (021 §2.3), so the daemon can
             // list every window it has heard from — the refused ones included —
             // as a project. Omitted when this window cannot name one.
@@ -793,10 +824,12 @@ export class Transport {
    * could not show the one sentence that matters here (issue #57 §12).
    *
    * So a refusal is **reported and stopped, never retried**: nothing this side
-   * can do clears it — the user has to revoke the pairing, upgrade the build, or
-   * fix the protocol — and a retry loop buries that under a network symptom.
-   * In particular it must not be reported as a heartbeat timeout: that names the
-   * daemon for a decision the daemon made on purpose.
+   * can do clears it — the user has to authorise the pairing with
+   * `boardwise bridge pair <CODE>` (549; before that field existed the remedy was
+   * `bridge revoke`), upgrade the build, or fix the protocol — and a retry loop
+   * buries that under a network symptom. In particular it must not be reported
+   * as a heartbeat timeout: that names the daemon for a decision the daemon made
+   * on purpose.
    */
   private refuseHandshake(frame: Frame): void {
     const code = typeof frame.error?.code === 'string' ? frame.error.code : '';
@@ -805,7 +838,11 @@ export class Transport {
       + (message ? ` — ${message}` : '');
     this.log(line);
     try {
-      this.options.onHandshakeRefused?.({ code, message });
+      this.options.onHandshakeRefused?.({
+        code,
+        message,
+        ...(frame.error?.detail === undefined ? {} : { detail: frame.error.detail }),
+      });
     } catch {
       /* a reporting callback must not be able to keep a refused socket alive */
     }

@@ -41,7 +41,7 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 - **当前是 0.6.1 内测发布候选**：审查线 `cdff88b` 与绘制线 `44901da` 已提交；发布只带
   已提交内容，不带候选货架、临时测试计划、锁文件和探针产物。版本骨架见 `docs/roadmap.md`，
   发布结果与能力边界以本版 Release 为准。
-- **549 首次配对显式授权：本地实现与离线验收完成，待真机/发布**（工作树，未提交/未发布）：`boardwise bridge pair <CODE>`
+- **549 首次配对显式授权：本地实现、离线验收及 4.1.93 真机/回滚验收完成，待发布；4.1.71 仍只有模拟证据**（工作树，未提交/未发布）：`boardwise bridge pair <CODE>`
   用 CLI token 调 daemon-owned `pair.authorize`，daemon 内存单槽 5 分钟 grant（8 位公开编号、
   授权时记指纹、一次性消费、重启失效）；未认证的任何 Origin 都不能首配或换配，有效旧配对任意
   Origin 可重连；**错码不作废 grant**（红队 2026-11-10 推翻“10 次作废”，次数只进审计）；
@@ -53,9 +53,16 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   23 failed / 5 errors（27:15）——不是全绿**：两条 `test_537a_daemon_write_policy` 是 549 新动作
   未登记例外（已补，聚焦 126 passed 关闭），4 处 549 测试审计写根目录已改 `tmp_path`，其余为
   既有货架数据、绘制线在途与已知 MSYS 环境错误；未跑第二轮全量。红队两轮 7 条 + 3 条非阻断项
-  已修，无已知阻断项。4.1.71 只有模拟 Origin 证据，朋友的真实候选跑通不是本实现的验收；
+  已修，无已知阻断项。**真机（2026-11-10，EDA 4.1.93 `test V4`）**：独立 `BOARDWISE_HOME` 首次
+  `bridge pair` 成功（审计 `authorizedBy=pair.authorize`，编号只留掩码）；`sys.probe`/`doc.list`
+  通过；`checkup` 取到 **77 components / 225 nets**，exit 1 是工程自身 85 项 ERROR、
+  `completion=incomplete`；隔离 daemon 重启后未再授权，旧 token 自动重连且 `doc.list` 成功
+  （审计 `pair-authorize=1 / pairing=1 / re-pairing=0`）；随后回滚到原 0.6.0 bundle，最终
+  Connector 0.6.0 / daemon 0.6.1 / 两窗口 connected、paired fingerprint 不变。证据
+  `outputs/review/549_real/ACCEPTANCE.md` 与 `outputs/review/549_real/checkup/`。
+  4.1.71 只有模拟 Origin 证据，朋友的真实候选跑通不是本实现的验收；
   部署时新版 daemon 与 Connector 必须同步（旧内嵌 Connector 的热更不算安全包）。**未做**：提交、
-  推送、版本 bump、发布、真实 EDA/Connector 端到端、生产升级回滚。
+  推送、版本 bump、发布、生产升级、整板验收。
 - **daemon / connector 版本纪律（岳 2026-11-06 定）**：只要求 major.minor 系列同步，补丁号独立；
   同系列混跑为 `compatible`，不是全功能相等，新动作仍按能力探测，缺失时明确 `UNKNOWN_ACTION`。
   0.6.1 daemon 可与 0.6.0 connector 做常规审查；`attributeMoves` 仍需要支持它的 connector。

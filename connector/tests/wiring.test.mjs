@@ -146,7 +146,11 @@ test('the daemon banner is answered with a hello carrying a generated token', as
   // re-pairing the daemon — and so the source survives the reload with it. Not
   // a token key beside a source key: that pair is what half-wrote itself on a
   // real editor (2026-09-13).
-  assert.deepEqual(written, [['token', `webcrypto:${hello.params.token}`]]);
+  assert.deepEqual(written[0], ['token', `webcrypto:${hello.params.token}`]);
+  // The public pair code travels in `hello` too (549), and is kept under its own
+  // key — never inside the token's value, which would make the two lifetimes one.
+  assert.equal(hello.params.pairCode, written[1]?.[1]);
+  assert.deepEqual(written[1]?.[0], 'pairCode');
 });
 
 test('an already stored token is reused rather than regenerated', async (t) => {
@@ -159,12 +163,18 @@ test('an already stored token is reused rather than regenerated', async (t) => {
   await socket.deliver(BANNER);
 
   assert.equal(socket.frame('hello').params.token, 'b'.repeat(64));
-  assert.deepEqual(written, [], 'nothing needed generating');
+  // Nothing regenerated: the only write is the pair code a first re-pair will
+  // need. The token key is not touched at all.
+  assert.deepEqual(written.map(([key]) => key), ['pairCode'], 'the token needed no generating');
 });
 
 test('the token is written under exactly one key, never a pair', async (t) => {
   // The regression guard for the measured partial write: 0.2.1 wrote `token`
-  // then `token.source`, and a real editor kept the second without the first.
+  // then `token.source`, and a real editor kept the second without the first —
+  // so the token's own provenance lives inside its value, never beside it. The
+  // pair code (549) is a *different, public* value under its own key; it must
+  // never be appended to the token's value, and the token must never be
+  // appended to it.
   const { socket, written } = withHost(t);
 
   await connector.activate();
@@ -172,14 +182,19 @@ test('the token is written under exactly one key, never a pair', async (t) => {
 
   assert.deepEqual(
     written.map(([key]) => key),
-    ['token'],
-    'a second key is a second chance to half-write',
+    ['token', 'pairCode'],
+    'two values, two keys, one write each — a source key beside the token would be a second chance to half-write',
   );
   assert.match(
     String(written[0][1]),
     /^(webcrypto|math):[0-9a-f]{64}$/,
-    'the stored value must carry its own provenance',
+    'the stored token must carry its own provenance',
   );
+  assert.ok(
+    !String(written[0][1]).includes(String(written[1][1])),
+    'the public pair code must not be folded into the secret',
+  );
+  assert.match(String(written[1][1]), /^[0-9A-HJKMNP-TV-Z]{8}$/);
 });
 
 test('a host with no Web Crypto still connects, and says what it used', async (t) => {

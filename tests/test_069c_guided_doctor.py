@@ -134,7 +134,10 @@ def test_a_line_that_failed_on_its_own_evidence_keeps_its_own_step():
     extension」 would send the reader to a step that is already done — the exact
     mistake issue #6 was about.
     """
-    checks = run_doctor(healthy_probe(connector_version="0.4.4"))
+    # Cross-series on purpose: an older *patch* of the same series is compatible
+    # under the release discipline, so only a series difference is "an old build"
+    # here (0.3.9 against the probe's 0.4.5 repo).
+    checks = run_doctor(healthy_probe(connector_version="0.3.9"))
     entry = check(checks, "connector-version")
     assert entry.ok is False
     assert "未验证" not in entry.detail, "it failed on its own comparison"
@@ -185,7 +188,7 @@ def test_a_check_with_no_manual_step_prints_its_fix_without_a_pointer():
     A check the table has no entry for (a future one) still gets a step; it just
     does not claim a section of the manual that may not be about it.
     """
-    checks = run_doctor(healthy_probe(connector_version="0.4.4"))
+    checks = run_doctor(healthy_probe(connector_version="0.3.9"))
     entry = check(checks, "connector-version")
     assert DOCTOR_STEP_HINTS["connector-version"] == 2
     assert "docs/getting-started.md 第 2 步" in _guided_step(entry, 1)

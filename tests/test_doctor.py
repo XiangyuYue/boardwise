@@ -408,11 +408,88 @@ def test_a_daemon_that_predates_the_version_field_is_not_silently_equal():
 
 
 def test_an_old_connector_bundle_is_diagnosed_as_update_connector():
-    checks = run_doctor(healthy_probe(connector_version="0.4.4"))
+    # Cross-series, not just an older patch: 0.4.4 against a 0.5.x repo is the
+    # case the update advice is for (0.4.4 vs 0.4.5 would now be same-series
+    # compatible — see the patch-difference cases above).
+    checks = run_doctor(healthy_probe(connector_version="0.4.4", local_connector_version="0.5.0"))
     entry = check(checks, "connector-version")
     assert entry.ok is False
-    assert "0.4.4" in entry.detail and "0.4.5" in entry.detail
+    assert "0.4.4" in entry.detail and "0.5.0" in entry.detail
     assert "update-connector" in entry.fix
+
+
+def test_the_0_6_0_connector_is_green_against_the_0_6_1_repository():
+    """The pair this machine actually meets: 0.6.0 running, 0.6.1 in the repo.
+
+    Green under the series discipline — same `major.minor`, patches independent —
+    so the line must not send the reader to `update-connector` over a connector
+    that still does everything the review needs. The boundary stays part of the
+    answer: the newer attribute actions need a connector that has them, and an
+    older patch says `UNKNOWN_ACTION` rather than pretending.
+    """
+    checks = run_doctor(healthy_probe(connector_version="0.6.0", local_connector_version="0.6.1"))
+    entry = check(checks, "connector-version")
+    assert entry.ok is True
+    assert entry.fix == "", "a green line must not carry a fix"
+    assert "0.6.0" in entry.detail and "0.6.1" in entry.detail
+    assert "同系列兼容" in entry.detail and "major.minor" in entry.detail
+    assert "sch.list_attributes" in entry.detail and "sch.move_attribute" in entry.detail
+    assert "attributeMoves" in entry.detail, "the affected channel is named, not left to the reader"
+    assert "UNKNOWN_ACTION" in entry.detail, "the older connector must be named as not supporting the newer actions"
+    assert "update-connector" not in entry.detail
+
+
+@pytest.mark.parametrize(
+    ("running", "local"),
+    [
+        ("0.6.0", "0.6.2"),  # either side may be the older patch
+        ("0.6.2", "0.6.0"),
+        ("0.6.1", "0.6.0"),
+        ("0.6.0", "0.6.1"),
+        ("0.4.4", "0.4.5"),  # an older patch of an older series is still the same series
+        ("0.5.9", "0.5.21"),  # a series with two-digit patches
+    ],
+)
+def test_a_same_series_patch_difference_is_green_both_ways(running, local):
+    """Patch numbers are independent inside a series — in both directions.
+
+    The line is a protocol statement, so `0.6.0` vs `0.6.2` is as green as
+    `0.6.0` vs `0.6.1`: nothing about the action set is claimed either way.
+    """
+    checks = run_doctor(healthy_probe(connector_version=running, local_connector_version=local))
+    entry = check(checks, "connector-version")
+    assert entry.ok is True, (running, local)
+    assert entry.fix == "", (running, local)
+    assert "同系列兼容" in entry.detail, (running, local)
+    assert "UNKNOWN_ACTION" in entry.detail, (running, local)
+
+
+@pytest.mark.parametrize(
+    ("running", "local"),
+    [
+        ("0.6.0", "0.7.0"),  # a series bump is done on both sides together
+        ("0.7.0", "0.6.0"),
+        ("0.5.21", "0.6.1"),
+        ("0.6.1", "0.5.21"),
+        ("0.6", "0.6.1"),  # not a strict x.y.z
+        ("0.6.0", "0.6"),
+        ("v0.6.0", "0.6.1"),
+        ("0.6.0-beta", "0.6.1"),
+        ("0.6.x", "0.6.1"),
+    ],
+)
+def test_a_cross_series_or_malformed_version_is_still_a_mismatch(running, local):
+    """No series is read out of a cross-series pair or a malformed string.
+
+    A different `major.minor` is red in both directions, and a version missing a
+    segment / carrying a prefix or suffix is not silently parsed into a series —
+    it stays a mismatch with the update advice.
+    """
+    checks = run_doctor(healthy_probe(connector_version=running, local_connector_version=local))
+    entry = check(checks, "connector-version")
+    assert entry.ok is False, (running, local)
+    assert "update-connector" in entry.fix, (running, local)
+    assert "sch.move_attribute" not in entry.detail, (running, local)
 
 
 def test_the_connector_version_check_skips_when_there_is_no_repo_manifest():

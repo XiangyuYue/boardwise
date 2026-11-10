@@ -30,6 +30,10 @@ import websockets
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 
+#: The code the "connector" shows and the CLI types (549). Public by design:
+#: the editor prints it, so a test may print it too — unlike a token.
+PAIR_CODE = "ABCD-EFGH"
+
 
 def _free_port() -> int:
     with socket.socket() as probe:
@@ -142,7 +146,7 @@ def _audit_lines(home: Path) -> list[dict]:
     return lines
 
 
-async def _connector_hello_async(port: int, token: str) -> dict:
+async def _connector_hello_async(port: int, token: str, pair_code: str | None = None) -> dict:
     """One connector handshake, awaited — see :func:`_connector_hello`."""
     async with websockets.connect(f"ws://127.0.0.1:{port}", max_size=None) as ws:
         banner = json.loads(await ws.recv())
@@ -155,12 +159,17 @@ async def _connector_hello_async(port: int, token: str) -> dict:
                 "role": "connector",
                 "protocol": "1.0",
                 "client": "boardwise-connector/0.2.0",
+                # 549: what the connector read out of its own panel. Because the
+                # handshake cannot write the pairing record without it, every
+                # test in this file that expects to *pair* has to pass it —
+                # which is the property the task wanted from this suite.
+                **({"pairCode": pair_code} if pair_code is not None else {}),
             },
         }))
         return json.loads(await ws.recv())
 
 
-def _connector_hello(port: int, token: str) -> dict:
+def _connector_hello(port: int, token: str, pair_code: str | None = None) -> dict:
     """Run one connector handshake from this process, as the extension would.
 
     Deliberately the *real* socket and the *real* frames: this file's job is
@@ -168,17 +177,34 @@ def _connector_hello(port: int, token: str) -> dict:
     leave exactly the seam it exists to cover. Returns the reply frame, ok or
     not — refusing a connector is as much a documented outcome as accepting it.
     """
-    return asyncio.run(_connector_hello_async(port, token))
+    return asyncio.run(_connector_hello_async(port, token, pair_code))
 
 
-def _with_live_connector(port: int, token: str, body):
+def _authorise_pairing(daemon, code: str = PAIR_CODE):
+    """Authorise the next pairing **through the real CLI**, as a user would.
+
+    Since 549 nothing a connector does on its own gets it paired, so a test that
+    wants a pairing record has to do what the engineer does: run
+    ``boardwise bridge pair <CODE>``. Run as a subprocess against the daemon the
+    test already started, so the command's own wiring — the parser, the
+    ``pair.authorize`` call, the exit code — is exercised rather than bypassed.
+    Returns the completed process; callers that do not care may ignore it.
+    """
+    result = _cli(["bridge", "pair", code], daemon["env"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result
+
+
+def _with_live_connector(port: int, token: str, body, pair_code: str | None = None):
     """Run `body(reply)` with a connector **still attached** to the daemon.
 
-    `_connector_hello` closes its socket before it returns, and since 004f that
-    changes the answer the next connector gets: with nobody attached an unknown
-    token may re-pair. Tests about *refusal* need a connector that is still
-    there, so the assertions that depend on it run inside this scope. `body` is
-    asynchronous, and runs inside this loop so the socket stays open.
+    `_connector_hello` closes its socket before it returns, and a live peer
+    changes the answer the next connector gets: it may not be displaced (549
+    refuses that *after* checking the authorisation, so an authorised re-pair
+    arriving at a busy daemon is refused with `connector-attached`). Tests about
+    *refusal* therefore need a connector that is still there, so the assertions
+    that depend on it run inside this scope. `body` is asynchronous, and runs
+    inside this loop so the socket stays open.
     """
 
     async def run():
@@ -193,6 +219,7 @@ def _with_live_connector(port: int, token: str, body):
                     "role": "connector",
                     "protocol": "1.0",
                     "client": "boardwise-connector/0.2.0",
+                    **({"pairCode": pair_code} if pair_code is not None else {}),
                 },
             }))
             return await body(json.loads(await ws.recv()))
@@ -235,17 +262,47 @@ def test_status_reports_no_pairing_before_the_first_connector(daemon):
     assert "paired connector: none" in result.stdout, result.stdout
 
 
-def test_a_connector_pairs_itself_and_then_only_that_token_is_accepted(daemon):
+def test_an_unauthorised_connector_cannot_pair_itself(daemon):
+    """549, the negative half: arriving is no longer a way in.
+
+    Before 549 a newcomer with a token nobody had seen *became* the pairing —
+    trust-on-first-use, and the whole reason an `Origin` gate was bolted on top
+    of it. The gate that replaced both is `boardwise bridge pair`, so this test
+    stands one step before the next one: the connector presents no code, the
+    daemon refuses with `pairCodeRequired`, and nothing at all is written. It
+    has to keep failing after the positive half starts passing, or the CLI
+    command would be decoration.
+    """
+    secret = "deadbeef" * 8  # 64 hex, invented by "the extension"
+    reply = _connector_hello(daemon["port"], secret)
+
+    assert reply["ok"] is False, reply
+    assert reply["error"]["code"] == "UNAUTHENTICATED"
+    assert reply["error"]["detail"]["pairCodeRequired"] is True
+    assert reply["error"]["detail"]["reason"] == "no-grant"
+    assert "boardwise bridge pair" in reply["error"]["message"]
+    assert not (daemon["home"] / "connector-token").exists(), (
+        "a refusal must leave no pairing record behind"
+    )
+    assert not [record for record in _audit_lines(daemon["home"])
+                if record["action"] == "pairing"]
+
+
+def test_a_connector_pairs_once_the_cli_authorises_it(daemon):
     """The new-user flow, minus the editor — and the door closing behind it.
 
-    A connector arrives with a token it invented, is trusted, and both the
-    console and `bridge status` name it by fingerprint: the two places the user
-    is looking. The token itself appears in neither. A *second* connector with
-    a different token is then refused, which is the whole point of pairing
-    rather than leaving the port open.
+    The engineer reads the code out of the editor's boardwise panel and runs
+    `boardwise bridge pair <CODE>`; the connector then arrives with that code
+    and with a token it invented, is trusted, and both the console and
+    `bridge status` name it by fingerprint: the two places the user is looking.
+    Neither the token nor the code in full appears in any of them. A *second*
+    connector with a different token is then refused, which is the whole point
+    of pairing rather than leaving the port open.
     """
     secret = "c0ffee" * 10 + "c0ff"  # 64 hex, invented by "the extension"
-    reply = _connector_hello(daemon["port"], secret)
+    _authorise_pairing(daemon)
+
+    reply = _connector_hello(daemon["port"], secret, PAIR_CODE)
     assert reply["ok"] is True, reply
     fingerprint = reply["data"]["fingerprint"]
     assert len(fingerprint) == 8
@@ -259,32 +316,190 @@ def test_a_connector_pairs_itself_and_then_only_that_token_is_accepted(daemon):
     console = _console(daemon)
     assert f"paired new connector (fingerprint {fingerprint})" in console, console
     assert "boardwise bridge revoke" in console
+    assert secret not in console, "the pairing secret must never reach the console"
 
     # 3. visible in `status`
     result = _cli(["bridge", "status"], daemon["env"])
     assert f"paired connector: {fingerprint}" in result.stdout, result.stdout
     assert secret not in result.stdout
 
-    # 4. and on the record, without the secret
+    # 4. and on the record, without the secret — but *with* its author, and with
+    # the code masked, so the pairing line alone answers "who let this in?"
     pairing = [record for record in _audit_lines(daemon["home"])
                if record["action"] == "pairing"]
     assert len(pairing) == 1
     assert pairing[0]["fingerprint"] == fingerprint
     assert pairing[0]["client"] == "boardwise-connector/0.2.0"
+    assert pairing[0]["authorizedBy"] == "pair.authorize"
+    assert pairing[0]["pairCode"] != PAIR_CODE.replace("-", "")
+    assert secret not in json.dumps(pairing)
 
     # 5. a different connector is now a stranger — while this one is still
-    # attached. With nobody attached an unknown token may re-pair (004f item
-    # 2), so "a stranger is refused" only holds for a live pairing.
+    # attached. Nothing re-pairs on its own any more (549), so the refusal is
+    # about the missing authorisation as much as about the live peer.
     async def check(reply):
         assert reply["ok"] is True, reply
         refused = await _connector_hello_async(daemon["port"], "deadbeef" * 8)
         assert refused["ok"] is False
         assert refused["error"]["code"] == "UNAUTHENTICATED"
+        assert refused["error"]["detail"]["pairCodeRequired"] is True
         assert paired_file.read_text(encoding="utf-8").strip() == secret, (
             "a refused connector must not overwrite the pairing"
         )
 
     _with_live_connector(daemon["port"], secret, check)
+
+
+def test_pair_authorises_only_the_code_it_was_given(daemon):
+    """The chain end to end: the CLI mints a grant, the daemon honours *that* code.
+
+    A wrong code has to lose to the right one, and the right one has to still
+    work afterwards — a wrong code is counted, not fatal, until ten of them
+    void the grant (that counting lives in
+    ``test_549_pairing_authorization.py``; here the question is whether the
+    command's grant is really the thing the handshake is checked against).
+    """
+    secret = "cafe" * 16  # 64 hex, invented by "the extension"
+    _authorise_pairing(daemon, "7K3M-9QXZ")
+
+    wrong = _connector_hello(daemon["port"], secret, "ZZZZ-ZZZZ")
+    assert wrong["ok"] is False, wrong
+    assert wrong["error"]["detail"]["reason"] == "code-mismatch"
+
+    right = _connector_hello(daemon["port"], secret, "7K3M-9QXZ")
+    assert right["ok"] is True, right
+    assert (daemon["home"] / "connector-token").read_text(encoding="utf-8").strip() == secret
+
+
+def test_pair_prints_the_masked_code_and_never_the_token(daemon):
+    """What the command may say out loud: a pair code in masked form, no token.
+
+    The code is public — the editor shows it — so printing it is not a leak;
+    the *token* is the credential, and it must not reach a terminal that gets
+    pasted into a chat, a log collector or a bug report. Hence the split: the
+    receipt's own masked form is printed, the full code is not echoed, and the
+    token (read here from the file the earlier test paired) appears nowhere.
+    """
+    result = _authorise_pairing(daemon, "HH22-33JJ")
+    printed = result.stdout + result.stderr
+
+    assert "HH****JJ" in printed, printed
+    assert "HH2233JJ" not in printed, "the full code is not echoed"
+    assert "5 minutes" in printed, printed
+    paired = (daemon["home"] / "connector-token").read_text(encoding="utf-8").strip()
+    assert paired not in printed, "the pairing token must never be printed"
+    # The receipt names the record the authorisation was issued against: the
+    # one on disk right now, so a user who revoked a moment ago can tell the
+    # grant describes what they think it describes.
+    assert "pairing record: none yet" not in printed, printed
+    reply = _connector_hello(daemon["port"], "beef" * 16, "HH22-33JJ")
+    assert reply["ok"] is True, reply
+    status = _cli(["bridge", "status"], daemon["env"])
+    assert f"paired connector: {reply['data']['fingerprint']}" in status.stdout, status.stdout
+
+
+def test_pair_refuses_a_code_the_daemon_rejects(daemon):
+    """A code the daemon calls malformed is a refusal, not an authorisation.
+
+    Exit 1 — the daemon answered, and the answer was no — with the error code on
+    stderr, because that is the difference between "my typing was wrong" and
+    "nothing is listening".
+    """
+    result = _cli(["bridge", "pair", "A" * 100], daemon["env"])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "BAD_REQUEST" in result.stderr, result.stderr
+    assert "not authorised" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "ABCD-EFG",     # a short paste: one symbol lost
+        "ABCD",         # one group only
+        "ABCD-EFGHI",   # a long paste
+        "ABCD-EFG!",    # a symbol neither the alphabet nor a separator
+        "ABCD-EFGI",    # 8 symbols, but `I` is not in the alphabet
+    ],
+)
+def test_pair_exits_1_on_a_code_that_is_not_eight_symbols(daemon, code):
+    """The validation the red team asked for, measured at the CLI boundary.
+
+    Exit 1, not 2: nothing about the *environment* is wrong, the daemon answered
+    and said no, and the user's next move is to retype the code. Exit 2 would say
+    "no daemon", which is the wrong errand. Before the daemon validated the code
+    at all (only `> 64`), the first four of these minted a five-minute grant that
+    no connector could ever present — and replaced whatever good grant the user
+    had.
+    """
+    result = _cli(["bridge", "pair", code], daemon["env"])
+    assert result.returncode == 1, (code, result.stdout + result.stderr)
+    assert "BAD_REQUEST" in result.stderr, (code, result.stderr)
+    assert "not authorised" in result.stderr, (code, result.stderr)
+    assert "daemon not reachable" not in result.stderr, (code, result.stderr)
+
+
+def test_pair_success_text_sends_the_user_to_reconnect_not_restart(daemon):
+    """What the user is told to do next, now that pairing is authorised (549).
+
+    "Restart it (or use its re-pair item)" was wrong twice over: a restart is not
+    how a connector re-handshakes (it reconnects by itself, and the editor's own
+    Reconnect does it on demand), and choosing *re-pair* throws the authorised code
+    away for a freshly minted one, which the daemon will refuse because the grant
+    names the old code. So the line has to say Reconnect, and if the user really
+    wants re-pair, that it costs a second `bridge pair`.
+    """
+    result = _authorise_pairing(daemon, "QQ44-55WW")
+    printed = result.stdout + result.stderr
+
+    assert "Reconnect" in printed, printed
+    assert "restart" not in printed.lower(), (
+        "a restart is not how a connector re-handshakes — that advice was wrong: "
+        + printed
+    )
+    assert "re-pair" in printed, printed
+    assert "new code" in printed, printed
+    assert "bridge pair" in printed, printed
+    # …and nothing about the token or the full code, same rule as every other
+    # line this command prints.
+    assert "QQ4455WW" not in printed, printed
+    paired = (daemon["home"] / "connector-token").read_text(encoding="utf-8").strip()
+    assert paired not in printed, printed
+
+
+def test_pair_without_a_code_exits_2_and_touches_nothing(tmp_path):
+    """No code is a usage error: exit 2, and no daemon is even contacted.
+
+    Two spellings of "no code" — the argument missing, and the shell expanding
+    an empty variable into it — have to land in the same place, and that place
+    is *before* `_open_cli`: authorising nothing must not start a daemon or open
+    a socket, which the unreachable port here proves by not being dialled.
+    """
+    env = _env(tmp_path, _free_port())  # nothing listening, auto-start switched off
+
+    missing = _cli(["bridge", "pair"], env)
+    assert missing.returncode == 2
+    assert "code" in missing.stderr, missing.stderr
+
+    blank = _cli(["bridge", "pair", ""], env)
+    assert blank.returncode == 2
+    assert "a pair code is required" in blank.stderr, blank.stderr
+    assert "nothing was authorised" in blank.stderr
+    assert "daemon not reachable" not in blank.stderr, (
+        "the blank code must be refused before anything is dialled"
+    )
+    assert not (tmp_path / "connector-token").exists()
+
+
+def test_pair_reports_a_daemon_that_is_not_reachable(tmp_path):
+    """Exit 2 and the port, like every other bridge command (157 made it rare)."""
+    port = _free_port()
+    env = _env(tmp_path, port)
+
+    result = _cli(["bridge", "pair", PAIR_CODE], env)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert f"daemon not reachable on 127.0.0.1:{port}" in result.stderr, result.stderr
+    assert "nothing was authorised" in result.stderr
+
 
 
 def test_revoke_is_a_local_command_and_needs_no_daemon(tmp_path):
@@ -298,6 +513,12 @@ def test_revoke_is_a_local_command_and_needs_no_daemon(tmp_path):
     empty = _cli(["bridge", "revoke"], env)
     assert empty.returncode == 0
     assert "nothing to revoke" in empty.stdout
+    # 549: revoking withdraws a pairing; it does not reopen trust-on-first-use.
+    # The old line promised the next connector would be "trusted as the new
+    # one" — advice that would leave the user waiting for a handshake the daemon
+    # now refuses.
+    assert "boardwise bridge pair <CODE>" in empty.stdout, empty.stdout
+    assert "will be trusted as the new one" not in empty.stdout, empty.stdout
 
     (tmp_path / "connector-token").write_text("super-secret", encoding="utf-8")
     revoked = _cli(["bridge", "revoke"], env)
@@ -324,6 +545,10 @@ def test_every_call_is_audited(daemon):
 
     actions = {record["action"] for record in lines}
     assert {"ping", "export.screenshot", "canvas.highlight"} <= actions
+    # 549: the authorisation that let the connector pair is on the record too,
+    # as a grant (`pair-authorize`) and as the request that asked for it.
+    assert "pair-authorize" in actions
+    assert "pair.authorize" in actions
 
     failures = [record for record in lines if record.get("ok") is False]
     assert any(record.get("error") == "NO_CONNECTOR" for record in failures)
@@ -339,12 +564,25 @@ def test_every_call_is_audited(daemon):
     assert all("origin" in record for record in lines if record["action"] == "connect")
 
     # `ms` is the duration of a *request*. Connection and pairing lifecycle
-    # events carry other fields instead — see docs/bridge.md §8.
-    lifecycle = {"connect", "disconnect", "hello", "pairing", "revoke"}
+    # events carry other fields instead — see docs/bridge.md §8 — and since 549
+    # the grant itself is one of those events: `pair-authorize` says *what was
+    # authorised* (masked code, deadline, fingerprint), which is not a duration.
+    # `re-pairing` is here because the tests above replace a record they had
+    # already paired (a re-pair is a lifecycle event with `authorizedBy`, not a
+    # request): it used to be unreachable from this file, where a fresh daemon
+    # could only ever be paired once.
+    lifecycle = {
+        "connect", "disconnect", "hello", "pairing", "re-pairing", "revoke",
+        "pair-authorize",
+    }
     requests = [record for record in lines if record["action"] not in lifecycle]
     assert requests
     assert all(record["role"] == "cli" for record in requests)
     assert all("ms" in record for record in requests)
+    # The code is public, but the log outlives the five-minute window by years:
+    # only the masked form is written down.
+    grants = [record for record in lines if record["action"] == "pair-authorize"]
+    assert all(record["pairCode"] != PAIR_CODE.replace("-", "") for record in grants)
 
 
 def test_status_ignores_an_ambient_http_proxy(monkeypatch, tmp_path):
@@ -1470,6 +1708,7 @@ def own_daemon(tmp_path):
 async def _hello_over(
     websocket, token: str, *, instance_id: str, version: str = "0.4.10",
     project_name: str | None = None, project_uuid: str | None = None,
+    pair_code: str | None = None,
 ) -> dict:
     """One connector handshake on an already-open socket.
 
@@ -1482,6 +1721,11 @@ async def _hello_over(
     ``project_name``/``project_uuid`` are the 021 §2.3 fields — the project the
     *window* has open — and are omitted unless a test passes them, which is also
     how an older connector arrives.
+
+    ``pair_code`` (549) is the code from the editor's panel. Only the *first*
+    window of a fresh pairing needs it: the daemon spends the grant on the write,
+    and every later window presenting the same paired token is let through
+    without one.
     """
     banner = json.loads(await websocket.recv())
     assert banner["event"] == "banner"
@@ -1497,6 +1741,7 @@ async def _hello_over(
             "instanceId": instance_id,
             **({"projectName": project_name} if project_name else {}),
             **({"projectUuid": project_uuid} if project_uuid else {}),
+            **({"pairCode": pair_code} if pair_code is not None else {}),
         },
     }))
     return json.loads(await websocket.recv())
@@ -1511,18 +1756,23 @@ async def _fake_connector(
     project_uuid: str | None = None,
     responses: dict | None = None,
     context: dict | None = None,
+    pair_code: str | None = None,
 ):
     """A connector window that stays connected and answers actions.
 
     Returns ``(websocket, task)``; the caller closes the socket and cancels the
     task. It exists so the *real* CLI process can be run against a *real* daemon
     with windows attached: the CLI is a subprocess, so the sockets answering it
-    have to be driven from this process's event loop.
+    have to be driven from this process's event loop. The caller authorises the
+    pairing with :func:`_authorise_pairing` first (549) and passes the same
+    ``pair_code`` here; the second window of a test shares the paired token and
+    therefore needs neither.
     """
     ws = await websockets.connect(uri, max_size=None)
     reply = await _hello_over(
         ws, token, instance_id=instance_id,
         project_name=project_name, project_uuid=project_uuid,
+        pair_code=pair_code,
     )
     assert reply["ok"] is True, reply
 
@@ -1548,13 +1798,18 @@ def test_status_lists_every_connected_window(own_daemon):
     both sockets stay open while the CLI runs. Before 023 only the privileged one
     could appear here; the other was a refusal, and after it retried enough times
     an unbounded list of them.
+
+    Both windows share one install, so one authorisation (`bridge pair`, 549) is
+    enough: the first window spends it and the second presents the paired token.
     """
     uri = f"ws://127.0.0.1:{own_daemon['port']}"
     token = "the-shared-extension-token"  # both windows share one install
 
     async def scenario():
+        await asyncio.to_thread(_authorise_pairing, own_daemon)
         a_ws, _ = await _fake_connector(uri, token, instance_id="window-A",
-                                        project_name="/test", project_uuid="uuid-test")
+                                        project_name="/test", project_uuid="uuid-test",
+                                        pair_code=PAIR_CODE)
         b_ws, _ = await _fake_connector(uri, token, instance_id="window-B",
                                         project_name="test2", project_uuid="uuid-test2")
         try:
@@ -1587,8 +1842,10 @@ def test_status_maps_every_window_to_its_project(own_daemon):
     token = "the-shared-extension-token"  # both windows share one install
 
     async def scenario():
+        await asyncio.to_thread(_authorise_pairing, own_daemon)
         a_ws, _ = await _fake_connector(uri, token, instance_id="window-A",
-                                        project_name="/test", project_uuid="uuid-test")
+                                        project_name="/test", project_uuid="uuid-test",
+                                        pair_code=PAIR_CODE)
         b_ws, _ = await _fake_connector(uri, token, instance_id="window-B",
                                         project_name="test2", project_uuid="uuid-test2")
         try:
@@ -1620,10 +1877,12 @@ def test_call_project_hint_reaches_that_window_from_the_cli(own_daemon):
     token = "the-shared-extension-token"
 
     async def scenario():
+        await asyncio.to_thread(_authorise_pairing, own_daemon)
         a_ws, a_task = await _fake_connector(
             uri, token, instance_id="window-A", project_name="/test",
             project_uuid="uuid-test",
             responses={"doc.list": {"window": "A"}},
+            pair_code=PAIR_CODE,
         )
         b_ws, b_task = await _fake_connector(
             uri, token, instance_id="window-B", project_name="test2",
@@ -1686,9 +1945,11 @@ def test_call_instance_hint_reaches_that_window_from_the_cli(own_daemon):
     token = "the-shared-extension-token"
 
     async def scenario():
+        await asyncio.to_thread(_authorise_pairing, own_daemon)
         a_ws, a_task = await _fake_connector(
             uri, token, instance_id="window-A",
             responses={"doc.list": {"window": "A"}},
+            pair_code=PAIR_CODE,
         )
         b_ws, b_task = await _fake_connector(
             uri, token, instance_id="window-B",

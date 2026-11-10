@@ -25,21 +25,25 @@ from websockets.protocol import State
 from boardwise.bridge.daemon import (
     AUDIT_CONNECTOR_REJECTED,
     AUDIT_PAIRING,
+    AUDIT_PAIR_AUTHORIZE,
     AUDIT_REPAIRING,
     MIN_CONNECTOR_VERSION,
+    PAIR_GRANT_TTL,
     UNKNOWN_CONNECTOR_VERSION,
     WINDOW_KEY_SEPARATOR,
     AUDIT_REVOKE,
     BridgeDaemon,
+    PairGrant,
     PendingCall,
     WindowConnection,
     _bound_port,
     _clock,
-    _origin_is_a_web_page,
     check_origin,
     connector_fingerprint,
     connector_token_path,
     load_connector_token,
+    mask_pair_code,
+    normalise_pair_code,
     revoke_connector_token,
     start_server,
     status_lines,
@@ -64,6 +68,12 @@ from boardwise.bridge.protocol import (
 )
 
 TOKEN = "test-token-not-a-real-secret"
+
+#: The pair code these tests authorise with (549). Public by construction: the
+#: connector prints it, the user retypes it, and the daemon stores it beside
+#: nothing secret — so a literal is the honest thing for a test to hold. Its
+#: shape is the real one: eight Crockford characters, displayed ``XXXX-XXXX``.
+PAIR_CODE = "ABCD-EFGH"
 
 
 # --------------------------------------------------------------------------
@@ -117,7 +127,18 @@ def _daemon(home: Path) -> BridgeDaemon:
     # `{"*"}` is the legacy full-allow switch, pinned explicitly so these tests
     # keep testing routing/locking/forwarding and nothing silently depends on
     # the production default.
-    return BridgeDaemon(token=TOKEN, home=home, write_projects={"*"})
+    daemon = BridgeDaemon(token=TOKEN, home=home, write_projects={"*"})
+    # 549: a connector may no longer write the pairing record on its own, so
+    # every one of these tests would otherwise have to authorise a pairing before
+    # its first ``hello`` — the same three lines, sixty times, hiding the tests'
+    # actual subject. This fixture authorises **through the production action**
+    # (the code below is what `bridge pair` sends) and :func:`_hello` presents
+    # the matching code, which is exactly what a real connector does. The
+    # negative side — no grant, wrong code, expiry, reuse, fingerprint change,
+    # role — lives in ``test_549_pairing_authorization.py``, which builds its own
+    # daemon precisely so that nothing here can quietly vouch for it.
+    authorize_pairing(daemon)
+    return daemon
 
 
 async def _start(daemon: BridgeDaemon) -> tuple[object, int]:
@@ -152,21 +173,31 @@ async def _hello(
     protocol=PROTOCOL_VERSION,
     headers: dict | None = None,
     client: str = "fake",
+    pairCode: object = PAIR_CODE,
     **extra: object,
 ):
     """Connect, expect the daemon's banner first, then answer with ``hello``.
 
     ``extra`` is merged into the hello params, which is how a connector
     announces optional fields such as ``connectorVersion``.
+
+    ``pairCode`` (549) is sent by a connector and only by a connector: it is what
+    a build that is not yet the paired one presents, and the default here is the
+    code :func:`_daemon` authorised. Pass ``pairCode=None`` to send **no** field
+    at all — the pre-549 connector — which is what the authorisation tests do,
+    and pass a different string to send a wrong one.
     """
     ws = await websockets.connect(
         f"ws://127.0.0.1:{port}", max_size=None, additional_headers=headers
     )
     await _recv_event(ws)
-    await ws.send(request_frame("hello", {
+    params: dict[str, object] = {
         "token": token, "role": role, "protocol": protocol, "client": client,
         **extra,
-    }, id="hello"))
+    }
+    if role == "connector" and pairCode is not None:
+        params["pairCode"] = pairCode
+    await ws.send(request_frame("hello", params, id="hello"))
     return ws, await _recv_frame(ws)
 
 
@@ -178,6 +209,24 @@ def _audit_records(home: Path) -> list[dict]:
             json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
         )
     return records
+
+
+def authorize_pairing(daemon: BridgeDaemon, code: str = PAIR_CODE) -> dict:
+    """Authorise one pairing on ``daemon``, the way ``bridge pair`` does (549).
+
+    The **production** path, not a poke at ``daemon.pair_grant``: a test that
+    wrote the field itself would keep passing after the action stopped being
+    wired up, and the single point of this task is that a pairing needs that
+    action. Exported (no leading underscore) so the other suites that fake a
+    connector can call it — every one of them now needs an authorisation before
+    its first ``hello``, and none of them may get a back door in the daemon.
+
+    Synchronous on purpose: ``pair.authorize`` is a daemon-owned action and the
+    handler is not a coroutine, so this works inside an ``asyncio.run`` scenario
+    as well as outside one. That the *socket* path reaches the same action is
+    proved separately, in ``test_549_pairing_authorization``.
+    """
+    return daemon._local_action("pair.authorize", role="cli", params={"code": code})
 
 
 def run(coro):
@@ -337,6 +386,7 @@ def test_a_new_token_re_pairs_when_nothing_is_attached(tmp_path):
         daemon = BridgeDaemon(token=TOKEN, home=tmp_path, on_pairing=notices.append)
         server, port = await _start(daemon)
         async with server:
+            authorize_pairing(daemon)
             first_ws, first = await _hello(port, "connector", token="before-sideload")
             assert first["ok"] is True
             await first_ws.close()
@@ -346,8 +396,12 @@ def test_a_new_token_re_pairs_when_nothing_is_attached(tmp_path):
             await _until(lambda: not daemon.has_connector())
             assert not daemon.has_connector()
 
+            # 549: the sideloaded build is a *new* pairing, so it needs its own
+            # authorisation — the grant the first pairing spent is gone, exactly
+            # as it would be for a user who ran `bridge pair` once.
+            authorize_pairing(daemon)
             ws, reply = await _hello(port, "connector", token="after-sideload")
-            assert reply["ok"] is True, "an unattached pairing may be re-taken"
+            assert reply["ok"] is True, "an authorised re-pair may be taken"
             assert load_connector_token(tmp_path) == "after-sideload"
             await ws.close()
 
@@ -523,6 +577,7 @@ def test_first_connector_is_paired_and_remembered(tmp_path):
         daemon = BridgeDaemon(token=TOKEN, home=tmp_path, on_pairing=notices.append)
         server, port = await _start(daemon)
         async with server:
+            authorize_pairing(daemon)
             ws, reply = await _hello(port, "connector",
                                      token="generated-by-the-extension",
                                      client="boardwise-connector/0.2.0")
@@ -671,6 +726,11 @@ def test_revoke_forgets_the_pairing_and_the_next_connector_re_pairs(tmp_path):
             revoked = revoke_connector_token(tmp_path)
             assert revoked == connector_fingerprint("the-old-one")
             assert load_connector_token(tmp_path) is None
+
+            # 549: revoking the record also voids the grant that was issued
+            # against it (the grant pins the fingerprint it saw), so this needs
+            # a fresh authorisation — `bridge pair` — before anything may pair.
+            authorize_pairing(daemon)
 
             # A different connector now pairs instead.
             intruder, intruder_reply = await _hello(port, "connector", token="a-new-one")
@@ -2103,60 +2163,136 @@ def test_check_origin_allows_everything_for_now():
 
 
 # --------------------------------------------------------------------------
-# the compound web-page gap (#57 security note)
+# Origin authorises nothing; a grant does (549)
 # --------------------------------------------------------------------------
 #
-# Two separately-documented deferrals compounded: `check_origin` allows every
-# Origin (004d, still unmeasured), and the re-pair exception honours *any*
-# newcomer whenever no connector is attached — which is true between
-# `bridge start` and the editor attaching, and every time all editor windows
-# close. During exactly that window any `http://` page could open the socket,
-# have its token written down as the pairing, and lock the real connector out
-# with `UNAUTHENTICATED` (#12 then hid that behind "heartbeat timed out").
+# Until 549 this section was about a *gap*: `check_origin` allowed every Origin,
+# and the re-pair exception honoured any newcomer whenever no connector was
+# attached — true between `bridge start` and the editor attaching, and again
+# every time all editor windows close. In exactly that window any `http://` page
+# could open the socket, have its token written down as the pairing, and lock the
+# real connector out with `UNAUTHENTICATED`. The fix at the time was an Origin
+# gate: refuse `http(s)` EXCEPT the one measured editor Origin
+# (`https://client`, 0.2.5's acceptance run on 3.2.186, §12 item 4).
 #
-# Threat model, stated because the rule is narrow on purpose: the newcomer this
-# refuses is a **web page in the user's browser** — and a browser always sends
-# an `Origin` on a WebSocket handshake, while `curl`-class clients do not
-# (`websockets` itself sends none, asserted above). A non-browser attacker
-# merely has to omit the header, so this is *not* a boundary against local
-# processes: that boundary is the token (§9). 004d still owns what the editor's
-# own socket sends, and that is now measured rather than assumed: the EasyEDA
-# Pro extension host sends `Origin: https://client` (0.2.5's acceptance run on
-# 3.2.186, §12 item 4; measured again in 540). The rule therefore refuses
-# `http(s)` EXCEPT that one exact origin, and lets everything else — including a
-# missing Origin — through.
+# That gate is gone, and 549 is why. It answered the wrong question. An `Origin`
+# is a header the client chooses whether to send — a browser always sends one,
+# `curl`-class clients never do — so it could only ever have named the browser
+# case, and it cost the editor a whole class of false refusals: EDA 4.1.71 reports
+# `https://pro.lceda.cn`, which is not the measured value, so a real editor could
+# not pair at all. What a pairing write now needs is not "which page opened this
+# socket" but "did the user authorise it": one `bridge pair` grant, held in the
+# daemon's memory, presented as `hello.pairCode`. A page cannot mint a grant (the
+# action is CLI-only, and it has no CLI token) and cannot guess the code, so every
+# Origin — the editor's, a lookalike's, an attacker's, or none at all — is
+# refused identically until something was authorised. The valid old pairing is
+# the other half of the rule and is untouched: it is accepted whatever its Origin.
+
+#: Every spelling anyone has actually seen, plus the lookalikes that used to be
+#: spelled out one by one for the Origin gate. They are all equal now — that is
+#: the point of the parametrisation — and if a future change reintroduces an
+#: Origin-shaped exception, one of these lines will say so.
+ANY_ORIGIN = [
+    None,                          # curl-class and `websockets` itself: no header
+    "https://client",              # the value measured on 3.2.186
+    "https://pro.lceda.cn",        # the value EDA 4.1.71 reports (549's bug)
+    "http://evil.example",         # a page in the user's browser
+    "https://client.evil.example",  # merely starts with `client`
+    "https://sub.client",
+    "https://clientx",
+    "https://client:8443",
+    "https://client/eda",
+    "https://user@client",
+    "https://client?x=1",
+    "https://client#frag",
+    "chrome-extension://abcdefghijklmnop",
+    "null",                        # a sandboxed frame
+]
 
 
-def test_a_web_page_cannot_pair_itself_before_the_editor_attaches(tmp_path):
-    """The attack the audit described, in its own window: a fresh daemon."""
+def _headed(origin: str | None) -> dict | None:
+    """Handshake headers for one Origin, or none at all when there is none."""
+    return None if origin is None else {"Origin": origin}
+
+
+@pytest.mark.parametrize("origin", ANY_ORIGIN)
+def test_no_origin_can_pair_without_an_authorisation(origin, tmp_path):
+    """The first-pairing attack, one Origin at a time: a fresh daemon, no grant.
+
+    Note what is *not* in the assertion: the message no longer names the Origin,
+    because the Origin is not what was wrong with the handshake. It names the
+    missing authorisation and the command that creates one — the detail carries
+    the machine-readable half, so a connector can act on it instead of guessing.
+    """
 
     async def scenario():
-        daemon = _daemon(tmp_path)
+        # Deliberately not `_daemon()`: that fixture authorises a pairing, and
+        # the one thing this test must observe is a daemon nobody authorised.
+        daemon = BridgeDaemon(token=TOKEN, home=tmp_path, write_projects={"*"})
         server, port = await _start(daemon)
         async with server:
             ws, reply = await _hello(
-                port, "connector", token="page-token",
-                headers={"Origin": "http://evil.example"},
+                port, "connector", token="page-token", headers=_headed(origin),
             )
-            assert reply["ok"] is False, "a web page must not be able to pair"
+            assert reply["ok"] is False, f"{origin!r} must not be able to pair"
             assert reply["error"]["code"] == ErrorCodes.UNAUTHENTICATED
-            # The handshake refusal frame carries code + message only (`_close`
-            # sends `BridgeError(code, message)`), so the Origin has to be
-            # readable in the message — that is where a human looks.
-            assert "http://evil.example" in reply["error"]["message"], reply["error"]
+            detail = reply["error"]["detail"]
+            assert detail["pairCodeRequired"] is True, reply["error"]
+            assert detail["reason"] == "no-grant", reply["error"]
+            assert "boardwise bridge pair" in reply["error"]["message"], reply["error"]
             await ws.close()
 
     run(scenario())
 
     assert load_connector_token(tmp_path) is None, (
-        "the page's token must not become the pairing — that is what locks the "
-        "real connector out"
+        "an unauthorised handshake's token must not become the pairing — that is "
+        "what locks the real connector out"
     )
     assert not [r for r in _audit_records(tmp_path) if r["action"] == AUDIT_PAIRING]
 
 
-def test_a_web_page_cannot_re_pair_over_a_pairing_nobody_is_using(tmp_path):
-    """The other half: an existing pairing, and every window closed."""
+@pytest.mark.parametrize("origin", ANY_ORIGIN)
+def test_an_authorised_handshake_pairs_whatever_its_origin(origin, tmp_path):
+    """The other direction, Origin by Origin: the grant is the whole gate.
+
+    This is the assertion that replaces the Origin whitelist. A pairing the user
+    authorised with `bridge pair` writes the record — from the editor's measured
+    Origin, from `https://pro.lceda.cn`, from a `chrome-extension://` host, or
+    from a client that sends no Origin at all. Refusing any of these on Origin
+    grounds would be refusing the user's own explicit decision for a reason that
+    header cannot support.
+    """
+
+    async def scenario():
+        daemon = BridgeDaemon(token=TOKEN, home=tmp_path, write_projects={"*"})
+        authorize_pairing(daemon)
+        server, port = await _start(daemon)
+        async with server:
+            ws, reply = await _hello(
+                port, "connector", token="editor-token", headers=_headed(origin),
+            )
+            assert reply["ok"] is True, reply
+            await ws.close()
+
+    run(scenario())
+
+    assert load_connector_token(tmp_path) == "editor-token"
+    pairings = [r for r in _audit_records(tmp_path) if r["action"] == AUDIT_PAIRING]
+    assert len(pairings) == 1
+    assert pairings[0]["fingerprint"] == connector_fingerprint("editor-token")
+    # 549: the pairing line says who authorised it, without the code in full.
+    assert pairings[0]["authorizedBy"] == "pair.authorize"
+    assert pairings[0]["pairCode"] == mask_pair_code(normalise_pair_code(PAIR_CODE))
+    assert PAIR_CODE.replace("-", "") not in json.dumps(pairings[0])
+
+
+def test_no_re_pair_over_a_pairing_nobody_is_using_without_a_grant(tmp_path):
+    """The re-pair half: an existing pairing, every window closed, no grant.
+
+    Before 549 this state handed the record to *any* newcomer — the sideload
+    self-heal, and the hole. Now the record simply stays where it is, and the
+    audit gains no re-pairing line.
+    """
 
     async def scenario():
         daemon = _daemon(tmp_path)
@@ -2167,26 +2303,32 @@ def test_a_web_page_cannot_re_pair_over_a_pairing_nobody_is_using(tmp_path):
             await real_ws.close()
             await _until(lambda: not daemon.has_connector())
 
+            # The first pairing spent the fixture's grant; nothing replaced it.
             ws, reply = await _hello(
                 port, "connector", token="page-token",
                 headers={"Origin": "http://evil.example"},
             )
             assert reply["ok"] is False
             assert reply["error"]["code"] == ErrorCodes.UNAUTHENTICATED
+            assert reply["error"]["detail"]["reason"] == "no-grant"
             await ws.close()
 
     run(scenario())
 
     assert load_connector_token(tmp_path) == "real-token", (
-        "a re-pair must not be handed to a web page"
+        "a re-pair must not be handed to a stranger"
     )
     assert not [r for r in _audit_records(tmp_path) if r["action"] == AUDIT_REPAIRING]
 
 
-def test_the_editor_pairs_exactly_as_before_when_it_sends_no_origin(tmp_path):
-    """The rule may not cost the editor anything — it sends no Origin at all
-    (`websockets`, which the tests use, matches that; 004d measures the real
-    one)."""
+def test_the_editor_pairs_exactly_as_before_once_authorised(tmp_path):
+    """The editor's handshake must not cost the user a single extra step.
+
+    `websockets` (which these tests use) sends no Origin, which is also what a
+    `curl`-class caller sends — so this is the "there is no Origin to look at"
+    case, and it pairs because it was authorised, not because of what it did not
+    send.
+    """
 
     async def scenario():
         daemon = _daemon(tmp_path)
@@ -2201,33 +2343,12 @@ def test_the_editor_pairs_exactly_as_before_when_it_sends_no_origin(tmp_path):
     assert load_connector_token(tmp_path) == "editor-token"
 
 
-def test_a_non_http_origin_still_pairs(tmp_path):
-    """`chrome-extension://…` is not a web page's origin, and 004d has not yet
-    said which value the editor's host sends — so anything that is not `http(s)`
-    keeps the door it had."""
-
-    async def scenario():
-        daemon = _daemon(tmp_path)
-        server, port = await _start(daemon)
-        async with server:
-            ws, reply = await _hello(
-                port, "connector", token="extension-token",
-                headers={"Origin": "chrome-extension://abcdefghijklmnop"},
-            )
-            assert reply["ok"] is True
-            await ws.close()
-
-    run(scenario())
-
-    assert load_connector_token(tmp_path) == "extension-token"
-
-
 def test_a_paired_connector_sending_an_http_origin_is_still_accepted(tmp_path):
-    """The gate guards the **pairing write**, not the token check.
+    """A valid old pairing is accepted whatever it reports — grant or no grant.
 
-    A caller that already knows the pairing secret is the paired connector as
-    far as this daemon can tell, and a browser page cannot learn that secret —
-    so narrowing here would buy nothing and could refuse a legitimate build.
+    This is the half of the rule that must not become Origin-shaped by accident:
+    the record is the credential, a page cannot learn it, and narrowing here
+    could refuse a legitimate connector build for a header it happens to send.
     """
 
     async def scenario():
@@ -2251,83 +2372,13 @@ def test_a_paired_connector_sending_an_http_origin_is_still_accepted(tmp_path):
     assert load_connector_token(tmp_path) == "real-token"
 
 
-# The editor's own Origin, measured twice rather than assumed: 0.2.5's
-# acceptance run recorded `origin: "https://client"` on EasyEDA Pro 3.2.186
-# (§12 item 4), and 540 measured the same value again on the same build. Without
-# this one exemption the gate refuses the editor's FIRST pairing — and every
-# re-pair after the extension storage was reset — with `UNAUTHENTICATED`,
-# forever. The known-token early return is why historical runs looked fine, and
-# it cannot help a daemon that has no token on file yet.
-EDITOR_ORIGIN = "https://client"
-
-
-def test_the_measured_editor_origin_is_not_a_web_page():
-    """The measured editor Origin is the host itself, not a page in a browser."""
-    assert _origin_is_a_web_page(EDITOR_ORIGIN) is False
-    # Scheme and host are case-insensitive in a URL. The editor sends lowercase
-    # and that stays the norm; case is not what makes an origin a different one.
-    assert _origin_is_a_web_page("HTTPS://Client") is False
-
-
-@pytest.mark.parametrize(
-    "origin",
-    [
-        "http://client",  # wrong scheme: an http server on this host, not the host
-        "https://client.evil.example",  # merely starts with `client`
-        "https://sub.client",
-        "https://clientx",
-        "https://client:443",  # an explicit port is an unmeasured spelling
-        "https://client:8443",
-        "https://client/",  # a path, including the bare trailing slash
-        "https://client/eda",
-        "https://user@client",  # credentials in the authority
-        "https://client?x=1",
-        "https://client#frag",
-        "https://client.",  # a trailing dot is a different host
-        "https://client example",
-    ],
-)
-def test_lookalike_origins_are_still_web_pages(origin):
-    """The exemption is one exact origin; everything near it stays refused."""
-    assert _origin_is_a_web_page(origin) is True, (
-        f"{origin!r} is not the measured editor origin and must stay refused"
-    )
-
-
-def test_the_editor_origin_pairs_on_first_use(tmp_path):
-    """540's regression: the measured Origin must be able to write a FIRST pairing.
-
-    This is the state right after `bridge start`, with the editor not attached
-    yet — the state the #57 gate was added for, and the one where the editor's
-    own socket and a lookalike page must still be told apart (next test).
-    """
-    async def scenario():
-        daemon = _daemon(tmp_path)
-        server, port = await _start(daemon)
-        async with server:
-            ws, reply = await _hello(
-                port, "connector", token="editor-token",
-                headers={"Origin": EDITOR_ORIGIN},
-            )
-            assert reply["ok"] is True, reply
-            await ws.close()
-
-    run(scenario())
-
-    assert load_connector_token(tmp_path) == "editor-token", (
-        "the editor's own handshake must be able to pair"
-    )
-    pairings = [r for r in _audit_records(tmp_path) if r["action"] == AUDIT_PAIRING]
-    assert len(pairings) == 1
-    assert pairings[0]["fingerprint"] == connector_fingerprint("editor-token")
-
-
-def test_the_editor_origin_re_pairs_over_a_pairing_nobody_is_using(tmp_path):
+def test_the_editor_origin_re_pairs_once_authorised(tmp_path):
     """The other write path: a storage reset with no live connector (004f).
 
-    Both pairing writes have to accept the measured Origin. Exempting only the
-    first would leave a sideloaded connector looping on `UNAUTHENTICATED` — the
-    exact failure 540 hit on the machine.
+    A sideloaded connector is a *new* pairing, so it needs its own `bridge pair`
+    — and once it has one, the measured editor Origin writes the record exactly
+    as before. That is the failure 540 hit on the machine, and 549's answer to it
+    is the grant rather than an Origin exemption.
     """
     async def scenario():
         daemon = _daemon(tmp_path)
@@ -2338,9 +2389,10 @@ def test_the_editor_origin_re_pairs_over_a_pairing_nobody_is_using(tmp_path):
             await real_ws.close()
             await _until(lambda: not daemon.has_connector())
 
+            authorize_pairing(daemon)
             ws, reply = await _hello(
                 port, "connector", token="after-sideload",
-                headers={"Origin": EDITOR_ORIGIN},
+                headers={"Origin": "https://client"},
             )
             assert reply["ok"] is True, reply
             await ws.close()
@@ -2348,38 +2400,12 @@ def test_the_editor_origin_re_pairs_over_a_pairing_nobody_is_using(tmp_path):
     run(scenario())
 
     assert load_connector_token(tmp_path) == "after-sideload", (
-        "a re-pair from the editor's own handshake must overwrite the record"
+        "an authorised re-pair must overwrite the record"
     )
     repairs = [r for r in _audit_records(tmp_path) if r["action"] == AUDIT_REPAIRING]
     assert len(repairs) == 1
     assert repairs[0]["replacedFingerprint"] == connector_fingerprint("before-sideload")
-
-
-def test_a_lookalike_origin_cannot_pair_over_the_wire(tmp_path):
-    """The exemption is one exact origin, proven on the real handshake path.
-
-    `https://client.evil.example` is what a page on an attacker-named host would
-    carry; it must be refused exactly like any other http(s) page, and the
-    pairing file must stay absent.
-    """
-    async def scenario():
-        daemon = _daemon(tmp_path)
-        server, port = await _start(daemon)
-        async with server:
-            ws, reply = await _hello(
-                port, "connector", token="page-token",
-                headers={"Origin": "https://client.evil.example"},
-            )
-            assert reply["ok"] is False, "a lookalike must not be able to pair"
-            assert reply["error"]["code"] == ErrorCodes.UNAUTHENTICATED
-            await ws.close()
-
-    run(scenario())
-
-    assert load_connector_token(tmp_path) is None, (
-        "a lookalike's token must not become the pairing"
-    )
-    assert not [r for r in _audit_records(tmp_path) if r["action"] == AUDIT_PAIRING]
+    assert repairs[0]["authorizedBy"] == "pair.authorize"
 
 
 def test_daemon_speaks_first_with_a_banner(tmp_path):
@@ -2462,7 +2488,11 @@ def test_raw_connection_and_disconnection_are_audited(tmp_path):
 
     run(scenario())
 
-    records = _audit_records(tmp_path)
+    records = [r for r in _audit_records(tmp_path)
+               # The fixture authorised a pairing before any socket existed (549),
+               # and that line is itself an audit fact — but it is not a
+               # connection record, which is what this test is about.
+               if r["action"] != AUDIT_PAIR_AUTHORIZE]
     assert records[0]["action"] == "connect", "connect must be the first record"
     assert records[0]["ok"] is True
     assert records[0]["role"] == "-", "nothing is authenticated yet"

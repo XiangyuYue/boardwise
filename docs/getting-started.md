@@ -138,8 +138,20 @@ boardwise bridge: listening on 127.0.0.1:61190
   waiting for the EasyEDA extension to connect (Ctrl-C to stop)
 ```
 
-几秒内编辑器里的扩展会连上来，**首次**连接时这个窗口会打印一条很显眼的配对公告
-（"这台编辑器被信任了"之类，带一个 8 位指纹）。这就是配对：第一次谁连上来就信谁，之后只有那个 token 能进。
+几秒内编辑器里的扩展会连上来。**首次**连接不再"谁连上来就信谁"：扩展的 boardwise 面板
+（`About…`）里会显示一个 **8 位配对编号**（形如 `7K3M-9QXZ`），你在本机终端敲一次
+
+```bash
+boardwise bridge pair 7K3M-9QXZ
+```
+
+daemon 才允许**这一个** Connector 写入配对记录（`~/.boardwise/connector-token`），这个窗口随即打印
+一条很显眼的配对公告（带 8 位指纹）。授权只活 **5 分钟、一次性**，存在 daemon 内存里，重启即失效；
+编号可以照抄、可以公开显示，**token 永不显示**。之后重连不用再敲——有效旧配对在任何 Origin
+（`https://client`、`https://pro.lceda.cn`、不带 Origin）都能直接重连。
+
+> 注意：授权之后再在编辑器里选 **Re-pair on next connect** 会换一个新 token **和新编号**，
+> 新编号必须重新 `bridge pair`；普通 **Reconnect** 不需要。
 
 **这个窗口要一直开着**（关掉就等于把桥拆了；想停就按 Ctrl-C）。自动拉起的那份不受影响，
 它下一次被命令再拉起来。

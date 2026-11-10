@@ -56,6 +56,7 @@ from .engines.checkup import (
     accepted_unknown_section,
     board_report_section,
     conclusion_section,
+    connector_versions_compatible,
     cross_board_net_section,
     declared_passive_exemptions,
     disambiguated_triage_keys,
@@ -10922,7 +10923,10 @@ def _cmd_bridge_status(args: argparse.Namespace) -> int:
         print(
             f"  paired connector: {fingerprint}"
             if fingerprint
-            else "  paired connector: none — the next connector to connect will be trusted"
+            else (
+                "  paired connector: none — no connector may pair until "
+                "`boardwise bridge pair <CODE>` authorises one"
+            )
         )
         return 0 if connected else 1
 
@@ -10930,12 +10934,19 @@ def _cmd_bridge_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_bridge_revoke(args: argparse.Namespace) -> int:
-    """Forget the paired connector. The next one re-pairs by itself.
+    """Forget the paired connector. The next one must be authorised, not trusted.
 
     Deliberately a local file operation, not an action sent to the daemon: the
     moment you most want to revoke is the moment you are least sure what is
     listening, and requiring a healthy daemon to withdraw trust would be
     backwards. The audit record is written by this process for the same reason.
+
+    Since 549 revoking does not open a trust-on-first-use window: the next
+    connector has to be let in by :func:`_cmd_bridge_pair`. The two lines below
+    used to promise the opposite ("the next connector to connect will be
+    trusted as the new one"), so they say what actually happens instead — a
+    user who reads them and waits for the editor to reconnect would otherwise
+    sit in front of a handshake that keeps being refused.
     """
     _, daemon_module, _ = _bridge_modules()
     fingerprint = daemon_module.revoke_connector_token()
@@ -10950,8 +10961,108 @@ def _cmd_bridge_revoke(args: argparse.Namespace) -> int:
         print(f"boardwise bridge: pairing revoked (was {fingerprint})")
     else:
         print("boardwise bridge: no connector was paired — nothing to revoke")
-    print("  the next connector to connect will be trusted as the new one")
+    print(
+        "  nothing is trusted automatically now: open the boardwise panel in the "
+        "editor (it shows a pair code), then run `boardwise bridge pair <CODE>`"
+    )
     return 0
+
+
+def _cmd_bridge_pair(args: argparse.Namespace) -> int:
+    """Authorise one connector pairing: `boardwise bridge pair <CODE>` (549).
+
+    The grant is the user's own decision, made in the one place a web page
+    cannot reach, so this command is the whole security boundary in one line:
+    it hands a **public** pair code (shown in the editor's boardwise panel, and
+    therefore safe to print, log or paste) to the daemon's ``pair.authorize``,
+    under the CLI token that the connector never holds.
+
+    Nothing is written here: the daemon keeps the grant in its own memory for
+    five minutes, and a successful pairing spends it. That is why a daemon must
+    be running — and why the ordinary path (:func:`_open_cli`) is the right one
+    even though the daemon may not be up yet: a pairing request is exactly the
+    moment a freshly installed bridge is used for the first time, so the daemon
+    is started on demand here as it is for every other bridge command.
+
+    Exit codes are the file's own: 0 authorised, 1 the daemon refused (it says
+    which code and why), 2 nothing was attempted — a blank code, or a daemon
+    that is neither running nor startable. The token itself never appears in any
+    of the three: the receipt the daemon returns names the code in masked form
+    only.
+    """
+    import asyncio
+
+    code = (args.code or "").strip()
+    if not code:
+        # A shell that expanded an empty variable, or a paste that lost the code:
+        # refuse here rather than sending a blank one to be normalised away. The
+        # daemon would answer BAD_REQUEST for the same reason, but then the user
+        # pays a round trip to learn something argparse could have said.
+        print(
+            "boardwise bridge pair: a pair code is required (the XXXX-XXXX shown "
+            "in the editor's boardwise panel); nothing was authorised",
+            file=sys.stderr,
+        )
+        return 2
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+
+    from websockets.exceptions import WebSocketException
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, WebSocketException, BridgeError) as exc:
+            # The auto-start already ran (_open_cli) and still nothing answered,
+            # so this is the same fact `bridge status` reports in the same shape:
+            # nothing was authorised.
+            print(
+                f"boardwise bridge pair: daemon not reachable on 127.0.0.1:{port} "
+                f"({exc}); nothing was authorised",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            receipt = await client.call("pair.authorize", {"code": code})
+        except BridgeError as exc:
+            print(
+                f"boardwise bridge pair: not authorised [{exc.code}] {exc.message}",
+                file=sys.stderr,
+            )
+            return 1
+        finally:
+            await client.close()
+
+        seconds = receipt.get("expiresIn")
+        window = f"{seconds // 60} minutes" if isinstance(seconds, int) else "five minutes"
+        # The receipt's own masked form: the daemon never returns the code in
+        # full, so neither can this line — and nothing here reads the token.
+        print(
+            f"boardwise bridge: pairing authorised for "
+            f"{receipt.get('pairCode') or 'that code'} — valid for {window}"
+        )
+        fingerprint = receipt.get("fingerprint")
+        print(
+            f"  pairing record: {fingerprint}"
+            if fingerprint
+            else "  pairing record: none yet — the first connector to present this code will be written"
+        )
+        if receipt.get("replaced"):
+            print(
+                "  this replaces the authorisation issued before it; only the "
+                "latest code is accepted"
+            )
+        print(
+            "  next: on the Connector side, use Reconnect as usual — the window "
+            "showing this code then pairs on its own. Do NOT choose re-pair there: "
+            "re-pair mints a *new* code, and that new code needs its own "
+            "`boardwise bridge pair <CODE>` before anything is written."
+        )
+        return 0
+
+    return asyncio.run(run())
 
 
 def _cmd_bridge_screenshot(args: argparse.Namespace) -> int:
@@ -30814,16 +30925,42 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
         )
     else:
         same = p.connector_version == p.local_connector_version
+        # Release discipline: daemon and connector are only required to be in the
+        # same `major.minor` series, patches travel independently. So a green
+        # line here is a statement about the **protocol** lining up — never about
+        # the action set: actions are still added inside a series (0.6.1 added
+        # `sch.list_attributes` / `sch.move_attribute` over 0.6.0), and an older
+        # patch answers an explicit `UNKNOWN_ACTION` for one it lacks instead of
+        # pretending. The judgement itself lives in `checkup`, shared with the
+        # review report so the two surfaces cannot disagree.
+        compatible = not same and connector_versions_compatible(
+            expected=p.local_connector_version, running=p.connector_version
+        )
+        version_ok = same or compatible
+        if same:
+            detail = (
+                f"编辑器里跑的是 connector {p.connector_version}，仓库里是 {p.local_connector_version}"
+            )
+        elif compatible:
+            detail = (
+                f"编辑器里跑的是 connector {p.connector_version}，仓库里是 {p.local_connector_version}"
+                " —— 同系列兼容（major.minor 相同，补丁号独立）：两边既有动作照常可用；"
+                "兼容不等于动作全集相同——较新的动作（如属性读写 attributeMoves："
+                "sch.list_attributes / sch.move_attribute）只在支持它的 connector 上存在，"
+                "旧补丁调用会明确答 UNKNOWN_ACTION，要按能力探测确认，不能靠系列号推定"
+            )
+        else:
+            detail = (
+                f"编辑器里跑的是 connector {p.connector_version}，仓库里是 {p.local_connector_version}"
+            )
         checks.append(
             DoctorCheck(
                 name="connector-version",
-                label="运行中的 connector 版本与仓库一致",
-                ok=same,
-                detail=(
-                    f"编辑器里跑的是 connector {p.connector_version}，仓库里是 {p.local_connector_version}"
-                ),
+                label="运行中的 connector 版本与仓库同系列或一致",
+                ok=version_ok,
+                detail=detail,
                 fix=""
-                if same
+                if version_ok
                 else "运行 `boardwise bridge update-connector`（把仓库里的 bundle 热更新进编辑器；"
                 "编辑器里跑的可能是上一次的构建）",
             )
@@ -31457,6 +31594,7 @@ BRIDGE_COMMANDS = {
     "start": _cmd_bridge_start,
     "status": _cmd_bridge_status,
     "revoke": _cmd_bridge_revoke,
+    "pair": _cmd_bridge_pair,
     "screenshot": _cmd_bridge_screenshot,
     "export-fab": _cmd_bridge_export_fab,
     "call": _cmd_bridge_call,
