@@ -1,6 +1,6 @@
-# 任务书：549 首次配对显式授权（工作树）
+# 任务书：549 首次配对显式授权（已随 0.6.1 正式版发布）
 
-> 状态：**本地实现、离线验收及 4.1.93 真机/回滚验收完成，待发布；4.1.71 仍只有模拟证据**（工作树，未提交、未发布）。当前主仓有绘制线及 546 同系列兼容改动，任何既有修改不得覆盖或夹带。所有批次串行，禁止 git 写。红队裁定变化、离线读数与真机验收见 §5。
+> 状态：**已随 0.6.1 正式版发布**（tag 与 Release `targetCommitish` 均为 `9ffeb3b`，`prerelease=false`、latest）；本地实现、离线验收及 4.1.93 真机/回滚验收完成；4.1.71 仍只有模拟证据。红队裁定变化、离线读数与真机验收见 §5、§7。
 
 ## 1. 问题与证据
 
@@ -52,7 +52,7 @@ socket 都能用 10 次错码取消用户自己的授权——把守卫变成攻
 上报 `https://pro.lceda.cn` 的真实 EDA 4.1.71。现实现里配对写只认 CLI 铸的 grant；Origin 仍记录在
 `connect` 审计行、仍被 `doctor` 读，但不参与授权判断（`check_origin` 恒放行，仍属 004d）。
 
-**当前状态（未提交、未发布、未做真机）：** 工作树实现覆盖 daemon/protocol/CLI/Connector 四块，
+**实现要点（549，已随 0.6.1 正式版发布；定稿时为工作树）：** 覆盖 daemon/protocol/CLI/Connector 四块，
 `pair.authorize` 为 daemon-owned、`risk=write`、`design_write=false`、仅 CLI role；Connector 侧
 Web Crypto only（无 `Math.random`，零/恒定随机失败关闭），编号独立 `pairCode` 键，重连稳定、
 re-pair 换新编号，`hello.data.pairCodeUsed === true` 才轮换。记录写盘改为同目录临时文件 +
@@ -72,10 +72,10 @@ tests/test_bridge_cli.py` 聚焦 **126 passed** 关闭；另有 4 处 549 测试
 `pairCode` 参数（`contract-drift.test.mjs` 比对 `ACTIONS` ↔ 文档表）已补；两处过期 HELP 文案
 （`protocol.py` summary、`shared.py` pair description）已改正并重生成 `contracts/cli/v1.json`。
 
-**状态：本地实现、离线验收及 4.1.93 真机/回滚验收完成，待发布；4.1.71 仍只有模拟证据。**（真机读数见 §7）
+**状态：已随 0.6.1 正式版发布**（tag 与 Release `targetCommitish` 均为 `9ffeb3b`，`prerelease=false`、latest）；本地实现、离线验收及 4.1.93 真机/回滚验收完成，4.1.71 仍只有模拟证据。（真机读数见 §7）
 
-**未做/未验：** 提交、推送、版本 bump、发布、生产升级（真机验收后已回滚到原 0.6.0 Connector）、4.1.71 真机、
-生产升级回滚；4.1.71 只有模拟 Origin 证据（无安装包），朋友那台真实候选跑通不是本实现的验收；
+**未做/未验（发布后仍成立）：** 生产环境升级（真机验收后已回滚到原 0.6.0 Connector）、4.1.71 真机、
+整板验收；4.1.71 只有模拟 Origin 证据（无安装包），朋友那台真实候选跑通不是本实现的验收；
 新版 daemon 与 Connector 必须同步部署，不能用内嵌旧 Connector 的 `update-connector` 冒充安全包；
 `connected` 不等于 `checkup` 通过（空模型仍 `incomplete`）。
 
@@ -102,5 +102,8 @@ tests/test_bridge_cli.py` 聚焦 **126 passed** 关闭；另有 4 处 549 测试
   connected、paired fingerprint `8b82a227` 不变；临时对齐的 package/extension 元数据逐字节恢复。
   原 daemon EXE 首次启动报 `Could not create temporary directory` 是临时目录不可写，改用既有可写目录后恢复，
   与配对无关。
-- **仍未覆盖**：4.1.71 只有模拟 Origin 证据，4.1.93 的结果不得外推为 4.1.71 全功能兼容；未提交/未推送/
-  未 bump/未发布，生产未升级（已回滚），本次不处理工程 findings、未做整板验收。
+- **仍未覆盖**：4.1.71 只有模拟 Origin 证据，4.1.93 的结果不得外推为 4.1.71 全功能兼容；发布时生产环境
+  仍是原 0.6.0 Connector（真机验收后已回滚），本次不处理工程 findings、未做整板验收。
+- **发布（2026-11-10）**：已随 0.6.1 正式版发布——main `47713c2`/`8ad625e`/`9ffeb3b`，tag 与 Release
+  `targetCommitish` 均为 `9ffeb3b`，`prerelease=false` 且 latest；内嵌 Connector bundle
+  `418c7a023b44d5d5cbc659c8d0e3e26fe8eaca17b2a3b4df4acd4cfac89e05dc`。

@@ -13,6 +13,8 @@ DSH 插件与 boardwise 外部版本的同号策略不因本条改变。
 - 同系列双向兼容，不做方向白名单，不把 0.6.0↔0.6.2 或反向误判为失效。
 - 兼容的依据是 protocol 主版本未变和加性动作，不表示动作全集相同。较新的动作仍需能力探测；
   旧补丁没有该动作时明确 `UNKNOWN_ACTION`，不得伪装支持。
+- **发布状态（2026-11-10）：本批已随 0.6.1 正式版发布**（tag 与 Release `targetCommitish`
+  均为 `9ffeb3b`，`prerelease=false`、latest）。
 - `environment.limitations` 的 `connector-version-compatible` 只影响 `attributeMoves`，
   不降级常规 live 审查证据。0.6.0 connector 可与 0.6.1 daemon 做既有动作；
   `sch.list_attributes` / `sch.move_attribute` 需要支持它们的 connector。

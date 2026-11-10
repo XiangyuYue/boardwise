@@ -38,10 +38,12 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 
 ### 3.0 0.6.x与派单路由（先看这里）
 
-- **当前是 0.6.1 内测发布候选**：审查线 `cdff88b` 与绘制线 `44901da` 已提交；发布只带
-  已提交内容，不带候选货架、临时测试计划、锁文件和探针产物。版本骨架见 `docs/roadmap.md`，
+- **0.6.1 已正式发布（2026-11-10）**：main 推送 `47713c2`、`8ad625e`、`9ffeb3b`；release tag 与
+  Release `targetCommitish` 均为 `9ffeb3b2850f8391f75700f1f3f37851a4ee4ac2`
+  <https://github.com/XiangyuYue/boardwise/releases/tag/v0.6.1>，`prerelease=false` 且 latest。
+  发布只带已提交内容，不带候选货架、临时测试计划、锁文件和探针产物。版本骨架见 `docs/roadmap.md`，
   发布结果与能力边界以本版 Release 为准。
-- **549 首次配对显式授权：本地实现、离线验收及 4.1.93 真机/回滚验收完成，待发布；4.1.71 仍只有模拟证据**（工作树，未提交/未发布）：`boardwise bridge pair <CODE>`
+- **549 首次配对显式授权：已随 0.6.1 正式版发布（tag `9ffeb3b`）；本地实现、离线验收及 4.1.93 真机/回滚验收完成；4.1.71 仍只有模拟证据**：`boardwise bridge pair <CODE>`
   用 CLI token 调 daemon-owned `pair.authorize`，daemon 内存单槽 5 分钟 grant（8 位公开编号、
   授权时记指纹、一次性消费、重启失效）；未认证的任何 Origin 都不能首配或换配，有效旧配对任意
   Origin 可重连；**错码不作废 grant**（红队 2026-11-10 推翻“10 次作废”，次数只进审计）；

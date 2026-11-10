@@ -6,7 +6,7 @@
 
 发版规矩不变：挖洞 swarm + 上机 + 实测三闸全过才发；**正式版一周最多一发、何时发由岳定**，其余一律按**内测（prerelease）**发；同一天只发一版；daemon 与 connector 只要求 major.minor 系列同步、补丁号独立，系列升级时两边必须同升；**dsh 插件从 0.6.0 起与 boardwise 外部版本同号**（`0.1.x` 到 `0.1.3` 止；插件改动用固定 commit 复检到达，不为此挪 tag）。
 
-> **549 首次配对显式授权（工作树，未提交、未发版）：本地实现、离线验收及 4.1.93 真机/回滚验收完成，待发布；4.1.71 仍只有模拟证据**——
+> **549 首次配对显式授权（已随 0.6.1 正式版发布，tag `9ffeb3b`）：本地实现、离线验收及 4.1.93 真机/回滚验收完成；4.1.71 仍只有模拟证据**——
 > `boardwise bridge pair <CODE>` 用 CLI token 调 daemon-owned `pair.authorize`（政策测试第四个
 > `design_write=False` 例外，`risk=write` 不变），daemon 内存单槽 5 分钟 grant，取消 Origin+TOFU
 > 授权；错码不作废 grant（红队裁定），失败只进服务端审计；Connector 编号 Web Crypto only，
@@ -41,7 +41,7 @@
 | **v0.5.20**（**内测**，2026-10-23） | **审查线实板反馈修复**：#83 铺铜包含性判据恒真（间距静默丢行）· #84 载流不建模铺铜/分支（承担铜时细线档降 UNKNOWN(INFO) 逐段点名）· #85 同封装焊盘对误报间距 · #86 旧库 Value 为空按货架 MPN/C 号补容值；**#88 以 5 条 `xfail(strict=True)` 记档**（铺铜弧当弦视图）· **绘图线并回 main**（merge `534d21f`：520a2–533 多岛落图）+ **535 合并暴露三层回归修复**（`2c71844`：pin-text 单模块容忍、地网降级旗标+记账、埋脚逃逸）+ **535 跟进**（`f4f3709`：143 F1 拒绝保持在 gnd 降级之前）· dsh 迁移（`docs/handoff.md`、SKILL 双副本、根 package.json shim `23b2a53`）；dsh-plugin 0.1.3 | 挖洞✓（dsh 子代理只读红队：0 实锤 / 4 存疑记档）· 实测：dsh 侧 6934 passed / **5 环境红**（3 条钩=沙箱拦 msys BaseNamedObjects、1 条 hunt=假接缝+真网络、1 条=并行竞态单跑即绿，机制均定位记档）——**0 红读数待在非沙箱终端补取**（`--basetemp=$env:TEMP\tmp_pt_rel520`）· connector 536 passed + tsc · dsh 50/1 + build；产物 exe `b0e0dce9…` / eext `E523BD6F…` / dsh `16DA3308…` | — |
 | **v0.5.21**（**正式版**，2026-10-23） | **dsh 迁移暴露的测试基建三修**（发布 v0.5.20 时被沙箱环境照出的暗伤）：① `parts hunt` 的 fetch_detail 假接缝修复（`cli.py` 函数内局部 import 甩开猴子补丁 → `globals().get` 优先 + 惰性兜底；`test_520_parts_hunt` 离线密封，521/522 两处同名死补丁一并激活）· ② 钩测试 3 条加 sh 共享对象探测 skip（本机 python 子进程受限时自动 skip，非受限环境照真跑）· ③ guard probe 收集竞态根治（`--confcutdir=tests/`，churn 对拍 5/40→0/40）· 附带：epru docstring 抹除机器路径、handoff「在 dsh 里跑测试」基线节 | 挖洞✓（dsh 红队 0 实锤）· 实测✓（**dsh 与终端双边 6936 passed / 0 failed / 25 skipped / 5 xfailed 逐字一致**，互证等价；钩链另有真实 commit/push 触发旁证）· 上机：无新增 bridge/connector 行为面，闸不适用；产物 exe `93a4be1d…` / eext `55FABAA6…` / dsh `16DA3308…`（0.1.3 未变） | — |
 | **v0.6.0**（正式版，2026-10-31） | 200A/B/C 报告与高速审查 + 542 反激人工锚 + CH343 示例 + 527D2/D3 + 540 平台准备 + V4 单 PCB 首批 + #89 同网测量与证据披露 | 全量 **8821 passed / 25 skipped / 0 failed**；connector 542、DSH 127/1、Rust 47+显式4；真机 doctor 9/9、evidence exit 0、P4 lint 0/0/0；三件发布件验收通过 | — |
-| **v0.6.1**（内测，2026-11-06） | V4 多 PCB 与记录一致性 + 041 跨板声明 + 焊盘/货架/去耦/跨视图修复 + 541 R1/R2/R4 opt-in 闸；CH343 成对布局与持久化 + CH340 第二拓扑；DSH 安装与输出加固 | 两线批次验收完成；发布候选复验、三件发布件与真机边界以本版 Release 记录为准，不把 partial 写成板级通过 | 真实多板＋库、4.1.94+ 探针、541 R3 与 CH340 重开验证仍开放 |
+| **v0.6.1**（**正式版**，2026-11-10 发布；工作树定稿 2026-11-06） | V4 多 PCB 与记录一致性 + 041 跨板声明 + 焊盘/货架/去耦/跨视图修复 + 541 R1/R2/R4 opt-in 闸；CH343 成对布局与持久化 + CH340 第二拓扑；DSH 安装与输出加固；**549 首次配对显式授权** | **已正式发布**：main `47713c2`/`8ad625e`/`9ffeb3b`，tag 与 Release `targetCommitish` 均为 `9ffeb3b`（`prerelease=false`、latest）；发布快照 Python 10628 passed / 39 skipped / 1 xfailed（另两条已登记 115/116 的 098 基线差异、0 errors，不称全量全绿）、Connector 608 + typecheck、DSH 137/1 + build、Rust 111/4 ignored；三件附件回读逐字节比对一致；真机边界以本版 Release 记录为准，不把 partial 写成板级通过 | 真实多板＋库、4.1.94+ 探针、541 R3 与 CH340 重开验证仍开放 |
 | **v0.6.x** | **041 跨板网络**（DRAFT → 细化，040b 已落地）+ **V4 适配**（岳 2026-10-19 裁：**11 月起做**，见 `tasks/038-eprj3-tierA.md` §V4） | 0.6.0 后 | — |
 | **0.6.0 后（独立方向）** | **AI 电路语义编译层**：网表 → 类型化、类 C 的可读语言，AI 读编译结果而非原始网表；调研任务 `tasks/038_v4_review_line_research.md` 只登记 V3/V4 共用语义边界，不实施编译器 | 先定义语义合同与可验证还原，再逐规则/逐视图小批接入；不与 V4 适配同批 | — |
 | 远景 | **R5 SPICE**：岳 10-17 裁——等**原理图绘制过关** + **041 跨板网络**搞定后再开 | 冻结 | 两个前置 |
