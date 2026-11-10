@@ -850,10 +850,16 @@ def islands_from_circuit(
             if member.partition(".")[0] in designators
         )
         members = sorted(
-            _designator_pin(
-                designators, member
-            )
-            for member in _role_siblings_of_net(circuit, book, net, spelled)
+            _designator_pin(designators, member)
+            for member in {
+                # 547F: a name is a spelling of the pin, not a second pin. The
+                # expectation is stated in numbers — the identity the plan's pin
+                # table and the editor's read-back share — while a token the
+                # profile cannot resolve keeps the spec's spelling so the plan
+                # refuses it by name (nothing is guessed).
+                _canonical_member(circuit, book, member)
+                for member in _role_siblings_of_net(circuit, book, net, spelled)
+            }
         )
         for member in members:
             islands.append(PlanIsland(pin=member, mates=list(members)))
@@ -864,6 +870,86 @@ def _designator_pin(designators: Mapping[str, str], member: str) -> str:
     """``<specId>.<pin>`` -> ``<designator>.<pin>`` for the plan's own spelling."""
     part_id, _, pin = member.partition(".")
     return f"{designators[part_id]}.{pin}"
+
+
+def pin_tokens(pin: Any) -> set[str]:
+    """Every token that names this profile pin, by the tree's own ruler.
+
+    A spec writes ``<partId>.<pin>`` with "whatever token the symbol uses"
+    (`drawcompiler._pin_of_token`), and the symbol uses more than one: its
+    number, its own ``Pin Name``, and — on a host library — the name's
+    ``<port>-<function>`` segments.  The measured STM32G431RBT6 profile names
+    pin 7 ``PG10-NRST`` and pin 61 ``PB8-BOOT0``
+    (`evidence/547/g4/live/profiles/profiles.json`), so a spec that writes
+    ``U1.NRST`` names the pin the profile numbers ``7``.
+
+    The segments are only *extra* tokens; the full name and the number keep
+    their places, and a token that two different pins answer is never resolved
+    here (:func:`pin_number_for` refuses the ambiguity rather than guessing).
+    """
+    tokens = {str(pin.number)} if getattr(pin, "number", "") else set()
+    name = str(getattr(pin, "name", "") or "")
+    if name:
+        tokens.add(name)
+        tokens.update(part for part in name.split("-") if part and part != name)
+    return tokens
+
+
+def pin_number_for(profile: Any, token: str) -> str:
+    """The profile pin *number* a spec token names — identity, not spelling.
+
+    Same order as the tree's one ruler (`drawcompiler._pin_of_token`,
+    ``grammar.base.profile_pin_for``, `core.symbolprofile.role_siblings`):
+    **number first, then the symbol's own pin name.**  547F adds only what the
+    measured profiles required: the name's ``<port>-<function>`` segments, and
+    the answer is the pin's **number**, because the number is what the plan's
+    own pin table and the editor's read-back are keyed by (a plan that expected
+    ``U1.PA3`` would be judged against a read-back that spells the same pin
+    ``17``).
+
+    A name carried by **several** pins answers the id-sorted first of them: that
+    set is one node inside the symbol (`role_siblings`, 060 sec.2), so any of
+    its numbers names the same node, and the sibling pass adds the rest.
+    An alias segment answered by two different pins stays unresolved (``""``) —
+    the caller then keeps the spec's spelling and the plan refuses it as an
+    unknown pin rather than silently picking one.
+    """
+    if not token:
+        return ""
+    found = profile.pin(token)
+    if found is not None:
+        return str(found.number)
+    named = [pin for pin in profile.pins if pin.name == token]
+    if named:
+        return str(min(named, key=lambda pin: str(pin.number)).number)
+    aliased = [
+        pin for pin in profile.pins
+        if token in pin_tokens(pin) and token not in ("", str(pin.number), pin.name)
+    ]
+    if len(aliased) == 1:
+        return str(aliased[0].number)
+    return ""
+
+
+def _canonical_member(
+    circuit: CircuitSpec,
+    book: Mapping[str, SymbolProfile],
+    member: str,
+) -> str:
+    """``<specId>.<token>`` with the token spelled as the pin's own number.
+
+    The island expectation is a statement about **membership**, and its spelling
+    is the one the plan's pin table and the live read-back share.  A token the
+    profile cannot resolve is left exactly as the spec wrote it, so the plan's
+    missing-pin refusal still names it.
+    """
+    part_id, _, token = member.partition(".")
+    part = circuit.part(part_id)
+    profile = book.get(part.symbol_ref) if part is not None else None
+    if profile is None:
+        return member
+    number = pin_number_for(profile, token)
+    return f"{part_id}.{number}" if number else member
 
 
 def _named_pin(designators: Mapping[str, str], spelling: str) -> str:
@@ -1672,9 +1758,29 @@ def module_plan(
             "judgement would have nothing to say"
         )
     placeholders = sorted({member for island in islands for member in island.mates})
+    # 547F: the pin table states a pin by **number**, but a library symbol also
+    # carries its own `Pin Name` — and on the measured host an STM32 pin is named
+    # `PG10-NRST` (number 7) or `PB8-BOOT0` (61). A spec member written with any
+    # token that names the same real pin is the same pin, so the expectation is
+    # declared under every identity that resolves to exactly one of them. The
+    # check is not skipped: a token no profile pin answers (`U1.PA4` against a
+    # symbol without it) is still missing, and so is one two pins answer.
     declared = {
         f"{item.designator}.{pin.number}" for item in built.parts for pin in item.pins
     }
+    for item in built.parts:
+        profile = book.get(item.symbol_ref)
+        if profile is None:
+            continue
+        for pin in profile.pins:
+            declared.update(
+                f"{item.designator}.{token}"
+                for token in pin_tokens(pin)
+                # A token two different pins answer is not an identity anyone can
+                # check: leaving it undeclared makes the refusal name it, rather
+                # than letting an unverifiable expectation through.
+                if pin_number_for(profile, token)
+            )
     missing = [member for member in placeholders if member not in declared]
     if missing:
         # A spec member the pin table does not carry is a fact about the *library*

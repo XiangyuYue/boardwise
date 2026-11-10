@@ -607,7 +607,7 @@ local-label 逐脚独立选档造成，不是电路需要的不对称，P37 撤�
 - connector **576 passed** + typecheck；DSH **129 passed / 1 skipped** + typecheck/build；
   Rust fmt/clippy/test通过；draw smoke、CLI合同、仓库卫生均通过。
   最终日志 `evidence/543h/final_pytest_rerun.log`，源码哈希 `final_source_hashes.txt`。
-  未做git提交、推送或发布。
+  本批成果已随 `44901da` 提交；后续发布状态见 `docs/handoff.md`。
 
 ## 3. 总验收与兼容口径
 
@@ -616,3 +616,14 @@ local-label 逐脚独立选档造成，不是电路需要的不对称，P37 撤�
 - 当前只规划 V4 单页普通器件；V3、多板、CBB、`.epro2/.eprj2/.eprj3` 不在本任务已覆盖范围。
 - 最终批次才串行跑全量 pytest、connector、dsh-plugin、Rust 和 draw smoke；开发期跑聚焦测试。
 - 全量一次只跑一轮，失败后先聚焦修复；任何 git 写仍逐次经岳批准。
+
+### 543O：roadmap 同步声明钉（文档批）
+
+- 岳指出稳定路线图没有随 543G/N/H 收口，要求及时更新。主代理只改 `docs/roadmap.md` 与本任务账；
+  保留其他 agent 在同文件已有的版本规则改动，不碰发布或其他业务文件。
+- 路线图必须记录两个已验收拓扑及各自持久化边界、agent/解释器职责、201C/201D 不复活、
+  201E 已落，并清除 Board2/P1 是试验场的过期说法。历史读数保留为基线，不冒充当前页读数。
+- 子代理文件域仅 `tests/test_doc_claims.py`：新增一条 roadmap 与本任务账、TASKMAP 的同步声明钉。
+  最多 20 步或 15 分钟；不碰真机、不跑全量、不改生产代码、不做 git 写。先跑新增用例，
+  再跑完整 `tests/test_doc_claims.py`，pytest 使用独立 `--basetemp=.tmp_pt_543o`。
+- 完成条件：声明钉与文档 diff 经主代理复核，文档测试通过；本批不自行提交或推送。

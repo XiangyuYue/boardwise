@@ -639,6 +639,59 @@ ambiguous host, several hosts or several equivalent host pins are left to the
 ordinary ladder — the key is not a licence to guess. The normal readability and
 lint gates still run unchanged.
 
+### Two-part series declarations (548B1–B3)
+
+`seriesBranches` is an optional top-level PresentationSpec array. It is absent when unstated;
+`[]` is exactly the same as absence and is never serialised, so the document's digest and every
+old drawing stay unchanged. Each entry has exactly five keys:
+
+```json
+{
+  "id": "status-led",
+  "from": "GPIO_STAT",
+  "to": "GND",
+  "parts": ["R2", "LED1"],
+  "middleNet": "LED_A"
+}
+```
+
+The reading is `from → parts[0] → middleNet → parts[1] → to`. `parts[0]` is against the host end
+and `parts[1]` against the terminal end; this is reading order, not current or polarity direction.
+`id` is unique, `parts` contains exactly two distinct part ids, and a duplicate `(from,to,parts)`
+statement is refused. Unknown keys, missing fields, empty/non-string values, a different part count,
+duplicate ids/statements and coordinate-shaped keys are `PresentationSpecError`s with their paths.
+There are no numbers, provenance, module, note, gap, order or coordinates in an entry; `userLocks`
+remains the only coordinate entry. `specVersion` and the CLI are unchanged.
+
+548B1 implements the closed data contract. 548B2 adds `validate_series_branches` on the complete
+`CircuitSpec` + `PresentationSpec`, before any geometry in both `dc.compile` and `pc.compile_page`:
+V1 missing facts, V2 two pins/two nets, V3 declared order, V4 private middle node, V5 distinct ends,
+V6 one host, V7 one common module, and V8 one part per arm. Refusals use the existing categories and
+name the entry and actual pin/net evidence. A page slice carries an arm only when it owns both parts;
+a cross-module arm is refused by V7 before slicing instead of disappearing silently. Undeclared and
+empty-array documents keep their old behaviour.
+
+548B3 makes a declaration decide the geometry. Each declared arm becomes a structured
+`RelativeConstraint` between its two parts, injected after grammar binding and before layout
+preparation, and read by both `compile` and the independent `check_grammar` through
+`_with_series_arms`, so the machine gate and the grammar checker see the same relation. The seat's
+axis and progress come from the presentation's existing layout and the parts' real pins, never
+from a fixed left-to-right rule; the chain is laid out
+host → `parts[0]` → `middleNet` → `parts[1]` → terminal, at the pitch the ordinary layout already
+used, and an arm whose terminal net is not ground attaches its flag at the arm's own terminal pin
+when that pin exists. Every returned candidate keeps the six points monotone along the chain
+axis, a `middleNet` of at most two segments, hard 0, circuit-equal partition, no shorts, splits or
+unplaced parts, and complete reference and value rows. That holds for the cases B3 covered — the
+two declared positive arms and the existing fold-back negative. **The unusable-pose / seat-conflict
+paths are now a named refusal under 548B3-R** (`layout-unsat`, no silent fallback to the old
+layout); the checker still does not verify the whole six-point chain directly, so no such claim is
+made. Undeclared and `[]` documents keep
+byte-identical geometry and refusals, and a same-shaped pair is never auto-recognised. Provenance
+derivation, native/live landing and whole-page completion are still not done. Permanent tests are
+`tests/test_548b_series_branches.py`, `tests/test_548b_series_validation.py`,
+`tests/test_548b_series_geometry.py` and `tests/test_548b_series_failures.py`; evidence is under `evidence/548B1/`, `evidence/548B2/` and
+`evidence/548B3/`.
+
 ### Service channels, paired labels and final-plan bounds (543C–543F)
 
 These are all opt-in behaviours; a document that states neither `serviceLayout`
@@ -791,6 +844,234 @@ visually accepted the host render. P38 remains as the CH343 example and Board2's
 P1 is untouched. P39 is `saved_unverified` until its own close-and-reopen.
 Evidence: `evidence/543g/`, especially `live_mpn/` and the final specification
 `blocklib/specs/ch340_uart_543g.*`.
+
+### Opt-in compact page arrangement (548D3X)
+
+`pageArrangement={"strategy":"compact"}` is an optional top-level PresentationSpec
+statement. It contains no coordinates, page box, gap, keep-outs, module sizes or
+user locks. Agent-owned functional grouping and reading order remain in `modules`,
+`flow` and `moduleOrder`; the interpreter computes all module origins. Omitting the
+key preserves the historical variants, serialization and drawings.
+
+The compact path packs real, port-inclusive frames and attached-module reservation
+boxes on the compilation lattice. It rebuilds ports from clean module candidates
+until their directions agree with the actual placement (at most four rounds), then
+uses the ordinary attach, route and two-layer readability gates. A cycle, replay
+exhaustion, packing truncation, overlap or page-bound violation is a named refusal,
+not a best-effort drawing. A main-path edge is attempted as a real wire and is never
+silently renamed; if no compact candidate is legal, the historical grid remains the
+fallback. Compact pages with page locks are refused rather than moved onto a lock
+after packing.
+
+The ordinary minimum module-frame gap is **40** canvas units. Compact packing leaves
+one extra grid step in its candidate separation so later origin snapping cannot
+reduce the delivered gap below that threshold; it is not permission to place modules
+closer. `tests/test_548d_page_arrangement.py` covers real compilation, replay,
+main-path wiring, malformed packer answers and a three-module ragged layout that
+the old grid cannot hold. Evidence: `evidence/548D/page-layout/`. This is a generic
+opt-in layout capability, **not** a claim that the SmartMedicineBox MCU or its full
+1170×825 page now compiles or passes visual acceptance; those remain open in 548D.
+
+### Panel reading declarations (548D3X3A–C, final drawing replay pending)
+
+`panelGroups` is an optional top-level array for Agent-declared reading groups of
+repeated two-terminal branches. Each group has a closed `id/side/columns/branches`
+shape; each branch names `from`, `to` and one `part`. The side is a host reading
+edge and columns is a reading count, never a coordinate, pitch or scale. Groups
+need at least two branches; parts must belong to the declared modules, are unique
+across groups and cannot also belong to a `seriesBranches` arm. Omission or `[]`
+keeps the old digest and drawing.
+
+Standalone and page compilation validate the declaration before any geometry:
+each part really has two pins on the two declared nets, each branch resolves to one
+host pin, and the whole group belongs to one host part in one module. A keypad's
+four GPIOs are four different pins of one MCU, not one shared pin. Page slicing
+carries a panel whole or not at all; invalid groups stop before grammar binding or
+module compilation. Evidence: `tests/test_548d_panel_validation.py`.
+
+For a `side="bottom"` group, base and topology now consume one `PanelSeatTemplate`
+and produce real panel plans. A four-cell, two-column declaration becomes two x
+bands and two y bands, with measured part/text/flag reservations and orthogonal
+host leads. The search cannot move panel cells independently; a moved host rebinds
+the whole panel before candidate evaluation. Foreign intrusion and an unseated
+plan are hard failures, with real intersection area used to guide the search.
+Other sides and malformed host directions are named refusals. The automatic
+cell/host side and near heuristics are replaced by the explicit panel relationship
+and concrete plan, not by a larger near budget. See `tests/test_548d_panel_base.py`
+and `tests/test_548d_panel_placement.py`.
+
+**This is a placement capability, not a completed schematic.** Final route, text
+and flag replay is the next batch; a full `LayoutPlan`, the actual SmartMedicineBox
+MCU and the fixed 1170×825 page are not thereby claimed to compile or pass visual
+acceptance. See `tasks/548_drawing_capability_ladder.md` §33.
+
+### One shared-net reading for branches and relations (547S)
+
+`placement.shared_net_order` is the single ordering contract for a branch's shared
+nets: a declared signal first, then the other non-ground nets in sorted order,
+and ground last. With no class resolver it preserves the old sorted reading.
+The branch seater, placement search, final relation checker, repair pass and
+same-line lane edges all consume this one rule. Thus a switch sharing `KEY1` and
+`3V3` is seated and measured on `KEY1`, while `VCC`+`GND` still anchors on `VCC`.
+The rule is about net classes, never particular net or part names. Regression
+coverage includes signal/rail ambiguity, ground fallback, undeclared classes,
+lane/repair agreement and the four-key MCU island; the island's remaining seat
+and return-routing limitations are separate and are not claimed to be solved.
+
+### Pin names and numbers in plan expectations (547F)
+
+`drawapply.module_plan` resolves a circuit pin token through the profile's real
+number, its `Pin Name`, and a `<port>-<function>` alias segment. Plan islands
+are then stated by pin number, matching the plan's own pin table and the live
+read-back. A name shared by sibling supply pins stays one node and is expanded
+only through the existing role-sibling rule. Unknown or ambiguous tokens are
+still refused rather than guessed. This fixes the measured STM32G431RBT6 case
+where `PA3` means pin 17 and `NRST` means pin 7 (`PG10-NRST`), without changing
+the existing numeric-pin path. Regression: `tests/test_547_named_pin_plan.py`.
+
+### Automatic and agent-adjusted tracks (547G, G4 partially verified; paused)
+
+547 keeps two separate execution accounts. In `automatic`, the agent writes semantic
+islands and relations, while the compiler generates every coordinate and conductor.
+In `agent-adjusted`, the agent may additionally supply an explicit local geometry
+plan or a guarded post-layout adjustment; each such change needs a reason and
+before/after evidence. Writing an ordinary PresentationSpec does not by itself make
+a result agent-adjusted. Neither route may waive readability/lint, independent
+per-pin and NC checks, or island-by-island visual review.
+
+The assisted track reuses the existing `LayoutPlan`/`ChangePlan`, offline lint and
+render entry points; it does not add a second geometry engine. G1 (interface
+inventory) and G2 (one WiFi island through the three gates) are complete, and G3
+produced a 30-part / 31-net / 5-NC / 8-island page from the firmware-constrained
+circuit (`evidence/547/g4/live/spec/final.circuit.json`, object sha256 `391667fb…`,
+presentation `evidence/547/a/smart_medicine_box.presentation.json`, sha256
+`18f900d5…`) through the offline dual-layer page gate, an independent per-pin and
+NC check, and island-by-island visual review. Real device profiles are in place:
+18 profiles and 122 profile pin records
+(`evidence/547/g4/live/profiles/profiles.json`). G4 is only partly complete; the
+assisted route is still open, and none of these results close the automatic 547D
+repeated-branch or 547E series-branch gaps.
+
+The live page is test V4 / P41 (`uuid=037f5a63d7825dfe`, sheet
+`93e5fa80765af875`, 2338×1652). Apply delivered 30 parts / 95 wires / 57 flags in
+`write.calls=242` without force, letting the live pool allocate designators, so its
+first `designator_taken` attempt wrote nothing and the final mapping is not 1:1
+(`U1→U5`, `R1→R6`, `D1→D2`, …; `evidence/547/g4/live/apply/designator-map.json`).
+Main-agent lint reads 0 ERROR / 0 WARN / 13 INFO: 12 flag-orientation INFOS for
+90°/270° flags plus one unjunctioned crossing. Those 12 remain because
+`sch.modify_primitive` accepts components only, not netflags, and no flag posture is
+faked to clear them. An independent host netlist audit reports 30/30 parts,
+31/31 nets, 5/5 NC and no shorts. DRC was executed but is **not** a pass: 0 error /
+200 warn entries with `passed=false` (grid, library-attribute and floating-pin
+triage; the NC and unused firmware pins are not new shorts). The main agent reviewed
+the full-page and local host renders by eye.
+
+Persistence is `saved_unverified`, not `saved_verified`: the page was saved but not
+closed and reopened. With several windows open the persistence call returns
+`WINDOW_UNSPECIFIED`; the same-shape baseline is
+`evidence/547/g4/live/apply-fix/persistence-baseline.json`. What remains is a manual
+close-and-reopen of test V4 (ideally with that window alone) and a read-only
+comparison, then the full four-line run and the hygiene check. The work is paused
+here and the four lines have not been run for this batch. G3/G4 pages are
+agent-adjusted redraws of firmware constraints with observed/assumed/optional kept
+apart: not automatic whole-page drawing, not a copy of a reference, and not cleared
+for fabrication.
+
+Konnect-EDA is an architectural reference for this split between agent decisions
+and deterministic local tools, not a code dependency. The inspected legacy Konnect
+source is AGPL-3.0 and the current Konnect-EDA internals are not public; no source
+is vendored into this MIT repository. The research boundaries, pilot contract and
+subagent batches are in `tasks/547_smart_medicine_box.md` §547G.
+
+### 548C3 / 548C4 public contracts on compiled pages (2026-11-08)
+
+Two behaviours are public contracts now, not incidental fixes. Both are offline: neither was
+exercised on a live canvas, and neither changes the automatic whole-page claim.
+
+**Page port members resolve by the symbol's own pin ruler (548C3 ②).** A page port written as
+`<ref>.<token>` is resolved through `readability._profile_pin_ruler` — pin number first, then
+pin name — into that symbol's own pin number, and only then looked up in the pin-number keyed
+point table, so `J1.VCC` reaches `J1.1` when the symbol names pin 1 `VCC`. A token the symbol
+does not carry is a grammar failure whose detail names the member, the symbol and its pin table
+(`J1.NOPE` → `symbol 'LCD' carries no pin 'NOPE' (the symbols pins are 1/VCC, 2/GND, …)`).
+There is no prefix guessing and no second ruler.
+
+**A page fallback label draws its own horizontal carrier bar (548C3 ③).** When a page adds a
+fallback label for a net the module leaves unnamed and the library carries no flag symbol for,
+the label no longer adopts the module's own wire as its carrier (the host would name every wire
+through the anchor point, pressing value rows and turning short vertical runs into vertical
+names). If the anchor rides a module wire, the page draws a horizontal bar of its own:
+candidates are the compiler's existing straight stub ladder
+(`drawapply.LABEL_STUB_LENGTHS_STRAIGHT`, 40…240, short to long) × member pins ordered by port
+facing × the two horizontal directions; an existing same-direction stub is continued from its
+far end, so one straight line is drawn once. Bar body, name row and label box all have to clear
+the occupied keepout set. Vertical bars are never drawn (S-20 / `name-row-vertical`). No new
+thresholds, no coordinate search.
+
+**Texts that collide with labels get a bounded repair round (548C4).** When the readability gate
+reports `text-overlap` between `texts[i]` and `labels[j]`, the compiler adds exactly the
+gate-named label boxes to the text wall set and rebuilds that variant, up to
+`TEXT_LABEL_REPAIR_ROUNDS = 4` rounds (`_build_one_variant`'s `extra_text_walls` /
+`text_repair_round`; the same shape as 148's name-row escape ladder). A page with no such
+collision runs 0 rounds, so its geometry stays byte-identical. Collisions against `parts[...]`
+are not on this path: there the pitched distance leaves no free side, and enlarging the wall set
+cannot move the part.
+
+**What these two contracts do not allow.** They are not permission to name ground or power nets
+with network labels: the delivery red line (ground and power use flags) still stands, and how
+each split-ground neighbourhood states its name (548C2 ①) was ruled on 2026-11-08 — no network
+labels, flags may be added to the library — and is carried by the separate 548C7 batch, which has
+not produced a candidate yet. 548C4's B3 (a non-wire statement for 3V3), native/live execution and
+automatic whole-page drawing remain open.
+The permanent C3 regression covers module compilation and `_module_ports`; the final assembled-page
+gate remains outside its positive coverage.
+
+Permanent regressions: `tests/test_548c3_page_port_members.py` (positive paths through
+`_compile_modules` and `_module_ports`, plus a strict xfail recording that the 547A island still
+refuses the page budget) and `tests/test_548c4_text_label_repair.py` (B1 passes and the baseline
+geometry does not move). Mutation evidence: inverting `preferred` in `pagecompiler._module_ports`
+reds the C3 regression; setting `TEXT_LABEL_REPAIR_ROUNDS = 0` reds the C4 regression. Evidence
+under `evidence/548C3/`, `evidence/548C4/` and `evidence/548R/`.
+
+548C5 did not establish a long-value pitch capability. Uniform widening and per-part pushing both
+exceeded the two-dimensional `near_limit=300`; the production attempts were restored byte-for-byte.
+Its strict xfail recorded that boundary until 548C6 made it XPASS. The independently reproduced
+injected-seat probe proved only that downstream routing could accept a two-dimensional band; it was
+never an automatic capability.
+
+**Single-module two-dimensional branch seats are a rescue round (548C6).** When both the ordinary
+constructive ladder and 119's widened round produce no candidate, and before 201B's topology search,
+the compiler retries its own spacing/pose ladder with `_seat_branch_stack`. For an eligible
+`(owner, direction)` sibling group, it measures each part's body and left/right `_line_boxes`, computes
+the lateral pitch required by those real boxes, and checks that continuing to spend the escape axis
+would exceed `near_limit`. It then keeps each member's `rung.base`, assigns distinct line coordinates
+on the compilation grid, re-runs `_dodge_foreign_pins`, and rechecks near, part overlap and the text
+ladder. Any failure rolls back the whole group.
+
+The pass is deliberately narrow: locked/chain-owned relations, stated service intervals, shared-pad
+shunts, declared same-line/sibling orders and groups owned by `_share_one_bay` are excluded. Reseated
+members are excluded from both `_share_one_bay` and `_align_branch_lanes`, so a later pass cannot
+silently undo the seats. The rescue has its own `CompileResult`: accepted candidates join the real
+result, while its refusals stay a count plus first-reason note instead of doubling the constructive
+variant counters. Multi-island pages do not enter this round. A page that already compiles never
+enters it either, which is the structural zero-move guarantee for 547A, B1 and the CH34 pinned pages.
+
+This does not wrap, shrink or hide text, split functional islands, relax page/near/hard gates or copy
+probe coordinates. B2 now has a production-generated hard-zero candidate with all 26 nets connected,
+no shorts and complete long value rows; the separate 3V3 power-flag finding remains 548C2①/B3 work,
+not something C6 claims to solve. Permanent coverage is in
+`tests/test_548c6_two_dimensional_seats.py`; `tests/test_548c5_text_pitch.py` is now positive after
+the measured strict XPASS. Main-agent mutations disable the rescue and remove the new dodge, and the
+final SVG/PNG and independent netlist readings are under `evidence/548C6/`.
+
+**The dodge is followed by a final leg+tail pin check (548C6R).** The bounded walk inside
+`_dodge_foreign_pins` can exhaust its reach while a foreign pin remains on the branch's tail. The
+two-dimensional seater therefore reuses the same `_foreign_pins_on_run` ruler after dodging and checks
+both `anchor → shared root` and `shared root → other pin`. Any residual foreign pin rolls back the whole
+sibling group; “the dodge ran” is not accepted as proof that the run is clear. The original dodge's
+return contract and GAP/near/page/text gates are unchanged. The permanent tail regression first failed
+with a real `C1.2(GND) × S2.2(3V3)` coincidence, then passed after the fix; normal B2 geometry and the
+legal leg-dodge control are unchanged. Evidence and the main-agent mutation are under `evidence/548C6R/`.
 
 ## Flag and naming rules on compiled pages (060–074)
 
