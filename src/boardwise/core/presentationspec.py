@@ -78,6 +78,33 @@ order, "no order stated"), and a page that declares no flow is the page whose
 modules are read in name order. `islands` (520j) is an addition on the same
 terms: a spec that states none serialises exactly as it did before the key
 existed, and is read as one implicit island holding every part.
+
+`pageArrangement` (548D) is the page's own statement of **how the compiler is to
+arrange the modules it has**, and it is deliberately one word wide:
+``{"strategy": "compact"}``. It carries no box, no gap, no keep-out and no
+coordinate — the reading order is still `moduleOrder` and `flow`, and the
+strategy only says that the frames the page already has should sit as close as
+the module gap allows instead of on the historical fixed-column grid. Every one
+of those other numbers already has an owner (the compiler owns the frames, the
+budget owns the gap), so a copy here would be a second source of truth. It is
+opt-in and written only when stated. The page compiler consumes it by packing
+real port-inclusive frames, replaying port directions to a fixed point and then
+applying the ordinary route and readability gates; an unsettled or illegal
+packing is refused rather than delivered as a drawing.
+
+`panelGroups` (548D3X3A) is the one place the document states a **reading panel**
+— repeated two-terminal branches on one side of their host: the keys of a keypad,
+the arms of a status row. A group is the closed four keys `id` / `side` /
+`columns` / `branches`, each branch the closed three `from` / `to` / `part`, and
+`columns` is a **reading** count (a positive integer no larger than the group's
+own branch count), never a canvas coordinate, a pitch or a scale: the row count
+follows from the declared order, and the interpreter derives the seats. What the
+document does not state is what a parser may not invent — whether the nets meet
+that part's pins, which pin faces the host and how many arms the host really has
+are `CircuitSpec` + profile facts. A part of a `seriesBranches` arm may not join
+a panel (one part, one reading statement), and a spec that states no panels
+writes no key, so every document compiled before this key exists keeps its
+bytes, digest and drawing.
 """
 
 from __future__ import annotations
@@ -116,11 +143,18 @@ __all__ = [
     "LOCK_SCOPE_MODULE",
     "LOCK_SCOPE_PAGE",
     "MODULE_PRESENTATION_KEYS",
+    "PAGE_ARRANGEMENT_COMPACT",
+    "PAGE_ARRANGEMENT_KEYS",
+    "PAGE_ARRANGEMENT_STRATEGIES",
+    "PANEL_BRANCH_KEYS",
+    "PANEL_GROUP_KEYS",
+    "PANEL_MIN_BRANCHES",
     "PATH_STEP_NET",
     "PATH_STEP_PART",
     "PRESENTATION_SPEC_KIND",
     "PRESENTATION_SPEC_VERSION",
     "SERVICE_LAYOUT_KEYS",
+    "SERIES_BRANCH_KEYS",
     "SIDES",
     "_FLOW_EDGE_KEYS",
     "DirectWiringObligation",
@@ -128,11 +162,15 @@ __all__ = [
     "LabelPolicy",
     "LayoutIsland",
     "LocalLabelObligation",
+    "PageArrangement",
+    "PanelBranch",
+    "PanelGroup",
     "PresentationModule",
     "PresentationPath",
     "PresentationSpec",
     "PresentationSpecError",
     "ServiceLayout",
+    "SeriesBranch",
     "UserLock",
     "main_path_wire",
     "presentation_sha256",
@@ -194,6 +232,16 @@ GND_CLUSTERING_KEYS: tuple[str, ...] = ("radius",)
 #: shunt keeps from the host pin it serves. Closed like every other object here.
 SERVICE_LAYOUT_KEYS: tuple[str, ...] = ("pinGap",)
 
+#: The one key `pageArrangement` carries (548D), and the only strategy this
+#: build knows. Closed like every other object here, and for the same reason: a
+#: key nobody reads is an intent nobody honours, and a strategy word this build
+#: cannot carry out would be a packing nobody promised. The value says **how**
+#: the frames the page already has are packed, never where a module goes — that
+#: is `moduleOrder` and `flow` — and never a page box, a gap or a keep-out.
+PAGE_ARRANGEMENT_KEYS: tuple[str, ...] = ("strategy",)
+PAGE_ARRANGEMENT_COMPACT = "compact"
+PAGE_ARRANGEMENT_STRATEGIES: tuple[str, ...] = (PAGE_ARRANGEMENT_COMPACT,)
+
 #: The four sides a preference may name. Preferences are defaults; a user lock
 #: wins over them (053 sec.2: "默认可被锁定覆盖").
 SIDES: tuple[str, ...] = ("left", "right", "top", "bottom")
@@ -236,6 +284,7 @@ _TOP_KEYS = (
     "flow",
     "moduleOrder",
     "moduleColumns",
+    "pageArrangement",
     "flagLeadLimit",
     "gndClustering",
     "serviceLayout",
@@ -250,6 +299,8 @@ _TOP_KEYS = (
     "userLocks",
     "partTexts",
     "textPlacement",
+    "seriesBranches",
+    "panelGroups",
 )
 _MODULE_KEYS = (
     "id", "parts", "role", "grammarRef", "presentation", "branchOrder", "core",
@@ -276,6 +327,21 @@ _FLOW_EDGE_KEYS = ("from", "to", "mainPath")
 _OBLIGATION_KEYS = ("nets", "note")
 _LABEL_POLICY_KEYS = ("local", "crossModule", "highFanout", "stub", "stubMin", "rowModel")
 _LOCK_KEYS = ("partId", "x", "y", "rotation", "scope")
+#: The five keys one `seriesBranches` entry may carry (548B1), and no sixth: a
+#: two-part series arm is a *reading* of the partition — end, end, and the node
+#: between the two parts — and every extra key (a provenance, a module, a
+#: coordinate, an ordinal) would be an intent nothing here honours.
+SERIES_BRANCH_KEYS = ("id", "from", "to", "parts", "middleNet")
+
+#: The closed four keys one `panelGroups` entry may carry (548D3X3A), the closed
+#: three keys each of its branches carries, and the smallest number of branches a
+#: panel may hold. Every extra key would be an intent nothing here honours: the
+#: row count follows from the declared order (`columns` is the reading column
+#: count, not a grid), the seats and their pitch are the interpreter's, and the
+#: electrical truth of `from` / `to` / `part` is `CircuitSpec`'s to check.
+PANEL_GROUP_KEYS: tuple[str, ...] = ("id", "side", "columns", "branches")
+PANEL_BRANCH_KEYS: tuple[str, ...] = ("from", "to", "part")
+PANEL_MIN_BRANCHES = 2
 
 #: What a lock's coordinates are relative to (057 sec.3). ``module`` — the
 #: default, and the only reading before 057 — is the module's own drawing: the
@@ -528,6 +594,115 @@ class ServiceLayout:
     pin_gap: float
 
 
+@dataclass(frozen=True)
+class PageArrangement:
+    """How the page packs the frames it has compiled (548D).
+
+    ``strategy="compact"`` says the modules should keep the module gap and sit
+    as close as it allows, instead of on the historical fixed-column grid. It is
+    a **packing** word and not a placement one: `moduleOrder` and `flow` still
+    decide which group the reader meets first, and this key only decides how
+    tightly that order is packed.
+
+    It therefore carries no page box, no gap, no keep-out, no band and no
+    coordinate — those are already owned elsewhere (the compiler owns the
+    frames, `budget.module_gap` owns the gap), and a copy here would be a second
+    source of truth. The page compiler replays clean port-inclusive frames to a
+    fixed point and applies the ordinary gates; an illegal or unsettled packing
+    is refused rather than delivered as a drawing.
+    """
+
+    #: The packing strategy; ``compact`` is the only value this build knows.
+    strategy: str = PAGE_ARRANGEMENT_COMPACT
+
+
+@dataclass(frozen=True)
+class SeriesBranch:
+    """A two-part series arm the drawing must read as one chain (548B1).
+
+    The netlist states an undirected partition: it says ``R2`` and ``LED1``
+    share ``LED_A``, and nothing about which of the two is the one the chain
+    leaves from. The **order** is the one fact the partition cannot carry, so
+    the document states it — ``from_net — parts[0] — middle_net — parts[1] —
+    to_net`` — and ``parts[0]`` is the part against the host end while
+    ``parts[1]`` is the one against the terminal end.
+
+    The direction is the *reading* direction, not the current's and not
+    polarity's: a low-active LED drawing still states ``from: GPIO`` even
+    though the current runs from 3V3 through the LED into the pin.
+
+    Everything a consumer needs to *check* these five fields lives in the
+    circuit, not here: the entry names facts, and whether the arms really form
+    that chain is decided by whoever holds both documents (`CircuitSpec`).
+    That is why the entry carries no provenance, no module and no number — a
+    second copy of an electrical fact would split the source of truth, the
+    module is derivable from the two parts' common group, and how far apart to
+    draw the two parts is a construction interval that would need its own
+    opt-in key. ``userLocks`` stays this document's only coordinate entry.
+    """
+
+    #: The branch's name — what a refusal or a plan note points at.
+    id: str
+    #: The net the arm hangs from (the host end).
+    from_net: str
+    #: The net the arm terminates on. Not necessarily a ground: a rail or a
+    #: signal net can be the end of a series arm just as well.
+    to_net: str
+    #: Exactly two part ids, in reading order: host end first.
+    parts: tuple[str, str]
+    #: The net between the two parts — what makes the stated order falsifiable.
+    middle_net: str
+
+
+@dataclass(frozen=True)
+class PanelBranch:
+    """One arm of a reading panel: a part between the host net and its terminal.
+
+    The branch is the **electrical** shape of one panel cell — two nets and the
+    two-terminal part between them — and nothing more: no pin, no pose, no
+    coordinate. Which pin faces the host, and whether the part really has one
+    pin on each of these nets, are facts only `CircuitSpec` + profile hold.
+    """
+
+    #: The net on the host side of the branch.
+    from_net: str
+    #: The net the branch terminates on (not necessarily a ground).
+    to_net: str
+    #: The two-terminal part that forms this arm.
+    part: str
+
+
+@dataclass(frozen=True)
+class PanelGroup:
+    """Repeated two-terminal branches read as one panel (548D3X3A).
+
+    A keypad's keys and a status row's arms are the same reading fact: several
+    equal branches against one side of their host, which a reader groups into
+    columns and rows. No partition can state it — the modules say which parts
+    are one group, the netlist says what each branch hangs between — so the
+    document states the **reading relationship**: the side of the host the
+    panel sits against, how many reading columns it has, and the branches in the
+    order the reader meets them.
+
+    ``columns`` is a reading count, not a place: it is a positive integer no
+    larger than the group's branch count, the row count follows from the
+    declared order, and the seats, pitch, text and flags are derived by the
+    interpreter from real geometry. The group carries no coordinate, no gap and
+    no origin, and it does not split islands or change any grammar — a part of a
+    `seriesBranches` arm may not join a panel, and one part may sit in one group
+    only, so the document keeps one reading statement per branch.
+    """
+
+    #: The group's name — what a refusal or a plan note points at.
+    id: str
+    #: The side of the host the panel is read against; one of :data:`SIDES`.
+    side: str
+    #: The number of reading columns (1 ≤ columns ≤ len(branches)).
+    columns: int
+    #: The branches, in the order the reader meets them.
+    branches: tuple[PanelBranch, ...]
+
+
 @dataclass
 class PresentationSpec:
     """The whole presentation intent, in normal form."""
@@ -559,6 +734,12 @@ class PresentationSpec:
     #: states the grid shape, so a row of satellites can sit beside its core on
     #: the same row instead of being pushed to a second row.
     module_columns: int = 0
+    #: How the page packs its compiled frames (548D). ``None`` — the default, and
+    #: every document written before this key — is the historical fixed-column
+    #: grid, so an old spec keeps its bytes, digest and drawing.
+    #: :class:`PageArrangement` states a packing strategy and nothing else: it is
+    #: not a module order, a page box, a gap, a band or a coordinate.
+    page_arrangement: "PageArrangement | None" = None
     #: The farthest a power/ground flag lead may reach from its pad. ``0`` keeps
     #: the compiler's 60-unit default; a crowded core states a longer lead so its
     #: flag can leave the label lane without crossing a conductor.
@@ -589,6 +770,22 @@ class PresentationSpec:
     #: (:class:`LocalLabelObligation`). Empty = the document states none, which
     #: is the rule every spec written before this key followed.
     local_label_obligations: list[LocalLabelObligation] = field(default_factory=list)
+    #: The two-part series arms the drawing must read as chains (548B1). Empty —
+    #: the default, and every document written before this key — is "the
+    #: document states none", which means the compiler draws exactly what it drew
+    #: before the key existed; it never looks for a same-shaped pair and calls it
+    #: a chain. Stating one is an **intent** about how a pair is read; whether the
+    #: circuit really has that chain is checked by whoever holds both documents,
+    #: not by this parser.
+    series_branches: list[SeriesBranch] = field(default_factory=list)
+    #: The reading panels the page must keep readable (548D3X3A). Empty — the
+    #: default, and every document written before this key — is "the document
+    #: states none", so the compiler draws exactly what it drew before the key
+    #: existed and never infers a panel from repeated shapes. A stated group
+    #: contributes a reading relationship only (side, column count, branch order);
+    #: seats, pitch, text and flags stay the interpreter's, and the electrical
+    #: facts of each branch stay `CircuitSpec`'s.
+    panel_groups: list[PanelGroup] = field(default_factory=list)
     label_policy: LabelPolicy = field(default_factory=LabelPolicy)
     side_preferences: dict[str, str] = field(
         default_factory=lambda: dict(DEFAULT_SIDE_PREFERENCES)
@@ -751,6 +948,14 @@ class PresentationSpec:
                 if self.module_columns
                 else {}
             ),
+            # 548D: written only when stated, like every opt-in above — an old
+            # document keeps its bytes, digest and drawing. The object carries
+            # the strategy and no sixth key: the schema is closed.
+            **(
+                {"pageArrangement": {"strategy": self.page_arrangement.strategy}}
+                if self.page_arrangement is not None
+                else {}
+            ),
             **(
                 {"flagLeadLimit": self.flag_lead_limit}
                 if self.flag_lead_limit
@@ -786,6 +991,28 @@ class PresentationSpec:
                     for item in self.local_label_obligations
                 ]}
                 if self.local_label_obligations
+                else {}
+            ),
+            # 548B1: written only when stated, like every opt-in above — a
+            # document that names no series arm keeps its bytes and digest, and
+            # `[]` is the same statement as no key at all, so it is not written
+            # either (a canonical JSON with `"seriesBranches": []` would move
+            # every existing spec's digest for a document that says nothing new).
+            **(
+                {"seriesBranches": [
+                    _series_branch_json(branch) for branch in self.series_branches
+                ]}
+                if self.series_branches
+                else {}
+            ),
+            # 548D3X3A: written only when stated, on the same terms — a document
+            # that names no panel keeps its bytes and digest, and `[]` is the
+            # same statement as no key at all, so it is not written either.
+            **(
+                {"panelGroups": [
+                    _panel_group_json(group) for group in self.panel_groups
+                ]}
+                if self.panel_groups
                 else {}
             ),
             "labelPolicy": {
@@ -846,12 +1073,16 @@ class PresentationSpec:
         # Islands after modules, and not merely in this order: an island's parts
         # are checked against the parts the modules name, so the modules have to
         # be read first. Nothing else in this parse depends on the order.
+        # Panel groups are checked against the series arms' parts (one part may
+        # not be both), so the arms are read first as well.
+        series_branches = _series_branches_from(root)
         return cls(
             modules=modules,
             islands=_islands_from(root, modules),
             flow=_flow_from(root),
             module_order=_module_order_from(root, modules),
             module_columns=_module_columns(root),
+            page_arrangement=_page_arrangement(root),
             flag_lead_limit=_flag_lead_limit(root),
             gnd_cluster_radius=_gnd_clustering(root),
             service_layout=_service_layout(root),
@@ -866,6 +1097,8 @@ class PresentationSpec:
             user_locks=_locks_from(root),
             part_texts=_part_texts_from(root, modules),
             text_placement=_text_placement(root),
+            series_branches=_series_branches_from(root),
+            panel_groups=_panel_groups_from(root, modules, series_branches),
         )
 
     def dump(self, path: str | Path) -> None:
@@ -948,6 +1181,35 @@ def main_path_wire(
 
 def _path_json(path: PresentationPath) -> dict[str, Any]:
     return {"id": path.id, "chain": list(path.chain), "note": path.note}
+
+
+def _series_branch_json(branch: SeriesBranch) -> dict[str, Any]:
+    """One series arm — exactly the five keys, in the reading order (548B1)."""
+    return {
+        "id": branch.id,
+        "from": branch.from_net,
+        "to": branch.to_net,
+        "parts": list(branch.parts),
+        "middleNet": branch.middle_net,
+    }
+
+
+def _panel_group_json(group: PanelGroup) -> dict[str, Any]:
+    """One panel — the closed four keys, branches in the declared read order.
+
+    The branch order is the statement (the row count is derived from it), so it
+    is written in document order and never sorted; `columns` is written as
+    stated because it is the reading count the document chose.
+    """
+    return {
+        "id": group.id,
+        "side": group.side,
+        "columns": group.columns,
+        "branches": [
+            {"from": branch.from_net, "to": branch.to_net, "part": branch.part}
+            for branch in group.branches
+        ],
+    }
 
 
 def _lock_json(lock: UserLock) -> dict[str, Any]:
@@ -1483,6 +1745,49 @@ def _service_layout(root: dict[str, Any]) -> ServiceLayout | None:
     return ServiceLayout(pin_gap=float(gap))
 
 
+def _page_arrangement(root: dict[str, Any]) -> PageArrangement | None:
+    """The stated page arrangement, or ``None`` when the document states none.
+
+    Closed on every side (548D): the object has one key, that key has one
+    strategy, and anything else is refused with its path. A page box, a gap, a
+    keep-out or a band would be geometry this document has no business carrying
+    — the frames are the compiler's and the gap is ``budget.module_gap``'s — and
+    an unknown strategy would promise a packing this build cannot carry out.
+    Coordinates never reach this reader: :func:`_refuse_coordinates` runs on the
+    raw payload before parsing, so an ``x`` smuggled in here is refused as a
+    coordinate at ``$.pageArrangement.x``.
+
+    Absent stays absent: :meth:`PresentationSpec.to_jsonable` does not write the
+    key, so every document compiled before it existed keeps its digest, its plan
+    and its drawing. Only a **missing** key means "the document states none": an
+    explicit ``null`` is refused like any other non-object (§30B), because the
+    object is what carries the strategy and `null` states neither "no strategy"
+    nor one this build reads.
+    """
+    if "pageArrangement" not in root:
+        return None
+    value = root.get("pageArrangement")
+    if value is None:
+        raise PresentationSpecError(
+            "$.pageArrangement is null; a stated page arrangement is an object "
+            "{'strategy': 'compact'} — omit the key to state none, because null "
+            "neither states a strategy nor leaves the document silent"
+        )
+    body = _object(value, "$.pageArrangement")
+    _check_keys(body, PAGE_ARRANGEMENT_KEYS, "$.pageArrangement")
+    strategy = _text(
+        body.get("strategy"), "$.pageArrangement.strategy", required=True
+    )
+    if strategy not in PAGE_ARRANGEMENT_STRATEGIES:
+        raise PresentationSpecError(
+            f"$.pageArrangement.strategy is {strategy!r}; this build knows "
+            f"{', '.join(repr(item) for item in PAGE_ARRANGEMENT_STRATEGIES)} — "
+            "a strategy names a packing this build can carry out, and an "
+            "unknown one is refused rather than read as the default"
+        )
+    return PageArrangement(strategy=strategy)
+
+
 def _paths_from(root: dict[str, Any], key: str) -> list[PresentationPath]:
     out: list[PresentationPath] = []
     for index, item in enumerate(_list(root.get(key), key)):
@@ -1540,6 +1845,252 @@ def _local_labels_from(root: dict[str, Any]) -> list[LocalLabelObligation]:
         "(the net drawn by a name at each pin is named by the net)",
         refuse_duplicates=True,
     )
+
+
+def _series_branches_from(root: dict[str, Any]) -> list[SeriesBranch]:
+    """The stated series arms, or none when the document states none (548B1).
+
+    An absent key and ``[]`` are the same statement — "this document names no
+    series arm" — and neither is written by
+    :meth:`PresentationSpec.to_jsonable`, so every document compiled before this
+    key existed keeps its bytes, its digest and its drawing.
+
+    An entry is five keys and no sixth, read as
+    ``from — parts[0] — middleNet — parts[1] — to``. The order is the one fact
+    the net partition cannot state (a partition says the two parts share a node,
+    not which of them the chain leaves from), so it is stated here; the pair
+    must be two distinct parts, because an "arm" whose two parts are one part is
+    a repeat and not a chain. Two entries under one id, or two entries stating
+    the same arm under different ids, would leave "which one does a refusal
+    point at" unanswered, so both are refused.
+
+    Nothing here is checked against a circuit: whether both parts really have a
+    pin on each of those three nets — and no pin on a fourth — is a fact only
+    `CircuitSpec` holds, and it belongs to whoever holds both documents.
+    """
+    out: list[SeriesBranch] = []
+    by_id: dict[str, str] = {}
+    statements: dict[tuple[str, str, tuple[str, str]], str] = {}
+    for index, item in enumerate(_list(root.get("seriesBranches"), "seriesBranches")):
+        spot = f"$.seriesBranches[{index}]"
+        body = _object(item, spot)
+        _check_keys(body, SERIES_BRANCH_KEYS, spot)
+        branch_id = _text(body.get("id"), f"{spot}.id", required=True)
+        from_net = _text(body.get("from"), f"{spot}.from", required=True)
+        to_net = _text(body.get("to"), f"{spot}.to", required=True)
+        if body.get("middleNet") is None:
+            raise PresentationSpecError(
+                f"{spot}.middleNet is required and missing — the two ends are not "
+                "enough to say which part sits against the host end: a series arm "
+                "names the node between its two parts, and that node is what makes "
+                "the stated order falsifiable"
+            )
+        middle_net = _text(body.get("middleNet"), f"{spot}.middleNet", required=True)
+        parts = _series_parts(body.get("parts"), f"{spot}.parts")
+        if branch_id in by_id:
+            raise PresentationSpecError(
+                f"{spot}.id is {branch_id!r} and {by_id[branch_id]} already carries "
+                "that id — a refusal and a plan note point at an arm by its id, so "
+                "two arms cannot share one"
+            )
+        by_id[branch_id] = spot
+        statement = (from_net, to_net, parts)
+        if statement in statements:
+            raise PresentationSpecError(
+                f"{spot} states the same arm as {statements[statement]}: "
+                f"{from_net} — {parts[0]} — {middle_net} — {parts[1]} — {to_net}, "
+                "and one arm is one statement — a second id for the same chain "
+                "would give the compiler two names for one drawing"
+            )
+        statements[statement] = spot
+        out.append(SeriesBranch(
+            id=branch_id,
+            from_net=from_net,
+            to_net=to_net,
+            parts=parts,
+            middle_net=middle_net,
+        ))
+    return out
+
+
+def _series_parts(value: Any, where: str) -> tuple[str, str]:
+    """``parts`` — two distinct part ids, host end first (548B1).
+
+    Locked at two on purpose: the schema is where "this build draws two-part
+    arms" is stated, so a third part is refused as a schema error with its path
+    rather than as a runtime surprise later. A three-part chain is a different
+    contract (it would need a list of middle nodes), not a wider version of this
+    one.
+    """
+    if not isinstance(value, list):
+        raise PresentationSpecError(
+            f"{where} must be a list of exactly two part ids in reading order "
+            f"(host end first), got {value!r}"
+        )
+    if len(value) != 2:
+        raise PresentationSpecError(
+            f"{where} names {len(value)} part(s); a series arm is exactly two — "
+            "a longer chain needs its own middle nodes and its own contract, and "
+            "a one-part entry is a stub rather than an arm"
+        )
+    first = _text(value[0], f"{where}[0]", required=True)
+    second = _text(value[1], f"{where}[1]", required=True)
+    if first == second:
+        raise PresentationSpecError(
+            f"{where} names {first!r} twice; the two parts of a series arm are two "
+            "distinct parts"
+        )
+    return (first, second)
+
+
+def _panel_groups_from(
+    root: dict[str, Any],
+    modules: Sequence[PresentationModule],
+    series_branches: Sequence[SeriesBranch],
+) -> list[PanelGroup]:
+    """The stated reading panels, or none when the document states none (548D3X3A).
+
+    A panel is the **reading relationship** of repeated two-terminal branches on
+    one side of their host — the keys of a keypad, the arms of a status row —
+    which neither the partition nor the netlist can state: the modules only say
+    which parts form a group, and the nets only say what each branch hangs
+    between. So the document states the part, the host-side net, the terminal
+    net, the side and the number of reading columns; the row count follows from
+    the declared order, which is why no row key, gap, pitch or origin exists
+    here.
+
+    What this reader refuses, and why:
+
+    * a group with fewer than two branches — one branch is not a panel, and the
+      drawing it would ask for is the ordinary single arm;
+    * a column count that is not a positive integer (a boolean is not a count),
+      or that exceeds the group's own branch count — a third column for four
+      arms would leave a column nobody can read;
+    * a part the modules do not declare, a part named by two groups, and a part
+      that already belongs to a `seriesBranches` arm — one part has one place in
+      one reading statement, and two statements would give the compiler two
+      truths about the same branch (548D3X3A keeps the series five-key contract
+      untouched and does not silently join an LED arm to a panel);
+    * a coordinate (refused upstream by :func:`_refuse_coordinates` with its
+      path), an empty or missing field, and any key beyond the closed four or
+      three.
+
+    Nothing here is checked against a circuit: whether the two nets really meet
+    that part's two pins, which pin faces the host, and whether the host has the
+    stated number of arms are `CircuitSpec` + profile facts, and they belong to
+    the consumer. An absent key and ``[]`` are the same statement — "no panel is
+    stated" — and neither is written back, so every document compiled before
+    this key existed keeps its bytes, digest and drawing.
+    """
+    declared = declared_part_ids(module.parts for module in modules)
+    series_parts: dict[str, str] = {}
+    for arm in series_branches:
+        for part_id in arm.parts:
+            series_parts[part_id] = arm.id
+    out: list[PanelGroup] = []
+    by_id: dict[str, str] = {}
+    part_spots: dict[str, str] = {}
+    for index, item in enumerate(_list(root.get("panelGroups"), "panelGroups")):
+        spot = f"$.panelGroups[{index}]"
+        body = _object(item, spot)
+        _check_keys(body, PANEL_GROUP_KEYS, spot)
+        group_id = _text(body.get("id"), f"{spot}.id", required=True)
+        if group_id in by_id:
+            raise PresentationSpecError(
+                f"{spot}.id is {group_id!r} and {by_id[group_id]} already carries "
+                "that id — a refusal and a plan note point at a panel by its id, "
+                "so two groups cannot share one"
+            )
+        by_id[group_id] = spot
+        side = _text(body.get("side"), f"{spot}.side", required=True)
+        if side not in SIDES:
+            raise PresentationSpecError(
+                f"{spot}.side is {side!r}; the sides are "
+                + ", ".join(repr(item) for item in SIDES)
+                + " — a panel is read against one edge of its host, not at a place"
+            )
+        if body.get("branches") is None:
+            raise PresentationSpecError(
+                f"{spot}.branches is required and missing — a panel is the reading "
+                "relationship of repeated branches, so it has to state them"
+            )
+        entries = _list(body.get("branches"), f"{spot}.branches")
+        if len(entries) < PANEL_MIN_BRANCHES:
+            raise PresentationSpecError(
+                f"{spot}.branches names {len(entries)} branch(es); a panel is at "
+                f"least {PANEL_MIN_BRANCHES} — one branch is the ordinary single "
+                "arm, not a panel, and the drawing it asks for already exists"
+            )
+        branches: list[PanelBranch] = []
+        for branch_index, entry in enumerate(entries):
+            branch_spot = f"{spot}.branches[{branch_index}]"
+            head = _object(entry, branch_spot)
+            _check_keys(head, PANEL_BRANCH_KEYS, branch_spot)
+            from_net = _text(head.get("from"), f"{branch_spot}.from", required=True)
+            to_net = _text(head.get("to"), f"{branch_spot}.to", required=True)
+            part = _text(head.get("part"), f"{branch_spot}.part", required=True)
+            if part not in declared:
+                raise PresentationSpecError(
+                    f"{branch_spot}.part is {part!r}, which the modules do not "
+                    f"declare (they declare {sorted(declared)!r}) — a panel is "
+                    "stated over this document's own parts"
+                )
+            if part in series_parts:
+                raise PresentationSpecError(
+                    f"{branch_spot}.part is {part!r}, which seriesBranches arm "
+                    f"{series_parts[part]!r} already names — one part has one "
+                    "reading statement, and a part cannot be a series arm and a "
+                    "panel branch at once"
+                )
+            if part in part_spots:
+                raise PresentationSpecError(
+                    f"{branch_spot}.part is {part!r}, which {part_spots[part]} "
+                    "already names — one branch, one seat: a part named twice is "
+                    "two panels claiming the same arm"
+                )
+            part_spots[part] = branch_spot
+            branches.append(PanelBranch(
+                from_net=from_net, to_net=to_net, part=part,
+            ))
+        columns = _panel_columns(
+            body.get("columns"), f"{spot}.columns", len(branches)
+        )
+        out.append(PanelGroup(
+            id=group_id, side=side, columns=columns, branches=tuple(branches),
+        ))
+    return out
+
+
+def _panel_columns(value: Any, where: str, branches: int) -> int:
+    """A panel's reading column count: a positive integer ≤ its branch count.
+
+    A **reading** count and not a geometry: the row count is derived from the
+    declared branch order, the seats and pitch come from real measurement, and
+    the value is bounded by the group's own branches so a column can never be
+    declared empty. Booleans are refused although Python counts them as ints —
+    ``true`` is not a number of columns.
+    """
+    if value is None:
+        raise PresentationSpecError(
+            f"{where} is required and missing — a panel states how many reading "
+            "columns its branches are grouped into"
+        )
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise PresentationSpecError(
+            f"{where} must be a positive integer, got {value!r} — columns is a "
+            "reading count, not a place, a pitch or a scale"
+        )
+    if value < 1:
+        raise PresentationSpecError(
+            f"{where} is {value}; a panel has at least one reading column"
+        )
+    if value > branches:
+        raise PresentationSpecError(
+            f"{where} is {value}, and the group names {branches} branch(es) — a "
+            "column with no branch in it is a column nobody can read; the row "
+            "count follows from the declared order"
+        )
+    return value
 
 
 def _obligation_entries(

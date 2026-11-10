@@ -294,3 +294,160 @@ fallback → 删除旧实现」垂直迁移。Python fallback 只过渡，不形
 
 实施文件域限 `core/compare.py`、`cli.py`、`tests/test_persistence.py` 与必要的
 compare 邻域测试。至少两处变异、owner/layer 守卫、两个消费者证据；全量与真机串行。
+
+## 10. 548D3I：宿主随动串联座位的 draw 内部 placement 合同（设计登记，未实施）
+
+### 合同、调用方与回退
+
+548D3A 只读审计证明 `_seat_series_arms` 事后移动两件无法同时约束 base 普通支路与
+topology 搜索。完整设计与判据见 `evidence/548D/series-seat-plan.md` 和
+`series-seat-plan-criteria.md`。本批登记的是 **draw 内部 placement API**，不是 parser、
+DesignModel、CircuitSpec、PresentationSpec、ChangePlan、CLI、DSH 或 Rust 公共合同。
+
+- `PlacementInput` 新增默认空的 series templates；纯数据描述 branch/host/两件 pin 与
+  pose、方向及节距来源。`PlacementResult` 可携带默认空的 bound plans，包含两件
+  origin/pose、reserved boxes、普通支路 yield 与结构化拒绝。
+- topology 的唯一消费者是 `drawcompiler._topology_placement`：普通 seed 后绑定一次，
+  所有 restart 固定 pitch；candidate move 后重投影，宿主移动时整臂随动。外国件侵入
+  reserved box 是具名 hard cost，返回残留 hard 时由 compiler 转 `layout-unsat`。
+- base 的另一消费者在下一小批接入 `_chain_and_shelf_layout`，与 topology 共用 binder。
+  两个消费者未共同通过前不得宣称集成完成。不得伪造 engineer `locked_origin`、跑两次
+  独立退火、用 soft 权重替代 hard 预留或移动真实 userLock。
+- 空 tuple 时不创建计划、不增加 cost term、不改变 seed/move 随机轨迹或结果。回退为
+  移除可选字段和投影/消费者适配；任何源码恢复均 cp 备份并核 SHA-256，禁 git 写。
+
+### 兼容矩阵与 negative control
+
+| 维度 | 本批覆盖条件 | 必须不变 / 不得声称 |
+|---|---|---|
+| base / topology | 各自窄测试后再接 548D 双臂 MCU | 一方的绿不代替另一方；未共同通过不称完成 |
+| 未声明 / `[]` | 旧构造器、成本、随机轨迹和 CH34 pinned 不变 | 不能只比最终候选而漏掉搜索轨迹变化 |
+| userLocks | 真锁优先，冲突点名拒绝 | 禁止伪造/挪动锁，禁参考坐标 |
+| 在线 / 离线 | 仅离线；真机未覆盖 | 不进入548E，不宣称宿主兼容 |
+| `.epro2/.eprj2/.eprj3` | parser未改，未覆盖 | 不声称三种容器兼容完成 |
+| 单 / 多板 | 单模块离线；多板未覆盖 | 重复PCB双审与分歧库串板均不在本批改变或宣称验证 |
+| 普通器件 / CBB | 普通 SymbolProfile；CBB未覆盖 | 不声称CBB几何支持 |
+| V3 / V4 | 均不跑真机 | 不以离线读数声称V3/V4宿主兼容 |
+
+第一阶段文件域仅 `engines/placement.py` 和新 placement 窄测试；不得改 drawcompiler、
+core 公共合同、CLI/DSH、connector、旧 fixtures 或 package.json。第二阶段才允许按同一
+任务书接 base/topology 两个真实消费者。至少验证空输入等价、宿主随动、臂联合 lane、
+外国件 hard yield、结构化拒绝；owner/layer 守卫与两线回归按最终批串行运行。
+
+## 11. 548D3G：连接器相邻旗脚的内部 FlagCorridor（内部数据试验，未接生产消费者）
+
+WiFi 的真实最小失败不是 MCU 的 series 通道：J2 同侧 3V3/GND 相邻脚需要不同方向的旗标，
+去耦支路与注释占据同一出走空间。单件座位、旗引线形状和统一聚簇均实测无合法候选，见
+`evidence/548D/full-page/wifi-ground.md`。21C 已修后布导线跨连续旗引线漏检，不等于 WiFi 通过。
+随后 `drawcompiler` 的相邻 power/GND 联合预留让 WiFi 单岛出候选，但这**不是**本节的
+placement corridor 集成证明。
+
+本节内部 FlagCorridorTemplate/BoundPlan/ServicePinGap 已有数据与 binder 测试，缺省空时旧行为
+不变；没有真实候选生成、base/topology 两个消费者或最终回放。不得把内部 API 测试当成交付。
+它仍不修改 CircuitSpec、
+PresentationSpec、ChangePlan、CLI/DSH/Rust，也不增加用户坐标或自动功能分岛。输入只能来自
+现有绑定关系、SymbolProfile 的引脚/旗形和已有 CompileBudget；缺省空 tuple 时随机轨迹、
+成本、几何和 CH34 输出均不变。必须论证 base/topology 同一数据源，不能把 `_flag_pin_lead`
+事后失败换名为 placement 成功，也不能用 soft 权重或伪造 userLock 代替 hard 空间约束。
+
+| 维度 | 本批覆盖条件 | 不得声称 / negative control |
+|---|---|---|
+| 同侧相邻电源/地脚 | WiFi 最小复现，真实盒/文本/旗形 | 相邻不意味可重叠；无空间具名拒绝 |
+| 并联去耦支路 | 同宿主、同两端网的现有绑定关系 | 不合并不同信号支路，不改电气分区 |
+| base / topology | 同一 corridor 绑定/投影；各测 | 任一方绿不替代另一方；不恢复 series 失败实验 |
+| 未声明 / 无该结构 | 默认空；CH34 pinned MATCH | 不得改变已有布局、随机轨迹或旗位策略 |
+| userLocks / reach / page | 真锁优先；原 reach、page-box 不变 | 禁伪造锁、放大图幅、加 reach、调硬闸/排名 |
+| 在线 / 离线 | 仅离线单页；真机未覆盖 | 不进入548E，不宣称V3/V4宿主兼容 |
+| 容器 / 多板 / CBB | parser未改，均未覆盖 | 不宣称 `.epro2/.eprj2/.eprj3`、多板或CBB兼容完成 |
+
+先在 `tasks/548_drawing_capability_ladder.md` 写清字段、绑定者、空间不变量、拒绝、回退和
+两个真实消费者，再决定是否实施。若需要公共输入合同或无法证明普通支路/文本与旗引线同看
+一份走廊，停止并交最小失败证书。任何实现仍按一个小文件域、聚焦测试、cp+SHA-256变异、
+独立逐脚分区与主代理视觉验收串行进行，不真机、不git写、不rm。
+
+**548D3X4D-A2/A3集成裁决（2026-11-10）**：不复用本节corridor解决panel独立支路。其模板硬拒单pin，
+只投影调用方已给座且不枚举；本件label corridor被既有障碍表排除，而C1.2的实测阻挡正是本件印字。
+placement.FlagReservation同样不含完整lead/文字。当前先后次序冲突由drawcompiler候选联合选择解决，
+C1.2由同一SeatFirstPlan驱动一次既有文字重排尝试；均不改placement.py或shared公共合同。若后续确需
+移动器件/计价或新增placement字段，必须停止并另按本节集成锁登记，不得夹带进draw算法批。
+
+## 12. 548D3X3C：PanelSeatPlan 的 draw 内部 placement 合同（base/topology已接，最终回放待接）
+
+`PanelSeatTemplate/PanelCell` 与 `BoundPanelSeatPlan` 是 draw 内部 API，不是 CircuitSpec、
+DesignModel、ChangePlan、CLI/DSH/Rust 公共合同。输入来自已验证的 panelGroups、普通 SymbolProfile、
+真实引脚/旗形与现有 CompileBudget；没有绝对 origin、参考坐标或 userLock。`panel_templates` 与
+`panel_plans` 都默认空，空时旧随机轨迹、成本、JSON与CH34不变。
+
+唯一binder按宿主body box和真实part/text/flag预留求bottom网格；其它side拒绝，不做复杂yield。
+topology `placement.place`在seed后绑定，panel件不得单独move/swap/turn/repair，宿主每个候选在
+evaluate前由同一binder重投影。base在series后、anchor前消费同一模板，anchor后仅translate并复核。
+panel件从普通spread/series yield排除，topology spread把panel预留当障碍，spread后重绑。未落座plan
+也是hard；外国件侵入按真实相交面积计hard以提供搜索梯度，任何正面积仍拒，不改near/权重/页框。
+host pin按真实pose的逃逸方向离开本体，无方向具名拒绝，不默认+x。
+
+自动cell/host侧向与near启发式由显式below和更具体的PanelSeatPlan替代，默认near_limit=300不变；
+非panel关系不变。compiler与check_grammar共用 `_with_panel_groups`，错误位置仍失败。
+
+| 维度 | 当前证据 | 必须不变 / 未覆盖 |
+| --- | --- | --- |
+| base / topology | 真实2×2、逐候选投影、move排除、anchor稳定、spread后重绑 | 最终route/text/flag未接，不宣称整图或整页 |
+| 未声明 / [] | 空字段不进入binder/cost/move，旧轨迹与JSON不变 | 不得改变CH34或既有轻量对象 |
+| userLocks / foreign | 锁、外国侵入、无方向pin具名拒绝 | 禁伪造/移动锁、参考坐标或默认逃逸方向 |
+| 默认near=300 | 具体panel计划替代自动near，不调整阈值 | 禁420、排名/near/page-box调参 |
+| 在线/容器/多板/CBB/V3/V4 | 均未覆盖 | 不进入548E，不声称兼容完成 |
+
+主代理组合179条邻域通过后，方向负例与文档/卫生收尾另计。base不消费、未落座plan不计hard两项变异
+均先红并cp/hash恢复；spread去预留一次未变红记无效。33C1候选投影/move排除变异此前已闭合。
+生产 `drawcompiler.py` = `f1e47b11bce6aa482032fb918d935b299b9b6da505db2a70ba0894ce6b8f7c50`，
+`placement.py` = `abc285ef48fecbb4eacbe0630cf84f546e8355ef0a3c2c1f5661320eca234f05`。
+最终route/text/flag按任务书§34接同一plan，不新建第二套路由或文字度量。
+
+## 13. 548D3S：ServiceSeatTemplate 的 draw 内部 placement 集成锁（S1通过，S2在途）
+
+34D-B2a/B2b证明draw-only顺序试验不能解决U1左列真实走廊冲突：VSS在两条梯子上仅一合法座，
+C1/R1/LED与宿主信号、文字和旗座必须在placement共同预留。合同与兼容矩阵见
+`evidence/548D/service-seat-criteria.md`。本批不是parser、DesignModel、CircuitSpec、PresentationSpec、
+ChangePlan、CLI/DSH/Rust公共合同；公共panelGroups不扩成单支路。
+
+新增默认空的 `PlacementInput.service_templates` / `PlacementResult.service_plans` 与独立
+`ServiceSeatTemplate`。模板复用PanelCell的真实from/to/host pin、pose、text/flag reserve；新增默认空
+`PanelCell.flag_lead`只供后续draw回放，空值保持旧panel向下行为。输出复用BoundPanelSeatPlan形状但
+**永不进panel_plans**。left/right单cell在本地帧复用bottom求解和cache，宿主平移/换姿重投影，
+外国件真实reserve相交具名hard/refusal；普通move/yield不得独立移动服务件。
+
+S1只改 `engines/placement.py` 与新 `tests/test_548d_service_placement.py`：证明left/right单元、宿主随动、
+cache key、外国件/锁/非法输入与空模板等价，不接drawcompiler或生产compile。S2才接drawcompiler真实
+C1/R1/D1/D2与base/topology两个消费者；S3才接SeatFirstPlan和最终回放。任一阶段不得以binder或placement
+绿冒称整图/整页通过。
+
+| 维度 | 必须验证 | negative control / 未覆盖 |
+| --- | --- | --- |
+| base / topology | S2各自接同一binder并实测 | binder绿不代替两个消费者 |
+| 空模板 | 无cost/move/cache/轨迹变化，JSON/digest与CH34不变 | 不只比较最终候选 |
+| userLocks / foreign | 真锁、侵入、非法side/token/pose具名拒绝 | 禁伪造锁、参考坐标、soft重叠许可 |
+| 默认near/reach/page-box | 全保持 | 禁420、调排名/硬闸、放大图幅 |
+| 在线/容器/多板/CBB/V3/V4 | 均未覆盖 | 不进入548E，不声称兼容完成；重复PCB双审/分歧库串板不在本批 |
+
+回退为移除可选字段与消费者适配，源码恢复只用cp备份+SHA-256。S2至少两项独立变异（base不消费、
+宿主候选不重投影）先红后恢复；owner/layer守卫与两线回归最终串行，不真机、不git写、不rm。
+
+**S1复验（2026-11-10）**：主代理63 passed、CH34 allMatch=true；from脚同轴缺陷与恒等测试已修复并补
+lattice负例，placement=`9be2c565…`。S2实现按任务书§35A：真实服务模板只在显式panelGroups文档生成，
+服务件排除panel cells，owner内唯一宿主脚；base/topology共享 `_service_templates` 与binder，service_plans
+不混panel_plans。host pose与side出脚不符具名拒绝；普通move/spread/yield排除服务件，外国reserve仍hard。
+S2只验placement消费者，不接最终compile/视觉，两项主代理变异通过后才关闭集成。
+
+**S2复审**：首轮65 passed/4 failed，不签收。宿主脚改由既有 `_series_host_candidates` 在owner内唯一
+解析，禁符号顺序首脚。四条panel detour/普通foreign-yield旧测试允许在测试内显式隔离ServiceSeat，
+原场景/断言/计数不动；不得在生产关闭、改xfail或改成允许拒绝。让位上限由request器件数决定，不新增
+魔数预算。全69条、CH34与两项变异补齐后才关闭S2。
+
+**S2关闭与S3边界**：主代理最终70 passed、CH34 MATCH；base不消费与topology候选不重投影两项变异
+均先红并cp/hash恢复，见 `evidence/548D/service-seat/mutations.md`。S3只把service模板的文字与固定
+flag_lead接入 `_panel_text_map`、`_panel_terminal_seats` 和SeatFirst来源，placement不再改；ordered
+原型通过前不接生产compile，任何placement/binder绿都不等于最终三关。
+
+**S3合同纠偏**：`_panel_terminal_seats` 继续panel-only；新增 `_service_terminal_seats` 和
+`_seat_first_terminal_seats` 合并并附source，禁止把service net纳入panel_nets。旧seat-first整册以autouse
+隔离ServiceSeat以保留原算法场景，新service测试另册覆盖，禁止逐个改期望或xfail。首次接入已由主代理
+用S2 cp备份恢复并复验70 passed；后续ordered原型和生产回放仍须各自验收。

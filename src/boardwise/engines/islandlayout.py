@@ -5070,14 +5070,23 @@ def _flag_ref(
 ) -> str:
     """The flag symbol ref a net is looked up under — `drawcompiler._flag_ref`'s rule.
 
-    A rail is named by its own ``power_flag_prefix + net``.  A **ground** takes the
-    family's shared symbol (``budget.gnd_flag``) unless the drawing really has more
-    than one ground domain, in which case it asks for the flag named after itself.
+    A rail is named by its own ``power_flag_prefix + net``, and when the book does
+    not carry that, by 548D3's exact alias ``power_flag_prefix + "+" + net`` (the
+    schematic's ``PWR-+3V3`` spelling of a ``3V3`` net).  The own name is asked for
+    first and the alias never overrides it, the alias is never built for a net id
+    that already carries the ``+``, and a rail under neither ref keeps its own ref
+    so the downgrade note names the spelling the rule asked for.  A **ground**
+    takes the family's shared symbol (``budget.gnd_flag``) unless the drawing
+    really has more than one ground domain, in which case it asks for the flag
+    named after itself; a ground is never aliased — ``PWR-+GND`` is not a name,
+    and two grounds may never be folded into one glyph by an alias.
+
     The reasoning is not restated here; `drawcompiler._flag_ref`'s docstring is
     where 173/C's 「按网的域选对应旗标族、绝不并地」 is argued, and this function
     exists so that an island page and a single-module page of one document answer
     it the same way.  ``drawcompiler``'s version delegates to a `_Context`; the two
-    are pinned equal by `tests/test_530a_island_flags.py`.
+    are pinned equal by `tests/test_530a_island_flags.py`, and the page's copy
+    (`pagecompiler._rail_flag_ref`, 548D 24A) by `tests/test_548d_page_flags.py`.
 
     An empty answer is a **statement**, not a gap: ``gnd_flag=""`` is 178's own
     switch for 「this drawing names no ground with a flag」, and the library cannot
@@ -5085,6 +5094,11 @@ def _flag_ref(
     """
     own = f"{budget.power_flag_prefix}{net_id}"
     if cls != "gnd":
+        if book.get(own) is not None:
+            return own
+        alias = f"{budget.power_flag_prefix}+{net_id}"
+        if "+" not in net_id and book.get(alias) is not None:
+            return alias
         return own
     gnd_flag = budget.gnd_flag
     if not gnd_flag or own == gnd_flag or len(ground_domains) <= 1:

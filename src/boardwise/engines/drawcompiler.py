@@ -106,9 +106,10 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from heapq import heappop, heappush
+from itertools import product as _rung_product
 from typing import Any
 
 from boardwise.core.circuitspec import CircuitSpec
@@ -200,6 +201,7 @@ from .grammar.base import (
     NET_ROLES,
     OWNED_BRANCH,
     RIGHT_OF,
+    RelativeConstraint,
     SAME_COLUMN,
     SAME_ROW,
     UNIFORM_GND,
@@ -629,7 +631,9 @@ class CompileBudget:
     #: is looked up under (net ``VIN`` -> symbol ``PWR-VIN``). A flag the library
     #: does not carry is written as a net label instead — the same kind of name
     #: in the netlist, and `uniform-gnd` is what refuses a drawing that mixes
-    #: the two styles.
+    #: the two styles. 548D3: a rail whose own ``PWR-<net>`` the book lacks is
+    #: also tried as ``PWR-+<net>`` (the schematic's ``+3V3`` spelling) before
+    #: the fallback; the ground flag is never aliased.
     gnd_flag: str = "PWR-GND"
     power_flag_prefix: str = "PWR-"
 
@@ -876,8 +880,875 @@ class CompileResult:
         ]
 
 
-# --------------------------------------------------------------------- entry
+# ------------------------------------------------------------- series arms
 
+
+def _series_pin_nets(circuit_spec: CircuitSpec) -> dict[str, dict[str, str]]:
+    """``part -> {pin: net}``, read off the circuit's partition.
+
+    This is the whole reading of the circuit a series arm needs: the partition
+    says which feet a part has and where each one goes. Nothing here is ordered —
+    the circuit has no order, which is exactly why the arm's order is declared
+    and then checked (:func:`validate_series_branches`).
+    """
+    out: dict[str, dict[str, str]] = {}
+    for net in circuit_spec.nets:
+        for member in net.members:
+            part, _, pin = member.partition(".")
+            out.setdefault(part, {})[pin] = net.id
+    return out
+
+
+def _series_owners(presentation_spec: PresentationSpec) -> dict[str, list[str]]:
+    """``part -> [module ids that claim it]``, in document order."""
+    out: dict[str, list[str]] = {}
+    for module in presentation_spec.modules:
+        for part in module.parts:
+            out.setdefault(part, []).append(module.id)
+    return out
+
+
+def _series_pin_table(part: str, pins: Mapping[str, str]) -> str:
+    """``R2.1->GPIO_STAT, R2.2->LED_A`` — the foot-by-foot evidence a refusal owes."""
+    return ", ".join(f"{part}.{pin}->{net}" for pin, net in pins.items())
+
+
+def validate_series_branches(
+    circuit_spec: CircuitSpec, presentation_spec: PresentationSpec
+) -> list[GrammarFailure]:
+    """The declared series arms against the circuit they claim, or say why not (548B2).
+
+    ``seriesBranches`` is the one part of a presentation that talks about the
+    **circuit's** connection and not only about itself: "these two parts are in
+    series, they meet at this node, and the arm runs from this net to that one".
+    Parsing cannot check it (`presentationspec.py` has no circuit), so the check
+    lives with whoever holds **both** documents — this module, and through it
+    every consumer (:func:`compile`, and `pagecompiler.compile_page` on the whole
+    documents before a module is compiled).
+
+    V1–V8, in the order they are decided, and why that order:
+
+    * **V1 facts exist** — a part or a net the circuit does not declare is
+      `facts-missing`, named with where to write it. A declaration cannot create
+      a connection.
+    * **V7 one module** — the arm's home, decided right after V1 because every
+      later question is asked *inside* that module: V6 counts the host feet in
+      the module, and a cross-module arm is refused as a fact about the document,
+      not as a broken wire. Deciding it here is also what keeps a cross-module
+      declaration from being reported as a dozen `circuit-invalid` complaints
+      about a chain that was never one chain.
+    * **V8 one part, one arm** — a document-level fact like V7 (which entries
+      exist), decided before the netlist so its refusal can name the two entries.
+    * **V5 two ends** — `from != to`, and the middle is neither end.
+    * **V2 two pins, two nets** — the arm's parts, before any topology.
+    * **V3 the declared order** — foot by foot, because the partition cannot
+      express order: `parts[0]` has one foot on `from` and one on the middle,
+      `parts[1]` one on the middle and one on `to`, and no foot on a third net.
+    * **V4 the middle is private** — exactly the two internal feet, one arm only,
+      never another arm's end.
+    * **V6 exactly one host** — inside the arm's module, the `from` net has one
+      foot besides the pair. Zero is a dangling arm, more than one is host
+      ambiguity; the candidates are listed, never guessed.
+
+    One refusal per arm and per question: after a rule refuses, the questions
+    that depend on its answer are not asked, so a cross-module declaration comes
+    back as one `facts-missing`, not as that plus a topology verdict about a
+    chain the document never established.
+
+    Only 053 sec.4's four categories are used (`facts-missing` and
+    `circuit-invalid` in this check). A document that declares no arm — and a
+    document that declares `[]`, which 548B1 made the same statement — is read
+    no further: this returns the empty list before touching the circuit, which is
+    what keeps every old document's bytes and readings where they were.
+    """
+    branches = presentation_spec.series_branches
+    if not branches:
+        return []
+    pins = _series_pin_nets(circuit_spec)
+    members = {net.id: list(net.members) for net in circuit_spec.nets}
+    declared_parts = {part.id for part in circuit_spec.parts}
+    owners = _series_owners(presentation_spec)
+    part_claims: dict[str, list[str]] = {}
+    for branch in branches:
+        for part in branch.parts:
+            part_claims.setdefault(part, []).append(branch.id)
+
+    failures: list[GrammarFailure] = []
+    for index, branch in enumerate(branches):
+        spot = f"$.seriesBranches[{index}] ({branch.id})"
+        first, second = branch.parts
+
+        # V1 — the facts the arm names must exist in the circuit.
+        missing_parts = [part for part in branch.parts if part not in declared_parts]
+        missing_nets = [
+            net_id
+            for net_id in (branch.from_net, branch.to_net, branch.middle_net)
+            if net_id not in members
+        ]
+        if missing_parts or missing_nets:
+            named: list[str] = []
+            if missing_parts:
+                named.append("parts[] names " + ", ".join(map(repr, missing_parts)))
+            if missing_nets:
+                named.append(
+                    "nets[] does not declare " + ", ".join(map(repr, missing_nets))
+                )
+            failures.append(GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=spot,
+                detail=(
+                    f"seriesBranches entry {branch.id!r} names a fact this circuit "
+                    f"does not declare: {'; '.join(named)} — a declaration cannot "
+                    "create a connection, and no later stage can draw a part or a "
+                    "node the circuit does not have"
+                ),
+                action=(
+                    "write the missing ids where the circuit states them (parts[] "
+                    "for a part, nets[] for a net), or drop the arm"
+                ),
+            ))
+            continue
+
+        # V7 — exactly one module owns both parts.
+        first_modules = owners.get(first, [])
+        second_modules = owners.get(second, [])
+        common = [
+            module.id for module in presentation_spec.modules
+            if first in module.parts and second in module.parts
+        ]
+        if len(common) != 1:
+            failures.append(GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=spot,
+                detail=(
+                    f"the arm {first!r} -> {second!r} must be read inside exactly "
+                    f"one module; {first} is in {first_modules or 'no module'} and "
+                    f"{second} is in {second_modules or 'no module'}, which leaves "
+                    f"{len(common)} common module(s): {common or 'none'} — one arm "
+                    "reads within one island, and a declaration that spans two is "
+                    "two arms with an explicit boundary"
+                ),
+                action=(
+                    "put both parts in the same module, or split the arm into two "
+                    "declarations with an explicit boundary between them"
+                ),
+            ))
+            continue
+        module_id = common[0]
+
+        # V8 — one part, one arm (a second declaration of the same pair in the
+        #      other reading is still the same two feet).
+        duplicates = [
+            other.id for other in branches
+            if other.id != branch.id and set(other.parts) & set(branch.parts)
+        ]
+        if duplicates:
+            shared = [
+                part for part in branch.parts if len(part_claims.get(part, [])) > 1
+            ]
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=spot,
+                detail=(
+                    f"the entry {branch.id!r} shares {shared} with seriesBranches "
+                    f"{duplicates} — a part has exactly one series reading, and "
+                    "declaring the same pair again (in either direction) is a "
+                    "second reading of one foot, not a second arm"
+                ),
+                action=(
+                    f"keep exactly one entry per part; remove the duplicate for "
+                    f"{shared[0] if shared else branch.parts[0]}"
+                ),
+            ))
+            continue
+
+        # V5 — two distinct ends, and the middle is neither of them.
+        if branch.from_net == branch.to_net:
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=spot,
+                detail=(
+                    f"seriesBranches entry {branch.id!r} runs from "
+                    f"{branch.from_net!r} to the same net {branch.to_net!r} — two "
+                    "ends on one node is a loop or a parallel pair, never a series "
+                    "arm"
+                ),
+                action=(
+                    f"give the arm two different ends, or state it as the "
+                    "parallel/repeated-branch reading it is"
+                ),
+            ))
+            continue
+        if branch.middle_net in (branch.from_net, branch.to_net):
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=spot,
+                detail=(
+                    f"seriesBranches entry {branch.id!r} names "
+                    f"{branch.middle_net!r} as the middle node and also as one of "
+                    f"its ends (from {branch.from_net!r}, to {branch.to_net!r}) — "
+                    "the node two parts meet at cannot be an end of the arm"
+                ),
+                action=(
+                    "name the node between the two parts, or drop the middle and "
+                    "declare the connection the circuit really has"
+                ),
+            ))
+            continue
+
+        # V2 — every part of the arm is two pins on two nets.
+        broken = False
+        for part in branch.parts:
+            table = pins[part]
+            if len(table) != 2:
+                failures.append(GrammarFailure(
+                    category=FAILURE_CIRCUIT_INVALID,
+                    subject=spot,
+                    detail=(
+                        f"seriesBranches entry {branch.id!r} puts {part!r} in a "
+                        f"series arm, but the circuit mentions {len(table)} pin(s) "
+                        f"of it ({_series_pin_table(part, table)}) — a series arm "
+                        "is two pins on two nets"
+                    ),
+                    action=(
+                        f"connect exactly two feet of {part} (or remove the extra "
+                        "net membership), or drop the arm"
+                    ),
+                ))
+                broken = True
+                break
+            if len(set(table.values())) == 1:
+                failures.append(GrammarFailure(
+                    category=FAILURE_CIRCUIT_INVALID,
+                    subject=spot,
+                    detail=(
+                        f"seriesBranches entry {branch.id!r} puts {part!r} in a "
+                        f"series arm, but both of its pins sit on "
+                        f"{next(iter(table.values()))!r} "
+                        f"({_series_pin_table(part, table)}) — that is a short "
+                        "across the part, not a link in a chain"
+                    ),
+                    action=(
+                        f"put {part}'s two feet on the two different nets the arm "
+                        "needs, or drop the arm"
+                    ),
+                ))
+                broken = True
+                break
+        if broken:
+            continue
+
+        # V3 — the declared order against the actual feet.
+        first_nets = set(pins[first].values())
+        second_nets = set(pins[second].values())
+        allowed = {branch.from_net, branch.middle_net, branch.to_net}
+        ordered = (
+            branch.from_net in first_nets
+            and branch.middle_net in first_nets
+            and branch.middle_net in second_nets
+            and branch.to_net in second_nets
+            and (first_nets | second_nets) <= allowed
+        )
+        if not ordered:
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=spot,
+                detail=(
+                    f"seriesBranches entry {branch.id!r} declares {first} -> "
+                    f"{second} between from {branch.from_net!r}, middle "
+                    f"{branch.middle_net!r} and to {branch.to_net!r}, but the "
+                    f"netlist says {_series_pin_table(first, pins[first])} and "
+                    f"{_series_pin_table(second, pins[second])} — parts[0] must "
+                    "have one foot on the from net and one on the middle net, "
+                    "parts[1] one on the middle net and one on the to net, and no "
+                    "foot may land on a third net. The order is the one thing the "
+                    "partition cannot say, so it is checked foot by foot instead "
+                    "of believed"
+                ),
+                action=(
+                    f"declare the order the netlist supports, or rewire — a "
+                    "declaration cannot create a connection"
+                ),
+            ))
+            continue
+
+        # V4 — the middle node is private to this pair.
+        middle_members = members[branch.middle_net]
+        internal = sorted(
+            f"{part}.{pin}"
+            for part in branch.parts
+            for pin, net_id in pins[part].items()
+            if net_id == branch.middle_net
+        )
+        others = [
+            other.id for other in branches
+            if other.id != branch.id and other.middle_net == branch.middle_net
+        ]
+        endpoints = [
+            other.id for other in branches
+            if other.id != branch.id
+            and branch.middle_net in (other.from_net, other.to_net)
+        ]
+        if set(middle_members) != set(internal) or others or endpoints:
+            also = ""
+            if others:
+                also = f", and the net is claimed by {others}"
+            if endpoints:
+                also += f", and used as an end by {endpoints}"
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=spot,
+                detail=(
+                    f"the middle net {branch.middle_net!r} of {branch.id!r} must "
+                    f"be private to the pair: its members are {middle_members}, "
+                    f"the arm's own internal feet are {internal}{also} — two parts "
+                    "in series meet at a node with exactly two feet, owned by one "
+                    "arm; a node shared by two arms is a repeated-branch reading, "
+                    "not a place two arms are welded together"
+                ),
+                action=(
+                    "name a distinct node between the two parts of each arm (the "
+                    "circuit needs its own net for it), or express the shared node "
+                    "as repeated branches"
+                ),
+            ))
+            continue
+
+        # V6 — exactly one host foot on the from net, inside the arm's module.
+        module = presentation_spec.module(module_id)
+        inside = set(module.parts)
+        hosts = [
+            member for member in members[branch.from_net]
+            if member.partition(".")[0] in inside
+            and member.partition(".")[0] not in branch.parts
+        ]
+        if len(hosts) != 1:
+            shape = (
+                "a dangling arm — nothing on that net inside the module drives it"
+                if not hosts
+                else "host ambiguity — more than one foot could be the host"
+            )
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=spot,
+                detail=(
+                    f"the from net {branch.from_net!r} of {branch.id!r} has "
+                    f"{len(hosts)} host pin(s) besides the pair inside module "
+                    f"{module_id!r}: {hosts or 'none'} — exactly one foot must be "
+                    f"the host, and this is {shape}; the compiler lists the "
+                    "candidates and does not pick one"
+                ),
+                action=(
+                    f"connect the arm's from net to exactly one host foot (or "
+                    f"remove the extra feet from {branch.from_net}), or drop the arm"
+                ),
+            ))
+            continue
+
+    return failures
+
+
+def _panel_pin_table(part: str, pins: Mapping[str, str]) -> str:
+    """``S1.1->KEY1, S1.2->GND`` — the foot-by-foot evidence a panel refusal owes."""
+    return ", ".join(f"{part}.{pin}->{net}" for pin, net in pins.items())
+
+
+def validate_panel_groups(
+    circuit_spec: CircuitSpec, presentation_spec: PresentationSpec
+) -> list[GrammarFailure]:
+    """The declared reading panels against the circuit they claim (548D3X3B).
+
+    ``panelGroups`` is a statement about the **circuit**: each branch names a
+    two-terminal part between a host net and a terminal net, and the group says
+    those branches are read as one panel. Parsing cannot check it, so the check
+    lives with whoever holds both documents — this function, called by
+    :func:`compile` and by :func:`boardwise.engines.pagecompiler.compile_page`
+    before anything is bound, placed or routed.
+
+    The order of the decisions is the one the task book fixes, and the reason is
+    the same as the series arms': a refusal must not be followed by a verdict
+    about a fact the refusal just withdrew.
+
+    * **P1 facts exist** — the part and both nets must be in the circuit
+      (`facts-missing`); a declaration cannot create a connection.
+    * **P2 one module, whole group** — every part of the group must sit in
+      exactly one module, and that module is the same for all of them. A part in
+      no module, a part claimed twice, or a group split across modules is
+      `facts-missing` and names the modules: a page slice that carried half a
+      panel would draw a group the document never declared.
+    * **P3 two ends, two feet, two nets** — ``from != to``, the part's circuit
+      feet number exactly two, one lands on each end, and no foot of the part is
+      a declared no-connect; ``circuit-invalid``, with the real pin→net table.
+    * **P4 one host foot, one host part** — inside the group's module, the
+      ``from`` net must have exactly one foot besides this branch's part, that
+      foot must not belong to another branch part, and **every branch must
+      resolve to the same host part**. The host *foot* is per branch on purpose:
+      a keypad row is four arms on four GPIO feet of one MCU, and requiring one
+      pin for the whole group would make the task book's own four-key fixture
+      undeclarable. Two branches landing on one host foot are refused all the
+      same — they are one fan-out node, not two cells of a panel — and that case
+      is reported as host ambiguity, because the other branch's part is then a
+      second foot on the same net.
+
+    Only 053 sec.4's categories are used (`facts-missing`, `circuit-invalid`).
+    A document that declares no group — or ``[]``, the same statement — returns
+    the empty list before the circuit is read, so every old document keeps its
+    candidates, its bytes and its call order. The attribute is read with
+    ``getattr`` because a lightweight older presentation (a test double, a
+    ``SimpleNamespace``) has no ``panel_groups`` at all and must not be broken by
+    a direct access here.
+    """
+    groups = getattr(presentation_spec, "panel_groups", ()) or ()
+    if not groups:
+        return []
+    pins = _series_pin_nets(circuit_spec)
+    members = {net.id: list(net.members) for net in circuit_spec.nets}
+    declared_parts = {part.id for part in circuit_spec.parts}
+    owners = _series_owners(presentation_spec)
+    nc_pins = {item.pin for item in circuit_spec.nc}
+
+    # P0 (a document-level fact, decided once): one part, one panel cell and one
+    # panel group. The parser refuses both shapes already; a hand-built document
+    # can still carry them, and a duplicate would make P4 read two hosts for one
+    # branch, so it is named here rather than guessed about later.
+    claims: dict[str, list[str]] = {}
+    for group in groups:
+        for branch in group.branches:
+            claims.setdefault(branch.part, []).append(group.id)
+
+    failures: list[GrammarFailure] = []
+    for group in groups:
+        spot = f"$.panelGroups[{group.id!r}]"
+        branches = tuple(group.branches)
+        group_parts = [branch.part for branch in branches]
+
+        # P1 — every fact the group names must exist.
+        missing_parts = sorted({
+            branch.part for branch in branches if branch.part not in declared_parts
+        })
+        missing_nets = sorted({
+            net_id
+            for branch in branches
+            for net_id in (branch.from_net, branch.to_net)
+            if net_id not in members
+        })
+        if missing_parts or missing_nets:
+            named: list[str] = []
+            if missing_parts:
+                named.append("parts[] names " + ", ".join(map(repr, missing_parts)))
+            if missing_nets:
+                named.append(
+                    "nets[] does not declare " + ", ".join(map(repr, missing_nets))
+                )
+            failures.append(GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=spot,
+                detail=(
+                    f"panelGroups entry {group.id!r} names a fact this circuit does "
+                    f"not declare: {'; '.join(named)} — a declaration cannot create "
+                    "a connection, and no later stage can draw a part or a node the "
+                    "circuit does not have"
+                ),
+                action=(
+                    "write the missing ids where the circuit states them (parts[] "
+                    "for a part, nets[] for a net), or drop the branch"
+                ),
+            ))
+            continue
+
+        # P0 rest — a part has one cell and one group.
+        doubled = sorted(
+            branch.part for branch in branches
+            if len(claims.get(branch.part, [])) > 1
+        )
+        if doubled:
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=spot,
+                detail=(
+                    f"panelGroups entry {group.id!r} declares "
+                    f"{sorted(set(doubled))} more than once across panelGroups "
+                    f"{sorted({name for part in doubled for name in claims[part]})} — "
+                    "one part is one panel cell, and a second declaration is a "
+                    "second reading of the same two feet"
+                ),
+                action=(
+                    "keep exactly one branch per part; remove the duplicate "
+                    f"declaration of {doubled[0]}"
+                ),
+            ))
+            continue
+
+        # P2 — every part in exactly one module, and all of them in the same one.
+        stray = sorted({part for part in group_parts if len(owners.get(part, [])) != 1})
+        if stray:
+            failures.append(GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=spot,
+                detail=(
+                    f"panelGroups entry {group.id!r} puts {stray} in a panel, but "
+                    "each part must sit in exactly one module: "
+                    + "; ".join(
+                        f"{part} is in {owners.get(part) or 'no module'}"
+                        for part in stray
+                    )
+                    + " — a group read inside one island cannot own a part no "
+                    "module declares, or one two modules both claim"
+                ),
+                action=(
+                    "declare each part in exactly one module (the panel's host "
+                    "module), or drop it from the group"
+                ),
+            ))
+            continue
+        homes = sorted({owners[part][0] for part in group_parts})
+        if len(homes) != 1:
+            failures.append(GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=spot,
+                detail=(
+                    f"panelGroups entry {group.id!r} spans modules "
+                    f"{ {part: owners[part][0] for part in sorted(group_parts)} } — "
+                    "one panel is read inside one island, and a page slice that "
+                    "carried half of it would draw a group the document never "
+                    "declared"
+                ),
+                action=(
+                    "put every branch part in the same module, or split the group "
+                    "into one declaration per module"
+                ),
+            ))
+            continue
+        module_id = homes[0]
+        module = presentation_spec.module(module_id)
+        inside = set(module.parts) if module is not None else set()
+
+        # P3 — two ends, two feet, two nets, no no-connect foot.
+        broken = False
+        for branch in branches:
+            branch_spot = f"{spot}.branches[{branch.part}]"
+            table = pins.get(branch.part, {})
+            # A no-connect foot is read from the circuit's own `nc` list, not
+            # only from the nets this part happens to appear in: a three-foot
+            # device whose third foot is declared unconnected is still not the
+            # two-terminal cell a panel branch claims, even though the partition
+            # shows the part with two feet.
+            nc_feet = sorted(
+                pin for pin in nc_pins
+                if pin.partition(".")[0] == branch.part
+            )
+            if branch.from_net == branch.to_net:
+                failures.append(GrammarFailure(
+                    category=FAILURE_CIRCUIT_INVALID,
+                    subject=branch_spot,
+                    detail=(
+                        f"panelGroups branch {branch.part!r} of {group.id!r} runs "
+                        f"from {branch.from_net!r} to the same net — a panel cell "
+                        "is a part between the host net and its terminal, and one "
+                        "node at both ends is a short, not a cell"
+                    ),
+                    action=(
+                        "give the branch two different ends, or state the parallel "
+                        "reading it really is"
+                    ),
+                ))
+                broken = True
+                continue
+            if nc_feet:
+                failures.append(GrammarFailure(
+                    category=FAILURE_CIRCUIT_INVALID,
+                    subject=branch_spot,
+                    detail=(
+                        f"panelGroups branch {branch.part!r} has a declared "
+                        f"no-connect foot ({', '.join(nc_feet)}) while the panel "
+                        f"claims it between {branch.from_net!r} and "
+                        f"{branch.to_net!r} — a no-connected pin is not part of a "
+                        "readable branch"
+                    ),
+                    action=(
+                        "remove the no-connect declaration for the branch's feet, "
+                        "or use a part that is wired as the panel states"
+                    ),
+                ))
+                broken = True
+                continue
+            if len(table) != 2:
+                failures.append(GrammarFailure(
+                    category=FAILURE_CIRCUIT_INVALID,
+                    subject=branch_spot,
+                    detail=(
+                        f"panelGroups branch {branch.part!r} of {group.id!r} names "
+                        f"a two-terminal arm, but the circuit mentions "
+                        f"{len(table)} pin(s) of it "
+                        f"({_panel_pin_table(branch.part, table) or 'none'}) — a "
+                        "panel cell is one part with exactly two feet"
+                    ),
+                    action=(
+                        f"connect exactly two feet of {branch.part} (one on "
+                        f"{branch.from_net}, one on {branch.to_net}), or drop the "
+                        "branch"
+                    ),
+                ))
+                broken = True
+                continue
+            feet = set(table.values())
+            if feet != {branch.from_net, branch.to_net}:
+                failures.append(GrammarFailure(
+                    category=FAILURE_CIRCUIT_INVALID,
+                    subject=branch_spot,
+                    detail=(
+                        f"panelGroups branch {branch.part!r} declares "
+                        f"{branch.from_net!r} -> {branch.to_net!r}, but the "
+                        f"netlist says {_panel_pin_table(branch.part, table)} — "
+                        "the part's two feet must land one on each declared end "
+                        "(a third net, or both feet on one net, is not a cell)"
+                    ),
+                    action=(
+                        "declare the two nets this part really joins, or rewire — "
+                        "a declaration cannot create a connection"
+                    ),
+                ))
+                broken = True
+                continue
+        if broken:
+            continue
+
+        # P4 — one host foot per branch, one host part for the group.
+        hosts: dict[str, str] = {}
+        host_problem = False
+        for branch in branches:
+            branch_spot = f"{spot}.branches[{branch.part}]"
+            candidates = [
+                member for member in members[branch.from_net]
+                if member.partition(".")[0] in inside
+                and member.partition(".")[0] != branch.part
+            ]
+            if len(candidates) != 1:
+                shape = (
+                    "a dangling cell — nothing inside the module drives that net"
+                    if not candidates
+                    else "host ambiguity — more than one foot could be the host"
+                )
+                failures.append(GrammarFailure(
+                    category=FAILURE_CIRCUIT_INVALID,
+                    subject=branch_spot,
+                    detail=(
+                        f"the from net {branch.from_net!r} of {branch.part!r} has "
+                        f"{len(candidates)} host foot/foot(s) besides the branch "
+                        f"inside module {module_id!r}: {candidates or 'none'} — "
+                        f"exactly one foot must drive it, and this is {shape}; the "
+                        "compiler lists the candidates and does not pick one"
+                    ),
+                    action=(
+                        f"connect {branch.from_net} to exactly one host foot inside "
+                        f"module {module_id!r} (or remove the extra feet), or drop "
+                        "the branch"
+                    ),
+                ))
+                host_problem = True
+                continue
+            host = candidates[0]
+            if host.partition(".")[0] in group_parts:
+                failures.append(GrammarFailure(
+                    category=FAILURE_CIRCUIT_INVALID,
+                    subject=branch_spot,
+                    detail=(
+                        f"the from net {branch.from_net!r} of {branch.part!r} is "
+                        f"driven by {host}, which is another part of panel "
+                        f"{group.id!r} — a panel's branches are read against their "
+                        "host, and an arm cannot host another arm"
+                    ),
+                    action=(
+                        "name the module's own host foot on each branch's from net, "
+                        "or split the group"
+                    ),
+                ))
+                host_problem = True
+                continue
+            hosts[branch.part] = host
+        if host_problem:
+            continue
+        host_parts = sorted({
+            host.partition(".")[0] for host in hosts.values()
+        })
+        if len(host_parts) != 1:
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=spot,
+                detail=(
+                    f"panelGroups entry {group.id!r} resolves to more than one host "
+                    f"part: { {part: hosts[part] for part in sorted(hosts)} } — one "
+                    "panel is read against one host, and the feet of two different "
+                    "parts are two readings, not one row"
+                ),
+                action=(
+                    "declare one panel per host, or rewire the branches onto one "
+                    "host part"
+                ),
+            ))
+            continue
+
+    return failures
+
+
+#: 548D3B: the prefix every relation the declared arms add to the binding starts
+#: with. `_with_series_arms` writes it; `_declared_sibling_owners` reads it to
+#: tell "the grammar's own silence about two siblings" from "the arm's declared
+#: order", which is not the same statement even though both are relations
+#: between two branches of one owner.
+SERIES_RELATION_REASON = "seriesBranches "
+
+def _series_arm_order(progress: tuple[float, float]) -> tuple[str, bool]:
+    """Which order kind puts `parts[0]` nearer the host, and whether it reverses.
+
+    The axis is the document's own (`_axis`/`_progress`: side preferences decide
+    it), never a hard-coded left-to-right, and never the current direction.
+    """
+    if abs(progress[0]) >= abs(progress[1]):
+        return (RIGHT_OF, True) if progress[0] > 0 else (LEFT_OF, False)
+    return (BELOW, True) if progress[1] > 0 else (ABOVE, False)
+
+
+def _with_series_arms(
+    binding: GrammarResult, presentation_spec: PresentationSpec
+) -> GrammarResult:
+    """548B3: a declared arm is one two-part order relation, in the binding.
+
+    The compiler and the independent checker both call this on their own bind, so
+    the relation the drawing is arranged by and the one it is graded by are the
+    same statement — not two readings that happen to agree. A document that
+    declares no arm gets its binding back untouched (no constraint, no rank, no
+    geometry change): `[]` and "the key is absent" stay the same document.
+    """
+    branches = presentation_spec.series_branches
+    if not branches:
+        return binding
+    progress = _progress(presentation_spec, _axis(binding))
+    kind, flip = _series_arm_order(progress)
+    extra: list[RelativeConstraint] = []
+    for branch in branches:
+        first, second = branch.parts
+        subject, obj = (second, first) if flip else (first, second)
+        extra.append(RelativeConstraint(
+            kind=kind,
+            subject=subject,
+            object=obj,
+            reason=(
+                f"{SERIES_RELATION_REASON}{branch.id!r} reads {first} -> "
+                f"{branch.middle_net} -> {second} from "
+                f"{branch.from_net} to {branch.to_net}: the arm's declared order "
+                "is the order the drawing must keep"
+            ),
+        ))
+    return replace(binding, constraints=(*binding.constraints, *extra))
+
+
+#: 548D3X3C: the reason every relation the declared panels add carries.
+PANEL_RELATION_REASON = "panelGroups "
+
+#: The four side kinds a panel's reading replaces. A panel branch is read
+#: against its host's **bottom** side, not the side its pin happens to leave by;
+#: that pair's automatic near is replaced by the concrete seat plan too, while
+#: every other relation and every other part's relations stay untouched.
+_PANEL_SIDE_KINDS = frozenset((LEFT_OF, RIGHT_OF, ABOVE, BELOW))
+
+
+def _panel_host_parts(
+    circuit_spec: CircuitSpec, presentation_spec: PresentationSpec,
+) -> dict[str, str]:
+    """``cell part -> host part`` for every declared panel branch (33C2a).
+
+    The host is the unique part outside the branch with a foot on the branch's
+    ``from`` net **inside the branch's own module** — the same reading
+    :func:`boardwise.engines.drawcompiler._series_host_candidates` makes for an
+    arm. Zero or several candidates is not guessed at here: the cross-document
+    validator (§32) already refused those documents by name.
+    """
+    out: dict[str, str] = {}
+    for group in getattr(presentation_spec, "panel_groups", ()) or ():
+        for branch in group.branches:
+            module = next(
+                (item for item in presentation_spec.modules
+                 if branch.part in item.parts),
+                None,
+            )
+            net = circuit_spec.net(branch.from_net)
+            if module is None or net is None:
+                continue
+            inside = set(module.parts)
+            hosts = {
+                member.partition(".")[0] for member in net.members
+                if member.partition(".")[0] in inside
+                and member.partition(".")[0] != branch.part
+            }
+            if len(hosts) == 1:
+                out[branch.part] = next(iter(hosts))
+    return out
+
+
+def _with_panel_groups(
+    binding: GrammarResult,
+    presentation_spec: PresentationSpec,
+    circuit_spec: CircuitSpec,
+) -> GrammarResult:
+    """548D3X3C (33C2a): a panel branch is read below its host, in the binding.
+
+    A grammar binds a branch to the side its own pin leaves by (``right-of`` for
+    a core pin that draws rightward). A declared panel reads those same branches
+    as one block against the host's **bottom** side, so that one relation is
+    *replaced* — for the cell/host pair only, and only when the kind is one of
+    the four side kinds — and the automatic ``near`` relation of the same pair is
+    **filtered out** (33C2b). ``near`` is the grammar's heuristic for "the branch
+    reads beside its part"; a panel states the reading concretely (which host
+    foot, which pose, which from/to seat, what room, and the host lead's path),
+    and that seat plan is checked on the finished drawing
+    (``placement.bind_panel_plans`` + ``mismatches``/hard terms in the base and
+    topology consumers). Keeping the heuristic as well would refuse a legal
+    two-row panel whose second row is simply further than ``near_limit``, and
+    nothing would be gained: the concrete plan is the stronger statement. The
+    explicit ``below`` survives, every other part's relation is untouched, and a
+    document that declares no panel gets its binding back byte for byte.
+    """
+    hosts = _panel_host_parts(circuit_spec, presentation_spec)
+    if not hosts:
+        return binding
+    groups = getattr(presentation_spec, "panel_groups", ()) or ()
+    reasons = {
+        branch.part: (
+            f"{PANEL_RELATION_REASON}{group.id!r}: {branch.part} is read below "
+            f"its host {hosts[branch.part]} on the panel's {group.side} side, "
+            "not on the side the host pin leaves by"
+        )
+        for group in groups for branch in group.branches
+        if branch.part in hosts
+    }
+    constraints: list[RelativeConstraint] = []
+    for item in binding.constraints:
+        pair = {item.subject, item.object}
+        cell = next(
+            (name for name in pair if name in reasons), None,
+        )
+        if cell is None or len(pair) != 2:
+            constraints.append(item)
+            continue
+        host = next(name for name in pair if name != cell)
+        if hosts.get(cell) != host:
+            constraints.append(item)
+            continue
+        if item.kind in _PANEL_SIDE_KINDS:
+            constraints.append(RelativeConstraint(
+                kind=BELOW, subject=cell, object=host, reason=reasons[cell],
+            ))
+            continue
+        if item.kind == NEAR:
+            # The cell's own concrete seat plan is the check that replaces this
+            # heuristic for a panel branch (33C2b).
+            continue
+        constraints.append(item)
+    return replace(binding, constraints=tuple(constraints))
+
+
+# --------------------------------------------------------------------- entry
 
 def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     circuit_spec: CircuitSpec,
@@ -944,6 +1815,27 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
         + ", ".join(f"{value:g}x" for value in budget.spacing_ladder)
     )
 
+    # 0. 548B2: a declared series arm is a statement about the **circuit**, so it
+    #    is checked against the circuit before anything is bound, placed or
+    #    routed. A document that declares none — or `[]`, which is the same
+    #    statement — comes back with an empty list and keeps the path it always
+    #    took, byte for byte; nothing is recognised automatically (the arm is
+    #    read because it was written, never because a shape looked like one).
+    arms = validate_series_branches(circuit_spec, presentation_spec)
+    if arms:
+        result.failures = arms
+        return result
+
+    # 0b. 548D3X3B: a declared reading panel is the same kind of statement — it
+    #     talks about the circuit's two-terminal parts and their host — so it is
+    #     checked against the circuit here, by the same whole-document reader,
+    #     before anything is bound, placed or routed. A document that declares
+    #     none (or `[]`) comes back empty and keeps the path it always took.
+    panels = validate_panel_groups(circuit_spec, presentation_spec)
+    if panels:
+        result.failures = panels
+        return result
+
     # 1. the two documents must agree before any geometry is attempted.
     blockers = _reference_failures(circuit_spec, presentation_spec)
     if blockers:
@@ -965,6 +1857,12 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     # 2. bind; a refusal travels through verbatim. The contract travels with it
     #    (095 A4): the order a decision states is a binding, not a decoration.
     binding = bind_grammar(circuit_spec, presentation_spec, book, intent=intent)
+    # 548B3: a declared series arm becomes one order relation in the binding, so
+    # the layout stage and the independent checker read the same statement.
+    binding = _with_series_arms(binding, presentation_spec)
+    # 548D3X3C: a declared panel replaces its branches' side relations with one
+    # "below the host" relation — the same wrapper the checker applies.
+    binding = _with_panel_groups(binding, presentation_spec, circuit_spec)
     result.grammar = binding
     if not binding.ok:
         result.failures = list(binding.failures)
@@ -1052,6 +1950,37 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
             )
             _try_variants(ctx, widened, result, seen, circuit_spec,
                           presentation_spec, book, budget, intent)
+
+        # 548C6: two-dimensional branch seats, as a **rescue round**. A page the
+        # constructive ladder and the widened round could not draw at all gets one
+        # more walk of its own ladder with the seats computed from the parts'
+        # texts; a page with a candidate never reaches this, which is what keeps
+        # 547A, 548C4's B1 and every other compiling input byte-for-byte theirs.
+        #
+        # The round runs on a result of its own. Its refusals are **not** appended
+        # to `result.rejected`: that list is the constructive ladder's, and both
+        # 147b's rung count and 201B's "how many constructive variants were built"
+        # note would otherwise double for a page the seat round did not draw. Its
+        # reading goes into one note that names the count and the first reason, so
+        # the refusal certificate still says what the second walk measured.
+        if not result.ranked:
+            rescue = CompileResult()
+            ctx.two_dimensional_seats = True
+            try:
+                _try_variants(ctx, _variants(ctx), rescue, seen, circuit_spec,
+                              presentation_spec, book, budget, intent)
+            finally:
+                ctx.two_dimensional_seats = False
+            if rescue.ranked:
+                result.ranked.extend(rescue.ranked)
+                result.notes.extend(rescue.notes)
+            else:
+                first = rescue.rejected[0].reason if rescue.rejected else ""
+                result.notes.append(
+                    "the two-dimensional seat round also found nothing: the same "
+                    f"{len(rescue.rejected)} variant(s) were walked with one row "
+                    f"per sibling branch and refused again (first: {first[:240]})"
+                )
 
         # 201B: the topology search, for the inputs the constructive ladder cannot
         # draw at all. Identity on every input that compiles, because it is only
@@ -1718,6 +2647,12 @@ class _Context:
     #: `serviceLayout`. ``None`` means "not asked yet"; the field is not a
     #: second reading of the circuit, it is the 543A analysis (which is pure).
     service_relations: Any = None
+    #: **548C6**: is the two-dimensional branch-seat rescue round running? It is
+    #: set by :func:`compile` **only** after the constructive ladder and 119's
+    #: widened round produced no candidate, and cleared in a ``finally``, so a
+    #: page that compiles today never takes that path and keeps its own bytes.
+    #: The seat itself is :func:`_seat_branch_stack`.
+    two_dimensional_seats: bool = False
 
     def services(self):
         """The 543A relations, computed once per compilation (543B)."""
@@ -2103,12 +3038,18 @@ def _prepare(
             else:
                 # 543K: an opt-in pair of signal shunts whose pads leave sideways
                 # is drawn as one row of horizontal parts; every other branch
-                # keeps the pose its own return net states.
+                # keeps the pose its own return net states.  548A's repeat-bank
+                # gate (G9) sits between the pair opt-in and that default: only a
+                # row of three or more same-return shunts on one host may turn.
                 paired = _signal_pair_body_direction(ctx, slot)
-                ctx.body_dirs[part_id] = (
-                    paired if paired is not None
-                    else _branch_body_direction(ctx, slot)
-                )
+                if paired is not None:
+                    ctx.body_dirs[part_id] = paired
+                else:
+                    banked = _foreign_row_body_direction(ctx, slot)
+                    ctx.body_dirs[part_id] = (
+                        banked if banked is not None
+                        else _branch_body_direction(ctx, slot)
+                    )
         poses, problem = _accepted_poses(ctx, slot)
         if problem is not None:
             failures.append(problem)
@@ -2440,8 +3381,9 @@ def _branch_lane_edges(
     """``lane label -> that group's same-line edges``, as ``(a, b, measured net)``.
 
     The net is resolved here exactly the way :func:`_points_for_relation`
-    resolves it — the first net the pair has in common, and ``""`` when they
-    share none, which is the case the relation is measured between **origins** on.
+    resolves it — :func:`boardwise.engines.placement.shared_net_order`'s first
+    answer (547S: the signal net before a rail), and ``""`` when they share
+    none, which is the case the relation is measured between **origins** on.
     Carrying it with the edge is what lets the placement level a group whose
     members are measured on *different pins* of different pairs: the flyback's
     U4 is asked to share a row with the divider through its ``FB_SENSE`` pad and
@@ -2460,9 +3402,10 @@ def _branch_lane_edges(
             continue
         if lane_here[1] != lane_there[1]:
             continue
-        common = sorted(
-            set(_part_nets(circuit_spec, here).values())
-            & set(_part_nets(circuit_spec, there).values())
+        common = placement.shared_net_order(
+            _part_nets(circuit_spec, here).values(),
+            _part_nets(circuit_spec, there).values(),
+            lambda net: _circuit_net_class(circuit_spec, net),
         )
         out.setdefault(lane_here[1], []).append(
             (here, there, common[0] if common else "")
@@ -2475,20 +3418,33 @@ def _shared_nets(
 ) -> list[str]:
     """Which net a branch shares with its owner — the node it hangs off.
 
-    A branch usually shares exactly one, but a decoupling capacitor's ground is
-    shared with *every* branch on the same IC, so the return is not evidence of
-    belonging. The rule therefore prefers a shared net that is not ground: a
-    branch hangs off the node it decouples, and only falls back to a shared
-    ground when that is all the two parts have in common.
+    **547S: one contract, four readers.** The order is
+    :func:`boardwise.engines.placement.shared_net_order`'s, in three bands: a net
+    the circuit declares as a **signal** first, then every other **non-``gnd``**
+    common net in the old sorted order (``VCC`` before ``GND``, an undeclared net
+    before ``GND``), and ``gnd`` last. That single function now answers this
+    seat, the ruler the relation gate measures with
+    (:func:`_points_for_relation`), the repair pass's own reading
+    (:func:`_shared_net_of`) and the lane edges (:func:`_branch_lane_edges`) —
+    before this batch two of the four wrote ``sorted(...)[0]`` inline and could
+    anchor a branch on ``3V3`` while the checker measured it on its ``KEY`` net
+    (547C1's measured split).
+
+    A branch usually shares exactly one net, but a decoupling capacitor's ground
+    is shared with *every* branch on the same IC, so the return is not evidence
+    of belonging: **ground always sorts last**, and among the rest the old
+    "prefer a non-return net, then sorted" reading is kept band for band — that
+    is what keeps a decoupling capacitor on ``VCC`` rather than on ``GND``.
     """
-    common = sorted(net for net in set(nets.values()) if net in owner_nets)
-    if not common:
-        return []
-    non_return = [
-        net for net in common
-        if (circuit_spec.net(net) is None or circuit_spec.net(net).cls != "gnd")
-    ]
-    return non_return or common
+    return placement.shared_net_order(
+        nets.values(), owner_nets, lambda net: _circuit_net_class(circuit_spec, net),
+    )
+
+
+def _circuit_net_class(circuit_spec: CircuitSpec, net_id: str) -> str:
+    """This net's declared class, ``""`` when the circuit states none (547S)."""
+    net = circuit_spec.net(net_id)
+    return net.cls if net is not None else ""
 
 
 def _branch_basis(
@@ -2684,6 +3640,148 @@ def _signal_pair_body_direction(
     if direction is None or direction[1] != 0.0:
         return None
     return direction
+
+
+def _foreign_row_body_direction(
+    ctx: _Context, slot: _Slot
+) -> tuple[float, float] | None:
+    """The row body a **repeat-bank** shunt takes when its other foot would land
+    on a foreign pin row (548A).
+
+    ``_branch_body_direction`` hangs every branch's body on its return side.  On
+    a host whose pins are a dense row that is sometimes wrong: the body's far foot
+    then sits on the *next* pin's row, and the run to it crosses the label box of
+    a pin in between.  The frozen 547A fixture is the measured case: ``C1``'s
+    body spans two pin rows and the ``BOOT0`` run is the thing that loses its
+    corridor.
+
+    The predicate is structural, never a coordinate threshold:
+
+    * **G1** a branch with two resolvable pins and a two-pin symbol;
+    * **G2** the pins share one axis in the symbol's own frame, so a row body
+      exists at all;
+    * **G3** the owner is a chain with accepted poses, and the shared token
+      resolves to one of its pins;
+    * **G4** the old body is vertical (an already row-aligned body stands aside);
+    * **G5** the host has foreign-net pins;
+    * **G6** under every same-side host pose the other foot lands on a foreign
+      pin row (within half a grid);
+    * **G7** the seat is horizontal — the direction this returns;
+    * **G8** the row body has at least one accepted pose;
+    * **G9** the branch belongs to a **bank of three or more** two-terminal
+      branches on the same host returning to the same net.
+
+    G9 is what separates a repeated row from unrelated two-terminal branches:
+    the flyback's ``C5``/``D1`` on CLAMP and ``R15`` on CLAMP_B are a pair and a
+    lone branch, and the CH343 ``C1``/``C3`` are two rails' decoupling pair — all
+    banks of size 2 or 1, while 547A's U1 carries GND=5 and 3V3=4.  A pair is a
+    series/differential structure handled elsewhere (543K); only a row of three
+    or more parallel shunts crowds one return's body/label corridor.
+    """
+    # G1: a branch with two resolvable pins.
+    if slot.kind != "branch" or not slot.pin_shared or not slot.pin_other:
+        return None
+    profile = ctx.profile(slot.part_id)
+    if len(profile.pins) != 2:
+        return None
+    # G2: the two pins share one axis in the symbol's own frame.
+    grid = ctx.budget.grid
+    first, second = profile.pins
+    if min(
+        abs(second.tip[0] - first.tip[0]), abs(second.tip[1] - first.tip[1])
+    ) > grid / 2.0:
+        return None
+    span = (
+        abs(second.tip[0] - first.tip[0])
+        + abs(second.tip[1] - first.tip[1])
+    )
+    if span <= 0.0:
+        return None
+    # G3: the owner is a chain with accepted poses, and the shared pin resolves.
+    owner = ctx.slots.get(slot.owner)
+    if owner is None or owner.kind != "chain":
+        return None
+    owner_profile = ctx.profile(owner.part_id)
+    poses, problem = _accepted_poses(ctx, owner)
+    if problem is not None or not poses:
+        return None
+    token = _shared_token(ctx, slot)
+    if not token:
+        return None
+    host = _pin_of_token(owner_profile, token)
+    if host is None:
+        return None
+    # G4: the old body is vertical.
+    hang = _branch_body_direction(ctx, slot)
+    if hang[1] == 0.0:
+        return None
+    # G5: the host has foreign-net pins.
+    owner_nets = _part_nets(ctx.circuit, owner.part_id)
+    foreign: list[tuple[SymbolPin, str]] = []
+    for pin in owner_profile.pins:
+        net = owner_nets.get(pin.number or "") or owner_nets.get(pin.name or "")
+        if net is not None and net != slot.shared_net:
+            foreign.append((pin, net))
+    if not foreign:
+        return None
+    # G7: the seat is horizontal; that is the direction a row body takes.
+    seat = _branch_offset_direction(
+        ctx, slot, {slot.owner: SymbolPose()}, {},
+    )
+    if seat is None or seat[1] != 0.0:
+        return None
+    # G6: under every same-side host pose the other foot lands on a foreign row.
+    side = [
+        pose for pose in poses
+        if _pin_escape(owner_profile, token, pose) == seat
+    ]
+    if not side:
+        return None
+    drop = hang[1] * span
+    for pose in side:
+        host_y = _posed_tip(host, pose)[1]
+        if not any(
+            abs(_posed_tip(pin, pose)[1] - host_y - drop) <= grid / 2.0
+            for pin, _net in foreign
+        ):
+            return None
+    # G8: the row body must have at least one accepted pose.  The probe is read
+    # through the same context the caller is about to fill, then put back.
+    present = slot.part_id in ctx.body_dirs
+    saved = ctx.body_dirs.get(slot.part_id)
+    try:
+        ctx.body_dirs[slot.part_id] = seat
+        row_poses, row_problem = _accepted_poses(ctx, slot)
+    finally:
+        if present:
+            ctx.body_dirs[slot.part_id] = saved  # type: ignore[assignment]
+        else:
+            ctx.body_dirs.pop(slot.part_id, None)
+    if row_problem is not None or not row_poses:
+        return None
+    # G9: only a bank of three or more same-return shunts is a repeated row.
+    if len(_same_return_bank(ctx, slot)) < 3:
+        return None
+    return seat
+
+
+def _same_return_bank(ctx: _Context, slot: _Slot) -> list[str]:
+    """Two-terminal branches sharing this host and this return net (548A G9).
+
+    Membership is the netlist's own structure — which part hangs off which host,
+    which net its far side returns to, and whether the symbol has two pins.  No
+    position is read, so a re-laid-out page does not change the bank.
+    """
+    bank = [slot.part_id]
+    for other in ctx.slots.values():
+        if other is slot or other.kind != "branch":
+            continue
+        if other.owner != slot.owner or other.other_net != slot.other_net:
+            continue
+        if len(ctx.profile(other.part_id).pins) != 2:
+            continue
+        bank.append(other.part_id)
+    return bank
 
 
 def _paired_sibling(ctx: _Context, slot: _Slot, symbol_ref: str) -> bool:
@@ -3076,6 +4174,16 @@ class _Placement:
     origins: dict[str, tuple[float, float]]
     poses: dict[str, SymbolPose]
     residue: tuple[float, float] = (0.0, 0.0)
+    #: The bound series seat plans this placement was built with (548D3B).
+    #: Empty on every page that declares no arm — the historical placement, and
+    #: the field is appended so every positional constructor keeps its meaning.
+    series_plans: tuple[placement.BoundSeriesSeatPlan, ...] = ()
+    #: The bound panel seats this placement carries (548D3X3C). Empty on every
+    #: page that declares no panel, appended for the same reason.
+    panel_plans: tuple[placement.BoundPanelSeatPlan, ...] = ()
+    #: The bound service seats this placement carries (548D3S2). Empty on every
+    #: page that declares no panelGroups, appended for the same reason.
+    service_plans: tuple[placement.BoundPanelSeatPlan, ...] = ()
 
 
 def _part_box(
@@ -3462,8 +4570,39 @@ def _topology_request(ctx: _Context) -> placement.PlacementInput:
         )
         for item in ctx.binding.constraints
     )
+    # 548D3B: the declared arms travel into the one search as the placement's
+    # own templates. The actual lattice is the search's answer (read after it
+    # runs); at request time the origins are still on the plain grid, so the
+    # templates start at lattice (0, 0) and the answer's plans are restated in
+    # the anchored lattice afterwards. `clearance` is separate and stays zero:
+    # the old seat reserved no extra air.
+    templates, template_failure = _series_templates(
+        ctx, (0.0, 0.0), tuple(sorted(ctx.slots)),
+    )
+    if template_failure is not None:
+        raise _SeriesTemplateError(template_failure)
+    # 548D3X3C (33C2): the same conversion the base layout uses, with lattice
+    # (0, 0) — the search's own residue is restated after the anchor. A template
+    # that cannot be stated is a named refusal, not a guess.
+    panel_templates, panel_failure = _panel_templates(
+        ctx, (0.0, 0.0), tuple(sorted(ctx.slots)),
+    )
+    if panel_failure is not None:
+        raise _SeriesTemplateError(panel_failure)
+    service_templates, service_failure = _service_templates(
+        ctx, (0.0, 0.0), tuple(sorted(ctx.slots)),
+    )
+    if service_failure is not None:
+        raise _SeriesTemplateError(service_failure)
     return placement.PlacementInput(
         parts=tuple(parts), nets=nets, relations=relations,
+        series_templates=templates,
+        panel_templates=panel_templates,
+        service_templates=service_templates,
+        # 548D3B: the same label corridors the base consumer gets — one reading
+        # of "which names this page prints and where they sit by default", so
+        # the same arm cannot be legal in one consumer and illegal in the other.
+        label_corridors=_label_corridors(ctx),
         # D1: the chain is stated so the seed can **fold** at an order kind
         # between two chain nodes. Only the topology round passes it, so every
         # page the ladder already draws keeps the one-line seed byte for byte.
@@ -3607,13 +4746,14 @@ def _net_flag_profile(
     """The library symbol a net's own flag is drawn with, or ``None``.
 
     The same two lookups the per-net loop makes: a ground's is ``budget.gnd_flag``
-    and a rail's is found under ``budget.power_flag_prefix + net id``. ``None``
-    means this library carries no flag for that net — a fact the plan states
-    (``_missing_flag_symbol``), and one that makes the reservation pointless.
+    and a rail's is :func:`_flag_ref`'s own name (or its ``PWR-+<net>`` alias when
+    that is what the book carries). ``None`` means this library carries no flag
+    for that net — a fact the plan states (``_missing_flag_symbol``), and one that
+    makes the reservation pointless.
     """
     ref = (
         ctx.budget.gnd_flag if net.cls == "gnd"
-        else f"{ctx.budget.power_flag_prefix}{net.id}"
+        else _flag_ref(ctx, net.id, net.cls)
     )
     return ctx.book.get(ref) if ref else None
 
@@ -3625,11 +4765,11 @@ def _topology_placement(ctx: _Context) -> _Placement | GrammarFailure:
     could not trade one part's position against another's, so a relation two
     parts have to keep between their **pins** was unreachable however many poses
     were tried — the flagship flyback compiled to zero candidates for exactly
-    that reason. The search the task book asked for replaces it; the old solver
-    stays in this module as :func:`_place_chain_and_shelf`, reachable and tested,
-    but nothing in :func:`compile` calls it any more — a fallback nobody routes to
-    is a fallback that rots, and this one is named for what it is so the next
-    reader does not have to guess which of the two is live.
+    that reason. The search the task book asked for is reached from
+    :func:`_topology_round`, **after** the ladder: the constructive rungs
+    (:func:`_place_chain_and_shelf`) still place every input that compiles
+    today, and only a page the ladder cannot place at all falls through to
+    this solver.
 
     The residue is the search's own answer read through the compiler's lattice
     (:func:`_lattice_residue`): a placement whose pin tips do not share one
@@ -3638,8 +4778,67 @@ def _topology_placement(ctx: _Context) -> _Placement | GrammarFailure:
     """
     if ctx.topology is not None:
         return ctx.topology
-    request = _topology_request(ctx)
+    try:
+        request = _topology_request(ctx)
+    except _SeriesTemplateError as exc:
+        ctx.topology = exc.failure
+        return exc.failure
+    except placement.PlacementError as exc:
+        answer = _series_seat_refusal(
+            "$.seriesBranches",
+            f"the declared arm is not a seat the placement can search: {exc}",
+            "correct the arm's host, pins or poses, or drop the entry",
+        )
+        ctx.topology = answer
+        return answer
     result = placement.place(request)
+    # 548D3B: a residual series hard, a refused plan or a plan that does not
+    # match the search's own answer is a refusal, not a candidate. This check
+    # runs before the page anchor because every series term is translation
+    # invariant.
+    series_failure = _series_result_failure(result)
+    if series_failure is not None:
+        ctx.topology = series_failure
+        return series_failure
+    # 548D3X3C (33C2): the panel seats the search carried must hold in the answer
+    # it returned — a refused plan or a cell off its seat is a named refusal.
+    if result.panel_plans:
+        problems = list(result.panel_mismatches())
+        problems.extend(
+            term.render() for term in result.hard
+            if term.name.startswith("panel-")
+        )
+        if problems:
+            answer = _series_seat_refusal(
+                "$.panelGroups",
+                "the placement search returned a panel seat that does not hold: "
+                + "; ".join(problems),
+                "move the ordinary parts out of the panel's reserved room, or "
+                "drop the group that cannot be seated",
+            )
+            ctx.topology = answer
+            return answer
+    # 548D3S2: the service seats the search carried must hold too, and their
+    # parts/reserves join the spread's fixed set below.
+    if result.service_plans:
+        service_problems = [
+            line for plan in result.service_plans
+            for line in plan.mismatches(result.origins, result.poses)
+        ]
+        service_problems.extend(
+            term.render() for term in result.hard
+            if term.name.startswith("service-")
+        )
+        if service_problems:
+            answer = _series_seat_refusal(
+                "$.panelGroups",
+                "the placement search returned a service seat that does not "
+                "hold: " + "; ".join(service_problems),
+                "move the ordinary parts out of the cell's reserved room, or "
+                "drop the branch that cannot be seated",
+            )
+            ctx.topology = answer
+            return answer
     points = [
         placement.posed_tip(pin.tip, result.poses[part_id], result.origins[part_id])
         for part_id in sorted(result.poses)
@@ -3663,22 +4862,1103 @@ def _topology_placement(ctx: _Context) -> _Placement | GrammarFailure:
         )
     else:
         origins = dict(result.origins)
+        probe = next(iter(origins)) if origins else None
+        before = origins[probe] if probe is not None else None
         _anchor_to_page(ctx, origins, result.poses, residue)
-        answer = _Placement(
-            origins=origins, poses=result.poses, residue=residue,
+        delta = (
+            (origins[probe][0] - before[0], origins[probe][1] - before[1])
+            if probe is not None and before is not None else (0.0, 0.0)
         )
-        # 515A hole 2: the search prices relations as **soft** costs, so its
-        # best answer can still miss one — and the ladder round refuses the
-        # very same condition (`_place_chain_and_shelf` ends with
-        # `_relation_failures` and hands back the first failure). The same
-        # gate runs here, on the search's own answer, so a broken relation is
-        # a refusal naming the pair, never a candidate whose evidence carries
-        # a `grammar-relation-broken` finding while `compile` says ok.
-        conflict = _relation_failures(ctx, answer)
-        if conflict:
-            answer = conflict[0]
+        # 548D3D: the search seats ordinary siblings itself, so the constructive
+        # round's band spread never runs on this picture — and a sibling can be
+        # left inside an arm's reserved corridor (`S3` on the measured MCU
+        # page), which the lane binder then refuses. Run the **same** pass here,
+        # on the same real boxes, after the anchor (the arms' terms are
+        # translation invariant, so the seats the search bound are the ones it
+        # sees) and before the plans are translated / the relation gate. The
+        # arm's own parts are excluded: their origins and poses are the binder's
+        # and must not drift, and `_seat_series_arms` still checks every plan
+        # against them. Nothing is invented here — a group whose boxes do not
+        # overlap is not moved at all, exactly as in the constructive round, and
+        # a page that declares no arm does not enter the pass at all, so its
+        # topology answer keeps the bytes it had.
+        spread: GrammarFailure | None = None
+        reserved_boxes: list[Box] = []
+        for plan in (*result.panel_plans, *result.service_plans):
+            reserved_boxes.extend(plan.reserved_boxes)
+            for path in plan.host_paths:
+                for start, stop in zip(path, path[1:]):
+                    reserved_boxes.append((
+                        min(start[0], stop[0]) - 1.0, min(start[1], stop[1]) - 1.0,
+                        max(start[0], stop[0]) + 1.0, max(start[1], stop[1]) + 1.0,
+                    ))
+        if ctx.presentation.series_branches or getattr(
+                ctx.presentation, "panel_groups", ()):
+            fixed_parts = frozenset(
+                part
+                for branch in ctx.presentation.series_branches
+                for part in branch.parts
+            ) | frozenset(
+                branch.part
+                for group in (getattr(ctx.presentation, "panel_groups", ()) or ())
+                for branch in group.branches
+            ) | frozenset(
+                plan.cells[0].part_id for plan in result.service_plans
+                if plan.cells
+            )
+            spread = _spread_band_collisions(
+                ctx, origins, result.poses, fixed_parts,
+                reserved=tuple(reserved_boxes),
+            )
+        if isinstance(spread, GrammarFailure):
+            ctx.topology = spread
+            return spread
+        anchored = (
+            ctx.budget.page_box is not None
+            and not ctx.presentation.user_locks
+        )
+        plans = tuple(
+            plan.translated(delta, residue if anchored else None)
+            for plan in result.series_plans
+        )
+        # 548D3X3C: the spread above may have moved an ordinary part (with the
+        # panel's own reserves as obstacles), so a plan bound before it can be
+        # stale. The panels are re-bound **after** the spread, from the drawing
+        # that really stands, and seated onto it — no second grid, and the same
+        # binder the base layout uses. With no panel this block adds nothing.
+        panel_plans: tuple[placement.BoundPanelSeatPlan, ...] = ()
+        if getattr(ctx.presentation, "panel_groups", ()):
+            panel_plans = placement.bind_panel_plans(request, origins, result.poses)
+            placement.seat_panel_plans(panel_plans, origins, result.poses)
+        else:
+            panel_plans = result.panel_plans
+        # 548D3S2: the service cells are re-bound the same way, from the drawing
+        # the spread left. They are a separate list and never join panel_plans.
+        service_plans: tuple[placement.BoundPanelSeatPlan, ...] = ()
+        if getattr(ctx.presentation, "panel_groups", ()):
+            service_plans = placement.bind_service_plans(
+                request, origins, result.poses, panel_plans)
+            placement.seat_service_plans(service_plans, origins, result.poses)
+        else:
+            service_plans = result.service_plans
+        drifted = [
+            line for plan in plans
+            for line in plan.mismatches(origins, result.poses)
+        ]
+        drifted.extend(
+            line for plan in panel_plans
+            for line in plan.mismatches(origins, result.poses)
+        )
+        drifted.extend(
+            line for plan in service_plans
+            for line in plan.mismatches(origins, result.poses)
+        )
+        if drifted:
+            answer = _series_seat_refusal(
+                "$.seriesBranches",
+                "the page anchor moved the drawing off its bound series seat: "
+                + "; ".join(drifted),
+                "drop the seriesBranches entry, or correct the arm's host",
+            )
+        else:
+            answer = _Placement(
+                origins=origins, poses=result.poses, residue=residue,
+                series_plans=plans, panel_plans=panel_plans,
+                service_plans=service_plans,
+            )
+            # 515A hole 2: the search prices relations as **soft** costs, so its
+            # best answer can still miss one — and the ladder round refuses the
+            # very same condition (`_place_chain_and_shelf` ends with
+            # `_relation_failures` and hands back the first failure). The same
+            # gate runs here, on the search's own answer, so a broken relation is
+            # a refusal naming the pair, never a candidate whose evidence carries
+            # a `grammar-relation-broken` finding while `compile` says ok.
+            conflict = _relation_failures(ctx, answer)
+            if conflict:
+                answer = conflict[0]
     ctx.topology = answer
     return answer
+
+
+def _arm_token_on(nets: Mapping[str, str], net_id: str) -> str:
+    """The spec token this part puts on that net, if any."""
+    return next((token for token, net in nets.items() if net == net_id), "")
+
+
+def _arm_pose(
+    profile: SymbolProfile, near_token: str, far_token: str,
+    direction: tuple[float, float],
+) -> SymbolPose | None:
+    """The pose whose ``near`` foot trails its ``far`` foot along `direction`.
+
+    Nothing about the page is assumed here: the direction is the document's own
+    chain direction, and the pose is chosen from the symbol's legal set so that
+    the two feet of this part run along it in the arm's declared order.
+    """
+    near_pin = _pin_of_token(profile, near_token)
+    far_pin = _pin_of_token(profile, far_token)
+    if near_pin is None or far_pin is None:
+        return None
+    best: tuple[float, SymbolPose] | None = None
+    for pose in profile.poses:
+        near = _posed_tip(near_pin, pose)
+        far = _posed_tip(far_pin, pose)
+        along = (far[0] - near[0], far[1] - near[1])
+        forward = along[0] * direction[0] + along[1] * direction[1]
+        across = abs(along[0] * direction[1] - along[1] * direction[0])
+        if forward <= 0.0 or across > 1e-6:
+            continue
+        if best is None or forward > best[0]:
+            best = (forward, pose)
+    return best[1] if best is not None else None
+
+
+def _arm_host_foot(
+    ctx: _Context, placed: _Placement, part_ids: Sequence[str], net_id: str
+) -> tuple[tuple[float, float], str] | None:
+    """The one foot that drives this arm, and the part it belongs to."""
+    for part in ctx.circuit.parts:
+        if part.id in part_ids or part.id not in placed.origins:
+            continue
+        if part.id not in placed.poses:
+            continue
+        token = _arm_token_on(_part_nets(ctx.circuit, part.id), net_id)
+        if not token:
+            continue
+        profile = ctx.profile(part.id)
+        pin = _pin_of_token(profile, token)
+        if pin is None:
+            continue
+        tip = _posed_tip(pin, placed.poses[part.id])
+        origin = placed.origins[part.id]
+        return (origin[0] + tip[0], origin[1] + tip[1]), part.id
+    return None
+
+
+class _SeriesTemplateError(Exception):
+    """A declared arm's facts are incomplete; carries the named refusal."""
+
+    def __init__(self, failure: GrammarFailure) -> None:
+        super().__init__(failure.detail)
+        self.failure = failure
+
+
+def _series_host_candidates(
+    ctx: _Context, part_ids: Sequence[str], net_id: str
+) -> list[tuple[str, str]]:
+    """Every part outside the pair with a foot on the arm's host net."""
+    out: list[tuple[str, str]] = []
+    for part in ctx.circuit.parts:
+        if part.id in part_ids:
+            continue
+        token = _arm_token_on(_part_nets(ctx.circuit, part.id), net_id)
+        if token:
+            out.append((part.id, token))
+    return out
+
+
+def _series_yield_parts(
+    ctx: _Context, arm_parts: Sequence[str]
+) -> frozenset[str]:
+    """The ordinary **signal** branches a series seat may move.
+
+    A rail's decoupling part is not an ordinary branch: an arm's reserve may not
+    push it aside, and a page whose seat would bury one is refused by name. A
+    signal branch (a key, an LED, a status pin) is the part the arm can yield.
+    The arm's own two parts and its host are never in the set.
+    """
+    excluded = set(arm_parts)
+    excluded |= _service_branch_parts(ctx)
+    # 548D3X3C: a panel cell is not an ordinary branch either — an arm's yield
+    # may not push a cell out of the seat the panel binder is about to bind.
+    excluded.update(
+        branch.part
+        for group in (getattr(ctx.presentation, "panel_groups", ()) or ())
+        for branch in group.branches
+    )
+    out: set[str] = set()
+    for part_id in ctx.slots:
+        if part_id in excluded:
+            continue
+        for net_id in _part_nets(ctx.circuit, part_id).values():
+            net = ctx.circuit.net(net_id)
+            if net is not None and net.cls == "signal":
+                out.add(part_id)
+                break
+    return frozenset(out)
+
+
+def _series_templates(
+    ctx: _Context,
+    residue: tuple[float, float],
+    part_ids: Sequence[str],
+) -> tuple[tuple[placement.SeriesSeatTemplate, ...], GrammarFailure | None]:
+    """Turn every ``seriesBranches`` entry into the placement's own template.
+
+    The facts are read exactly where :func:`_seat_series_arms` read them before:
+    the two parts' feet on the declared nets (:func:`_arm_token_on`) and the
+    poses whose feet run along ``ctx.progress`` (:func:`_arm_pose`). The host is
+    the **unique** part outside the pair with a foot on ``from_net``; zero or
+    several candidates is a named ``layout-unsat``, never a guess. The lattice is
+    the caller's actual placement residue, and ``clearance`` is a separate
+    padding field (zero here: the old seat reserved no extra air).
+    """
+    branches = ctx.presentation.series_branches
+    if not branches:
+        return (), None
+    arm_parts = [
+        part_id for branch in branches for part_id in branch.parts
+    ]
+    yield_parts = _series_yield_parts(ctx, arm_parts)
+    templates: list[placement.SeriesSeatTemplate] = []
+    known = set(part_ids)
+    for index, branch in enumerate(branches):
+        spot = f"$.seriesBranches[{index}] ({branch.id})"
+        first_id, second_id = branch.parts
+        unplaced = [
+            part_id for part_id in (first_id, second_id) if part_id not in known
+        ]
+        if unplaced:
+            return (), _series_seat_refusal(
+                spot,
+                f"the entry {branch.id!r} declares {first_id!r} -> "
+                f"{branch.middle_net!r} -> {second_id!r}, but this layout gives "
+                f"no seat to {unplaced}",
+                f"place {unplaced} on the page, or drop seriesBranches entry "
+                f"{branch.id!r}",
+            )
+        first_profile = ctx.profile(first_id)
+        second_profile = ctx.profile(second_id)
+        first_nets = _part_nets(ctx.circuit, first_id)
+        second_nets = _part_nets(ctx.circuit, second_id)
+        from_token = _arm_token_on(first_nets, branch.from_net)
+        first_middle = _arm_token_on(first_nets, branch.middle_net)
+        second_middle = _arm_token_on(second_nets, branch.middle_net)
+        to_token = _arm_token_on(second_nets, branch.to_net)
+        if not all((from_token, first_middle, second_middle, to_token)):
+            missing = [
+                f"{part!r} on {net!r}"
+                for part, token, net in (
+                    (first_id, from_token, branch.from_net),
+                    (first_id, first_middle, branch.middle_net),
+                    (second_id, second_middle, branch.middle_net),
+                    (second_id, to_token, branch.to_net),
+                )
+                if not token
+            ]
+            return (), _series_seat_refusal(
+                spot,
+                f"the entry {branch.id!r} needs a foot of {first_id!r} on "
+                f"{branch.from_net!r} and {branch.middle_net!r}, and a foot of "
+                f"{second_id!r} on {branch.middle_net!r} and {branch.to_net!r}; "
+                f"the netlist gives none for {missing}",
+                "connect the arm's parts to those nets, or drop the entry",
+            )
+        hosts = _series_host_candidates(ctx, branch.parts, branch.from_net)
+        if len(hosts) != 1:
+            if hosts:
+                what = (
+                    "several parts drive it: "
+                    + ", ".join(f"{part}.{token}" for part, token in hosts)
+                )
+                action = (
+                    "leave exactly one host foot on the arm's from net, or drop "
+                    f"seriesBranches entry {branch.id!r}"
+                )
+            else:
+                what = "no part outside the pair drives it"
+                action = (
+                    f"connect {branch.from_net!r} to exactly one host foot, or "
+                    f"drop seriesBranches entry {branch.id!r}"
+                )
+            return (), _series_seat_refusal(
+                spot,
+                f"the entry {branch.id!r} runs from {branch.from_net!r}, but "
+                f"{what}, so the arm has no unique host to start from",
+                action,
+            )
+        host_part, host_token = hosts[0]
+        first_pose = _arm_pose(
+            first_profile, from_token, first_middle, ctx.progress
+        )
+        second_pose = _arm_pose(
+            second_profile, second_middle, to_token, ctx.progress
+        )
+        if first_pose is None or second_pose is None:
+            starved = []
+            if first_pose is None:
+                starved.append((first_id, from_token, first_middle))
+            if second_pose is None:
+                starved.append((second_id, second_middle, to_token))
+            shapes = "; ".join(
+                f"{part!r} has no legal pose that runs {near!r} -> {far!r} along "
+                f"{ctx.progress} (its legal poses are "
+                f"{[pose.label() for pose in ctx.profile(part).poses]})"
+                for part, near, far in starved
+            )
+            return (), _series_seat_refusal(
+                spot,
+                f"the entry {branch.id!r} reads {first_id!r} -> "
+                f"{branch.middle_net!r} -> {second_id!r} along {ctx.progress}, "
+                f"but {shapes}",
+                "add the pose that draws this symbol's two feet along the chain "
+                "to its legal poses, or declare the arm differently",
+            )
+        try:
+            template = placement.SeriesSeatTemplate(
+                branch_id=branch.id,
+                host_part=host_part,
+                host_token=host_token,
+                first=placement.SeriesSeatArmPart(
+                    first_id, from_token=from_token, middle_token=first_middle,
+                ),
+                second=placement.SeriesSeatArmPart(
+                    second_id, middle_token=second_middle, to_token=to_token,
+                ),
+                first_pose=first_pose,
+                second_pose=second_pose,
+                progress=ctx.progress,
+                lateral=ctx.lateral(),
+                grid=ctx.budget.grid,
+                lattice=residue,
+                clearance=0.0,
+                yield_parts=yield_parts,
+                pitch_source="ordinary-seed",
+            )
+        except placement.PlacementError as exc:
+            return (), _series_seat_refusal(
+                spot, f"the entry {branch.id!r} cannot be stated as a seat: {exc}",
+                "correct the entry's parts, pins, poses or chain axis",
+            )
+        templates.append(template)
+    return tuple(templates), None
+
+
+def _panel_templates(
+    ctx: _Context,
+    residue: tuple[float, float],
+    part_ids: Sequence[str],
+) -> tuple[tuple[placement.PanelSeatTemplate, ...], GrammarFailure | None]:
+    """Turn every ``panelGroups`` entry into the placement's own template (33C2).
+
+    The facts are read where the validator read them: each branch's foot on its
+    two nets (:func:`_arm_token_on`), the host foot its ``from`` net resolves to
+    inside the module (:func:`_series_host_candidates`), and the pose that runs
+    the cell's feet from the host net down to the terminal (``_arm_pose`` with
+    the page's downward reading). The printed rows come from the compiler's own
+    ruler (:func:`_line_boxes`) and the terminal flag's room from the same
+    :class:`placement.FlagReservation` the placement already receives
+    (:func:`_flag_seats`); a bus whose flag symbol the library does not carry is
+    a named refusal, never a cell without room. No grid is invented here: the
+    template carries the group's columns and lattice, and
+    :func:`placement.bind_panel_plans` is the only place cells are solved.
+    """
+    groups = getattr(ctx.presentation, "panel_groups", ()) or ()
+    if not groups:
+        return (), None
+    known = set(part_ids)
+    seats = {(item.part_id, item.token): item for item in _flag_seats(ctx)}
+    templates: list[placement.PanelSeatTemplate] = []
+    for group in groups:
+        spot = f"$.panelGroups[{group.id!r}]"
+        if group.side != placement.PANEL_SIDE_BOTTOM:
+            return (), _series_seat_refusal(
+                spot,
+                f"the group is read against the host's {group.side!r} side, and "
+                "this build seats panels under the host body only",
+                "state side='bottom', or drop the group",
+            )
+        cells: list[placement.PanelCell] = []
+        for branch in group.branches:
+            if branch.part not in known:
+                return (), _series_seat_refusal(
+                    spot,
+                    f"the branch part {branch.part!r} is not placed by this "
+                    "layout, so its panel cell has no seat",
+                    "place the part on the page, or drop the branch",
+                )
+            profile = ctx.profile(branch.part)
+            nets = _part_nets(ctx.circuit, branch.part)
+            from_token = _arm_token_on(nets, branch.from_net)
+            to_token = _arm_token_on(nets, branch.to_net)
+            if not from_token or not to_token:
+                return (), _series_seat_refusal(
+                    spot,
+                    f"the branch {branch.part!r} needs one foot on "
+                    f"{branch.from_net!r} and one on {branch.to_net!r}",
+                    "connect the branch's two ends, or drop the branch",
+                )
+            candidates = _series_host_candidates(
+                ctx, (branch.part,), branch.from_net)
+            if len(candidates) != 1:
+                return (), _series_seat_refusal(
+                    spot,
+                    f"the from net {branch.from_net!r} of {branch.part!r} has "
+                    f"{len(candidates)} host foot/foot(s): {candidates or 'none'}",
+                    "leave exactly one host foot on each branch's from net",
+                )
+            host_part, host_token = candidates[0]
+            pose = _arm_pose(profile, from_token, to_token, (0.0, -1.0))
+            if pose is None:
+                return (), _series_seat_refusal(
+                    spot,
+                    f"{branch.part!r} has no legal pose that runs its "
+                    f"{from_token!r} foot above its {to_token!r} foot",
+                    "add the host-to-terminal pose to its legal poses, or drop "
+                    "the branch",
+                )
+            relative = placement.part_box(profile, pose, (0.0, 0.0))
+            rows = _line_boxes(
+                relative, [text for _kind, text in _part_lines(ctx, branch.part)],
+                "right",
+            )
+            to_net = ctx.circuit.net(branch.to_net)
+            flag_box = None
+            if to_net is not None and to_net.cls in ("gnd", "power"):
+                # 548D3X3C (§34): a cell's terminal flag hangs **down** out of
+                # its to pin, whatever the rail's own flag does elsewhere. The
+                # room is measured with the compiler's own ruler
+                # (`_flag_rotation`/`_flag_box`) at the anchor the lead reaches
+                # below the pin; the up-facing rail reservation (`_flag_seats`)
+                # is the wrong side for a terminal and would reserve the room
+                # the wire into the cell needs.
+                profile_flag, ref = _flag_plan(ctx, to_net.id, to_net.cls)
+                if profile_flag is None:
+                    return (), _series_seat_refusal(
+                        spot,
+                        f"the terminal net {branch.to_net!r} is a bus and the "
+                        f"library carries no flag symbol {ref!r}, so the cell's "
+                        "terminal flag has no room to reserve",
+                        f"add {ref!r} to the library, or terminate the branch on "
+                        "a net this library can flag",
+                    )
+                kind = flag_glyph_kind(profile_flag)
+                down = (0.0, -1.0)
+                box = _flag_box(
+                    profile_flag, _flag_rotation(down, kind),
+                    (0.0, -FLAG_LEAD), to_net.id,
+                )
+                # The box is stated relative to the **pin**, like every other
+                # `FlagReservation`: shift the anchor-relative box down the lead
+                # and include the pin itself (the lead's first point).
+                flag_box = (
+                    min(box[0], 0.0), min(box[1] - FLAG_LEAD, 0.0),
+                    max(box[2], 0.0), max(box[3] - FLAG_LEAD, 0.0),
+                )
+            cells.append(placement.PanelCell(
+                part_id=branch.part, from_net=branch.from_net,
+                to_net=branch.to_net, from_token=from_token, to_token=to_token,
+                host_token=host_token, pose=pose, text_boxes=tuple(rows),
+                flag_box=flag_box,
+            ))
+        host_parts = sorted({
+            _series_host_candidates(ctx, (cell.part_id,), cell.from_net)[0][0]
+            for cell in cells
+        })
+        if len(host_parts) != 1:
+            return (), _series_seat_refusal(
+                spot,
+                f"the group resolves to more than one host part: {host_parts}",
+                "declare one panel per host, or rewire onto one host",
+            )
+        try:
+            templates.append(placement.PanelSeatTemplate(
+                group_id=group.id, host_part=host_parts[0], cells=tuple(cells),
+                columns=group.columns, side=group.side,
+                grid=ctx.budget.grid, lattice=residue,
+            ))
+        except placement.PlacementError as exc:
+            return (), _series_seat_refusal(
+                spot, f"the group cannot be stated as a seat: {exc}",
+                "correct the group's side, columns or branches",
+            )
+    return tuple(templates), None
+
+
+def _label_corridors(
+    ctx: _Context,
+) -> tuple[placement.LabelCorridor, ...]:
+    """The default seat of every label this page prints, as pure data (548D3B).
+
+    A **single-foot signal net** is a net the page draws as a name hung on the
+    one pin that owns it — the reading the ladder's pages have always made. The
+    box that name takes comes from the compiler's own ruler, so the numbers here
+    are the same ones :func:`_label_at` would print:
+
+    * ``width`` is :func:`text_width` of the net's name and ``height`` is
+      :data:`TEXT_SIZE` — text is always horizontal, so the width always runs
+      along x and no rotation below ever turns the box;
+    * ``reach_x`` / ``reach_y`` are ``_label_at``'s own two first-rung offsets
+      (half the name's advance plus :data:`TEXT_GAP` plus the policy's standoff,
+      and the text row's half-height plus the same two terms);
+    * ``local_direction`` is the pin's **stated** escape in the symbol's frame;
+      the pose turns it into a page direction at the placement, exactly where
+      ``_pin_escape`` would, so a part that turns moves its label with it.
+
+    Empty when the page prints no such name, which is the default for every
+    drawing that has no single-foot signal net — and then nothing downstream
+    transforms or tests a corridor at all.
+    """
+    standoff = _label_standoff(ctx)
+    out: list[placement.LabelCorridor] = []
+    for net in ctx.circuit.nets:
+        if net.cls != "signal" or len(net.members) != 1:
+            continue
+        part_id, _, token = net.members[0].partition(".")
+        if part_id not in ctx.slots or not token:
+            continue
+        pin = _pin_of_token(ctx.profile(part_id), token)
+        if pin is None or pin.direction not in ("left", "right", "up", "down"):
+            continue
+        width = text_width(net.id)
+        out.append(placement.LabelCorridor(
+            part_id=part_id,
+            token=token,
+            local_direction=pin.direction,
+            width=width,
+            height=TEXT_SIZE,
+            reach_x=width / 2.0 + TEXT_GAP + standoff,
+            reach_y=TEXT_SIZE / 2.0 + TEXT_GAP + standoff,
+            net_id=net.id,
+        ))
+    return tuple(out)
+
+
+def _service_templates(
+    ctx: _Context,
+    residue: tuple[float, float],
+    part_ids: Sequence[str],
+) -> tuple[tuple[placement.ServiceSeatTemplate, ...], GrammarFailure | None]:
+    """Every ordinary two-foot branch as one service seat beside its host (§35A).
+
+    Only a document that states ``panelGroups`` enters this pass: no other page
+    gets a service template, a cost term or a reserved box, so its random
+    trajectory and JSON are the ones it always had.
+
+    The facts are the compiler's own and come from one place each: the branch's
+    slot (:attr:`_Slot`) says which net it shares with its owner and which is its
+    far end; the feet are :func:`_arm_token_on`; the host is the **unique** foot
+    on the shared net outside the branch (:func:`_series_host_candidates`), and
+    zero or several is a named refusal, never a guess; the reading side is the
+    host pin's own symbol direction (left/right only); the pose is
+    :func:`_arm_pose` along that side, so the feet run host → terminal; the rows
+    are :func:`_line_boxes` on the **outer** side; and the terminal flag's room
+    and lead are the compiler's own ``_flag_box``/``FLAG_LEAD`` on the same
+    outward axis. No absolute origin is written: the template carries the
+    budget's grid and the caller's residue only.
+
+    Panel cells are excluded by name — they belong to the panel binder, and one
+    part is one seat.
+    """
+    groups = getattr(ctx.presentation, "panel_groups", ()) or ()
+    if not groups:
+        return (), None
+    panel_cells = {
+        branch.part for group in groups for branch in group.branches
+    }
+    known = set(part_ids)
+    templates: list[placement.ServiceSeatTemplate] = []
+    for part_id in sorted(ctx.slots):
+        slot = ctx.slots[part_id]
+        if (
+            slot.kind != "branch"
+            or not slot.owner
+            or not slot.shared_net
+            or not slot.other_net
+        ):
+            continue
+        if part_id in panel_cells or part_id not in known:
+            continue
+        spot = f"$.panelGroups (service {part_id!r})"
+        profile = ctx.profile(part_id)
+        nets = _part_nets(ctx.circuit, part_id)
+        from_token = _arm_token_on(nets, slot.shared_net)
+        to_token = _arm_token_on(nets, slot.other_net)
+        if not from_token or not to_token:
+            return (), _series_seat_refusal(
+                spot,
+                f"the branch {part_id!r} needs one foot on "
+                f"{slot.shared_net!r} and one on {slot.other_net!r}",
+                "connect the branch's two ends, or drop the entry",
+            )
+        # The host is the branch's **owner** and the compiler's own host
+        # reader decides which of its feet drives the branch — the same
+        # `_series_host_candidates` the arms use, filtered to the owner. A
+        # supply rail with several feet on it (U1.VDD and U1.VBAT on 3V3) is
+        # therefore never resolved by symbol order: zero or several candidates
+        # left after the owner filter is a named refusal, not a guess.
+        host_part = slot.owner
+        host_candidates = [
+            (part, token)
+            for part, token in _series_host_candidates(
+                ctx, (part_id,), slot.shared_net)
+            if part == host_part
+        ]
+        if len(host_candidates) != 1:
+            return (), _series_seat_refusal(
+                spot,
+                f"the branch {part_id!r} hangs off {host_part!r}, and that "
+                f"owner has {len(host_candidates)} host foot/foot(s) on the "
+                f"shared net {slot.shared_net!r}: {host_candidates or 'none'}",
+                "leave exactly one host foot on the branch's shared net, or "
+                "move the branch to a host whose pin drives it",
+            )
+        host_part, host_token = host_candidates[0]
+        host_pin = next(
+            (pin for pin in ctx.profile(host_part).pins
+             if pin.number == host_token or pin.name == host_token),
+            None,
+        )
+        direction = getattr(host_pin, "direction", "")
+        if direction not in ("left", "right"):
+            return (), _series_seat_refusal(
+                spot,
+                f"the host pin {host_part}.{host_token} of {part_id!r} states "
+                f"no horizontal reading side ({direction!r}), so this build "
+                "cannot tell which side the branch is read on",
+                "give that library pin a left/right direction, or drop the entry",
+            )
+        side = direction
+        along = (1.0, 0.0) if side == "right" else (-1.0, 0.0)
+        pose = _arm_pose(profile, from_token, to_token, along)
+        if pose is None:
+            return (), _series_seat_refusal(
+                spot,
+                f"{part_id!r} has no legal pose that runs its {from_token!r} "
+                f"foot towards its host and its {to_token!r} foot outwards",
+                "add the host-to-terminal pose to its legal poses, or drop the "
+                "entry",
+            )
+        relative = placement.part_box(profile, pose, (0.0, 0.0))
+        rows = _line_boxes(
+            relative, [text for _kind, text in _part_lines(ctx, part_id)], side,
+        )
+        flag_box = None
+        flag_lead: tuple[tuple[float, float], ...] = ()
+        to_net = ctx.circuit.net(slot.other_net)
+        if to_net is not None and to_net.cls in ("gnd", "power"):
+            profile_flag, ref = _flag_plan(ctx, to_net.id, to_net.cls)
+            if profile_flag is None:
+                return (), _series_seat_refusal(
+                    spot,
+                    f"the terminal net {slot.other_net!r} is a bus and the "
+                    f"library carries no flag symbol {ref!r}, so the branch's "
+                    "terminal flag has no room to reserve",
+                    f"add {ref!r} to the library, or terminate the branch on a "
+                    "net this library can flag",
+                )
+            # The compiler's own reading of a terminal flag: the glyph stands
+            # **upright** (069 sec.7) and is reached by a vertical run, so the
+            # lead is straight down from the to pin on every side. The room is
+            # the same box the panel binder reserves.
+            kind = flag_glyph_kind(profile_flag)
+            down = (0.0, -1.0)
+            box = _flag_box(
+                profile_flag, _flag_rotation(down, kind),
+                (0.0, -FLAG_LEAD), to_net.id,
+            )
+            flag_box = (
+                min(box[0], 0.0), min(box[1] - FLAG_LEAD, 0.0),
+                max(box[2], 0.0), max(box[3] - FLAG_LEAD, 0.0),
+            )
+            flag_lead = ((0.0, 0.0), (0.0, -FLAG_LEAD))
+        try:
+            templates.append(placement.ServiceSeatTemplate(
+                group_id=f"service:{part_id}", host_part=host_part, side=side,
+                cell=placement.PanelCell(
+                    part_id=part_id, from_net=slot.shared_net,
+                    to_net=slot.other_net, from_token=from_token,
+                    to_token=to_token, host_token=host_token, pose=pose,
+                    text_boxes=tuple(rows), flag_box=flag_box,
+                    flag_lead=flag_lead,
+                ),
+                grid=ctx.budget.grid, lattice=residue,
+            ))
+        except placement.PlacementError as exc:
+            return (), _series_seat_refusal(
+                spot,
+                f"the service seat of {part_id!r} is not a legal template: {exc}",
+                "correct the branch's host, pins or pose, or drop the entry",
+            )
+    return tuple(templates), None
+
+
+def _series_placement_request(
+    ctx: _Context,
+    templates: Sequence[placement.SeriesSeatTemplate],
+    poses: Mapping[str, SymbolPose],
+    panel_templates: Sequence[placement.PanelSeatTemplate] = (),
+    service_templates: Sequence[placement.ServiceSeatTemplate] = (),
+) -> placement.PlacementInput:
+    """A minimal PlacementInput for the base layout's binder call.
+
+    Only the fields the binder reads are stated: parts, nets, templates, grid
+    and direction. The layout already has its poses, so the legal set is that
+    one pose plus every template pose (the template validation checks that the
+    arm poses are legal for their parts).
+    """
+    pose_book: dict[str, list[SymbolPose]] = {
+        part_id: [poses[part_id]] for part_id in sorted(poses)
+    }
+    for template in templates:
+        for part_id, pose in (
+            (template.first.part_id, template.first_pose),
+            (template.second.part_id, template.second_pose),
+        ):
+            pose_book.setdefault(part_id, []).append(pose)
+    parts: list[placement.PlacementPart] = []
+    for part_id in sorted(pose_book):
+        lock = ctx.locked(part_id)
+        parts.append(placement.PlacementPart(
+            part_id=part_id,
+            profile=ctx.profile(part_id),
+            poses=tuple(dict.fromkeys(pose_book[part_id])),
+            locked=_locked_pose(ctx, part_id, tuple(pose_book[part_id])),
+            locked_origin=(lock.x, lock.y) if lock is not None else None,
+            value=(ctx.circuit.part(part_id).value
+                   if ctx.circuit.part(part_id) is not None else ""),
+        ))
+    nets = tuple(
+        placement.PlacementNet(
+            net_id=net.id,
+            members=tuple(
+                (member.partition(".")[0], member.partition(".")[2])
+                for member in net.members
+            ),
+            cls=net.cls,
+        )
+        for net in ctx.circuit.nets
+    )
+    return placement.PlacementInput(
+        parts=tuple(parts), nets=nets, relations=(),
+        series_templates=tuple(templates),
+        panel_templates=tuple(panel_templates),
+        service_templates=tuple(service_templates),
+        label_corridors=_label_corridors(ctx),
+        progress=ctx.progress, lateral=ctx.lateral(),
+        grid=ctx.budget.grid, near_limit=ctx.budget.near_limit,
+        channel=ctx.budget.channel, lane=ctx.budget.lane,
+    )
+
+
+def _series_result_failure(
+    result: placement.PlacementResult,
+) -> GrammarFailure | None:
+    """A residual series problem in the search's answer, or ``None``.
+
+    Read off the result itself: every plan must match the answer's origins and
+    poses, and no ``series-*`` cost may still be violated. A residual is a
+    ``layout-unsat`` naming the branch; it is never a candidate.
+    """
+    problems: list[str] = list(result.series_mismatches())
+    for term in result.hard:
+        if term.name.startswith("series-"):
+            problems.append(term.render())
+    if not problems:
+        return None
+    return _series_seat_refusal(
+        "$.seriesBranches",
+        "the placement search returned a series seat that does not hold: "
+        + "; ".join(problems),
+        "move the ordinary parts out of the arm's reserved boxes, or drop the "
+        "seriesBranches entry that cannot be seated",
+    )
+
+
+def _series_seat_refusal(spot: str, detail: str, action: str) -> GrammarFailure:
+    """548B3-R: a declared arm that cannot be seated, refused in an existing class.
+
+    ``layout-unsat`` is the category for "the drawing cannot hold what the
+    document asks for" — the same one :func:`_relation_failures` and the zero-
+    candidate path use. No fifth category is invented: the arm is *legal* (548B2
+    passed it), what fails is the geometry this variant can build.
+    """
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT, subject=spot, detail=detail, action=action,
+    )
+
+
+def _series_path_mismatches(
+    ctx: _Context, placed: _Placement, segments: Sequence[LayoutSegment]
+) -> tuple[str, ...]:
+    """Is the **drawn** host lead the plan's own path? (548D3B)
+
+    The reserve and the wire have to be one drawing. The plan records the point
+    sequence its host lead means (host foot -> lane corner -> first ``from``
+    foot); this asks the finished plan whether every one of those points is on a
+    run of the **host pin's own net**. A wire that takes another way round is not
+    covered by the boxes the placement reserved, so a caller that wants the two
+    guaranteed hands the answer back as a named refusal instead of shipping a
+    reservation nobody uses.
+
+    Empty when no arm is declared, when the plan has no recorded path, or when
+    the net carries no run at all (the router's own refusal path reports that).
+    """
+    if not placed.series_plans:
+        return ()
+    out: list[str] = []
+    for seat in placed.series_plans:
+        if not seat.seated or len(seat.host_path) < 2:
+            continue
+        nets = _part_nets(ctx.circuit, seat.host_part)
+        net_id = nets.get(seat.host_token, "")
+        if not net_id:
+            continue
+        drawn = [item for item in segments if item.net == net_id]
+        for point in seat.host_path:
+            if any(_on_polyline(point, item.points) for item in drawn):
+                continue
+            out.append(
+                f"{seat.branch_id}: the drawn {net_id} run does not pass through "
+                f"({point[0]:g}, {point[1]:g}), which is the arm's own host lead"
+            )
+    return tuple(out)
+
+
+def _series_host_channel_problems(
+    ctx: _Context, placed: _Placement, segments: Sequence[LayoutSegment]
+) -> tuple[str, ...]:
+    """Does the **drawn** host lead reach the arm without going round the page?
+
+    Quality and envelope, not literal waypoint equality (548D3B). The arm's plan
+    records the lead it reserved — host foot, the lane corner, the first part's
+    ``from`` foot — and the router is free to draw the same lead as a simpler
+    right-angle staircase, which is what the measured 548D page does:
+    ``(80,35) -> (80,40) -> (160,40)`` against a plan that says
+    ``(80,35) -> (85,35) -> (160,40)``. Demanding the corner at ``(85,35)``
+    refused the page for a stub that is one grid step of quantization, not a
+    detour.
+
+    So the question is asked as the three things a reader means by "the wire
+    reaches the arm":
+
+    * **connectivity** — the host foot and the first ``from`` foot are on one
+      drawn run of the host net;
+    * **length** — that run's total travel does not exceed the plan's own lead
+      plus the quantization allowance (:data:`_SERIES_LEAD_SLACK_STEPS` lattice
+      steps per leg of the plan: a snapped corner can cost a step at each end
+      but cannot walk round the page);
+    * **envelope** — every point of the run lies inside the union of the plan's
+      ``guard_boxes`` (the conservative boxes the arm reserved, which include the
+      host lead's AABB), widened by one lattice step for the same quantization.
+
+    A route above or to the right of the host and back is a route outside that
+    envelope and longer than the lead, so it is refused by both readings; an
+    equal-length simplification is not.
+    """
+    if not placed.series_plans:
+        return ()
+    out: list[str] = []
+    for seat in placed.series_plans:
+        if not seat.seated or len(seat.host_path) < 2:
+            continue
+        net_id = _part_nets(ctx.circuit, seat.host_part).get(seat.host_token, "")
+        if not net_id:
+            continue
+        feet = [
+            _foot_point(ctx, placed, seat.host_part, seat.host_token),
+            _foot_point(ctx, placed, seat.first_part, seat.first_from_token),
+        ]
+        pieces = [
+            (start, end)
+            for segment in segments if segment.net == net_id
+            for start, end in zip(segment.points, segment.points[1:])
+        ]
+        if any(foot is None for foot in feet):
+            continue
+        if not pieces:
+            out.append(
+                f"{seat.branch_id}: the host net {net_id} is not drawn at all, so "
+                "the arm's lead does not exist"
+            )
+            continue
+        components = _polyline_components(pieces)
+        groups = [
+            _component_at(pieces, components, foot) for foot in feet
+        ]
+        if any(group is None for group in groups):
+            out.append(
+                f"{seat.branch_id}: the drawn {net_id} run does not reach "
+                + " and ".join(
+                    f"({foot[0]:g}, {foot[1]:g})" for foot in feet if foot is not None
+                )
+            )
+            continue
+        if groups[0] != groups[1]:
+            out.append(
+                f"{seat.branch_id}: the drawn {net_id} run does not connect the "
+                f"host foot ({feet[0][0]:g}, {feet[0][1]:g}) to the first "
+                f"part's foot ({feet[1][0]:g}, {feet[1][1]:g})"
+            )
+            continue
+        drawn = sum(
+            abs(end[0] - start[0]) + abs(end[1] - start[1])
+            for start, end in pieces
+        )
+        planned = sum(
+            abs(end[0] - start[0]) + abs(end[1] - start[1])
+            for start, end in zip(seat.host_path, seat.host_path[1:])
+        )
+        slack = seat.grid * _SERIES_LEAD_SLACK_STEPS * max(1, len(seat.host_path) - 1)
+        if drawn > planned + slack:
+            out.append(
+                f"{seat.branch_id}: the drawn {net_id} run travels {drawn:g} "
+                f"units for a {planned:g}-unit lead (allowed {planned + slack:g}), "
+                "so it goes round the page instead of along the arm's channel"
+            )
+            continue
+        envelope = _series_envelope(seat)
+        if envelope is not None:
+            pad = seat.grid
+            outside = [
+                point
+                for start, end in pieces
+                for point in (start, end)
+                if not (
+                    envelope[0] - pad <= point[0] <= envelope[2] + pad
+                    and envelope[1] - pad <= point[1] <= envelope[3] + pad
+                )
+            ]
+            if outside:
+                point = outside[0]
+                out.append(
+                    f"{seat.branch_id}: the drawn {net_id} run leaves the arm's "
+                    f"envelope at ({point[0]:g}, {point[1]:g}); the reservation "
+                    f"covers {tuple(round(value, 3) for value in envelope)}"
+                )
+    return tuple(out)
+
+
+#: 548D3B: how many lattice steps of quantization the drawn lead may cost per leg
+#: of the plan's own path. One snapped endpoint can be a step off; two per leg is
+#: the reading a staircase takes, and it still cannot pay for a loop round the
+#: host (the measured MCU route is hundreds of units longer than its lead).
+_SERIES_LEAD_SLACK_STEPS = 2
+
+
+def _foot_point(
+    ctx: _Context, placed: _Placement, part_id: str, token: str
+) -> tuple[float, float] | None:
+    """Where this pin's tip is drawn, or ``None`` when the part has no such pin."""
+    profile = ctx.profile(part_id)
+    pose = placed.poses.get(part_id)
+    origin = placed.origins.get(part_id)
+    if pose is None or origin is None:
+        return None
+    for pin in profile.pins:
+        if token in (pin.number, pin.name):
+            return placement.posed_tip(pin.tip, pose, origin)
+    return None
+
+
+def _polyline_components(
+    pieces: Sequence[tuple[tuple[float, float], tuple[float, float]]]
+) -> list[int]:
+    """A component id per piece, joining pieces that share an endpoint."""
+    keys: dict[tuple[float, float], int] = {}
+    parent: list[int] = []
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def node(point: tuple[float, float]) -> int:
+        key = (round(point[0], 6), round(point[1], 6))
+        if key not in keys:
+            keys[key] = len(parent)
+            parent.append(len(parent))
+        return keys[key]
+
+    for start, end in pieces:
+        first, second = node(start), node(end)
+        parent[find(first)] = find(second)
+    return [find(node(start)) for start, _end in pieces]
+
+
+def _component_at(
+    pieces: Sequence[tuple[tuple[float, float], tuple[float, float]]],
+    components: Sequence[int],
+    point: tuple[float, float],
+) -> int | None:
+    """The component of the drawn piece this point stands on, if any."""
+    for index, (start, end) in enumerate(pieces):
+        if _on_polyline(point, (start, end)):
+            return components[index]
+    return None
+
+
+def _series_envelope(seat: placement.BoundSeriesSeatPlan) -> Box | None:
+    """The AABB of the arm's conservative reservation, or ``None`` when empty."""
+    boxes = seat.guard_boxes or seat.reserved_boxes
+    if not boxes:
+        return None
+    return (
+        min(box[0] for box in boxes), min(box[1] for box in boxes),
+        max(box[2] for box in boxes), max(box[3] for box in boxes),
+    )
+
+
+def _seat_series_arms(ctx: _Context, placed: _Placement) -> GrammarFailure | None:
+    """548D3B: verify the bound seat plans; never invent a second equation.
+
+    The one binder runs **before** this pass: in the base round it is called by
+    :func:`_place_chain_and_shelf` on the finished ordinary layout, and in the
+    topology round it runs inside :func:`placement.place`. This pass only checks
+    that the answer still matches those plans and that no ordinary part was left
+    inside a reserved box. A missing plan, a drifted origin/pose, or a residual
+    yield is a named ``layout-unsat``; the old local seat equation is gone.
+    """
+    branches = ctx.presentation.series_branches
+    if not branches:
+        return None
+    if not placed.series_plans:
+        return _series_seat_refusal(
+            "$.seriesBranches",
+            "the layout carries no bound series seat plan, so the declared arm "
+            "was never consumed by the placement binder",
+            "build the candidate through the placement binder, or drop the "
+            "seriesBranches entry",
+        )
+    plans = {plan.branch_id: plan for plan in placed.series_plans}
+    for index, branch in enumerate(branches):
+        spot = f"$.seriesBranches[{index}] ({branch.id})"
+        plan = plans.get(branch.id)
+        if plan is None:
+            return _series_seat_refusal(
+                spot,
+                f"the entry {branch.id!r} declares an arm, but the bound plans "
+                f"carry only {sorted(plans)}",
+                f"drop seriesBranches entry {branch.id!r}, or state it again",
+            )
+        problems = list(plan.mismatches(placed.origins, placed.poses))
+        if problems:
+            return _series_seat_refusal(
+                spot,
+                "the drawing does not match its bound seat plan: "
+                + "; ".join(problems),
+                f"move the arm back onto its plan, or drop seriesBranches entry "
+                f"{branch.id!r}",
+            )
+        if plan.yields:
+            lines = []
+            for item in plan.yields:
+                if item.refusal:
+                    lines.append(f"{item.part_id}: {item.refusal}")
+                else:
+                    lines.append(
+                        f"{item.part_id} still intrudes reserved box "
+                        f"{item.box_index}"
+                    )
+            return _series_seat_refusal(
+                spot,
+                "the arm's reserved boxes still hold ordinary parts after the "
+                "binder's yields: " + "; ".join(lines),
+                f"move the named ordinary parts out of the arm, or drop "
+                f"seriesBranches entry {branch.id!r}",
+            )
+    return None
 
 
 def _place(
@@ -3689,9 +5969,8 @@ def _place(
     Every ladder variant goes to :func:`_place_chain_and_shelf` — the solver this
     compiler has shipped since 053 — so an input that compiles today compiles to
     the same page it compiled to before. The one variant whose ``pose_index`` is
-    negative is the topology search: it is not a rung, and
-    :func:`_variants` appends it last, which is what makes it reachable only when
-    the ladder produced no candidate at all.
+    negative is the topology search: :func:`_topology_round` reaches it only after
+    the constructive and widened ladders produced no candidate at all.
     """
     if variant.pose_index < 0:
         answer = _topology_placement(ctx)
@@ -4337,6 +6616,16 @@ def _chain_and_shelf_layout(
             index=index,
         )
 
+    # 548C6: in the rescue round only, a sibling group whose rows the ladder's
+    # escape axis cannot hold gets one line-coordinate row per branch. The parts
+    # are then told to both later sibling passes, so the seats measured here are
+    # the seats the page is graded on.
+    reseated: frozenset[str] = frozenset()
+    if ctx.two_dimensional_seats:
+        reseated = _seat_branch_stack(ctx, origins, poses, boxes, rungs, residue)
+        for part_id in reseated:
+            rungs.pop(part_id, None)
+
     # 543G-12b: a bridge and its two loads are **one bay**, measured from the
     # host pins they share nets with — before the sibling passes, which are told
     # to leave the bay's members where they were put.
@@ -4347,11 +6636,12 @@ def _chain_and_shelf_layout(
         origins,
         poses,
         boxes,
-        {part_id: rung for part_id, rung in rungs.items() if part_id not in bays},
+        {part_id: rung for part_id, rung in rungs.items()
+         if part_id not in bays and part_id not in reseated},
         residue,
     )
 
-    _align_branch_lanes(ctx, origins, poses, residue, exclude=bays)
+    _align_branch_lanes(ctx, origins, poses, residue, exclude=bays | reseated)
 
     shelf_y = axial if ctx.chain else 0.0
     shelf_x = 0.0
@@ -4378,6 +6668,196 @@ def _chain_and_shelf_layout(
             _snap(origins[part_id][1], ctx.budget.grid, residue[1]),
         )
     return origins, poses, residue
+
+
+def _spread_band_collisions(
+    ctx: _Context,
+    origins: dict[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+    exclude: frozenset[str],
+    *,
+    reserved: Sequence[Box] = (),
+) -> GrammarFailure | None:
+    """Separate banded siblings whose **real boxes** collide (548D3B).
+
+    The band reading (`_pair_bands`/`_bay_buckets`) answers one question: two
+    interchangeable siblings hang the same distance off their own pads. On a
+    group of **tall** symbols that answer is not enough — the measured MCU page
+    bands four `KEY-PTSM` (24-unit box) onto one column at `x = 395` with one
+    row per pad (10 units apart), so `S1..S4` are drawn on top of each other and
+    the page fails its own non-overlap rule.
+
+    This pass runs once, after every sibling/bay pass and before the shelf and
+    the final snap, and only for a `(owner, role, symbol_ref, direction)` group
+    whose members' `_part_box` — body **and** pin tips — actually overlap. A
+    group with no overlap is not touched at all (zero movement, so a page that
+    reads today keeps its seats byte for byte).
+
+    The escape the ladder chose is kept: members are ordered by their **anchor**
+    along the line axis (the pad order, i.e. declaration order of their own
+    pins) and the later ones are pushed **away from the owner** along their own
+    escape direction, one lattice step at a time, until the moved part's box
+    (plus its own text reach on the far side, plus `GAP`) clears every earlier
+    member's box and every other part on the page. Identity is never swapped:
+    the anchor, the owner and the pin a branch hangs off stay what the grammar
+    bound, and only the distance along the escape changes.
+
+    A member that cannot be separated within the page's own width (or within a
+    bounded number of lattice steps when the page states no box) is a named
+    `layout-unsat`: the compiler refuses rather than stacking two symbols or
+    shoving a third part aside.
+
+    ``reserved`` (548D3X3C) is a set of page boxes a moved member must keep clear
+    of as well — the panel seats' reserved room and host leads. It is
+    keyword-only, and empty by default, so every existing positional caller (and
+    every monkeypatched one) keeps its exact behaviour.
+    """
+    if not _pair_bands(ctx):
+        return None
+    groups: dict[tuple[Any, ...], list[str]] = {}
+    for part_id in sorted(origins):
+        slot = ctx.slots.get(part_id)
+        if slot is None or slot.kind != "branch" or part_id in exclude:
+            continue
+        if ctx.locked(part_id) is not None:
+            continue
+        direction = _branch_offset_direction(ctx, slot, poses, origins)
+        key = (slot.owner, slot.role, ctx.profile(part_id).symbol_ref, direction)
+        groups.setdefault(key, []).append(part_id)
+    grid = ctx.budget.grid
+    page = ctx.budget.page_box
+    for key, members in sorted(groups.items(), key=lambda item: str(item[0])):
+        if len(members) < 2:
+            continue
+        boxes = {
+            part_id: _part_box(ctx.profile(part_id), poses[part_id], origins[part_id])
+            for part_id in members
+        }
+        if not any(
+            _overlaps(boxes[left], boxes[right])
+            for index, left in enumerate(members)
+            for right in members[index + 1:]
+        ):
+            continue
+        direction = key[3]
+        lateral = (-direction[1], direction[0])
+        ordered = sorted(
+            members,
+            key=lambda part_id: (
+                _dot(_branch_anchor(ctx, ctx.slots[part_id], poses, origins), lateral),
+                _dot(origins[part_id], direction),
+                part_id,
+            ),
+        )
+        # The **line** axis is where these siblings are separated, and it is the
+        # only axis that can be: their escape distance is what `near` bounded
+        # (measured: pushing a key out along its escape to `(495, 15)` broke
+        # `near(S1, U1)` at 415 units), while a row costs nothing on the
+        # connection — the run just jogs by the row it moved. Both passes above
+        # already spend the line axis on the *ordinary* staircase; this pass
+        # spends it only where the real boxes say it is needed.
+        first_anchor = _dot(
+            _branch_anchor(ctx, ctx.slots[ordered[0]], poses, origins), lateral
+        )
+        placed: list[str] = []
+        for part_id in ordered:
+            origin = origins[part_id]
+            box = boxes[part_id]
+            anchor = _dot(
+                _branch_anchor(ctx, ctx.slots[part_id], poses, origins), lateral
+            )
+            sign = 1.0 if anchor >= first_anchor else -1.0
+            guard = 0
+            while any(
+                _overlaps(_band_grown(box, 0.0, lateral, grid), other)
+                for other in (
+                    [boxes[other] for other in placed]
+                    + [
+                        _part_box(ctx.profile(other), poses[other], origins[other])
+                        for other in sorted(origins)
+                        if other != part_id and other not in members
+                    ]
+                    + list(reserved)
+                )
+            ):
+                guard += 1
+                origin = (
+                    origin[0] + lateral[0] * sign * grid,
+                    origin[1] + lateral[1] * sign * grid,
+                )
+                box = _part_box(ctx.profile(part_id), poses[part_id], origin)
+                if page is not None:
+                    if not (
+                        page[0] <= box[0] and box[2] <= page[2]
+                        and page[1] <= box[1] and box[3] <= page[3]
+                    ):
+                        return _band_collision_failure(ctx, key, part_id, "the page")
+                elif guard > _BAND_SPREAD_STEPS:
+                    return _band_collision_failure(ctx, key, part_id, "the step budget")
+            origins[part_id] = origin
+            boxes[part_id] = box
+            placed.append(part_id)
+    return None
+
+
+#: How many lattice steps one banded part may be pushed out before the pass
+#: refuses. It only matters on a page that states no box; a stated page is
+#: bounded by its own edges, which is the constraint that means something.
+_BAND_SPREAD_STEPS = 32
+
+
+def _band_text_reach(ctx: _Context, part_id: str) -> float:
+    """The width this part's own reference/value row needs past its box (548D3B).
+
+    Read from the text the compiler will print for it, with the existing ruler
+    (:func:`text_width`), and only for a part whose rows the presentation states
+    on the far side of the escape. A part with no rows measured here keeps a
+    reach of zero: text is the text ladder's business, and this pass only needs
+    to leave it room when the page says where it goes.
+    """
+    side = ctx.presentation.part_texts.get(part_id, "")
+    if side not in ("right", "left", "top", "bottom"):
+        return 0.0
+    part = ctx.circuit.part(part_id)
+    texts = [part_id, part.value if part is not None and part.value else ""]
+    return max(text_width(text) for text in texts if text)
+
+
+def _band_grown(
+    box: Box, reach: float, direction: tuple[float, float], grid: float
+) -> Box:
+    """The box plus its far-side text row plus one `GAP`, grown along ``direction``."""
+    spread = reach + GAP + grid
+    if direction[0] > 0:
+        return (box[0], box[1] - GAP, box[2] + spread, box[3] + GAP)
+    if direction[0] < 0:
+        return (box[0] - spread, box[1] - GAP, box[2], box[3] + GAP)
+    if direction[1] > 0:
+        return (box[0] - GAP, box[1], box[2] + GAP, box[3] + spread)
+    return (box[0] - GAP, box[1] - spread, box[2] + GAP, box[3])
+
+
+def _band_collision_failure(
+    ctx: _Context, key: tuple[Any, ...], part_id: str, bound: str
+) -> GrammarFailure:
+    """A banded group the compiler will not stack and cannot separate."""
+    owner, role, symbol_ref, _direction = key
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject=part_id,
+        detail=(
+            f"{part_id} shares the {owner}/{role}/{symbol_ref} band with its "
+            f"siblings and their symbols collide on the seats the band gives "
+            f"them; pushing it away from {owner} along its own escape leaves "
+            f"{bound}, so the group cannot be separated without stacking two "
+            "symbols or moving a part the layout did not put there"
+        ),
+        action=(
+            f"space the {owner} pins this group hangs on further apart, drop "
+            "one of the branches, or state a text side that leaves the band "
+            "room; the compiler does not draw overlapping siblings"
+        ),
+    )
 
 
 def _order_baseline(
@@ -4453,10 +6933,13 @@ def _place_chain_and_shelf(
 ) -> tuple[_Placement | None, GrammarFailure | None]:
     """One rung: the constructive layout, then the bound orders it breaks.
 
-    **Not called by :func:`compile` since 201B stage 2** — the solver it wraps is
-    kept because it is still the honest answer to two questions: what a
-    *constructive* placement does with a grammar, and whether a drawing the
-    search refuses can be drawn at all. The layout itself is
+    **The live path since 201B stage 2 is the ladder first**: :func:`compile`
+    offers every input to these rungs, and the topology search
+    (:func:`_topology_placement`, reached from :func:`_topology_round`) runs only
+    when no rung produced a candidate. The solver also stays the honest answer
+    to two questions a refusal raises: what a *constructive* placement does with
+    a grammar, and whether a drawing the search refuses can be drawn at all. The
+    layout itself is
     :func:`_chain_and_shelf_layout` (unmoved since 053); what happens here is
     what 116 added on top of it — :func:`_honour_bound_orders` consuming the
     orders the base pitch cannot keep, then the page anchor, then the gate.
@@ -4465,14 +6948,162 @@ def _place_chain_and_shelf(
     if isinstance(layout, GrammarFailure):
         return None, layout
     origins, poses, residue = layout
+    # 548D3B: the pair pitch belongs to **this** construction, so it is read
+    # here — before `_honour_bound_orders` has walked anything — and handed to
+    # the binder as the frozen source. The pass below no longer moves an arm
+    # part, but the seed is what the pitch is measured on regardless.
+    seed_origins = dict(origins)
     # 116: the layout is already lattice-snapped, so a step this pass takes is
     # on the same lattice the gate measures and the final snap cannot undo it.
     # The pass runs before _anchor_to_page so the page anchor is chosen around
     # the honoured orders, not around the ones the pass is about to fix.
     _honour_bound_orders(
         ctx, origins, poses, variant.pose_index, _order_baseline(ctx, origins, poses))
+    # 548D3B: a band that shares one lane can put two **tall** siblings on
+    # collision course — the measured MCU page bands its four keys into one
+    # column one row per pad (10 units), while the KEY box is 24 tall. The band
+    # reading answers "how far from my pad", not "will the boxes fit", and every
+    # sibling pass may spend only the line axis, so the collision survives them.
+    # The pass runs here: after the band/bay seats, after the bound orders (a
+    # later pass that re-seats a branch would undo a spread it never saw), and
+    # before the arms are bound and the page is anchored — and it moves on the
+    # lattice, so the finished layout stays snapped.
+    panel_part_ids = frozenset(
+        branch.part
+        for group in (getattr(ctx.presentation, "panel_groups", ()) or ())
+        for branch in group.branches
+    ) | _service_branch_parts(ctx)
+    spread = _spread_band_collisions(ctx, origins, poses, panel_part_ids)
+    if isinstance(spread, GrammarFailure):
+        return None, spread
+    # 548D3B: consume the declared arms here — on the finished ordinary layout,
+    # before the page anchor and the relation gate — instead of discovering them
+    # in `_build_one_variant` after the layout is final. The binder is the same
+    # one the search uses; it measures the pitch from these origins, moves the
+    # ordinary parts its yields name, and seats the two arm parts.
+    series_plans: tuple[placement.BoundSeriesSeatPlan, ...] = ()
+    if ctx.presentation.series_branches:
+        templates, failure = _series_templates(
+            ctx, residue, tuple(sorted(origins)),
+        )
+        if failure is not None:
+            return None, failure
+        try:
+            request = _series_placement_request(ctx, templates, poses)
+            plans = placement.bind_series(
+                request, origins, poses, pitch_origins=seed_origins,
+            )
+            plans, state = placement.place_series_seats(
+                request, plans, origins, poses,
+            )
+        except placement.PlacementError as exc:
+            return None, _series_seat_refusal(
+                "$.seriesBranches",
+                f"the declared arm is not a seat this layout can hold: {exc}",
+                "correct the arm's host, pins or poses, or drop the entry",
+            )
+        origins = dict(state.origins)
+        poses = dict(state.poses)
+        series_plans = plans
+    # 548D3X3C (33C2): the panels are bound **after** the arms and **before** the
+    # page anchor, by the same binder the search uses, and the cells are seated
+    # onto that answer. The ordinary band/bay/stack/spread and the arm's yields
+    # have already run (the cells were excluded from both), so this is the first
+    # geometry that owns them and no later ordinary pass moves one back.
+    panel_plans: tuple[placement.BoundPanelSeatPlan, ...] = ()
+    if getattr(ctx.presentation, "panel_groups", ()):
+        templates, failure = _panel_templates(
+            ctx, residue, tuple(sorted(origins)))
+        if failure is not None:
+            return None, failure
+        try:
+            request = _series_placement_request(
+                ctx, (), poses, panel_templates=templates)
+            panel_plans = placement.bind_panel_plans(request, origins, poses)
+            placement.seat_panel_plans(panel_plans, origins, poses)
+        except placement.PlacementError as exc:
+            return None, _series_seat_refusal(
+                "$.panelGroups",
+                f"the declared panel is not a seat this layout can hold: {exc}",
+                "correct the group's host, branches or poses, or drop it",
+            )
+        refused = [plan for plan in panel_plans if not plan.seated]
+        if refused:
+            return None, _series_seat_refusal(
+                "$.panelGroups",
+                "the declared panel has no legal seat: "
+                + "; ".join(plan.refusal.render() for plan in refused
+                            if plan.refusal is not None),
+                "move the part the refusal names out of the panel's room, or drop "
+                "the group",
+            )
+    # 548D3S2: the service cells are bound by the same rule, after the panel and
+    # **before** the page anchor, and seated onto the answer. Their host pins are
+    # the branches' own shared nets, so a host that has already moved is the one
+    # they follow. Empty on every page without panelGroups.
+    service_plans: tuple[placement.BoundPanelSeatPlan, ...] = ()
+    if getattr(ctx.presentation, "panel_groups", ()):
+        service_templates, service_failure = _service_templates(
+            ctx, residue, tuple(sorted(origins)))
+        if service_failure is not None:
+            return None, service_failure
+        if service_templates:
+            try:
+                service_request = _series_placement_request(
+                    ctx, (), poses, service_templates=service_templates)
+                service_plans = placement.bind_service_plans(
+                    service_request, origins, poses, panel_plans)
+                placement.seat_service_plans(service_plans, origins, poses)
+            except placement.PlacementError as exc:
+                return None, _series_seat_refusal(
+                    "$.panelGroups",
+                    f"the service seats this page needs are not a seat this "
+                    f"layout can hold: {exc}",
+                    "correct the branch's host, pins or pose, or drop the entry",
+                )
+            refused = [plan for plan in service_plans if not plan.seated]
+            if refused:
+                return None, _series_seat_refusal(
+                    "$.panelGroups",
+                    "a service branch has no legal seat: "
+                    + "; ".join(plan.refusal.render() for plan in refused
+                                if plan.refusal is not None),
+                    "move the part the refusal names out of the cell's room, or "
+                    "drop the branch",
+                )
+    probe = next(iter(origins)) if origins else None
+    before = origins[probe] if probe is not None else None
     _anchor_to_page(ctx, origins, poses, residue)
-    placed = _Placement(origins=origins, poses=poses, residue=residue)
+    delta = (0.0, 0.0)
+    if probe is not None and before is not None:
+        delta = (origins[probe][0] - before[0], origins[probe][1] - before[1])
+    if series_plans and delta != (0.0, 0.0):
+        series_plans = tuple(plan.translated(delta) for plan in series_plans)
+    if panel_plans and delta != (0.0, 0.0):
+        panel_plans = tuple(plan.translated(delta) for plan in panel_plans)
+    if service_plans and delta != (0.0, 0.0):
+        service_plans = tuple(plan.translated(delta) for plan in service_plans)
+    # The anchor is a rigid translation, so the plans must still describe the
+    # drawing it left; anything else is a page-anchor drift, refused by name.
+    drifted = [
+        line for plan in panel_plans for line in plan.mismatches(origins, poses)
+    ]
+    drifted.extend(
+        line for plan in service_plans
+        for line in plan.mismatches(origins, poses)
+    )
+    if drifted:
+        return None, _series_seat_refusal(
+            "$.panelGroups",
+            "the page anchor moved the drawing off its bound panel seat: "
+            + "; ".join(drifted),
+            "drop the panel group, or correct the branch it names",
+        )
+    placed = _Placement(
+        origins=origins, poses=poses, residue=residue,
+        series_plans=series_plans, panel_plans=panel_plans,
+        service_plans=service_plans,
+    )
     conflict = _relation_failures(ctx, placed)
     if conflict:
         return None, conflict[0]
@@ -4727,6 +7358,47 @@ def _branch_order(ctx: _Context) -> list[str]:
     return ordered
 
 
+def _foreign_pins_on_run(
+    ctx: _Context,
+    part_id: str,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    poses: Mapping[str, SymbolPose],
+    origins: Mapping[str, tuple[float, float]],
+) -> tuple[tuple[str, str], ...]:
+    """Foreign pin tips lying on the stretch ``start -> end``.
+
+    ``part_id`` is the branch the run belongs to, so the branch never counts
+    itself: the pads it is about to place are its own, not obstacles. Per
+    **pin**, not per part: a branch's owner shares this run's net on the one pin
+    the branch hangs off, and its *other* pins sit on other nets — those are
+    exactly the ones a straight run walks over. The flyback's transformer is the
+    case: the aux rectifier hangs off its ``AUX`` pin and the run crosses its
+    ``PGND`` pin 20 units along.
+
+    One ruler, two readers (548C6R). :func:`_dodge_foreign_pins` steps a root
+    until this comes back empty; :func:`_seat_branch_stack` asks it again on the
+    root a two-dimensional seat produced, because that dodge's walk is
+    **bounded** — "the dodge ran" is not the same statement as "the run is
+    clear", and the walk can exhaust its reach with the pin still on the tail.
+    """
+    own = set(_part_nets(ctx.circuit, part_id).values())
+    found: list[tuple[str, str]] = []
+    for other in sorted(ctx.slots):
+        if other == part_id or other not in origins:
+            continue
+        pins_of = _part_nets(ctx.circuit, other)
+        for pin in ctx.profile(other).pins:
+            if (pins_of.get(pin.number) or pins_of.get(pin.name, "")) in own:
+                continue
+            point = _pin_point(ctx, other, pin.number, poses, origins)
+            if point is None:
+                continue
+            if _on_polyline(point, (start, end)):
+                found.append((other, pin.number))
+    return tuple(found)
+
+
 def _dodge_foreign_pins(
     ctx: _Context,
     part_id: str,
@@ -4784,7 +7456,6 @@ def _dodge_foreign_pins(
         return root
     unit = (across[0] / span, across[1] / span)
     index = 0 if unit[0] != 0.0 else 1
-    own = set(_part_nets(ctx.circuit, part_id).values())
     # How far past `root` this branch's own body reaches — the half the first
     # version never read. `root` is where the **shared** pad lands, and the
     # stored origin is `root - shared_local`, so the other pad's tip is at
@@ -4800,32 +7471,9 @@ def _dodge_foreign_pins(
     if shared_local is not None and other_local is not None:
         trail = (other_local[0] - shared_local[0],
                  other_local[1] - shared_local[1])
-    def _blockers_between(start, end, skip: str) -> int:
-        """Foreign pin tips lying on the stretch ``start -> end``.
 
-        ``skip`` is this branch's own id, so the branch never counts itself: the
-        pads it is about to place are its own, not obstacles.
-        """
-        found = 0
-        for other in sorted(ctx.slots):
-            if other == skip or other not in origins:
-                continue
-            pins_of = _part_nets(ctx.circuit, other)
-            for pin in ctx.profile(other).pins:
-                # Per **pin**, not per part: a branch's owner shares this run's net
-                # on the one pin the branch hangs off, and its *other* pins sit on
-                # other nets — those are exactly the ones a straight run walks
-                # over. The flyback's transformer is the case: the aux rectifier
-                # hangs off its ``AUX`` pin and the run crosses its ``PGND`` pin
-                # 20 units along.
-                if (pins_of.get(pin.number) or pins_of.get(pin.name, "")) in own:
-                    continue
-                point = _pin_point(ctx, other, pin.number, poses, origins)
-                if point is None:
-                    continue
-                if _on_polyline(point, (start, end)):
-                    found += 1
-        return found
+    def _blockers_between(start, end, skip: str) -> int:
+        return len(_foreign_pins_on_run(ctx, skip, start, end, poses, origins))
 
     # The leg: anchor -> root, the stretch the **shared** pad travels. A foreign
     # pin here is 114's original case.
@@ -5339,11 +7987,21 @@ def _declared_sibling_owners(ctx: _Context) -> frozenset[str]:
     a group base and one that took the counter would otherwise be handed the
     same band and land on one origin.
 
-    Nothing here reads a part id, a net name or a pin number: it only asks which
-    endpoints of the binding are branches of the same owner.
+    **548D3B**: a relation a **declared arm** adds (`seriesBranches …`, see
+    :data:`SERIES_RELATION_REASON`) is not the grammar's statement about two
+    siblings — it is the arm's own part order, and it says nothing about how the
+    owner's ordinary branches sit. Counting it made the 548D MCU page's whole
+    `U1` owner leave the band reading, which put the four keys back on the
+    ladder's staircase and took the page's host rows away with it. The filter is
+    on the relation's own stated provenance, never on a part id or a net.
     """
     declared: set[str] = set()
     for constraint in ctx.binding.constraints:
+        # A constraint without a stated provenance is the grammar's own silence,
+        # which is exactly what the pair reading answers: only a declared arm's
+        # relation is filtered out.
+        if getattr(constraint, "reason", "").startswith(SERIES_RELATION_REASON):
+            continue
         here = ctx.slots.get(constraint.subject)
         there = ctx.slots.get(constraint.object)
         if here is None or there is None:
@@ -5353,6 +8011,266 @@ def _declared_sibling_owners(ctx: _Context) -> frozenset[str]:
         if here.owner and here.owner == there.owner:
             declared.add(here.owner)
     return frozenset(declared)
+
+
+def _seat_branch_stack(
+    ctx: _Context,
+    origins: dict[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+    boxes: Mapping[str, Box],
+    rungs: Mapping[str, _BranchRung],
+    residue: tuple[float, float],
+) -> frozenset[str]:
+    """Give a text-starved sibling group one **row per branch** (548C6).
+
+    The measured case is 548C B2: nine branches off one MCU, each hanging off its
+    own pad 10 units apart, with value rows 159.5–271.5 units wide. The ladder
+    hangs sibling *n* ``step*n`` further out, which separates them along the
+    **escape** axis only — and that axis is the one ``near`` charges, so the row
+    that must clear its neighbour costs 167.5 units of escape distance and the
+    third member is already outside ``NEAR_LIMIT``. Two attempts at the pitch
+    (548C5 sec.4) each died on ``near``; the same measurement says the remaining
+    axis is the **line** one, which the pads themselves leave at 10 units — less
+    than the 28-unit text block of a single part.
+
+    So this pass keeps every member's own escape rung (``rung.base``, the same
+    distance the ladder charges first) and replaces the count with a staircase
+    **along the line**: each member's row is separated from the next by what the
+    two actually draw — their own extent plus the reference/value block they will
+    print on the left or right side, measured with :func:`_line_boxes` and
+    :func:`_part_box`, snapped to the compilation lattice. No coordinate is
+    written here and no numeric search runs: the only inputs are the symbols, the
+    texts, the pads and the budget.
+
+    What it refuses to do, each for a measured reason:
+
+    * **not a rewrite of the ladder** — a group is taken only when the pads cannot
+      separate the rows (``|Δq| < pitch``) **and** pushing them along the escape
+      axis would pass ``near_limit`` (``base + Σ(width + TEXT_GAP)``). On 547A both
+      terms are false (10 < 25, but 220 of the 300 available), so nothing here
+      runs. 548C4's B1 does satisfy the escape term (590.5 > 300) and is kept
+      byte-for-byte by the **round** instead: it has a candidate, so
+      :func:`compile` never enters the rescue round that sets
+      ``ctx.two_dimensional_seats`` — the zero-move property of B1 is the gate's,
+      not this predicate's. That is also why the pass may not be moved out of the
+      rescue round without moving B1;
+    * **not the bay's or the decliner's job** — a group whose anchors span at
+      least one ``lane`` is what :func:`_share_one_bay` collapses to one band (its
+      own ``spread < lane`` guard), and a group the grammar ordered (``lane_groups``,
+      ``_declared_among``) keeps that order. Both are skipped, so this pass cannot
+      be undone by either;
+    * **not a service branch, and not a shared tap** — a stated service interval
+      (543B) is a distance to *that* pin, and two shunts on one host pin are
+      543E-2's perpendicular seats (:func:`_service_pin_gap` names both), so
+      ``spread <= BAY_SAME_PAD`` and any served member skip the group;
+    * **not a candidate by force** — the seat is applied only when every member
+      stays inside ``near_limit`` (``hypot(distance, δ)``, the same two points the
+      relation checker measures), nothing overlaps anything already placed, and
+      every member still has one free side for its rows at the new place. A group
+      that fails any of those keeps the ladder's answer and the existing refusal
+      speaks.
+
+    The caller runs this **only** in the rescue round and hands the reseated parts
+    to neither :func:`_share_one_bay` nor :func:`_align_branch_lanes`, so the
+    seats measured here are the seats the page is graded on.
+    """
+    grid = ctx.budget.grid
+    groups: dict[tuple[str, tuple[float, float]], list[str]] = {}
+    for part_id in sorted(rungs):
+        rung = rungs[part_id]
+        groups.setdefault((rung.owner, rung.direction), []).append(part_id)
+    seated: list[str] = []
+    for (owner, direction), members in sorted(groups.items()):
+        if len(members) < 2 or owner not in ctx.chain:
+            # a branch's own anchor moves with its owner's answer: there is no
+            # fixed pad row to stack against (the bay pass's own reason).
+            continue
+        if any(ctx.locked(part_id) is not None for part_id in members):
+            continue
+        if any(part_id in ctx.lane_groups for part_id in members):
+            continue
+        if _declared_among(ctx, members):
+            continue
+        if any(_service_pin_gap(ctx, ctx.slots[part_id]) is not None
+               for part_id in members):
+            continue
+        line = (-direction[1], direction[0])
+        q = {part_id: _dot(rungs[part_id].anchor, line) for part_id in members}
+        spread = max(q.values()) - min(q.values())
+        if spread <= BAY_SAME_PAD or spread >= ctx.budget.lane:
+            continue
+        # The ladder's own order, as `_share_one_bay` takes it: which sibling
+        # hangs nearest the owner is the grammar's answer, not this pass's.
+        order = sorted(members, key=lambda part_id: (rungs[part_id].index, part_id))
+        lines = {
+            part_id: [text for _kind, text in _part_lines(ctx, part_id)]
+            for part_id in order
+        }
+        reach: dict[str, tuple[float, float]] = {}
+        for part_id in order:
+            blocks = [boxes[part_id]]
+            for side in ("right", "left"):
+                blocks.extend(_line_boxes(boxes[part_id], lines[part_id], side, 1))
+            values = [
+                _dot(corner, line)
+                for block in blocks
+                for corner in ((block[0], block[1]), (block[2], block[1]),
+                               (block[2], block[3]), (block[0], block[3]))
+            ]
+            reach[part_id] = (min(values), max(values))
+        pitch: dict[tuple[str, str], float] = {}
+        for here, there in zip(order, order[1:]):
+            need = max(reach[here][1] - reach[there][0],
+                       reach[there][1] - reach[here][0])
+            # Half a lattice step up: the pitch is the room the two draw, and a
+            # seat rounded *down* would put one row back on the other.
+            pitch[(here, there)] = _snap(need + grid * 0.5, grid, 0.0)
+        if not any(abs(q[there] - q[here]) < pitch[(here, there)]
+                   for here, there in zip(order, order[1:])):
+            continue
+        push = sum(
+            max(text_width(text) for text in lines[part_id]) + TEXT_GAP
+            for part_id in order[:-1]
+        )
+        if (max(rungs[part_id].base for part_id in members) + push
+                <= ctx.budget.near_limit):
+            # The escape axis can still hold the rows inside `near`: that is the
+            # ladder's own answer and this pass has nothing to add (547A: 220 of
+            # the 300 available).
+            continue
+        offset = {order[0]: 0.0}
+        for here, there in zip(order, order[1:]):
+            offset[there] = offset[here] + pitch[(here, there)]
+        sigma = 1.0 if q[order[-1]] >= q[order[0]] else -1.0
+        middle = _snap((offset[order[0]] + offset[order[-1]]) / 2.0, grid, 0.0)
+        axis = 1 if line[1] else 0
+        base = _snap(sum(q.values()) / len(q), grid, residue[axis])
+        seat = {
+            part_id: base + sigma * (offset[part_id] - middle)
+            for part_id in order
+        }
+        trial: dict[str, tuple[float, float]] = {}
+        # The foreign pins are measured against what is placed **outside** this
+        # group: the group's own old ladder seats are not obstacles for its new
+        # rows, and the new seats are validated as one set below. Seated members
+        # are added back as they land, exactly as the ladder's own loop does.
+        others = {
+            part_id: origin
+            for part_id, origin in origins.items()
+            if part_id not in order
+        }
+        for part_id in order:
+            delta = seat[part_id] - q[part_id]
+            distance = rungs[part_id].base
+            root = (
+                rungs[part_id].anchor[0] + direction[0] * distance + line[0] * delta,
+                rungs[part_id].anchor[1] + direction[1] * distance + line[1] * delta,
+            )
+            # 114/117①: the run from the owner's pin to the seat is the run the
+            # ladder dodges, and a row seat moves its **endpoint** — so the dodge
+            # is taken again on the new root, not inherited from the old one.
+            root = _dodge_foreign_pins(
+                ctx, part_id, ctx.slots[part_id], rungs[part_id].anchor, root,
+                poses, others,
+            )
+            if (math.hypot(root[0] - rungs[part_id].anchor[0],
+                           root[1] - rungs[part_id].anchor[1])
+                    > ctx.budget.near_limit):
+                # The dodge moved the shared pad further from its host pin: the
+                # same two points `near` measures, so the group keeps the
+                # ladder's answer rather than buying a row with a broken relation.
+                trial = {}
+                break
+            # 548C6R: the dodge's walk is **bounded**, so "the dodge ran" is not
+            # "the run is clear" — it can come back with a foreign pin still on
+            # the stretch past the shared pad, where this branch's other pin
+            # lands. Ask the same ruler again on the root the seat produced and
+            # treat a residual pin like the `near` failure above: the whole
+            # group keeps the ladder's answer, never half of it.
+            shared_local = _pin_local(
+                ctx, part_id, ctx.slots[part_id].pin_shared, poses)
+            other_local = _pin_local(
+                ctx, part_id, ctx.slots[part_id].pin_other, poses)
+            far = None
+            if shared_local is not None and other_local is not None:
+                far = (root[0] + other_local[0] - shared_local[0],
+                       root[1] + other_local[1] - shared_local[1])
+            if (_foreign_pins_on_run(ctx, part_id, rungs[part_id].anchor, root,
+                                     poses, others)
+                    or (far is not None
+                        and _foreign_pins_on_run(ctx, part_id, root, far,
+                                                 poses, others))):
+                trial = {}
+                break
+            shared = rungs[part_id].shared
+            trial[part_id] = (
+                root[0] - (shared[0] if shared else 0.0),
+                root[1] - (shared[1] if shared else 0.0),
+            )
+            others[part_id] = trial[part_id]
+        if not trial:
+            continue
+        trial_origins = dict(origins)
+        trial_origins.update(trial)
+        if not _stack_is_clear(ctx, poses, trial_origins, trial):
+            continue
+        origins.update(trial)
+        seated.extend(trial)
+    return frozenset(seated)
+
+
+def _stack_is_clear(
+    ctx: _Context,
+    poses: Mapping[str, SymbolPose],
+    placed: Mapping[str, tuple[float, float]],
+    group: Mapping[str, tuple[float, float]],
+) -> bool:
+    """Is a proposed stack free of every other part, and does each row still fit?
+
+    Two questions, both on the measured boxes: nothing in the group may overlap
+    anything already placed (the checker's own test, :func:`_overlaps`), and each
+    reseated member must still have **one** side left for its rows when this
+    group's own bodies are in the way — the same four-side ladder
+    :func:`_part_texts` runs, read here with :func:`_line_boxes` on the same
+    walls. That second question is what makes the reservation a reservation: the
+    pitch was computed from the left/right block, and this proves one of them
+    really is free at the seat, instead of trusting the arithmetic.
+    """
+    ids = sorted(placed)
+    for index, here in enumerate(ids):
+        box = _part_box(ctx.profile(here), poses[here], placed[here])
+        for there in ids[index + 1:]:
+            if here not in group and there not in group:
+                continue
+            if _overlaps(box, _part_box(ctx.profile(there), poses[there],
+                                        placed[there])):
+                return False
+    walls = [
+        wall
+        for other in ids
+        for wall in _text_walls(ctx.profile(other), poses[other], placed[other])
+    ]
+    for part_id in group:
+        box = _part_box(ctx.profile(part_id), poses[part_id], placed[part_id])
+        own = _text_walls(ctx.profile(part_id), poses[part_id], placed[part_id])
+        lines = [text for _kind, text in _part_lines(ctx, part_id)]
+        free = False
+        for side in TEXT_SIDES:
+            for rung in range(1, TEXT_ESCALATION_STEPS + 1):
+                boxes = _line_boxes(box, lines, side, rung)
+                if not any(
+                    _overlaps(candidate, wall)
+                    for candidate in boxes
+                    for wall in walls
+                    if wall not in own
+                ):
+                    free = True
+                    break
+            if free:
+                break
+        if not free:
+            return False
+    return True
 
 
 def _share_one_bay(
@@ -5595,7 +8513,15 @@ def _pair_bands(ctx: _Context) -> bool:
 
     The gate is a *read* of the presentation both layers already hold — no new
     key, no CLI surface, no shared contract.
+
+    **548D3B**: a page that declares **two or more arms** is an explicit opt-in by
+    itself. An arm is the page stating the exact order and the exact pair it
+    wants drawn, which is the same "decide this for me" the two keys state; with
+    one arm there is no sibling group to read, so the historical reading is
+    untouched (and CH34, which declares none, keeps its ladder byte for byte).
     """
+    if len(ctx.presentation.series_branches) >= 2:
+        return True
     return _pair_reading(ctx.presentation)
 
 
@@ -5734,6 +8660,18 @@ def _honour_bound_orders(
     """
     locked = {
         part_id for part_id in ctx.slots if ctx.locked(part_id) is not None
+    }
+    # 548D3B: an arm part's seat belongs to the bound series plan, not to this
+    # pass. Walking it here was the double-seat failure (evidence
+    # `548D/series-seat-plan/structural-findings.md` sec.1): D1 went 20 -> 345
+    # before the binder measured its pair pitch, so the plan froze 165 from a
+    # layout that was no longer the ordinary construction seed. The relation
+    # itself stays in the binding and is still reported by the checker — it is
+    # only this pass that may not write the seat.
+    locked |= {
+        part_id
+        for branch in ctx.presentation.series_branches
+        for part_id in branch.parts
     }
     chain = set(ctx.chain)
     across = _across_axis(ctx)
@@ -6203,12 +9141,15 @@ def _order_asks(kind: str, own: bool) -> tuple[int, float]:
 def _shared_net_of(ctx: _Context, here: str, there: str) -> str:
     """The net this pair is measured on, or ``""`` when they share none.
 
-    The same first net :func:`_points_for_relation` picks, so the coordinate
-    this pass moves is the coordinate the gate measures.
+    547S: the same first net :func:`_points_for_relation` picks, through the one
+    contract (:func:`boardwise.engines.placement.shared_net_order`), so the
+    coordinate this pass moves is the coordinate the gate measures — the 547C1
+    split (seat on ``KEY1``, repair walking on ``3V3``) cannot come back.
     """
-    common = sorted(
-        set(_part_nets(ctx.circuit, here).values())
-        & set(_part_nets(ctx.circuit, there).values())
+    common = placement.shared_net_order(
+        _part_nets(ctx.circuit, here).values(),
+        _part_nets(ctx.circuit, there).values(),
+        lambda net: _net_class(ctx, net),
     )
     return common[0] if common else ""
 
@@ -7327,6 +10268,12 @@ def _flag_grouping(ctx: Any) -> bool:
     bytes it had — 535's Euclidean ground clusters, 053 sec.7's per-pin power
     flags, all of it untouched.
     """
+    presentation = getattr(ctx, "presentation", None)
+    if getattr(presentation, "panel_groups", ()) or ():
+        # 548D3X3C §34-2h: an explicit `panelGroups` declaration opts this page
+        # into the same grouping — the panel's supply feet are one statement.
+        # It is an opt-in on the document, never a default.
+        return True
     return (
         _native_text_placement(ctx)
         and getattr(getattr(ctx, "presentation", None), "service_layout", None)
@@ -7587,6 +10534,8 @@ def _apply_flag_groups(
     router: _Router,
     expressions: dict[str, _Expression],
     order: Sequence[str],
+    *,
+    only: set[str] | None = None,
 ) -> None:
     """Decide every group **before** the seats are reserved (543I-2).
 
@@ -7604,6 +10553,8 @@ def _apply_flag_groups(
     a seat it cannot join.
     """
     for net_id in order:
+        if only is not None and net_id not in only:
+            continue
         expression = expressions[net_id]
         if expression.style != "wire":
             continue
@@ -7732,6 +10683,3145 @@ def _flag_group_audit(
                 ),
             )
     return None
+
+
+# --------------------------------- 548D3X4D: seat-first ground/power allocation
+
+
+#: :attr:`_SeatFirstSeat.source` for the seat a panel cell's own terminal states.
+SEAT_FIRST_PANEL = "panel-terminal"
+#: :attr:`_SeatFirstSeat.source` for the seat a **service** seat's terminal
+#: states (§35B1). Named apart from the panel so a refusal says which
+#: declaration the seat came from: the two are different documents — a declared
+#: panel cell versus a branch the placement seated beside its host.
+SEAT_FIRST_SERVICE = "service-terminal"
+#: :attr:`_SeatFirstSeat.source` for a seat this pass found on a real pin.
+SEAT_FIRST_AUTO = "auto"
+
+
+def _seat_first_refusal(
+    net_id: str, detail: str, action: str = ""
+) -> GrammarFailure:
+    """One named refusal of the seat-first allocation (§34D-A).
+
+    Every refusal names the net, and ``detail`` names the member and the seat it
+    is about: a page that cannot settle a group has to say *which* rail, *which*
+    foot and *which* flag, because the answer to it is a document edit (or a
+    placement change), not another search.
+    """
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject=f"net {net_id!r}",
+        detail=detail,
+        action=action or (
+            "give the foot some room, move the part or state the panel "
+            "terminal that is missing; the allocator does not move a fixed "
+            "seat, merge two semantic groups or widen the reach to make a "
+            "candidate true"
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class _SeatFirstSeat:
+    """One flag seat a rail may carry, with the geometry it actually occupies.
+
+    ``owner`` is the member the flag hangs from (the foot of its own lead),
+    ``anchor``/``rotation``/``lead`` are the glyph's placement as the editor is
+    given it, and ``occupancy`` is the lattice nodes the lead and the glyph's
+    whole box (glyph, name row, clearance) claim — the lane another assignment
+    may not take. ``fixed`` says the seat came from a panel cell's terminal and
+    is therefore not a candidate the allocator may move or override.
+    """
+
+    net: str
+    owner: str
+    anchor: tuple[float, float]
+    rotation: float
+    lead: tuple[tuple[float, float], ...]
+    fixed: bool
+    source: str
+    glyph: Box
+    occupancy: frozenset[tuple[float, float]]
+
+
+@dataclass(frozen=True)
+class _SeatFirstAssignment:
+    """One seat and the complete set of members it serves (§34D-A)."""
+
+    net: str
+    share: str
+    group: str
+    members: tuple[str, ...]
+    seat: _SeatFirstSeat
+    paths: tuple[tuple[str, tuple[tuple[float, float], ...]], ...]
+    lanes: frozenset[tuple[float, float]] = frozenset()
+
+    def path_of(self, member: str) -> tuple[tuple[float, float], ...] | None:
+        for name, path in self.paths:
+            if name == member:
+                return path
+        return None
+
+
+@dataclass(frozen=True)
+class _SeatFirstCandidate:
+    """One seat the enumeration tried for a group, accepted or refused by name.
+
+    ``refusal`` is ``None`` for a candidate that is **complete** (every member
+    has a legal run): ``accepted`` then says whether the page allocation took it.
+    The completeness of a candidate and the page's choice between several
+    complete ones are two answers, and a refusal always names the measured
+    obstacle.
+    """
+
+    net: str
+    group: str
+    owner: str
+    members: tuple[str, ...]
+    seat: _SeatFirstSeat | None
+    paths: tuple[tuple[str, tuple[tuple[float, float], ...]], ...]
+    refusal: GrammarFailure | None
+    accepted: bool
+    lanes: frozenset[tuple[float, float]] = frozenset()
+    cost: float = 0.0
+
+
+@dataclass(frozen=True)
+class _SeatFirstPlan:
+    """A rail's whole allocation: complete assignments and named refusals."""
+
+    net: str
+    cls: str
+    assignments: tuple[_SeatFirstAssignment, ...]
+    candidates: tuple[_SeatFirstCandidate, ...]
+    refusals: tuple[GrammarFailure, ...]
+    #: ``(member, reason)`` for every pad this allocator deliberately leaves to
+    #: the drawing it already had — today only 069 sec.2's detached pads, whose
+    #: own local flag the existing detached branch states. An entry here is
+    #: **not** a missing seat: the validator checks the list against the
+    #: expression's own ``detached`` facts rather than trusting it.
+    excluded: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.refusals
+
+    def assigned_members(self) -> tuple[str, ...]:
+        return tuple(
+            member for item in self.assignments for member in item.members
+        )
+
+    def seat_for(self, member: str) -> _SeatFirstSeat | None:
+        for item in self.assignments:
+            if member in item.members:
+                return item.seat
+        return None
+
+
+def _seat_first_groups(
+    ctx: _Context,
+    net_id: str,
+    points: Sequence[tuple[str, tuple[float, float]]],
+) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    """The **semantic** groups of one rail: who may even share one flag.
+
+    The structure comes from :func:`_flag_share_keys` and from nowhere else, so
+    two independent branches are never merged because they happen to be close:
+    ``SHARE_ALONE`` becomes a group of exactly one member
+    (``"alone:<member>"``), and every other share key collects its members in
+    the stable member order. ``(share key, group id, members)`` is returned in
+    first-appearance order, which is the deterministic order the rest of this
+    allocation walks.
+    """
+    keys = _flag_share_keys(ctx, net_id, points)
+    order: list[str] = []
+    members: dict[str, list[str]] = {}
+    share_of: dict[str, str] = {}
+    for member, _point in sorted(points):
+        key = keys.get(member, flaggroups.SHARE_ALONE)
+        label = (
+            f"share:{key}"
+            if key != flaggroups.SHARE_ALONE
+            else f"alone:{member}"
+        )
+        if label not in members:
+            order.append(label)
+            members[label] = []
+            share_of[label] = key
+        members[label].append(member)
+    return tuple(
+        (share_of[label], label, tuple(members[label])) for label in order
+    )
+
+
+def _seat_first_points(
+    ctx: _Context, placed: _Placement, net_id: str
+) -> tuple[tuple[str, tuple[float, float] | None], ...]:
+    """Every member of one net and the pin tip it stands on (``None``: absent)."""
+    net = ctx.circuit.net(net_id)
+    if net is None:
+        return ()
+    out: list[tuple[str, tuple[float, float] | None]] = []
+    for member in sorted(net.members):
+        part_id, _, token = member.partition(".")
+        out.append((
+            member,
+            _pin_point(ctx, part_id, token, placed.poses, placed.origins),
+        ))
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class _SeatFirstScene:
+    """One page's texts and the obstacle tables they were measured into (§34D-A3).
+
+    The three values are always built together: the **same** ``texts`` that a
+    caller may hand on are the ones whose boxes are in ``solids``/``bodies``,
+    so a plan and the drawing it serves cannot be measured on two different
+    text layouts. ``labels`` is the same statement for the nets named by a
+    label: their boxes are already in ``solids``/``bodies``, and the labels
+    themselves are carried so a replay can be checked against the exact map
+    (§34D-B1). It is empty for every scene built before labels were seated,
+    which is every A3/A4/B0 scene.
+    """
+
+    texts: tuple[LayoutText, ...]
+    solids: tuple[Box, ...]
+    bodies: tuple[Box, ...]
+    labels: tuple[LayoutLabel, ...] = ()
+
+
+def _seat_first_text_inputs(
+    ctx: _Context, placed: _Placement
+) -> tuple[list[Box], list[Box]]:
+    """``(occupied, text_walls)`` — exactly what `_part_texts` is called with.
+
+    The two lists are the text pass's own inputs (the part extents text must
+    avoid, and the drawn bodies/pin lines it may sit beside). They are kept
+    separate from the wire tables because A3 re-runs `_part_texts` **once** with
+    one extra wall and needs the same inputs.
+    """
+    occupied: list[Box] = list(ctx.budget.keepouts)
+    text_walls: list[Box] = list(ctx.budget.keepouts)
+    for part_id in sorted(placed.origins):
+        profile = ctx.profile(part_id)
+        pose = placed.poses[part_id]
+        origin = placed.origins[part_id]
+        occupied.append(_part_box(profile, pose, origin))
+        text_walls.extend(_text_walls(profile, pose, origin))
+    return occupied, text_walls
+
+
+def _seat_first_scene_of(
+    ctx: _Context,
+    placed: _Placement,
+    texts: Sequence[LayoutText],
+    extra_bodies: Sequence[Box] = (),
+    labels: Sequence[LayoutLabel] = (),
+) -> _SeatFirstScene:
+    """The wire/lead obstacle tables for **these** texts and labels (§34D-A3).
+
+    ``labels`` is empty on every scene built before any label was seated, so
+    A3/A4/B0 keep the exact tables they had. When a caller has placed the page's
+    label names first (§34D-B1), their real boxes join the same two tables the
+    texts use — a member run may no more cross a label than a printed row — and
+    the labels themselves ride on the scene so a replay can be compared.
+    """
+    solids: list[Box] = list(ctx.budget.keepouts)
+    bodies: list[Box] = list(ctx.budget.keepouts)
+    for part_id in sorted(placed.origins):
+        profile = ctx.profile(part_id)
+        pose = placed.poses[part_id]
+        origin = placed.origins[part_id]
+        body = _body_box(profile, pose, origin)
+        if body is not None:
+            solids.append(body)
+            bodies.append(body)
+        solids.extend(_pin_walls(profile, pose, origin))
+    for text in texts:
+        solids.append(text.bbox)
+        bodies.append(text.bbox)
+    for label in labels:
+        solids.append(label.bbox)
+        bodies.append(label.bbox)
+    for box in extra_bodies:
+        solids.append(box)
+        bodies.append(box)
+    return _SeatFirstScene(
+        texts=tuple(texts), solids=tuple(solids), bodies=tuple(bodies),
+        labels=tuple(labels),
+    )
+
+
+def _seat_first_scene(
+    ctx: _Context, placed: _Placement, extra_bodies: Sequence[Box] = ()
+) -> tuple[tuple[Box, ...], tuple[Box, ...], GrammarFailure | None]:
+    """The obstacle tables one allocation is measured on (§34D-A).
+
+    ``solids`` is what a wire may not cross — every part's drawn body, its pin
+    lines and every printed text row (the same table
+    :func:`_build_one_variant` gives its router), plus the caller's own probe
+    bodies; ``bodies`` is the lead's own table, which is the same list (a flag's
+    lead may not cross a printed row either, 148). A page whose text cannot be
+    seated at all is a refusal here, not an empty obstacle set.
+    """
+    occupied, text_walls = _seat_first_text_inputs(ctx, placed)
+    texts, failure = _part_texts(ctx, placed, occupied, text_walls)
+    if failure is not None:
+        return (), (), failure
+    scene = _seat_first_scene_of(ctx, placed, texts, extra_bodies)
+    return scene.solids, scene.bodies, None
+
+
+def _seat_first_router(
+    ctx: _Context,
+    placed: _Placement,
+    net_id: str,
+    solids: Sequence[Box],
+    points: Sequence[tuple[str, tuple[float, float] | None]],
+    labels: Sequence[LayoutLabel] = (),
+    foreign: Sequence[LayoutSegment] = (),
+) -> tuple[_Router, set[tuple[float, float]]]:
+    """The compiler's own search over the seats' walls for one net (§34D-A).
+
+    A distance or a path this pass reports is a run the real router would draw,
+    on the obstacle set it holds before any wire exists: parts, texts, pin lines
+    and every foreign connection, plus the flag boxes already claimed. ``labels``
+    are the page's already-seated label names (§34D-B1): their anchors become
+    blocked points, exactly as a foreign label's anchor does in the build.
+    """
+    blocked = _blocked_points(ctx, placed, net_id, labels, (), ())
+    router = _Router(
+        grid=ctx.budget.grid,
+        residue=placed.residue,
+        boxes=list(solids),
+        bounds=_search_bounds(
+            ctx, solids, [point for _member, point in points if point is not None],
+        ),
+    )
+    router.blocked = blocked
+    router.reserved_exempt = net_id
+    if foreign:
+        # §34D-B2a: a pre-flighted signal is a conductor, not a wall — the
+        # compiler's own wire-vs-wire rule (074): a run may cross it at a price
+        # and may not put a vertex on it. Hard boxes for these runs made the
+        # rail plan unsatisfiable on the panel fixture (measured), which is the
+        # rule the drawing already states, not a relaxation.
+        _set_foreign_edges(router, foreign, net_id)
+    return router, blocked
+
+
+def _seat_first_run_nodes(
+    router: _Router, runs: Sequence[tuple[tuple[float, float], tuple[float, float]]]
+) -> frozenset[tuple[float, float]]:
+    cells: set[tuple[float, float]] = set()
+    for start, end in runs:
+        cells |= _lattice_nodes(router, start, end)
+    return frozenset(cells)
+
+
+def _seat_first_seat_nodes(
+    router: _Router,
+    lead: Sequence[tuple[float, float]],
+    glyph: Box,
+) -> frozenset[tuple[float, float]]:
+    """The lane and the flag a seat claims: its lead's nodes and its whole box."""
+    cells = set(_seat_first_run_nodes(
+        router, tuple(zip(lead, tuple(lead)[1:])),
+    ))
+    cells |= _nodes_in_box(router, glyph)
+    return frozenset(cells)
+
+
+def _seat_first_box_problem(box: Box, solids: Sequence[Box]) -> str:
+    """The first obstacle a seat's glyph box overlaps, or ``""``."""
+    for other in solids:
+        if _panel_boxes_overlap(box, other):
+            return (
+                f"the part or text at ({other[0]:g}, {other[1]:g})-"
+                f"({other[2]:g}, {other[3]:g})"
+            )
+    return ""
+
+
+def _seat_first_lead_problem(
+    lead: Sequence[tuple[float, float]],
+    solids: Sequence[Box],
+    blocked: set[tuple[float, float]],
+) -> str:
+    """The first obstacle a seat's own lead crosses, or ``""``."""
+    for point in lead:
+        if _key(point) in blocked:
+            return f"the foreign connection at {_point_text(point)}"
+    for start, end in zip(lead, lead[1:]):
+        for box in solids:
+            if _segment_hits_box(start, end, box):
+                return (
+                    f"the leg {_point_text(start)} -> {_point_text(end)} through "
+                    f"the part or text at ({box[0]:g}, {box[1]:g})-"
+                    f"({box[2]:g}, {box[3]:g})"
+                )
+    return ""
+
+
+def _seat_first_member_obstacle(
+    point: tuple[float, float], solids: Sequence[Box]
+) -> str:
+    """The first box a straight flag run off this foot would hit, or ``""``.
+
+    Evidence only, on a seat the ladder refused: the ladder's own message says
+    "a part, a text row, another net's wire", and a refusal a reader can act on
+    should name the box. The run tested is the compiler's own first shape —
+    straight out along the foot's vertical, :data:`FLAG_JOG` then
+    :data:`FLAG_LEAD`, both ways.
+    """
+    for sign, side in ((1.0, "up"), (-1.0, "down")):
+        end = (point[0], point[1] + sign * (FLAG_JOG + FLAG_LEAD))
+        for box in solids:
+            if _segment_hits_box(point, end, box):
+                return (
+                    f"the part or text at ({box[0]:g}, {box[1]:g})-"
+                    f"({box[2]:g}, {box[3]:g}) on the {side} run"
+                )
+    return ""
+
+
+def _seat_first_clash(
+    nodes: frozenset[tuple[float, float]],
+    taken: Mapping[tuple[float, float], tuple[str, str]],
+    *,
+    ignore: tuple[str, str] | None = None,
+) -> tuple[tuple[float, float], tuple[str, str]] | None:
+    """The first claimed node a seat or a run would stand on, if any."""
+    for node in sorted(nodes):
+        owner = taken.get(node)
+        if owner is None or owner == ignore:
+            continue
+        return node, owner
+    return None
+
+
+def _seat_first_paths(
+    ctx: _Context,
+    placed: _Placement,
+    net_id: str,
+    members: Sequence[str],
+    seat: _SeatFirstSeat,
+    points: Mapping[str, tuple[float, float] | None],
+    solids: Sequence[Box],
+    bodies: Sequence[Box],
+    walls: Sequence[Box],
+    taken: Mapping[tuple[float, float], tuple[str, str]],
+    labels: Sequence[LayoutLabel] = (),
+    foreign: Sequence[LayoutSegment] = (),
+) -> tuple[
+    tuple[tuple[str, tuple[tuple[float, float], ...]], ...],
+    frozenset[tuple[float, float]],
+    str,
+]:
+    """Every member's real orthogonal run to one seat, or the first named miss.
+
+    The run starts at the member's **pin** and ends at the seat's own foot
+    (``lead[0]``): the point the flag's lead leaves from. A member the search
+    cannot reach, or a run that would stand on another assignment's seat or
+    lane, refuses this candidate — the allocator never substitutes a straight
+    line or the nearest point of two wires.
+    """
+    router, _blocked = _seat_first_router(
+        ctx, placed, net_id, [*solids, *walls],
+        tuple((member, points[member]) for member in members),
+        labels, foreign,
+    )
+    # Another rail's claimed seats and lanes are walls for this group's runs:
+    # a member that can only reach the seat across a neighbour's lane has no
+    # legal run, and saying so is the honest answer (the neighbour was decided
+    # earlier and is not re-routed from here).
+    router.blocked = router.blocked | {
+        node for node, owner in taken.items()
+        if owner != (net_id, seat.owner)
+    }
+    out: list[tuple[str, tuple[tuple[float, float], ...]]] = []
+    lanes: set[tuple[float, float]] = set()
+    for member in members:
+        point = points[member]
+        if point is None:
+            return (), frozenset(), (
+                f"the member {member!r} of {net_id!r} is not on any placed part, "
+                "so the seat it was assigned has no foot to reach"
+            )
+        if member == seat.owner:
+            # The seat's own member *is* the foot: its run is the point the
+            # lead leaves from, and the lead itself is the seat's geometry.
+            path = (tuple(seat.lead[0]),)
+            nodes = _seat_first_run_nodes(
+                router, tuple(zip(seat.lead, tuple(seat.lead)[1:])),
+            )
+        else:
+            run = router.route(point, seat.lead[0])
+            if run is None:
+                return (), frozenset(), (
+                    f"the member {member!r} at {_point_text(point)} has no legal "
+                    f"orthogonal run to the seat at {_point_text(seat.lead[0])} "
+                    f"owned by {seat.owner!r}"
+                )
+            path = tuple(_rounded(point) for point in run)
+            nodes = _seat_first_run_nodes(router, tuple(zip(path, path[1:])))
+        clash = _seat_first_clash(
+            nodes, taken, ignore=(net_id, seat.owner),
+        )
+        if clash is not None:
+            node, owner = clash
+            return (), frozenset(), (
+                f"the run for {member!r} to the seat at "
+                f"{_point_text(seat.anchor)} would stand on {owner[1]!r}'s seat "
+                f"or lane on {owner[0]!r} at {_point_text(node)}"
+            )
+        lanes |= nodes
+        out.append((member, path))
+    return tuple(out), frozenset(lanes), ""
+
+
+def _seat_first_path_length(
+    paths: Sequence[tuple[str, tuple[tuple[float, float], ...]]],
+) -> float:
+    """The Manhattan length of a candidate's whole set of member runs.
+
+    This is the only ranking the allocator applies among **complete** seats: the
+    cheapest one is chosen, ties broken by the owner's member id. It relaxes no
+    constraint — every ranked candidate already has all its members' legal runs
+    — it only decides *which* of several true answers the page draws, so the
+    same page always draws the same one.
+    """
+    return sum(
+        abs(start[0] - end[0]) + abs(start[1] - end[1])
+        for _member, path in paths
+        for start, end in zip(path, path[1:])
+    )
+
+
+def _seat_first_candidate_seats(
+    ctx: _Context,
+    placed: _Placement,
+    rails: Sequence[str],
+    points_of: Mapping[str, tuple[tuple[str, tuple[float, float] | None], ...]],
+    solids: Sequence[Box],
+    bodies: Sequence[Box],
+    fixed: Mapping[tuple[str, str], _SeatFirstSeat],
+    fixed_refused: Mapping[str, Mapping[str, str]],
+    detached_of: Mapping[str, frozenset[str]],
+    walls: Sequence[Box],
+) -> dict[tuple[float, float], frozenset[tuple[str, str]]]:
+    """Every seat any automatic group could take, measured once (§34D-A2).
+
+    A page-wide fact, built on the fixed terminals and the real obstacles only —
+    never on another automatic group's choice — so the pool is the same whatever
+    order the rails are walked in. Only **forced** seats enter it: a group with
+    no completed alternative pins its one answer, and every other group's member
+    runs are measured clear of it. A group that has alternatives is not pooled —
+    pinning all of its alternatives would refuse the group with its own other
+    answer; those are resolved by :func:`_seat_first_joint` instead.
+    """
+    pool: dict[tuple[float, float], set[tuple[str, str]]] = {}
+    for net_id in rails:
+        net = ctx.circuit.net(net_id)
+        cls = net.cls if net is not None else "gnd"
+        detached = detached_of.get(net_id, frozenset())
+        points = points_of.get(net_id, ())
+        usable = tuple(
+            (member, point)
+            for member, point in points
+            if point is not None and member not in detached
+        )
+        if not usable:
+            continue
+        profile, _ref = _flag_plan(ctx, net_id, cls)
+        if profile is None:
+            continue
+        present = {member: point for member, point in usable}
+        fixed_members = {member for (net, member) in fixed if net == net_id}
+        for _share, group, members in _seat_first_groups(ctx, net_id, usable):
+            if any(member in fixed_members for member in members):
+                continue
+            if any(member in fixed_refused.get(net_id, {}) for member in members):
+                continue
+            found: list[tuple[str, frozenset[tuple[float, float]]]] = []
+            for owner in members:
+                router, blocked = _seat_first_router(
+                    ctx, placed, net_id, [*solids, *walls],
+                    tuple((member, present[member]) for member in members),
+                )
+                anchor, rotation, lead, failure = _rail_flag_seat(
+                    ctx, placed, net_id, owner, present[owner], profile, router,
+                    blocked, [*solids, *walls], bodies,
+                )
+                if lead is None:
+                    continue
+                glyph = _flag_box(profile, rotation, anchor, net_id)
+                found.append((owner, _seat_first_seat_nodes(router, lead, glyph)))
+            if len(found) != 1:
+                # A group with alternatives is resolved by the joint selection:
+                # pinning every alternative as a wall would refuse the group
+                # with its own other answer. Only a **forced** seat (the group
+                # has one candidate) is a page-wide fact worth clearing runs of.
+                continue
+            for node in found[0][1]:
+                pool.setdefault(node, set()).add((net_id, group))
+    return pool
+
+
+def _seat_first_pool_blocked(
+    pool: Mapping[tuple[float, float], frozenset[tuple[str, str]]],
+    own: tuple[str, str],
+) -> dict[tuple[float, float], tuple[str, str]]:
+    """Pool nodes that belong to **another** group, as walls for this one.
+
+    A candidate seat is pinned by its ``(net, semantic group)``, not by its
+    owner: two owners of one group are two alternatives of the same statement,
+    so neither may block the other (that would refuse the group with itself).
+    A node any **other** group's candidate could take is a wall — including a
+    node two groups both claim, whichever rail was walked first.
+    """
+    return {
+        node: (own[0], "another group's candidate seat")
+        for node, owners in pool.items()
+        if own not in owners
+    }
+
+
+def _seat_first_net_jobs(
+    ctx: _Context,
+    placed: _Placement,
+    net_id: str,
+    points: tuple[tuple[str, tuple[float, float] | None], ...],
+    solids: Sequence[Box],
+    bodies: Sequence[Box],
+    fixed: Mapping[str, _SeatFirstSeat],
+    fixed_refused: Mapping[str, str],
+    detached: frozenset[str],
+    taken: dict[tuple[float, float], tuple[str, str]],
+    walls: list[Box],
+    pool: Mapping[tuple[float, float], frozenset[tuple[str, str]]] | None = None,
+    labels: Sequence[LayoutLabel] = (),
+    foreign: Sequence[LayoutSegment] = (),
+) -> _SeatFirstEnumeration:
+    """Enumerate one rail's groups; choose nothing (§34D-A2).
+
+    Panel terminals are entered **first** and are not candidates: a group that a
+    fixed seat serves takes that seat, and the seat's anchor/lead are replayed
+    from the panel plan point for point. Every other group is enumerated on real
+    pins (``_rail_flag_seat``) and keeps **all** of its complete candidates —
+    every complete candidate is one where each member has a legal orthogonal run
+    to the seat, measured on the fixed terminal seats and the real obstacles
+    only. No automatic group is allowed to take a lane before another automatic
+    group is measured; the joint selection happens once, page-wide, after every
+    group's candidates exist (:func:`_seat_first_joint`).
+    """
+    net = ctx.circuit.net(net_id)
+    cls = net.cls if net is not None else "gnd"
+    pool = {} if pool is None else pool
+    refusals: list[GrammarFailure] = []
+    evidence: list[_SeatFirstCandidate] = []
+    fixed_assignments: list[_SeatFirstAssignment] = []
+    jobs: list[_SeatFirstJob] = []
+    excluded = tuple(
+        (
+            member,
+            "069 sec.2: this pad is drawn with its own local flag by the "
+            "detached-pad branch, so the seat-first allocator does not "
+            "allocate it (the obligation is the existing one, not a missing "
+            "seat)",
+        )
+        for member, _point in points
+        if member in detached
+    )
+    usable = tuple(
+        (member, point)
+        for member, point in points
+        if point is not None and member not in detached
+    )
+    for member, point in points:
+        if point is None:
+            refusals.append(_seat_first_refusal(
+                net_id,
+                f"the member {member!r} of {net_id!r} is not on any placed part, "
+                "so it has no foot a flag could stand on",
+            ))
+    present = {member: point for member, point in usable}
+    if not usable:
+        return _SeatFirstEnumeration(
+            net_id, cls, (), (), (), tuple(refusals), excluded,
+        )
+    profile, ref = _flag_plan(ctx, net_id, cls)
+    if profile is None:
+        refusals.append(_seat_first_refusal(
+            net_id,
+            f"the library carries no flag symbol {ref!r} for {net_id!r} "
+            f"({cls}), so a seat for it cannot be stated",
+        ))
+        return _SeatFirstEnumeration(
+            net_id, cls, (), (), (), tuple(refusals), excluded,
+        )
+    for share, group, members in _seat_first_groups(ctx, net_id, usable):
+        lost = [member for member in members if member in fixed_refused]
+        if lost:
+            refusals.append(_seat_first_refusal(
+                net_id,
+                f"the semantic group {group!r} of {net_id!r} is served by a "
+                f"panel terminal that could not be seated ({', '.join(lost)}): "
+                f"{fixed_refused[lost[0]]}; a fixed terminal is neither moved "
+                "nor replaced by an automatic seat",
+            ))
+            continue
+        group_fixed = [fixed[member] for member in members if member in fixed]
+        if len(group_fixed) > 1:
+            refusals.append(_seat_first_refusal(
+                net_id,
+                f"the semantic group {group!r} of {net_id!r} is served by "
+                f"{len(group_fixed)} panel terminals at once ("
+                + ", ".join(
+                    f"{seat.owner} at {_point_text(seat.anchor)}"
+                    for seat in group_fixed
+                )
+                + "); a group has one seat, and a fixed terminal is not moved",
+            ))
+            continue
+        if group_fixed:
+            seat = group_fixed[0]
+            paths, lanes, problem = _seat_first_paths(
+                ctx, placed, net_id, members, seat, present,
+                solids, bodies, walls,
+                {**_seat_first_pool_blocked(pool, (net_id, group)), **taken},
+                labels, foreign,
+            )
+            if problem:
+                refusals.append(_seat_first_refusal(
+                    net_id,
+                    f"the panel terminal seat of {seat.owner!r} at "
+                    f"{_point_text(seat.anchor)} cannot serve its group "
+                    f"{group!r}: {problem}",
+                ))
+                evidence.append(_SeatFirstCandidate(
+                    net_id, group, seat.owner, members, seat, (), None, False,
+                ))
+                continue
+            for node in seat.occupancy | lanes:
+                taken.setdefault(node, (net_id, seat.owner))
+            fixed_assignments.append(_SeatFirstAssignment(
+                net=net_id, share=share, group=group, members=members,
+                seat=seat, paths=paths, lanes=lanes,
+            ))
+            evidence.append(_SeatFirstCandidate(
+                net_id, group, seat.owner, members, seat, paths, None, True,
+            ))
+            continue
+        complete: list[_SeatFirstCandidate] = []
+        for owner in members:
+            point = present[owner]
+            # The signal runs are **not** walls here: a flag's lead is the one
+            # run the compiler already refuses to lay across a foreign wire
+            # (`_rail_flag_seat`'s lead ladder), and on this fixture that rule
+            # alone leaves U1's 3V3 group with no seat at all — measured. The
+            # member runs below do see them as edges (§34D-B2a).
+            router, blocked = _seat_first_router(
+                ctx, placed, net_id, [*solids, *walls],
+                tuple((member, present[member]) for member in members),
+                labels,
+            )
+            anchor, rotation, lead, seat_failure = _rail_flag_seat(
+                ctx, placed, net_id, owner, point, profile, router, blocked,
+                [*solids, *walls], bodies,
+            )
+            if lead is None:
+                obstacle = _seat_first_member_obstacle(point, solids)
+                if seat_failure is not None:
+                    detail = seat_failure.detail.rstrip().rstrip(".") + "."
+                    if obstacle:
+                        detail += (
+                            f" The first box on the foot's own straight run is "
+                            f"{obstacle}."
+                        )
+                    refusal = replace(seat_failure, detail=detail)
+                else:
+                    refusal = _seat_first_refusal(
+                        net_id,
+                        f"no seat for the group {group!r} of {net_id!r} at "
+                        f"{owner!r} ({_point_text(point)})"
+                        + (f"; the first obstacle on the foot's own straight "
+                           f"run is {obstacle}" if obstacle else ""),
+                    )
+                evidence.append(_SeatFirstCandidate(
+                    net_id, group, owner, members, None, (), refusal, False,
+                ))
+                continue
+            glyph = _flag_box(profile, rotation, anchor, net_id)
+            seat = _SeatFirstSeat(
+                net=net_id, owner=owner, anchor=anchor, rotation=rotation,
+                lead=tuple(lead), fixed=False, source=SEAT_FIRST_AUTO,
+                glyph=glyph,
+                occupancy=_seat_first_seat_nodes(router, lead, glyph),
+            )
+            paths, lanes, problem = _seat_first_paths(
+                ctx, placed, net_id, members, seat, present,
+                solids, bodies, walls,
+                {**_seat_first_pool_blocked(pool, (net_id, group)), **taken},
+                labels, foreign,
+            )
+            if problem:
+                evidence.append(_SeatFirstCandidate(
+                    net_id, group, owner, members, seat, (),
+                    _seat_first_refusal(
+                        net_id,
+                        f"the seat for the group {group!r} of {net_id!r} at "
+                        f"{owner!r} is not complete: {problem}",
+                    ),
+                    False,
+                ))
+                continue
+            cost = _seat_first_path_length(paths) + _seat_first_path_length(
+                ((owner, tuple(lead)),)
+            )
+            complete.append(_SeatFirstCandidate(
+                net_id, group, owner, members, seat, paths, None, False,
+                lanes, cost,
+            ))
+        if not complete:
+            refusals.append(_seat_first_refusal(
+                net_id,
+                f"the semantic group {group!r} of {net_id!r} ("
+                + ", ".join(members)
+                + ") has no complete seat: no member of the group owns a "
+                "seat every other member can reach (see this plan's "
+                "candidates for the measured obstacle)",
+            ))
+            continue
+        jobs.append(_SeatFirstJob(
+            net=net_id, cls=cls, share=share, group=group, members=members,
+            candidates=tuple(sorted(
+                complete, key=lambda item: (item.cost, item.owner),
+            )),
+            refusals=(),
+        ))
+    return _SeatFirstEnumeration(
+        net_id, cls, tuple(fixed_assignments), tuple(jobs), tuple(evidence),
+        tuple(refusals), excluded,
+    )
+
+
+#: The fixed ceiling on joint-selection expansions (§34D-A2). Each candidate a
+#: node tries is one expansion; the search reports the ceiling by name rather
+#: than raising it, and nothing in the allocator may widen it to make a page pass.
+SEAT_FIRST_EXPANSIONS = 4096
+
+
+@dataclass(frozen=True)
+class _SeatFirstJob:
+    """One automatic semantic group and **all** of its complete candidates."""
+
+    net: str
+    cls: str
+    share: str
+    group: str
+    members: tuple[str, ...]
+    candidates: tuple[_SeatFirstCandidate, ...]
+    refusals: tuple[GrammarFailure, ...] = ()
+
+
+@dataclass(frozen=True)
+class _SeatFirstEnumeration:
+    """One rail's enumeration: fixed assignments, automatic jobs and evidence."""
+
+    net: str
+    cls: str
+    fixed: tuple[_SeatFirstAssignment, ...]
+    jobs: tuple[_SeatFirstJob, ...]
+    evidence: tuple[_SeatFirstCandidate, ...]
+    refusals: tuple[GrammarFailure, ...]
+    excluded: tuple[tuple[str, str], ...] = ()
+
+
+def _seat_first_candidate_nodes(
+    candidate: _SeatFirstCandidate,
+) -> frozenset[tuple[float, float]]:
+    """What one candidate claims: its seat's lead/glyph and its member runs.
+
+    Compatibility between two assignments is a question about these nodes only
+    — the joint selection never asks the router, so the answer cannot depend on
+    an order in which the page happens to be walked.
+    """
+    if candidate.seat is None:
+        return frozenset()
+    return candidate.seat.occupancy | candidate.lanes
+
+
+def _seat_first_joint(
+    jobs: Sequence[_SeatFirstJob],
+    taken: Mapping[tuple[float, float], tuple[str, str]],
+    *,
+    limit: int | None = None,
+) -> tuple[
+    bool,
+    dict[tuple[str, str], _SeatFirstCandidate],
+    bool,
+    int,
+]:
+    """Choose one candidate per job, page-wide (§34D-A2).
+
+    A deterministic depth-first search: at every node the next group is the one
+    with the **fewest candidates still compatible** with the seats already
+    chosen (MRV), ties broken by the cheapest compatible candidate, then by the
+    group's net and id; the candidates of that group are tried cheapest first,
+    ties by owner member. Compatibility reads the candidate node sets only —
+    no ``_Router.route`` call happens here, so the joint answer is a fact about
+    the enumerated candidates and not a second routing opinion.
+
+    ``limit`` is :data:`SEAT_FIRST_EXPANSIONS`; every candidate the search tries
+    is one expansion. ``(ok, chosen, limit_hit, expansions)`` is returned: a
+    search that hits the ceiling says so, and is never reported as "no answer".
+    """
+    ceiling = SEAT_FIRST_EXPANSIONS if limit is None else limit
+    used = dict(taken)
+    chosen: dict[tuple[str, str], _SeatFirstCandidate] = {}
+    state = {"expansions": 0, "limit_hit": False}
+    ordered = tuple(jobs)
+
+    def walk(remaining: tuple[_SeatFirstJob, ...]) -> bool:
+        if not remaining:
+            return True
+        options = []
+        for job in remaining:
+            compatible = [
+                candidate for candidate in job.candidates
+                if not (_seat_first_candidate_nodes(candidate) & used.keys())
+            ]
+            if not compatible:
+                return False
+            options.append((
+                len(compatible),
+                min((candidate.cost, candidate.owner) for candidate in compatible),
+                job,
+                compatible,
+            ))
+        _, _, job, compatible = min(
+            options,
+            key=lambda item: (item[0], item[1], item[2].net, item[2].group),
+        )
+        rest = tuple(other for other in remaining if other is not job)
+        for candidate in compatible:
+            state["expansions"] += 1
+            if state["expansions"] > ceiling:
+                state["limit_hit"] = True
+                return False
+            nodes = _seat_first_candidate_nodes(candidate)
+            for node in nodes:
+                used[node] = (job.net, job.group)
+            chosen[(job.net, job.group)] = candidate
+            if walk(rest):
+                return True
+            del chosen[(job.net, job.group)]
+            for node in nodes:
+                used.pop(node, None)
+        return False
+
+    ok = walk(ordered)
+    return ok, chosen, state["limit_hit"], state["expansions"]
+
+
+def _seat_first_plans(
+    ctx: _Context,
+    placed: _Placement,
+    *,
+    obstacles: Sequence[Box] = (),
+    order: Sequence[str] | None = None,
+    scene: _SeatFirstScene | None = None,
+    foreign: Sequence[LayoutSegment] = (),
+) -> tuple[tuple[_SeatFirstPlan, ...], GrammarFailure | None]:
+    """The seat-first allocation of every ground/power rail (§34D-A2).
+
+    Only a document that states ``panelGroups`` enters this path: a page without
+    the key keeps the compiler it had, byte for byte. The order is the
+    contract's own — semantic groups (:func:`_flag_share_keys`), then the panel
+    cells' fixed terminals (:func:`_panel_terminal_seats`), then a **complete
+    enumeration of every automatic group's real seats** (:func:`_seat_first_net_jobs`,
+    measured on the fixed seats and the page's obstacles only), and finally the
+    page-wide joint choice (:func:`_seat_first_joint`). No automatic group takes
+    a lane before another automatic group has been measured, so the answer no
+    longer depends on which rail happens to be walked first. ``obstacles`` are
+    extra probe bodies (a test's real box); the compiler passes none.
+    """
+    if not getattr(ctx.presentation, "panel_groups", ()) or ():
+        return (), None
+    if scene is None:
+        solids, bodies, failure = _seat_first_scene(ctx, placed, obstacles)
+        if failure is not None:
+            return (), failure
+    else:
+        solids, bodies = scene.solids, scene.bodies
+    terminal_seats, terminal_failure = _seat_first_terminal_seats(ctx, placed)
+    if terminal_failure is not None:
+        return (), terminal_failure
+    rails = [
+        net.id for net in ctx.circuit.nets
+        if net.cls in ("gnd", "power") and net.members
+    ]
+    points_of = {
+        net_id: _seat_first_points(ctx, placed, net_id) for net_id in rails
+    }
+    rails = [
+        net_id for net_id in (
+            sorted(rails) if order is None else list(order)
+        )
+        if any(point is not None for _member, point in points_of[net_id])
+    ]
+    taken: dict[tuple[float, float], tuple[str, str]] = {}
+    walls: list[Box] = []
+    fixed_seats: dict[tuple[str, str], _SeatFirstSeat] = {}
+    fixed_refused: dict[str, dict[str, str]] = {}
+    page_refusals: list[GrammarFailure] = []
+    for net_id, member in sorted(terminal_seats):
+        anchor, lead, hang, source = terminal_seats[(net_id, member)]
+        net = ctx.circuit.net(net_id)
+        cls = net.cls if net is not None else "gnd"
+        profile, ref = _flag_plan(ctx, net_id, cls)
+        if profile is None:
+            detail = (
+                f"the {source} of {member!r} on {net_id!r} has no flag "
+                f"symbol {ref!r} in the library"
+            )
+            page_refusals.append(_seat_first_refusal(net_id, detail))
+            fixed_refused.setdefault(net_id, {})[member] = detail
+            continue
+        lead = tuple(tuple(point) for point in lead)
+        rotation = _flag_rotation((0.0, hang), flag_glyph_kind(profile))
+        glyph = _flag_box(profile, rotation, anchor, net_id)
+        router, blocked = _seat_first_router(
+            ctx, placed, net_id, [*solids, *walls], points_of.get(net_id, ()),
+            scene.labels if scene is not None else (), foreign,
+        )
+        problem = (
+            _seat_first_box_problem(glyph, [*solids, *walls])
+            or _seat_first_lead_problem(lead, [*solids, *walls], blocked)
+        )
+        if problem:
+            detail = (
+                f"the {source} seat of {member!r} at "
+                f"{_point_text(anchor)} is covered by {problem} — a fixed "
+                "terminal is not moved to make room"
+            )
+            page_refusals.append(_seat_first_refusal(net_id, detail))
+            fixed_refused.setdefault(net_id, {})[member] = detail
+            continue
+        seat = _SeatFirstSeat(
+            net=net_id, owner=member, anchor=anchor, rotation=rotation, lead=lead,
+            fixed=True, source=source, glyph=glyph,
+            occupancy=_seat_first_seat_nodes(router, lead, glyph),
+        )
+        clash = _seat_first_clash(seat.occupancy, taken)
+        if clash is not None:
+            node, other = clash
+            detail = (
+                f"the {source} seat of {member!r} at "
+                f"{_point_text(anchor)} overlaps {other[1]!r}'s seat on "
+                f"{other[0]!r} at {_point_text(node)}"
+            )
+            page_refusals.append(_seat_first_refusal(net_id, detail))
+            fixed_refused.setdefault(net_id, {})[member] = detail
+            continue
+        for node in seat.occupancy:
+            taken[node] = (net_id, member)
+        walls.append(glyph)
+        fixed_seats[(net_id, member)] = seat
+    # 069 sec.2: the expression facts decide which pads the allocator must not
+    # touch. They are read from the same `_expressions` the drawing uses, so a
+    # detached pad is excluded by name and never mistaken for a missing seat.
+    expressions = _expressions(ctx, placed)
+    detached_of = {
+        net_id: frozenset(
+            getattr(expressions.get(net_id), "detached", ()) or ()
+        )
+        for net_id in rails
+    }
+    pool = _seat_first_candidate_seats(
+        ctx, placed, rails, points_of, solids, bodies, fixed_seats,
+        fixed_refused, detached_of, walls,
+    )
+    enumerations: list[_SeatFirstEnumeration] = []
+    for net_id in rails:
+        enumerations.append(_seat_first_net_jobs(
+            ctx, placed, net_id, points_of[net_id], solids, bodies,
+            {member: seat for (net, member), seat in fixed_seats.items()
+             if net == net_id},
+            fixed_refused.get(net_id, {}),
+            detached_of[net_id],
+            taken, walls, pool,
+            scene.labels if scene is not None else (),
+            foreign,
+        ))
+    jobs = tuple(
+        job for enumeration in enumerations for job in enumeration.jobs
+    )
+    ok, chosen, limit_hit, _expansions = _seat_first_joint(jobs, taken)
+    joint_refusals: dict[tuple[str, str], GrammarFailure] = {}
+    if not ok:
+        names = ", ".join(
+            f"{job.group!r} on {job.net!r}" for job in jobs
+        )
+        if limit_hit:
+            for job in jobs:
+                joint_refusals[(job.net, job.group)] = _seat_first_refusal(
+                    job.net,
+                    f"the joint seat selection reached its fixed expansion "
+                    f"limit ({SEAT_FIRST_EXPANSIONS}) while settling {names}; "
+                    "the page has no answer inside the declared search and the "
+                    "limit is not raised to make one",
+                )
+        else:
+            conflict = ""
+            for first in jobs:
+                for second in jobs:
+                    if first is second:
+                        continue
+                    if all(
+                        _seat_first_candidate_nodes(one)
+                        & _seat_first_candidate_nodes(other)
+                        for one in first.candidates
+                        for other in second.candidates
+                    ):
+                        conflict = (
+                            f"every candidate of {first.group!r} on "
+                            f"{first.net!r} stands on every candidate of "
+                            f"{second.group!r} on {second.net!r}"
+                        )
+                        break
+                if conflict:
+                    break
+            for job in jobs:
+                joint_refusals[(job.net, job.group)] = _seat_first_refusal(
+                    job.net,
+                    f"no joint seat allocation exists for {names}"
+                    + (f": {conflict}" if conflict else "")
+                    + "; the groups are not merged and no lane is dropped to "
+                    "make one fit",
+                )
+    plans: list[_SeatFirstPlan] = []
+    for enumeration in enumerations:
+        assignments = list(enumeration.fixed)
+        candidates = list(enumeration.evidence)
+        refusals = list(enumeration.refusals)
+        for job in enumeration.jobs:
+            take = chosen.get((job.net, job.group))
+            if take is None:
+                candidates.extend(job.candidates)
+                refusal = joint_refusals.get((job.net, job.group))
+                refusals.append(refusal or _seat_first_refusal(
+                    job.net,
+                    f"the semantic group {job.group!r} of {job.net!r} "
+                    f"({', '.join(job.members)}) has {len(job.candidates)} "
+                    "complete seat(s) but the joint selection could not place "
+                    "it (see this plan's candidates)",
+                ))
+                continue
+            assignments.append(_SeatFirstAssignment(
+                net=job.net, share=job.share, group=job.group,
+                members=job.members, seat=take.seat, paths=take.paths,
+                lanes=take.lanes,
+            ))
+            candidates.append(replace(take, accepted=True))
+        plans.append(_SeatFirstPlan(
+            enumeration.net, enumeration.cls, tuple(assignments),
+            tuple(candidates), tuple(refusals), enumeration.excluded,
+        ))
+    if page_refusals:
+        # A fixed terminal the page cannot state refuses the whole allocation:
+        # the plan list still carries every rail's evidence for the reader.
+        return tuple(plans), page_refusals[0]
+    return tuple(plans), None
+
+
+@dataclass(frozen=True)
+class _SeatFirstTextPlan:
+    """One text re-layout and the plan measured on it (§34D-A3).
+
+    ``scene.texts`` is the **final** printed rows and ``scene.solids/bodies`` are
+    the tables built from exactly those rows, so a caller that draws
+    ``scene.texts`` draws what the plan was measured against. ``hypothetical``
+    is evidence only: those seats are not assignments, and every one of them has
+    to reappear from the real re-enumeration or the page is refused.
+    """
+
+    plans: tuple[_SeatFirstPlan, ...]
+    scene: _SeatFirstScene
+    hypothetical: tuple[tuple[str, str, _SeatFirstSeat], ...]
+    refusals: tuple[GrammarFailure, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.refusals
+
+
+def _seat_first_fixed_tables(
+    ctx: _Context, placed: _Placement, scene: _SeatFirstScene
+) -> tuple[dict[tuple[float, float], tuple[str, str]], list[Box]]:
+    """The page's fixed seats (panel and service) as walls — what a hypothetical
+    seat avoids."""
+    seats, failure = _seat_first_terminal_seats(ctx, placed)
+    taken: dict[tuple[float, float], tuple[str, str]] = {}
+    walls: list[Box] = []
+    if failure is not None:
+        return taken, walls
+    for net_id, member in sorted(seats):
+        anchor, lead, hang, _source = seats[(net_id, member)]
+        net = ctx.circuit.net(net_id)
+        cls = net.cls if net is not None else "gnd"
+        profile, _ref = _flag_plan(ctx, net_id, cls)
+        if profile is None:
+            continue
+        lead = tuple(tuple(point) for point in lead)
+        rotation = _flag_rotation((0.0, hang), flag_glyph_kind(profile))
+        glyph = _flag_box(profile, rotation, anchor, net_id)
+        router, _blocked = _seat_first_router(
+            ctx, placed, net_id,
+            [*scene.solids, *walls], _seat_first_points(ctx, placed, net_id),
+            scene.labels,
+        )
+        for node in _seat_first_seat_nodes(router, lead, glyph):
+            taken[node] = (net_id, member)
+        walls.append(glyph)
+    return taken, walls
+
+
+def _seat_first_hypothetical_seat(
+    ctx: _Context,
+    placed: _Placement,
+    scene: _SeatFirstScene,
+    net_id: str,
+    member: str,
+) -> tuple[_SeatFirstSeat | None, GrammarFailure | None]:
+    """One missing independent branch's seat, with **its own** text removed.
+
+    The owner's own printed rows are the obstacle A3 is allowed to question, so
+    they are taken out of the wire/lead tables for this measurement only; every
+    other part, text row, keep-out and fixed terminal stays a wall. The result is
+    a hypothesis: it is never written into an assignment, it is handed to one
+    real `_part_texts` pass as `extra_text_walls`, and the plan is then rebuilt
+    from the real words.
+    """
+    net = ctx.circuit.net(net_id)
+    cls = net.cls if net is not None else "gnd"
+    profile, ref = _flag_plan(ctx, net_id, cls)
+    if profile is None:
+        return None, _seat_first_refusal(
+            net_id,
+            f"the library carries no flag symbol {ref!r} for {net_id!r}, so "
+            f"the missing branch {member!r} has no hypothetical seat",
+        )
+    point = dict(_seat_first_points(ctx, placed, net_id))[member]
+    if point is None:
+        return None, _seat_first_refusal(
+            net_id,
+            f"the missing branch {member!r} is not on any placed part",
+        )
+    part_id = member.partition(".")[0]
+    own = {text.bbox for text in scene.texts if text.part_id == part_id}
+    solids = [box for box in scene.solids if box not in own]
+    bodies = [box for box in scene.bodies if box not in own]
+    taken, walls = _seat_first_fixed_tables(ctx, placed, scene)
+    router, blocked = _seat_first_router(
+        ctx, placed, net_id, [*solids, *walls],
+        _seat_first_points(ctx, placed, net_id), scene.labels,
+    )
+    router.blocked = router.blocked | set(taken)
+    anchor, rotation, lead, failure = _rail_flag_seat(
+        ctx, placed, net_id, member, point, profile, router, blocked,
+        [*solids, *walls], bodies,
+    )
+    if lead is None:
+        obstacle = _seat_first_member_obstacle(point, [*solids, *walls])
+        detail = (
+            f"the missing branch {member!r} of {net_id!r} has no seat even with "
+            "its own printed rows removed"
+            + (f"; the first box on its straight run is {obstacle}" if obstacle else "")
+        )
+        if failure is not None:
+            detail = failure.detail.rstrip().rstrip(".") + ". " + detail
+        return None, _seat_first_refusal(net_id, detail)
+    glyph = _flag_box(profile, rotation, anchor, net_id)
+    return _SeatFirstSeat(
+        net=net_id, owner=member, anchor=anchor, rotation=rotation,
+        lead=tuple(lead), fixed=False, source=SEAT_FIRST_AUTO, glyph=glyph,
+        occupancy=_seat_first_seat_nodes(router, lead, glyph),
+    ), None
+
+
+def _seat_first_text_plan(
+    ctx: _Context,
+    placed: _Placement,
+    *,
+    obstacles: Sequence[Box] = (),
+    order: Sequence[str] | None = None,
+    extra_walls: Sequence[Box] = (),
+    signal_walls: Sequence[Box] = (),
+) -> _SeatFirstTextPlan:
+    """The whole seat-first answer on **one** text layout (§34D-A3).
+
+    The first plan is measured on the page's own texts. When an **independent**
+    semantic group (``SHARE_ALONE``, one member) has no seat at all, one
+    hypothetical seat is proposed with that part's own text rows removed
+    (:func:`_seat_first_hypothetical_seat`), its real glyph box is given to a
+    single `_part_texts` re-layout as ``extra_text_walls``, and the **entire**
+    plan is then re-enumerated and jointly chosen on the new texts. The page is
+    accepted only when the hypothetical seat's anchor and lead reappear point
+    for point, every existing automatic seat is where it was, every fixed
+    terminal is untouched, every member is assigned and the validator clears the
+    final plan. Anything else is a named refusal; there is no second re-layout.
+    """
+    empty = _SeatFirstScene((), (), ())
+    if not getattr(ctx.presentation, "panel_groups", ()) or ():
+        return _SeatFirstTextPlan((), empty, (), ())
+    occupied, text_walls = _seat_first_text_inputs(ctx, placed)
+    # `_part_texts` extends the wall list it is handed, and A3 reuses that list
+    # on purpose: the identity of the default argument is part of the old
+    # behaviour, so it is kept whenever no signal wall was stated.
+    walls = text_walls if not extra_walls else [*text_walls, *extra_walls]
+    if signal_walls:
+        walls = [*walls, *signal_walls]
+    texts, failure = _part_texts(ctx, placed, occupied, walls)
+    if failure is not None:
+        return _SeatFirstTextPlan((), empty, (), (failure,))
+    scene = _seat_first_scene_of(
+        ctx, placed, texts,
+        obstacles if not extra_walls else [*obstacles, *extra_walls],
+    )
+    plans, page = _seat_first_plans(ctx, placed, scene=scene, order=order)
+    refusals: list[GrammarFailure] = [page] if page is not None else []
+    gaps: list[tuple[str, str, tuple[str, ...]]] = []
+    for plan in plans:
+        present = tuple(
+            (member, point)
+            for member, point in _seat_first_points(ctx, placed, plan.net)
+            if point is not None
+        )
+        assigned = {item.group for item in plan.assignments}
+        for share, group, members in _seat_first_groups(
+            ctx, plan.net, present
+        ):
+            if group in assigned:
+                continue
+            if share != flaggroups.SHARE_ALONE or len(members) != 1:
+                continue
+            gaps.append((plan.net, group, members))
+    if not gaps:
+        return _SeatFirstTextPlan(plans, scene, (), tuple(refusals))
+    hypothetical: list[tuple[str, str, _SeatFirstSeat]] = []
+    for net_id, group, members in gaps:
+        seat, problem = _seat_first_hypothetical_seat(
+            ctx, placed, scene, net_id, members[0],
+        )
+        if seat is None:
+            if problem is not None:
+                refusals.append(problem)
+            continue
+        hypothetical.append((net_id, group, seat))
+    if not hypothetical:
+        return _SeatFirstTextPlan(plans, scene, tuple(hypothetical), tuple(refusals))
+    extra = tuple(seat.glyph for _net, _group, seat in hypothetical)
+    walls2 = [*text_walls, *extra] if not extra_walls else [
+        *text_walls, *extra_walls, *extra]
+    if signal_walls:
+        walls2 = [*walls2, *signal_walls]
+    texts2, text_failure = _part_texts(ctx, placed, occupied, walls2)
+    if text_failure is not None:
+        return _SeatFirstTextPlan(
+            plans, scene, tuple(hypothetical), (*refusals, text_failure),
+        )
+    if tuple(text.bbox for text in texts2) == tuple(text.bbox for text in texts):
+        refusals.append(_seat_first_refusal(
+            hypothetical[0][0],
+            "the one text re-layout with the hypothetical flag's room did not "
+            "move any printed row, so the seat and the text are still two "
+            "different answers; the allocator does not shorten or nudge text "
+            "and does not run a second re-layout",
+        ))
+        return _SeatFirstTextPlan(plans, scene, tuple(hypothetical), tuple(refusals))
+    scene2 = _seat_first_scene_of(
+        ctx, placed, texts2,
+        obstacles if not extra_walls else [*obstacles, *extra_walls],
+    )
+    plans2, page2 = _seat_first_plans(ctx, placed, scene=scene2, order=order)
+    if page2 is not None:
+        refusals.append(page2)
+    for net_id, group, seat in hypothetical:
+        plan2 = next(plan for plan in plans2 if plan.net == net_id)
+        item = next(
+            (assignment for assignment in plan2.assignments
+             if assignment.group == group),
+            None,
+        )
+        if item is None:
+            refusals.append(_seat_first_refusal(
+                net_id,
+                f"the hypothetical seat of {group!r} on {net_id!r} at "
+                f"{_point_text(seat.anchor)} was not reproduced by the "
+                "re-enumeration on the real texts",
+            ))
+            continue
+        if (
+            _key(item.seat.anchor) != _key(seat.anchor)
+            or [tuple(point) for point in item.seat.lead]
+            != [tuple(point) for point in seat.lead]
+        ):
+            refusals.append(_seat_first_refusal(
+                net_id,
+                f"the hypothetical seat of {group!r} on {net_id!r} moved in the "
+                f"real scene: {_point_text(seat.anchor)} -> "
+                f"{_point_text(item.seat.anchor)}",
+            ))
+    before = {
+        (plan.net, item.group): (item.seat.owner, item.seat.anchor)
+        for plan in plans for item in plan.assignments if not item.seat.fixed
+    }
+    after = {
+        (plan.net, item.group): (item.seat.owner, item.seat.anchor)
+        for plan in plans2 for item in plan.assignments if not item.seat.fixed
+    }
+    for key, value in sorted(before.items()):
+        if key in after and after[key] != value:
+            refusals.append(_seat_first_refusal(
+                key[0],
+                f"the automatic seat of {key[1]!r} was "
+                f"{_point_text(value[1])} before the one text re-layout and is "
+                f"{_point_text(after[key][1])} after it; a re-layout may not "
+                "move a seat the page already had",
+            ))
+    refusals.extend(_seat_first_validate(ctx, placed, plans2, scene=scene2))
+    for plan in plans2:
+        if plan.complete:
+            continue
+        refusals.append(_seat_first_refusal(
+            plan.net,
+            f"{plan.net!r} is still incomplete after the one text re-layout: "
+            + "; ".join(item.detail for item in plan.refusals),
+        ))
+    return _SeatFirstTextPlan(plans2, scene2, tuple(hypothetical), tuple(refusals))
+
+
+@dataclass(frozen=True)
+class _SeatFirstTerminal:
+    """The text layout a page is finally checked on (§34D-A4).
+
+    ``discovery`` is the A3 answer **exactly as it came out**, refusals and all:
+    its hypothetical seats are the probes that found the text wall, and its own
+    refusal is kept for audit — A4 does not rewrite A3 and does not claim A3
+    succeeded. What this result asserts is narrower and stronger: the **final
+    scene** (the one text layout A3 ended on) carries a plan that passes every
+    geometric and semantic check, replays point for point, and is deterministic.
+    ``plans`` is that plan, freshly enumerated on ``scene`` — never the A3
+    assignments copied over.
+    """
+
+    plans: tuple[_SeatFirstPlan, ...]
+    scene: _SeatFirstScene
+    discovery: _SeatFirstTextPlan
+    refusals: tuple[GrammarFailure, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.refusals
+
+    @property
+    def discovery_ok(self) -> bool:
+        return self.discovery.ok
+
+
+def _seat_first_text_box_failures(
+    ctx: _Context,
+    placed: _Placement,
+    scene: _SeatFirstScene,
+    plans: Sequence[_SeatFirstPlan],
+) -> list[GrammarFailure]:
+    """Text collisions on the final scene: text/text, text/part, text/flag.
+
+    ``keepouts`` are part of the part table here because a printed row on one is
+    the same defect as a row on a body. Flag glyphs are taken from the plan's
+    own seats, so this asks the final words against the final flags.
+    """
+    failures: list[GrammarFailure] = []
+    part_boxes: list[Box] = list(ctx.budget.keepouts)
+    for part_id in sorted(placed.origins):
+        profile = ctx.profile(part_id)
+        pose = placed.poses[part_id]
+        origin = placed.origins[part_id]
+        body = _body_box(profile, pose, origin)
+        if body is not None:
+            part_boxes.append(body)
+        part_boxes.extend(_pin_walls(profile, pose, origin))
+    texts = scene.texts
+    for index, text in enumerate(texts):
+        for other in part_boxes:
+            if _panel_boxes_overlap(text.bbox, other):
+                failures.append(_seat_first_refusal(
+                    "",
+                    f"the printed row {text.text!r} of {text.part_id!r} at "
+                    f"({text.bbox[0]:g}, {text.bbox[1]:g})-"
+                    f"({text.bbox[2]:g}, {text.bbox[3]:g}) overlaps a part or a "
+                    "keep-out; the final text layout is not a drawing",
+                ))
+                break
+        for other in texts[index + 1:]:
+            if _panel_boxes_overlap(text.bbox, other.bbox):
+                failures.append(_seat_first_refusal(
+                    "",
+                    f"the printed rows {text.text!r} of {text.part_id!r} and "
+                    f"{other.text!r} of {other.part_id!r} overlap at "
+                    f"({text.bbox[0]:g}, {text.bbox[1]:g})-"
+                    f"({text.bbox[2]:g}, {text.bbox[3]:g})",
+                ))
+    for plan in plans:
+        for item in plan.assignments:
+            for text in texts:
+                if _panel_boxes_overlap(text.bbox, item.seat.glyph):
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the printed row {text.text!r} of {text.part_id!r} at "
+                        f"({text.bbox[0]:g}, {text.bbox[1]:g})-"
+                        f"({text.bbox[2]:g}, {text.bbox[3]:g}) overlaps the "
+                        f"flag of {item.group!r} at "
+                        f"{_point_text(item.seat.anchor)}",
+                    ))
+    return failures
+
+
+def _seat_first_terminal_fixed_failures(
+    ctx: _Context, placed: _Placement, plans: Sequence[_SeatFirstPlan]
+) -> list[GrammarFailure]:
+    """The page's fixed terminals must be exactly where their sources state them.
+
+    Read on the **final** text scene's plans: a terminal that is missing, given
+    an automatic seat, or moved is a named refusal, never a seat the re-layout
+    is allowed to make up. The seats are the merged reading (§35B1), so a
+    service seat's terminal is held to the same rule as a panel cell's.
+    """
+    failures: list[GrammarFailure] = []
+    seats, failure = _seat_first_terminal_seats(ctx, placed)
+    if failure is not None:
+        return [failure]
+    for (net_id, member), (anchor, lead, _hang, source) in sorted(seats.items()):
+        plan = next((item for item in plans if item.net == net_id), None)
+        found = None
+        if plan is not None:
+            found = next(
+                (item for item in plan.assignments if member in item.members),
+                None,
+            )
+        if found is None:
+            failures.append(_seat_first_refusal(
+                net_id,
+                f"the {source} {member!r} at {_point_text(anchor)} "
+                "has no assignment on the final text scene",
+            ))
+            continue
+        if not found.seat.fixed:
+            failures.append(_seat_first_refusal(
+                net_id,
+                f"the {source} {member!r} at {_point_text(anchor)} was "
+                "given an automatic seat on the final text scene",
+            ))
+            continue
+        if (
+            _key(found.seat.anchor) != _key(anchor)
+            or [tuple(point) for point in found.seat.lead]
+            != [tuple(point) for point in lead]
+        ):
+            failures.append(_seat_first_refusal(
+                net_id,
+                f"the {source} {member!r} moved on the final text "
+                f"scene: {_point_text(anchor)} -> "
+                f"{_point_text(found.seat.anchor)}",
+            ))
+    return failures
+
+
+def _seat_first_text_terminal(
+    ctx: _Context,
+    placed: _Placement,
+    *,
+    obstacles: Sequence[Box] = (),
+    order: Sequence[str] | None = None,
+    extra_walls: Sequence[Box] = (),
+    signal_walls: Sequence[Box] = (),
+) -> _SeatFirstTerminal:
+    """Accept the **final** text scene, not the process that found it (§34D-A4).
+
+    A3's discovery is left untouched: its refusals are carried in
+    ``discovery`` and its hypothetical seats stay probes. Here the whole plan is
+    enumerated again on A3's **final scene** — the one text layout the page
+    would draw — and accepted only when every one of these holds: no page
+    failure, every semantic group complete, the validator silent, the fixed
+    terminals exactly where the panel states them, no printed row on another
+    row / a part / a keep-out / a final flag, no two assignments sharing a flag
+    or a run (on one rail or across rails), the same scene replaying the same
+    plan point for point, and the answer being the same when asked twice.
+    """
+    discovery = _seat_first_text_plan(
+        ctx, placed, obstacles=obstacles, order=order,
+        extra_walls=extra_walls, signal_walls=signal_walls,
+    )
+    scene = discovery.scene
+    if not getattr(ctx.presentation, "panel_groups", ()) or ():
+        return _SeatFirstTerminal(
+            (), scene, discovery,
+            (_seat_first_refusal(
+                "",
+                "the page states no panelGroups, so it has no seat-first "
+                "terminal scene to accept",
+            ),),
+        )
+    plans, page = _seat_first_plans(ctx, placed, scene=scene, order=order)
+    refusals: list[GrammarFailure] = []
+    if page is not None:
+        refusals.append(page)
+    if plans != discovery.plans:
+        refusals.append(_seat_first_refusal(
+            "",
+            "the final text scene did not replay the plan A3 measured on it: "
+            "the same scene is two different answers",
+        ))
+    for plan in plans:
+        if plan.complete:
+            continue
+        refusals.append(_seat_first_refusal(
+            plan.net,
+            f"{plan.net!r} is not complete on the final text scene: "
+            + "; ".join(item.detail for item in plan.refusals),
+        ))
+    refusals.extend(_seat_first_terminal_fixed_failures(ctx, placed, plans))
+    refusals.extend(
+        _seat_first_text_box_failures(ctx, placed, scene, plans)
+    )
+    flat = [(plan.net, item) for plan in plans for item in plan.assignments]
+    for net_a, first in flat:
+        for net_b, second in flat:
+            if first is second:
+                continue
+            shared = sorted(
+                (first.lanes & second.seat.occupancy)
+                | (first.seat.occupancy & second.lanes)
+                | (first.lanes & second.lanes)
+                | (first.seat.occupancy & second.seat.occupancy)
+            )
+            if shared:
+                refusals.append(_seat_first_refusal(
+                    net_a,
+                    f"the seat/lane of {first.group!r} on {net_a!r} and "
+                    f"{second.group!r} on {net_b!r} share "
+                    f"{_point_text(shared[0])} on the final text scene",
+                ))
+    refusals.extend(
+        _seat_first_validate(ctx, placed, plans, scene=scene)
+    )
+    again, again_page = _seat_first_plans(ctx, placed, scene=scene, order=order)
+    # §35C: a page-level refusal that comes back on the replay is **the same
+    # fact** already stated above (a fixed terminal with no seat), not evidence
+    # that the page is nondeterministic. Only the plan list differing while both
+    # enumerations are clean is the determinism answer.
+    if again_page is not None:
+        if page is None:
+            refusals.append(again_page)
+    elif again != plans:
+        refusals.append(_seat_first_refusal(
+            "",
+            "the final text scene is not deterministic: two enumerations of the "
+            "same scene gave different plans",
+        ))
+    return _SeatFirstTerminal(plans, scene, discovery, tuple(refusals))
+
+
+@dataclass(frozen=True)
+class _SeatFirstChannelTerminal:
+    """The terminal scene with the panel host channels held as walls (§34D-B0).
+
+    ``channels`` is the panel's own host-lead map, computed on the page's own
+    texts before anything moved; ``walls`` is that map as positive boxes
+    (``PIN_TEXT_WALL`` around every leg). The terminal was re-laid-out, enumerated
+    and jointly chosen with those walls in the scene, and the channels were then
+    recomputed on the **final** texts: the two maps must be the same drawing,
+    point for point.
+    """
+
+    terminal: _SeatFirstTextPlan
+    channels: dict[str, tuple[LayoutSegment, ...]]
+    walls: tuple[Box, ...]
+    refusals: tuple[GrammarFailure, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.refusals
+
+
+def _seat_first_channel_walls(
+    channels: Mapping[str, Sequence[LayoutSegment]],
+) -> tuple[Box, ...]:
+    """Every host-lead leg as a real, positive box (:data:`PIN_TEXT_WALL`)."""
+    walls: list[Box] = []
+    for net in sorted(channels):
+        for item in channels[net]:
+            for start, end in zip(item.points, item.points[1:]):
+                walls.append((
+                    min(start[0], end[0]) - PIN_TEXT_WALL,
+                    min(start[1], end[1]) - PIN_TEXT_WALL,
+                    max(start[0], end[0]) + PIN_TEXT_WALL,
+                    max(start[1], end[1]) + PIN_TEXT_WALL,
+                ))
+    return tuple(walls)
+
+
+def _seat_first_channel_text_failures(
+    scene: _SeatFirstScene, walls: Sequence[Box]
+) -> list[GrammarFailure]:
+    """No printed row may stand on a host channel (§34D-B0)."""
+    failures: list[GrammarFailure] = []
+    for text in scene.texts:
+        for wall in walls:
+            if _panel_boxes_overlap(text.bbox, wall):
+                failures.append(_seat_first_refusal(
+                    "",
+                    f"the printed row {text.text!r} of {text.part_id!r} at "
+                    f"({text.bbox[0]:g}, {text.bbox[1]:g})-"
+                    f"({text.bbox[2]:g}, {text.bbox[3]:g}) stands on a panel "
+                    f"host channel at ({wall[0]:g}, {wall[1]:g})-"
+                    f"({wall[2]:g}, {wall[3]:g})",
+                ))
+                break
+    return failures
+
+
+def _seat_first_channel_seat_failures(
+    plans: Sequence[_SeatFirstPlan], walls: Sequence[Box]
+) -> list[GrammarFailure]:
+    """No seat lead or member run may stand on a host channel (§34D-B0)."""
+    failures: list[GrammarFailure] = []
+    for plan in plans:
+        for item in plan.assignments:
+            seat = item.seat
+            runs = [("lead", seat.lead)] + [
+                (member, path) for member, path in item.paths if len(path) > 1
+            ]
+            for name, path in runs:
+                for start, end in zip(path, path[1:]):
+                    for wall in walls:
+                        if _segment_hits_box(start, end, wall):
+                            failures.append(_seat_first_refusal(
+                                plan.net,
+                                f"the {name} of {item.group!r} at "
+                                f"{_point_text(start)} -> {_point_text(end)} "
+                                "stands on a panel host channel at "
+                                f"({wall[0]:g}, {wall[1]:g})-"
+                                f"({wall[2]:g}, {wall[3]:g})",
+                            ))
+                            break
+                    else:
+                        continue
+                    break
+    return failures
+
+
+def _seat_first_channel_drift(
+    initial: Mapping[str, Sequence[LayoutSegment]],
+    final: Mapping[str, Sequence[LayoutSegment]],
+) -> GrammarFailure | None:
+    """The channels must be one drawing before and after the text re-layout."""
+    if set(initial) != set(final):
+        return _seat_first_refusal(
+            "",
+            f"the panel channels changed nets after the text re-layout: "
+            f"{sorted(initial)} -> {sorted(final)}",
+        )
+    for net in sorted(initial):
+        before = [tuple(tuple(point) for point in item.points)
+                  for item in initial[net]]
+        after = [tuple(tuple(point) for point in item.points)
+                 for item in final[net]]
+        if before != after:
+            return _seat_first_refusal(
+                net,
+                f"the panel host channel of {net!r} changed after the text "
+                f"re-layout: {before} -> {after}",
+            )
+    return None
+
+
+def _seat_first_channel_terminal(
+    ctx: _Context,
+    placed: _Placement,
+    *,
+    obstacles: Sequence[Box] = (),
+    order: Sequence[str] | None = None,
+    extra_walls: Sequence[Box] = (),
+) -> _SeatFirstChannelTerminal:
+    """The production entry for a panel page (§34D-B0).
+
+    The page's **own** texts give the panel's host channels first
+    (:func:`_panel_channels`); every leg becomes a positive wall
+    (:data:`PIN_TEXT_WALL`), and those walls are both the text pass's extra
+    walls and seat-first scene obstacles. The channel-aware terminal is then
+    run, and the channels are recomputed on its final texts: the same drawing,
+    no text on a channel, no seat run on a channel, every seat/lead/path
+    measured through the channel obstacles and the validator silent.
+    """
+    empty_scene = _SeatFirstScene((), (), ())
+    if not getattr(getattr(ctx, "presentation", None), "panel_groups", ()) or ():
+        return _SeatFirstChannelTerminal(
+            _SeatFirstTextPlan((), empty_scene, (), ()), {}, (),
+            (_seat_first_refusal(
+                "",
+                "the page states no panelGroups, so it has no panel host channel",
+            ),),
+        )
+    occupied, text_walls = _seat_first_text_inputs(ctx, placed)
+    own_texts, failure = _part_texts(ctx, placed, occupied, text_walls)
+    if failure is not None:
+        return _SeatFirstChannelTerminal(
+            _SeatFirstTextPlan((), empty_scene, (), ()), {}, (), (failure,),
+        )
+    channels, problem = _panel_channels(ctx, placed, texts=own_texts)
+    if problem is not None:
+        return _SeatFirstChannelTerminal(
+            _SeatFirstTextPlan((), empty_scene, (), ()), {}, (), (problem,),
+        )
+    walls = _seat_first_channel_walls(channels)
+    terminal = _seat_first_text_terminal(
+        ctx, placed, obstacles=obstacles, order=order,
+        extra_walls=walls, signal_walls=extra_walls,
+    )
+    refusals: list[GrammarFailure] = list(terminal.refusals)
+    if not terminal.ok:
+        return _SeatFirstChannelTerminal(terminal, channels, walls, tuple(refusals))
+    final_channels, final_problem = _panel_channels(
+        ctx, placed, texts=list(terminal.scene.texts),
+    )
+    if final_problem is not None:
+        refusals.append(final_problem)
+    else:
+        drift = _seat_first_channel_drift(channels, final_channels)
+        if drift is not None:
+            refusals.append(drift)
+    refusals.extend(
+        _seat_first_channel_text_failures(terminal.scene, walls)
+    )
+    refusals.extend(
+        _seat_first_channel_seat_failures(terminal.plans, walls)
+    )
+    refusals.extend(
+        _seat_first_validate(ctx, placed, terminal.plans, scene=terminal.scene)
+    )
+    for plan in terminal.plans:
+        if plan.complete:
+            continue
+        refusals.append(_seat_first_refusal(
+            plan.net,
+            f"{plan.net!r} is not complete on the channel-aware scene: "
+            + "; ".join(item.detail for item in plan.refusals),
+        ))
+    return _SeatFirstChannelTerminal(terminal, channels, walls, tuple(refusals))
+
+
+@dataclass(frozen=True)
+class _SeatFirstLabelTerminal:
+    """The channel-aware terminal with the page's label names seated first (§34D-B1).
+
+    ``labels`` is the replay map the build must use: ``(net, pin point) ->
+    LayoutLabel``, in the order the names were seated. ``scene`` is the scene the
+    plan was measured on — the B0 texts, the B0 channel walls and exactly these
+    label boxes — and ``plans`` is the page-wide joint answer on that scene, not
+    the B0 plan copied over. ``channel_terminal`` keeps the B0 answer (and A3's
+    discovery inside it) for evidence; a reader never has to guess which scene a
+    number came from.
+    """
+
+    plans: tuple[_SeatFirstPlan, ...]
+    scene: _SeatFirstScene
+    labels: tuple[tuple[str, tuple[float, float], LayoutLabel], ...]
+    channels: dict[str, tuple[LayoutSegment, ...]]
+    walls: tuple[Box, ...]
+    channel_terminal: _SeatFirstChannelTerminal
+    refusals: tuple[GrammarFailure, ...]
+    #: Walls the caller stated besides the panel channels (a signal preflight's
+    #: legs, §34D-B2a). Empty for every B1 call, which is why that batch's
+    #: readings are unchanged.
+    extra_walls: tuple[Box, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.refusals
+
+    def label_at(
+        self, net_id: str, point: tuple[float, float]
+    ) -> LayoutLabel | None:
+        for net, seat, label in self.labels:
+            if net == net_id and _key(seat) == _key(point):
+                return label
+        return None
+
+
+def _seat_first_label_map(
+    ctx: _Context,
+    placed: _Placement,
+    scene: _SeatFirstScene,
+    walls: Sequence[Box] = (),
+    named: Sequence[LayoutLabel] = (),
+    fallback_nets: Sequence[str] = (),
+) -> tuple[tuple[str, tuple[float, float], LayoutLabel], ...]:
+    """Seat every label-style net's name on **this** scene, real ladder (§34D-B1).
+
+    ``expression.style == 'label'`` is the compiler's own statement that this net
+    is named, not wired or flagged (:func:`_expression_style`); ``fallback_nets``
+    are the signal nets whose own pre-flight failed (§34D-B2a), which the old
+    generic fallback names at every pin — they enter through the same ladder and
+    the same obstacles, never through a second label rule. Its names are
+    placed here with :func:`_label_for` — the same four-direction ladder the
+    drawing uses — on the real obstacles the scene already holds: every part's
+    extent, every printed row, every host channel wall. Previously seated labels
+    join the obstacle list as they land, exactly as the build's own label loop
+    does.
+
+    The order is sorted net then sorted member, so the same scene always seats the
+    same names in the same places. Nothing here is special-cased by net name: a
+    label box that lands on a row or a channel is not "fixed up" — the validator
+    names it.
+    """
+    expressions = _expressions(ctx, placed)
+    occupied: list[Box] = []
+    for part_id in sorted(placed.origins):
+        occupied.append(_part_box(
+            ctx.profile(part_id), placed.poses[part_id], placed.origins[part_id],
+        ))
+    occupied.extend(text.bbox for text in scene.texts)
+    occupied.extend(walls)
+    out: list[tuple[str, tuple[float, float], LayoutLabel]] = [
+        (label.net, _key((label.x, label.y)), label) for label in named
+    ]
+    occupied.extend(label.bbox for label in named)
+    named_by_fallback = frozenset(fallback_nets)
+    for net_id in sorted(expressions):
+        expression = expressions[net_id]
+        if expression.style != "label" and net_id not in named_by_fallback:
+            continue
+        for member, point in sorted(expression.points):
+            part_id, _, token = member.partition(".")
+            label = _label_for(
+                ctx, net_id, part_id, token, point, placed, occupied,
+            )
+            occupied.append(label.bbox)
+            out.append((net_id, _key(point), label))
+    return tuple(out)
+
+
+def _seat_first_label_failures(
+    scene: _SeatFirstScene,
+    labels: Sequence[tuple[str, tuple[float, float], LayoutLabel]],
+    walls: Sequence[Box],
+    plans: Sequence[_SeatFirstPlan],
+) -> list[GrammarFailure]:
+    """A seated label may touch no row, channel, other label or plan geometry."""
+    failures: list[GrammarFailure] = []
+    for net_id, _point, label in labels:
+        for text in scene.texts:
+            if _panel_boxes_overlap(label.bbox, text.bbox):
+                failures.append(_seat_first_refusal(
+                    net_id,
+                    f"the label {label.text!r} at "
+                    f"({label.bbox[0]:g}, {label.bbox[1]:g})-"
+                    f"({label.bbox[2]:g}, {label.bbox[3]:g}) stands on the "
+                    f"printed row {text.text!r} of {text.part_id!r}",
+                ))
+                break
+        for wall in walls:
+            if _panel_boxes_overlap(label.bbox, wall):
+                failures.append(_seat_first_refusal(
+                    net_id,
+                    f"the label {label.text!r} at "
+                    f"({label.bbox[0]:g}, {label.bbox[1]:g})-"
+                    f"({label.bbox[2]:g}, {label.bbox[3]:g}) stands on a panel "
+                    f"host channel at ({wall[0]:g}, {wall[1]:g})-"
+                    f"({wall[2]:g}, {wall[3]:g})",
+                ))
+                break
+        for other_net, _other_point, other in labels:
+            if other is label:
+                continue
+            if _panel_boxes_overlap(label.bbox, other.bbox):
+                failures.append(_seat_first_refusal(
+                    net_id,
+                    f"the label {label.text!r} stands on the label "
+                    f"{other.text!r} of {other_net!r} at "
+                    f"({other.bbox[0]:g}, {other.bbox[1]:g})-"
+                    f"({other.bbox[2]:g}, {other.bbox[3]:g})",
+                ))
+                break
+    for plan in plans:
+        for item in plan.assignments:
+            seat = item.seat
+            runs = [("lead", seat.lead)] + [
+                (member, path) for member, path in item.paths if len(path) > 1
+            ]
+            for name, path in runs:
+                for start, end in zip(path, path[1:]):
+                    hit = next(
+                        (
+                            label for _net, _point, label in labels
+                            if _segment_hits_box(start, end, label.bbox)
+                        ),
+                        None,
+                    )
+                    if hit is None:
+                        continue
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the {name} of {item.group!r} at "
+                        f"{_point_text(start)} -> {_point_text(end)} runs through "
+                        f"the label {hit.text!r} at "
+                        f"({hit.bbox[0]:g}, {hit.bbox[1]:g})-"
+                        f"({hit.bbox[2]:g}, {hit.bbox[3]:g})",
+                    ))
+                    break
+    return failures
+
+
+@dataclass(frozen=True)
+class _SeatFirstSignals:
+    """The panel page's signal nets, pre-routed before anything is re-laid-out.
+
+    ``segments`` is one entry per net the page can actually draw
+    (``net -> the runs :func:`_connect_net` produced``), and ``walls`` is those
+    same runs as :data:`PIN_TEXT_WALL` boxes — the picture the text pass, the
+    label ladder and the seat scene all have to keep clear of. ``fallbacks`` is
+    every signal net the compiler's own wiring refused, with the measured
+    reason: those are named at each pin by the old generic fallback, never
+    silently dropped and never assumed in advance (§34D-B2a).
+    """
+
+    segments: tuple[tuple[str, tuple[LayoutSegment, ...]], ...]
+    walls: tuple[Box, ...]
+    fallbacks: tuple[tuple[str, str], ...]
+    refusals: tuple[GrammarFailure, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.refusals
+
+    def segment_map(self) -> dict[str, tuple[tuple[tuple[float, float], ...], ...]]:
+        return {
+            net: tuple(tuple(tuple(point) for point in item.points)
+                       for item in runs)
+            for net, runs in self.segments
+        }
+
+    def fallback_map(self) -> dict[str, str]:
+        return dict(self.fallbacks)
+
+
+def _seat_first_signal_preflight(
+    ctx: _Context,
+    placed: _Placement,
+    scene: _SeatFirstScene,
+    channels: Mapping[str, Sequence[LayoutSegment]] = {},
+    pinned: Mapping[str, Sequence[LayoutSegment]] = {},
+    obstacles: Sequence[Box] = (),
+) -> _SeatFirstSignals:
+    """Pre-route every ordinary signal net on the page's own texts (§34D-B2a).
+
+    The set is the compiler's own: a net whose expression is ``wire``, whose
+    class is neither ``gnd`` nor ``power``, and that is **not** a panel host
+    channel (those runs are already fixed by the panel plan). Each one is wired
+    with the real :func:`_connect_net` — the same trunk/attachment ladder the
+    build uses — on the scene's own solids, with the fixed channel and the
+    signals already routed standing as foreign edges. A net the compiler cannot
+    route keeps the old 520E answer: it is named at each pin, and the measured
+    stage/reason is carried.
+
+    Nothing here is predicted or hard-coded: whether a net is a wire or a name is
+    the compiler's answer on this placement, asked before the seat plan exists.
+    """
+    expressions = _expressions(ctx, placed)
+    fixed: list[LayoutSegment] = [
+        item for net_id in sorted(channels) for item in channels[net_id]
+    ]
+    channel_nets = set(channels)
+    segments: list[tuple[str, tuple[LayoutSegment, ...]]] = []
+    walls: list[Box] = []
+    fallbacks: list[tuple[str, str]] = []
+    refusals: list[GrammarFailure] = []
+    for net_id in sorted(expressions):
+        expression = expressions[net_id]
+        if expression.style != "wire":
+            continue
+        net = ctx.circuit.net(net_id)
+        if net is None or net.cls in ("gnd", "power"):
+            continue
+        if net_id in channel_nets:
+            continue
+        points = tuple(expression.points)
+        if len(points) < 2:
+            continue
+        router, blocked = _seat_first_router(
+            ctx, placed, net_id, [*scene.solids, *obstacles], points,
+        )
+        _set_foreign_edges(router, fixed, net_id)
+        # A replay hands back the runs this pass already drew: `_connect_net`
+        # answers with them unchanged when they still join every pad (548D3B),
+        # so "no drift" is the same function's answer, not a second judgement.
+        drawn = _connect_net(
+            ctx, router, expression, blocked,
+            tuple(pinned.get(net_id, ())),
+        )
+        if isinstance(drawn, _Unrouted):
+            fallbacks.append((
+                net_id, f"{drawn.stage}: {drawn.reason}",
+            ))
+            continue
+        runs, _why = drawn
+        fixed.extend(runs)
+        segments.append((net_id, tuple(runs)))
+        walls.extend(_seat_first_channel_walls({net_id: runs}))
+    return _SeatFirstSignals(
+        tuple(segments), tuple(walls), tuple(fallbacks), tuple(refusals),
+    )
+
+
+def _seat_first_signal_drift(
+    initial: _SeatFirstSignals, final: _SeatFirstSignals
+) -> GrammarFailure | None:
+    """The same page must pre-route the same signals after the re-layout."""
+    before = initial.segment_map()
+    after = final.segment_map()
+    if set(before) != set(after):
+        return _seat_first_refusal(
+            "",
+            "the signal pre-flight changed its nets after the re-layout: "
+            f"{sorted(before)} -> {sorted(after)}",
+        )
+    for net in sorted(before):
+        if before[net] != after[net]:
+            return _seat_first_refusal(
+                net,
+                f"the pre-flighted signal {net!r} moved after the re-layout: "
+                f"{before[net]} -> {after[net]}",
+            )
+    if set(initial.fallback_map()) != set(final.fallback_map()):
+        return _seat_first_refusal(
+            "",
+            "the signal fallbacks changed after the re-layout: "
+            f"{sorted(initial.fallback_map())} -> {sorted(final.fallback_map())}",
+        )
+    return None
+
+
+def _seat_first_signal_failures(
+    signals: _SeatFirstSignals,
+    scene: _SeatFirstScene,
+    labels: Sequence[tuple[str, tuple[float, float], LayoutLabel]],
+    plans: Sequence[_SeatFirstPlan],
+) -> list[GrammarFailure]:
+    """No printed row, name, seat or run may stand on a pre-flighted signal run."""
+    failures: list[GrammarFailure] = []
+    for net_id, runs in signals.segments:
+        for item in runs:
+            for start, end in zip(item.points, item.points[1:]):
+                for text in scene.texts:
+                    if _segment_hits_box(start, end, text.bbox):
+                        failures.append(_seat_first_refusal(
+                            net_id,
+                            f"the pre-flighted run {_point_text(start)} -> "
+                            f"{_point_text(end)} of {net_id!r} is crossed by the "
+                            f"printed row {text.text!r} of {text.part_id!r}",
+                        ))
+                        break
+                for label_net, _point, label in labels:
+                    if _segment_hits_box(start, end, label.bbox):
+                        failures.append(_seat_first_refusal(
+                            net_id,
+                            f"the pre-flighted run {_point_text(start)} -> "
+                            f"{_point_text(end)} of {net_id!r} is crossed by the "
+                            f"label {label.text!r} of {label_net!r}",
+                        ))
+                        break
+    # A crossing is the compiler's own allowed price (074); a **vertex on** a
+    # pre-flighted run is the short this test refuses — the same rule the
+    # router pays for, asked of the finished plan.
+    for plan in plans:
+        for item in plan.assignments:
+            runs = [("lead", item.seat.lead)] + [
+                (member, path) for member, path in item.paths if len(path) > 1
+            ]
+            for name, path in runs:
+                for point in path:
+                    hit = next(
+                        (
+                            net_id for net_id, items in signals.segments
+                            for item in items
+                            if _on_polyline(point, item.points)
+                        ),
+                        None,
+                    )
+                    if hit is None:
+                        continue
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the {name} of {item.group!r} stands on the "
+                        f"pre-flighted signal {hit!r} at {_point_text(point)}",
+                    ))
+                    break
+    return failures
+
+
+def _seat_first_label_terminal(
+    ctx: _Context,
+    placed: _Placement,
+    *,
+    obstacles: Sequence[Box] = (),
+    order: Sequence[str] | None = None,
+    named: Sequence[LayoutLabel] = (),
+    extra_walls: Sequence[Box] = (),
+    fallback_nets: Sequence[str] = (),
+    signal_segments: Sequence[LayoutSegment] = (),
+) -> _SeatFirstLabelTerminal:
+    """The production entry for a panel page whose names must be seated first.
+
+    B0's channel-aware terminal is the base: it fixes the page's own texts and
+    the panel host channels. On **that** scene every label-style net's name is
+    seated with the real ladder (:func:`_seat_first_label_map`), those boxes join
+    the scene as ordinary obstacles, and the whole seat plan is enumerated and
+    jointly chosen again (:func:`_seat_first_plans`) — a member run or a flag
+    lead may not cross a name, and a name may not stand on a row, a channel or
+    another name. Everything checked here reads the final scene: fixed terminals
+    point for point, channels unchanged, no text/seat on a channel, the plan
+    complete and valid, and the same scene replaying the same labels and the same
+    plan.
+    """
+    empty_scene = _SeatFirstScene((), (), ())
+    base = _seat_first_channel_terminal(
+        ctx, placed, obstacles=obstacles, order=order, extra_walls=extra_walls,
+    )
+    refusals: list[GrammarFailure] = list(base.refusals)
+    all_walls = (*base.walls, *extra_walls)
+    if not base.ok:
+        return _SeatFirstLabelTerminal(
+            (), base.terminal.scene, (), dict(base.channels), base.walls, base,
+            tuple(refusals), tuple(extra_walls),
+        )
+    scene = base.terminal.scene
+    labels = _seat_first_label_map(
+        ctx, placed, scene, all_walls, named, fallback_nets,
+    )
+    # The signal legs are **edges**, not boxes, for the seat scene (§34D-B2a):
+    # the compiler's own rule for wire-vs-wire is "cross at a price, never share
+    # a vertex", and hard boxes for them made the rail plan unsatisfiable on
+    # this fixture. They stay hard walls for the text pass and the label ladder,
+    # which may not print on a conductor.
+    scene2 = _seat_first_scene_of(
+        ctx, placed, scene.texts,
+        [*obstacles, *base.walls],
+        tuple(label for _net, _point, label in labels),
+    )
+    plans, page = _seat_first_plans(
+        ctx, placed, scene=scene2, order=order, foreign=signal_segments,
+    )
+    if page is not None:
+        refusals.append(page)
+    for plan in plans:
+        if plan.complete:
+            continue
+        refusals.append(_seat_first_refusal(
+            plan.net,
+            f"{plan.net!r} is not complete on the label-aware scene: "
+            + "; ".join(item.detail for item in plan.refusals),
+        ))
+    refusals.extend(_seat_first_terminal_fixed_failures(ctx, placed, plans))
+    refusals.extend(_seat_first_text_box_failures(ctx, placed, scene2, plans))
+    refusals.extend(
+        _seat_first_label_failures(scene2, labels, all_walls, plans)
+    )
+    refusals.extend(_seat_first_channel_text_failures(scene2, base.walls))
+    refusals.extend(_seat_first_channel_seat_failures(plans, base.walls))
+    refusals.extend(_seat_first_validate(ctx, placed, plans, scene=scene2))
+    final_channels, final_problem = _panel_channels(
+        ctx, placed, texts=list(scene2.texts),
+    )
+    if final_problem is not None:
+        refusals.append(final_problem)
+    else:
+        drift = _seat_first_channel_drift(base.channels, final_channels)
+        if drift is not None:
+            refusals.append(drift)
+    again_labels = _seat_first_label_map(
+        ctx, placed, scene2, all_walls, named, fallback_nets,
+    )
+    if (
+        [(net, _key(point), label) for net, point, label in again_labels]
+        != [(net, _key(point), label) for net, point, label in labels]
+    ):
+        refusals.append(_seat_first_refusal(
+            "",
+            "the label-aware scene is not deterministic: seating the same names "
+            "on it twice gave different boxes",
+        ))
+    again, again_page = _seat_first_plans(
+        ctx, placed, scene=scene2, order=order, foreign=signal_segments,
+    )
+    if again_page is not None or again != plans:
+        refusals.append(_seat_first_refusal(
+            "",
+            "the label-aware scene is not deterministic: two enumerations of the "
+            "same scene gave different plans",
+        ))
+    return _SeatFirstLabelTerminal(
+        plans, scene2, labels, dict(base.channels), base.walls, base,
+        tuple(refusals), tuple(extra_walls),
+    )
+
+
+@dataclass(frozen=True)
+class _SeatFirstSignalTerminal:
+    """The label-aware terminal with the page's signals already routed (§34D-B2a).
+
+    ``signals`` is what the pre-flight measured on the page's own texts: the
+    runs it drew, the leg boxes they reserve, and the nets the compiler's own
+    wiring refused (with the reason). ``terminal`` is the label-aware answer
+    measured on a scene that holds those legs as walls; its plans are the ones
+    the third integration replays, and its labels include a name at every pin of
+    every real fallback net. Every refusal is read on the final scene: the same
+    signals must pre-route to the same geometry, no row/name/seat may stand on a
+    pre-flighted run, and the rail plans must still be complete and valid.
+    """
+
+    terminal: _SeatFirstLabelTerminal
+    signals: _SeatFirstSignals
+    refusals: tuple[GrammarFailure, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.refusals
+
+    @property
+    def plans(self) -> tuple[_SeatFirstPlan, ...]:
+        return self.terminal.plans
+
+    @property
+    def scene(self) -> _SeatFirstScene:
+        return self.terminal.scene
+
+    @property
+    def labels(self) -> tuple[tuple[str, tuple[float, float], LayoutLabel], ...]:
+        return self.terminal.labels
+
+    @property
+    def channels(self) -> dict[str, tuple[LayoutSegment, ...]]:
+        return self.terminal.channels
+
+
+def _seat_first_signal_terminal(
+    ctx: _Context,
+    placed: _Placement,
+    *,
+    obstacles: Sequence[Box] = (),
+    order: Sequence[str] | None = None,
+) -> _SeatFirstSignalTerminal:
+    """The production entry for a panel page's signals (§34D-B2a).
+
+    The page's own texts settle the panel host channels (B0), the ordinary
+    signal nets are pre-routed on exactly that scene with the compiler's own
+    ``_connect_net``, and those runs become walls for the text re-layout, the
+    label ladder and the seat scene. The label-aware terminal then runs with
+    those walls and with the **measured** fallback nets — never a guessed one —
+    so a signal that cannot be routed is named at its pins and a signal that can
+    keeps the path this pass drew. The final scene re-runs the pre-flight: a net
+    that changed path, appeared or disappeared is a named refusal.
+    """
+    empty_scene = _SeatFirstScene((), (), ())
+    empty_signals = _SeatFirstSignals((), (), ())
+    if not getattr(getattr(ctx, "presentation", None), "panel_groups", ()) or ():
+        refusal = _seat_first_refusal(
+            "",
+            "the page states no panelGroups, so it has no signal pre-flight",
+        )
+        empty_channel = _SeatFirstChannelTerminal(
+            _SeatFirstTextPlan((), empty_scene, (), ()), {}, (), (refusal,),
+        )
+        return _SeatFirstSignalTerminal(
+            _SeatFirstLabelTerminal(
+                (), empty_scene, (), {}, (), empty_channel, (refusal,),
+            ),
+            empty_signals, (refusal,),
+        )
+    base = _seat_first_channel_terminal(
+        ctx, placed, obstacles=obstacles, order=order,
+    )
+    if not base.ok:
+        return _SeatFirstSignalTerminal(
+            _SeatFirstLabelTerminal(
+                (), base.terminal.scene, (), dict(base.channels), base.walls,
+                base, tuple(base.refusals),
+            ),
+            empty_signals, tuple(base.refusals),
+        )
+    signals = _seat_first_signal_preflight(
+        ctx, placed, base.terminal.scene, base.channels,
+    )
+    terminal = _seat_first_label_terminal(
+        ctx, placed, obstacles=obstacles, order=order,
+        extra_walls=signals.walls,
+        fallback_nets=tuple(net for net, _reason in signals.fallbacks),
+        signal_segments=tuple(
+            item for _net, runs in signals.segments for item in runs
+        ),
+    )
+    refusals: list[GrammarFailure] = list(signals.refusals)
+    refusals.extend(terminal.refusals)
+    final = _seat_first_signal_preflight(
+        ctx, placed, terminal.scene, terminal.channels,
+        dict(signals.segments),
+    )
+    drift = _seat_first_signal_drift(signals, final)
+    if drift is not None:
+        refusals.append(drift)
+    refusals.extend(_seat_first_signal_failures(
+        signals, terminal.scene, terminal.labels, terminal.plans,
+    ))
+    return _SeatFirstSignalTerminal(terminal, signals, tuple(refusals))
+
+
+# ------------------------------------------------- 548D3X4D B2b: seat-first order
+
+
+def _seat_first_seat_walls(
+    plans: Sequence[_SeatFirstPlan],
+) -> tuple[tuple[tuple[str, str], tuple[Box, ...]], ...]:
+    """Every seat's real glyph and lead as hard boxes, keyed by ``(net, group)``.
+
+    The order of §34D-B2b: the seats are **decided first** and then the signals
+    are routed around them, so a seat is a wall exactly where the drawing will
+    put its glyph and its lead — no invented box, no soft weight.
+    """
+    out: list[tuple[tuple[str, str], tuple[Box, ...]]] = []
+    for plan in plans:
+        for item in plan.assignments:
+            boxes: list[Box] = [item.seat.glyph]
+            boxes.extend(_seat_first_channel_walls(
+                {plan.net: [LayoutSegment(net=plan.net,
+                                          points=list(item.seat.lead))]},
+            ))
+            out.append(((plan.net, item.group), tuple(boxes)))
+    return tuple(out)
+
+
+def _seat_first_ordered_failures(
+    plans: Sequence[_SeatFirstPlan],
+    baseline: Sequence[_SeatFirstPlan],
+    signals: _SeatFirstSignals,
+    labels: Sequence[tuple[str, tuple[float, float], LayoutLabel]],
+    scene: _SeatFirstScene,
+    walls: Sequence[Box],
+) -> list[GrammarFailure]:
+    """No path may share a vertex with a signal, a name, a channel or a seat."""
+    failures: list[GrammarFailure] = []
+    for plan in plans:
+        for item in plan.assignments:
+            if len(item.paths) != len(item.members):
+                failures.append(_seat_first_refusal(
+                    plan.net,
+                    f"the assignment {item.group!r} of {plan.net!r} has "
+                    f"{len(item.paths)} path(s) for {len(item.members)} member(s)",
+                ))
+                continue
+            for member, path in item.paths:
+                if not path or _key(path[-1]) != _key(item.seat.lead[0]):
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the path of {member!r} in {item.group!r} does not end "
+                        f"on its seat's foot at {_point_text(item.seat.lead[0])}",
+                    ))
+                    continue
+                for point in path:
+                    hit = next(
+                        (net for net, items in signals.segments
+                         for run in items if _on_polyline(point, run.points)),
+                        None,
+                    )
+                    if hit is not None:
+                        failures.append(_seat_first_refusal(
+                            plan.net,
+                            f"the path of {member!r} in {item.group!r} shares the "
+                            f"vertex {_point_text(point)} with the pre-flighted "
+                            f"signal {hit!r}",
+                        ))
+                        continue
+                    landed = next(
+                        (label for _net, _point, label in labels
+                         if _panel_boxes_overlap(
+                             (point[0], point[1], point[0], point[1]),
+                             label.bbox)),
+                        None,
+                    )
+                    if landed is not None:
+                        failures.append(_seat_first_refusal(
+                            plan.net,
+                            f"the path of {member!r} in {item.group!r} runs "
+                            f"through the label {landed.text!r} of "
+                            f"{landed.net!r} at {_point_text(point)}",
+                        ))
+                        continue
+                for start, end in zip(path, path[1:]):
+                    landed = next(
+                        (label for _net, _point, label in labels
+                         if _segment_hits_box(start, end, label.bbox)),
+                        None,
+                    )
+                    if landed is not None:
+                        failures.append(_seat_first_refusal(
+                            plan.net,
+                            f"the path of {member!r} in {item.group!r} at "
+                            f"{_point_text(start)} -> {_point_text(end)} runs "
+                            f"through the label {landed.text!r} of "
+                            f"{landed.net!r}",
+                        ))
+    by_group = {
+        (plan.net, item.group): item for plan in baseline
+        for item in plan.assignments
+    }
+    for plan in plans:
+        for item in plan.assignments:
+            was = by_group.get((plan.net, item.group))
+            if was is None:
+                failures.append(_seat_first_refusal(
+                    plan.net,
+                    f"the assignment {item.group!r} of {plan.net!r} was not in "
+                    "the B0 answer: the ordered pass may not invent a seat",
+                ))
+                continue
+            if (
+                _key(was.seat.anchor) != _key(item.seat.anchor)
+                or abs(was.seat.rotation - item.seat.rotation) > 1e-9
+                or [_key(point) for point in was.seat.lead]
+                != [_key(point) for point in item.seat.lead]
+                or was.members != item.members
+            ):
+                failures.append(_seat_first_refusal(
+                    plan.net,
+                    f"the seat {item.group!r} of {plan.net!r} moved from the B0 "
+                    f"answer: {_point_text(was.seat.anchor)} -> "
+                    f"{_point_text(item.seat.anchor)}",
+                ))
+    return failures
+
+
+@dataclass(frozen=True)
+class _SeatFirstOrderedTerminal:
+    """B0's seats, signals routed around them, and only the paths re-solved.
+
+    This is the order §34D-B2b states: the seat-first answer of B0 is taken as
+    given (anchor/rotation/lead unchanged), its glyphs and leads become hard
+    walls, the ordinary signals are wired around them with the compiler's own
+    ``_connect_net`` (a real failure is the generic fallback and is then named
+    with ``_label_for``), and **only** the member paths of the existing
+    assignments are measured again against those signals and names. No seat is
+    re-selected, no rung is added and no second text re-layout is run.
+    """
+
+    plans: tuple[_SeatFirstPlan, ...]
+    scene: _SeatFirstScene
+    labels: tuple[tuple[str, tuple[float, float], LayoutLabel], ...]
+    signals: _SeatFirstSignals
+    channels: dict[str, tuple[LayoutSegment, ...]]
+    walls: tuple[Box, ...]
+    seat_walls: tuple[tuple[tuple[str, str], tuple[Box, ...]], ...]
+    refusals: tuple[GrammarFailure, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.refusals
+
+
+def _seat_first_ordered_terminal(
+    ctx: _Context,
+    placed: _Placement,
+    *,
+    obstacles: Sequence[Box] = (),
+    order: Sequence[str] | None = None,
+) -> _SeatFirstOrderedTerminal:
+    """The B2b order: seats first, signals around them, paths last."""
+    empty_scene = _SeatFirstScene((), (), ())
+    empty_signals = _SeatFirstSignals((), (), ())
+    if not getattr(getattr(ctx, "presentation", None), "panel_groups", ()) or ():
+        refusal = _seat_first_refusal(
+            "",
+            "the page states no panelGroups, so it has no ordered seat pass",
+        )
+        return _SeatFirstOrderedTerminal(
+            (), empty_scene, (), empty_signals, {}, (), (), (refusal,),
+        )
+    baseline = _seat_first_label_terminal(ctx, placed)
+    refusals: list[GrammarFailure] = list(baseline.refusals)
+    if not baseline.ok:
+        return _SeatFirstOrderedTerminal(
+            (), baseline.scene, (), empty_signals, dict(baseline.channels),
+            baseline.walls, (), tuple(refusals),
+        )
+    seat_walls = _seat_first_seat_walls(baseline.plans)
+    flat_seat_walls = tuple(box for _key_, boxes in seat_walls for box in boxes)
+    signals = _seat_first_signal_preflight(
+        ctx, placed, baseline.scene, baseline.channels,
+        obstacles=flat_seat_walls,
+    )
+    refusals.extend(signals.refusals)
+    # The fallback nets are named on the page the seats and signals already
+    # make: the same ladder, with the seat walls and the signal legs as walls.
+    labels = _seat_first_label_map(
+        ctx, placed, baseline.scene,
+        (*baseline.walls, *flat_seat_walls, *signals.walls),
+        (),
+        tuple(net for net, _reason in signals.fallbacks),
+    )
+    label_boxes = tuple(label.bbox for _net, _point, label in labels)
+    bundles = dict(seat_walls)
+    foreign = tuple(item for _net, runs in signals.segments for item in runs)
+    plans: list[_SeatFirstPlan] = []
+    for plan in baseline.plans:
+        present = dict(_seat_first_points(ctx, placed, plan.net))
+        assignments: list[_SeatFirstAssignment] = []
+        plan_refusals: list[GrammarFailure] = []
+        for item in plan.assignments:
+            others = [
+                box
+                for (net, group), boxes in bundles.items()
+                if (net, group) != (plan.net, item.group)
+                for box in boxes
+            ]
+            taken: dict[tuple[float, float], tuple[str, str]] = {}
+            for other_plan in baseline.plans:
+                for other in other_plan.assignments:
+                    if other is item:
+                        continue
+                    for node in other.seat.occupancy:
+                        taken[node] = (other_plan.net, other.seat.owner)
+            paths, lanes, problem = _seat_first_paths(
+                ctx, placed, plan.net, item.members, item.seat, present,
+                [*baseline.scene.solids, *others, *label_boxes],
+                [*baseline.scene.bodies, *others],
+                (), taken,
+                tuple(label for _net, _point, label in labels), foreign,
+            )
+            if problem:
+                plan_refusals.append(_seat_first_refusal(
+                    plan.net,
+                    f"the same seat {item.group!r} of {plan.net!r} at "
+                    f"{_point_text(item.seat.anchor)} has no legal path on the "
+                    f"ordered page: {problem}",
+                ))
+                continue
+            assignments.append(_SeatFirstAssignment(
+                net=plan.net, share=item.share, group=item.group,
+                members=item.members, seat=item.seat, paths=paths, lanes=lanes,
+            ))
+        if plan_refusals:
+            refusals.extend(plan_refusals)
+        plans.append(replace(
+            plan, assignments=tuple(assignments),
+            refusals=tuple(plan.refusals) + tuple(plan_refusals),
+        ))
+    out_plans = tuple(plans)
+    scene = baseline.scene
+    refusals.extend(_seat_first_ordered_failures(
+        out_plans, baseline.plans, signals, labels, scene,
+        (*baseline.walls, *flat_seat_walls, *signals.walls),
+    ))
+    refusals.extend(_seat_first_terminal_fixed_failures(ctx, placed, out_plans))
+    refusals.extend(_seat_first_label_failures(
+        scene, labels, (*baseline.walls, *flat_seat_walls), out_plans,
+    ))
+    refusals.extend(_seat_first_signal_failures(
+        signals, scene, labels, out_plans,
+    ))
+    refusals.extend(_seat_first_channel_text_failures(
+        scene, baseline.walls,
+    ))
+    refusals.extend(_seat_first_channel_seat_failures(
+        out_plans, baseline.walls,
+    ))
+    refusals.extend(_seat_first_validate(ctx, placed, out_plans, scene=scene))
+    for plan in out_plans:
+        if plan.complete:
+            continue
+        refusals.append(_seat_first_refusal(
+            plan.net,
+            f"{plan.net!r} is incomplete on the ordered page: "
+            + "; ".join(item.detail for item in plan.refusals),
+        ))
+    final_channels, final_problem = _panel_channels(
+        ctx, placed, texts=list(scene.texts),
+    )
+    if final_problem is not None:
+        refusals.append(final_problem)
+    else:
+        drift = _seat_first_channel_drift(baseline.channels, final_channels)
+        if drift is not None:
+            refusals.append(drift)
+    replay = _seat_first_signal_preflight(
+        ctx, placed, scene, baseline.channels, dict(signals.segments),
+        obstacles=flat_seat_walls,
+    )
+    drift = _seat_first_signal_drift(signals, replay)
+    if drift is not None:
+        refusals.append(drift)
+    again_labels = _seat_first_label_map(
+        ctx, placed, scene,
+        (*baseline.walls, *flat_seat_walls, *signals.walls),
+        (),
+        tuple(net for net, _reason in signals.fallbacks),
+    )
+    if [(net, _key(point), label) for net, point, label in again_labels] != [
+        (net, _key(point), label) for net, point, label in labels
+    ]:
+        refusals.append(_seat_first_refusal(
+            "",
+            "the ordered page is not deterministic: the same page named its "
+            "fallback nets in two different places",
+        ))
+    return _SeatFirstOrderedTerminal(
+        out_plans, scene, labels, signals, dict(baseline.channels),
+        baseline.walls, seat_walls, tuple(refusals),
+    )
+
+
+@dataclass(frozen=True)
+class _SeatFirstPathFirstTerminal:
+    """Members' paths decided first, ordinary signals routed around them (§35F).
+
+    ``plans``/``scene`` are the channel terminal's own answer, unchanged: no seat
+    is re-chosen, no printed row is re-laid and no fixed-point pass is run.
+    ``path_walls`` is the hard table the signals were routed against — every
+    seat's glyph and lead **and every member path**, leg for leg, as
+    ``PIN_TEXT_WALL`` boxes. ``fallbacks`` is the generic fallback the
+    compiler's own pre-flight named (never a second rule), and ``labels`` is the
+    map :func:`_seat_first_label_map` builds for those nets, one name per pin.
+    """
+
+    plans: tuple[_SeatFirstPlan, ...]
+    scene: _SeatFirstScene
+    signals: _SeatFirstSignals
+    fallbacks: tuple[tuple[str, str], ...]
+    labels: tuple[tuple[str, tuple[float, float], LayoutLabel], ...]
+    path_walls: tuple[tuple[tuple[str, str], tuple[Box, ...]], ...]
+    refusals: tuple[GrammarFailure, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.refusals
+
+
+def _seat_first_path_walls(
+    plans: Sequence[_SeatFirstPlan],
+) -> tuple[tuple[tuple[str, str], tuple[Box, ...]], ...]:
+    """Every seat's glyph, lead **and each member path** as hard boxes (§35F)."""
+    out: list[tuple[tuple[str, str], tuple[Box, ...]]] = []
+    for plan in plans:
+        for item in plan.assignments:
+            boxes: list[Box] = [item.seat.glyph]
+            runs = [item.seat.lead] + [
+                path for _member, path in item.paths if len(path) > 1
+            ]
+            for run in runs:
+                boxes.extend(_seat_first_channel_walls(
+                    {plan.net: [LayoutSegment(net=plan.net, points=list(run))]},
+                ))
+            out.append(((plan.net, item.group), tuple(boxes)))
+    return tuple(out)
+
+
+def _seat_first_path_first_terminal(
+    ctx: _Context,
+    placed: _Placement,
+    *,
+    obstacles: Sequence[Box] = (),
+    order: Sequence[str] | None = None,
+    replay: bool = True,
+) -> _SeatFirstPathFirstTerminal:
+    """The B0 page with its member paths held as walls for the signals (§35F).
+
+    The channel terminal is the only author of the page: its texts, its plans and
+    its channels stand as they are. From those plans this builds the hard table —
+    glyph, lead and **every member path** — and routes the ordinary signals with
+    the real :func:`_connect_net` around it, so a seat never moves to make a
+    signal fit and a signal never takes a vertex the plan already owns. A net the
+    compiler's own pre-flight cannot route keeps the generic fallback and is
+    named at each of its pins through the ordinary label ladder
+    (:func:`_seat_first_label_map`), never by a second rule.
+
+    The checks are the terminal's own: fixed terminals unmoved, no member or seat
+    missing, channels undrifted, no printed row or name on a channel, no signal
+    vertex on a plan run and no plan vertex on a signal run, labels clear of
+    texts/labels/plans, the fallback names replaying in the same boxes, the
+    validator silent — and the whole answer made twice, the same both times.
+    """
+    empty_signals = _SeatFirstSignals((), (), ())
+    base = _seat_first_channel_terminal(
+        ctx, placed, obstacles=obstacles, order=order)
+    if not base.ok:
+        return _SeatFirstPathFirstTerminal(
+            (), base.terminal.scene, empty_signals, (), (), (),
+            tuple(base.refusals) or (
+                _seat_first_refusal(
+                    "",
+                    "the channel terminal states no page, so no member path can "
+                    "be held for the signals",
+                ),
+            ),
+        )
+    plans = base.terminal.plans
+    scene = base.terminal.scene
+    path_walls = _seat_first_path_walls(plans)
+    flat = tuple(box for _key_, boxes in path_walls for box in boxes)
+    signals = _seat_first_signal_preflight(
+        ctx, placed, scene, dict(base.channels), obstacles=flat)
+    fallbacks = tuple(signals.fallbacks)
+    walls = (*base.walls, *flat)
+    label_arg = tuple(net for net, _reason in fallbacks)
+    labels = _seat_first_label_map(
+        ctx, placed, scene, walls, (), label_arg)
+    refusals: list[GrammarFailure] = list(signals.refusals)
+    final_channels, problem = _panel_channels(
+        ctx, placed, texts=list(scene.texts))
+    if problem is not None:
+        refusals.append(problem)
+    else:
+        drift = _seat_first_channel_drift(base.channels, final_channels)
+        if drift is not None:
+            refusals.append(drift)
+    refusals.extend(_seat_first_signal_failures(signals, scene, labels, plans))
+    refusals.extend(_seat_first_label_failures(scene, labels, walls, plans))
+    refusals.extend(_seat_first_channel_text_failures(scene, base.walls))
+    refusals.extend(_seat_first_channel_seat_failures(plans, base.walls))
+    refusals.extend(_seat_first_terminal_fixed_failures(ctx, placed, plans))
+    refusals.extend(_seat_first_validate(ctx, placed, plans, scene=scene))
+    for plan in plans:
+        if plan.complete:
+            continue
+        refusals.append(_seat_first_refusal(
+            plan.net,
+            f"{plan.net!r} is incomplete on the path-first page: "
+            + "; ".join(item.detail for item in plan.refusals),
+        ))
+    again_labels = _seat_first_label_map(
+        ctx, placed, scene, walls, (), label_arg)
+    if again_labels != labels:
+        refusals.append(_seat_first_refusal(
+            "",
+            "the generic fallback names are not replayable: the same pins on the "
+            "same page landed in two different boxes",
+        ))
+    if replay:
+        again = _seat_first_path_first_terminal(
+            ctx, placed, obstacles=obstacles, order=order, replay=False)
+        if (
+            again.plans != plans or again.signals != signals
+            or again.labels != labels or again.fallbacks != fallbacks
+        ):
+            refusals.append(_seat_first_refusal(
+                "",
+                "the path-first terminal is not deterministic: two calls on the "
+                "same page gave different plans, signals or names",
+            ))
+    return _SeatFirstPathFirstTerminal(
+        plans, scene, signals, fallbacks, labels, path_walls, tuple(refusals),
+    )
+
+
+def _seat_first_validate(
+    ctx: _Context,
+    placed: _Placement,
+    plans: Sequence[_SeatFirstPlan],
+    *,
+    terminal_seats: Mapping[
+        tuple[str, str], tuple[tuple[float, float], tuple[tuple[float, float], ...],
+                              float, str]
+    ] | None = None,
+    scene: _SeatFirstScene | None = None,
+) -> tuple[GrammarFailure, ...]:
+    """Re-check one allocation against the placement and the panels (§34D-A).
+
+    This is the independent reading: it does not re-run the enumeration and it
+    does not re-group anything. It asks the four questions the contract's
+    negatives are about — every member exactly once, every fixed terminal
+    present and unmoved, every path a real orthogonal run from its own member to
+    its own seat's foot, and no run standing on another assignment's seat.
+    """
+    failures: list[GrammarFailure] = []
+    if terminal_seats is None:
+        terminal_seats, failure = _seat_first_terminal_seats(ctx, placed)
+        if failure is not None:
+            return (failure,)
+    if scene is None:
+        solids, _bodies, scene_failure = _seat_first_scene(ctx, placed)
+        if scene_failure is not None:
+            return (scene_failure,)
+    else:
+        solids = scene.solids
+    expressions = _expressions(ctx, placed)
+    groups_of: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {}
+    detached_of: dict[str, frozenset[str]] = {}
+    for plan in plans:
+        detached = frozenset(
+            getattr(expressions.get(plan.net), "detached", ()) or ()
+        )
+        detached_of[plan.net] = detached
+        present = tuple(
+            (member, point)
+            for member, point in _seat_first_points(ctx, placed, plan.net)
+            if point is not None and member not in detached
+        )
+        groups_of[plan.net] = {
+            group: (share, members)
+            for share, group, members in _seat_first_groups(
+                ctx, plan.net, present)
+        }
+    owner: dict[str, tuple[str, str]] = {}
+    for plan in plans:
+        expected = tuple(
+            member for member, point in _seat_first_points(ctx, placed, plan.net)
+            if point is not None and member not in detached_of[plan.net]
+        )
+        excluded = {member for member, _why in plan.excluded}
+        if excluded != set(detached_of[plan.net]):
+            failures.append(_seat_first_refusal(
+                plan.net,
+                f"the plan excludes {sorted(excluded)} from the seat-first "
+                f"allocation, but the expression's own detached pads are "
+                f"{sorted(detached_of[plan.net])}: an excluded member that is "
+                "not 069 sec.2's detached pad is a silently dropped seat",
+            ))
+        seen: list[str] = []
+        for item in plan.assignments:
+            for member in item.members:
+                if member in seen:
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the member {member!r} of {plan.net!r} is assigned to "
+                        "more than one seat",
+                    ))
+                seen.append(member)
+                other = owner.get(member)
+                if other is not None and other != (plan.net, item.group):
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the member {member!r} is assigned on two rails: "
+                        f"{other[0]!r} and {plan.net!r}",
+                    ))
+                owner[member] = (plan.net, item.group)
+        for member in expected:
+            if member not in seen:
+                failures.append(_seat_first_refusal(
+                    plan.net,
+                    f"the member {member!r} of {plan.net!r} has no seat: the "
+                    "assignment is incomplete",
+                ))
+        for member in seen:
+            if member in detached_of[plan.net]:
+                failures.append(_seat_first_refusal(
+                    plan.net,
+                    f"the member {member!r} is 069 sec.2's detached pad and the "
+                    "existing local-flag branch states it; the seat-first "
+                    "allocation must not assign it",
+                ))
+            elif member not in expected:
+                failures.append(_seat_first_refusal(
+                    plan.net,
+                    f"the seat of {member!r} names a member that is not on the "
+                    f"placed page for {plan.net!r}",
+                ))
+        for item in plan.assignments:
+            entry = groups_of[plan.net].get(item.group)
+            if entry is None:
+                failures.append(_seat_first_refusal(
+                    plan.net,
+                    f"the assignment {item.group!r} is not a semantic group of "
+                    "the current circuit and its share keys",
+                ))
+                continue
+            share, members = entry
+            if item.share != share:
+                failures.append(_seat_first_refusal(
+                    plan.net,
+                    f"the assignment {item.group!r} states share key "
+                    f"{item.share!r}, but the circuit's share keys give "
+                    f"{share!r} for {list(members)}",
+                ))
+            if tuple(item.members) != members:
+                misplaced = sorted(set(item.members) - set(members))
+                absent = sorted(set(members) - set(item.members))
+                failures.append(_seat_first_refusal(
+                    plan.net,
+                    f"the assignment {item.group!r} holds {list(item.members)}, "
+                    f"but its semantic group is {list(members)}"
+                    + (f"; misplaced {misplaced}" if misplaced else "")
+                    + (f"; missing {absent}" if absent else ""),
+                ))
+        blocked = _blocked_points(ctx, placed, plan.net, (), (), ())
+        for item in plan.assignments:
+            seat = item.seat
+            if not seat.lead or len(seat.lead) < 2:
+                failures.append(_seat_first_refusal(
+                    plan.net,
+                    f"the seat of {seat.owner!r} states no lead from a foot to "
+                    f"its anchor {_point_text(seat.anchor)}",
+                ))
+                continue
+            for start, end in zip(seat.lead, seat.lead[1:]):
+                if not _close(start[0], end[0]) and not _close(start[1], end[1]):
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the lead of the seat at {_point_text(seat.anchor)} is "
+                        f"not orthogonal: {_point_text(start)} -> "
+                        f"{_point_text(end)}",
+                    ))
+                for box in solids:
+                    if _segment_hits_box(start, end, box):
+                        failures.append(_seat_first_refusal(
+                            plan.net,
+                            f"the lead of {seat.owner!r} crosses the part or "
+                            f"text at ({box[0]:g}, {box[1]:g})-"
+                            f"({box[2]:g}, {box[3]:g}) on the leg "
+                            f"{_point_text(start)} -> {_point_text(end)}",
+                        ))
+            for point in seat.lead[:-1]:
+                if _key(point) in blocked:
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the lead of {seat.owner!r} stands on the foreign "
+                        f"connection at {_point_text(point)}",
+                    ))
+            paths = {name: path for name, path in item.paths}
+            for member in item.members:
+                path = paths.get(member)
+                if path is None:
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the member {member!r} of the seat at "
+                        f"{_point_text(seat.anchor)} has no path",
+                    ))
+                    continue
+                point = dict(_seat_first_points(ctx, placed, plan.net))[member]
+                if point is None or _key(path[0]) != _key(point):
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the path of {member!r} does not start on its own pin "
+                        f"{_point_text(point) if point else '?'}",
+                    ))
+                if _key(path[-1]) != _key(seat.lead[0]):
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the path of {member!r} does not end on the seat's foot "
+                        f"{_point_text(seat.lead[0])}",
+                    ))
+                for start, end in zip(path, path[1:]):
+                    if (
+                        not _close(start[0], end[0])
+                        and not _close(start[1], end[1])
+                    ):
+                        failures.append(_seat_first_refusal(
+                            plan.net,
+                            f"the path of {member!r} is not orthogonal: "
+                            f"{_point_text(start)} -> {_point_text(end)}",
+                        ))
+                    for box in solids:
+                        if _segment_hits_box(start, end, box):
+                            failures.append(_seat_first_refusal(
+                                plan.net,
+                                f"the path of {member!r} crosses the part or "
+                                f"text at ({box[0]:g}, {box[1]:g})-"
+                                f"({box[2]:g}, {box[3]:g}) on the leg "
+                                f"{_point_text(start)} -> {_point_text(end)}",
+                            ))
+                for point in path[:-1]:
+                    if _key(point) in blocked:
+                        failures.append(_seat_first_refusal(
+                            plan.net,
+                            f"the path of {member!r} stands on the foreign "
+                            f"connection at {_point_text(point)}",
+                        ))
+                if member == seat.owner and _key(path[-1]) != _key(seat.lead[0]):
+                    failures.append(_seat_first_refusal(
+                        plan.net,
+                        f"the seat's own member {member!r} is not on the foot "
+                        f"of the lead at {_point_text(seat.lead[0])}",
+                    ))
+    for plan in plans:
+        fixed_members = {
+            member for (net, member) in terminal_seats if net == plan.net
+        }
+        for item in plan.assignments:
+            stray = sorted(set(item.members) & fixed_members)
+            if stray and not item.seat.fixed:
+                failures.append(_seat_first_refusal(
+                    plan.net,
+                    f"the fixed terminal member(s) {stray} were given an "
+                    "automatic seat: a fixed terminal never enters the "
+                    "automatic selection",
+                ))
+    flat = [
+        (plan.net, item) for plan in plans for item in plan.assignments
+    ]
+    for net_a, first in flat:
+        for net_b, second in flat:
+            if first is second:
+                continue
+            shared = sorted(
+                (first.lanes & second.seat.occupancy)
+                | (first.seat.occupancy & second.lanes)
+                | (first.lanes & second.lanes)
+                | (first.seat.occupancy & second.seat.occupancy)
+            )
+            if shared:
+                failures.append(_seat_first_refusal(
+                    net_a,
+                    f"the seat/lane of {first.group!r} on {net_a!r} and "
+                    f"{second.group!r} on {net_b!r} share "
+                    f"{_point_text(shared[0])}: two assignments do not stand on "
+                    "one flag or one run, on one rail or across rails",
+                ))
+    for (net_id, member), (anchor, lead, _hang, source) in sorted(
+        terminal_seats.items()
+    ):
+        found = None
+        for plan in plans:
+            if plan.net != net_id:
+                continue
+            for item in plan.assignments:
+                if member in item.members:
+                    found = item
+                    break
+        if found is None:
+            failures.append(_seat_first_refusal(
+                net_id,
+                f"the {source} {member!r} at {_point_text(anchor)} has no "
+                "assignment: a fixed terminal was dropped",
+            ))
+            continue
+        if not found.seat.fixed:
+            failures.append(_seat_first_refusal(
+                net_id,
+                f"the {source} {member!r} at {_point_text(anchor)} was "
+                "assigned an automatic seat: a fixed terminal is not overridden",
+            ))
+            continue
+        if _key(found.seat.anchor) != _key(anchor) or list(found.seat.lead) != [
+            tuple(point) for point in lead
+        ]:
+            failures.append(_seat_first_refusal(
+                net_id,
+                f"the {source} {member!r} moved: its source states "
+                f"{_point_text(anchor)}, the plan has "
+                f"{_point_text(found.seat.anchor)}",
+            ))
+    return tuple(failures)
 
 
 def _net_needs_flag(
@@ -8007,6 +14097,42 @@ def _sibling_members(ctx: _Context, net: Any) -> set[str]:
     return extra - set(net.members)
 
 
+def _module_local_series_rail(ctx: _Context, net_id: str, count: int) -> bool:
+    """Is this rail a declared module's own supply on a multi-arm series page?
+
+    548D3's two conditions, read from the documents only — never from a part id
+    or a net name:
+
+    * the page declares **two or more** ``seriesBranches``. One arm (and a page
+      that declares none) keeps every byte of the answer it had, because a
+      single arm is not enough evidence that a rail is a module's local supply
+      rather than the page's bus;
+    * every part the net is on belongs to **one** declared module (the net's
+      own ``members``, not the siblings a role adds — a sibling is inside the
+      same symbol, so it cannot leave the module its part is in).
+
+    ``count`` is the number of placed pins, including role siblings; a rail with
+    fewer than two pins is left to the single-pin answer above. What the caller
+    does with a ``True`` answer is :func:`_expression_style`'s business: the rail
+    is wired and one flag is hung off it, at the pin that supplies it — a flag
+    that gathers this local branch, not a bus run across the page.
+    """
+    if count < 2:
+        return False
+    if len(getattr(ctx.presentation, "series_branches", ())) < 2:
+        return False
+    net = ctx.circuit.net(net_id)
+    if net is None:
+        return False
+    owners = {member.partition(".")[0] for member in net.members}
+    if not owners:
+        return False
+    for module in ctx.presentation.modules:
+        if owners <= set(module.parts):
+            return True
+    return False
+
+
 def _expression_style(
     ctx: _Context, net_id: str, cls: str, count: int, obligated: set[str],
     local_labels: set[str] = frozenset(),
@@ -8054,6 +14180,18 @@ def _expression_style(
             "saying where this net meets reference ground",
         )
     if cls == "power":
+        if _module_local_series_rail(ctx, net_id, count):
+            return (
+                "wire",
+                f"548D3: this rail's {count} pins all sit in one declared "
+                "module, and the page declares two or more series arms, so the "
+                "rail is that module's own supply branch rather than a board "
+                "bus: it is wired inside the module and stated by the one flag "
+                "the wire-style ladder hangs off it (`_wire_flag_seats`, 069 "
+                "sec.7), which gathers the local branch instead of running a "
+                "bus across the page. A rail that reaches outside the module "
+                "keeps the per-pin answer below",
+            )
         if count > ctx.budget.high_fanout and not _flag_grouping(ctx):
             return (
                 "flag",
@@ -8830,9 +14968,253 @@ def _paired_text_seats(
     return None
 
 
+def _series_arm_text_groups(
+    ctx: Any, placed: _Placement
+) -> dict[str, tuple[str, ...]]:
+    """The same-kind parts of **declared** series arms, as one text group (548D3 §24B).
+
+    ``seriesBranches`` is the document stating that two parts are one arm, so an
+    arm's own parts are the one set of rows whose reading is known to belong
+    together; the same-kind members of two arms are the rows a reader compares
+    row against row (`boardwise-draw` §3: 成对与同类支路默认一致). Nothing is
+    derived from geometry and nothing is inferred from the netlist: an empty
+    declaration returns ``{}`` and the historical ladder runs exactly as it did,
+    which is what keeps every page that declares no arms byte-for-byte theirs.
+
+    A member whose symbol declares its own anchors (:func:`_declared_rows`) is
+    left out unless ``native-attr`` lets a stated side override them — those
+    rows are the host's, not this compiler's. A kind left with fewer than two
+    members is no group.
+    """
+    presentation = getattr(ctx, "presentation", None)
+    branches = getattr(presentation, "series_branches", ()) if presentation is not None else ()
+    if not branches:
+        return {}
+    native = _native_text_placement(ctx)
+    by_kind: dict[str, list[str]] = {}
+    for branch in branches:
+        for part_id in branch.parts:
+            if part_id not in placed.origins:
+                continue
+            profile = ctx.profile(part_id)
+            if _declared_rows(
+                ctx, part_id, profile, placed.poses[part_id], placed.origins[part_id],
+            ) and not (native and _stated_part_text_side(ctx, part_id)):
+                continue
+            ids = by_kind.setdefault(profile.symbol_ref, [])
+            if part_id not in ids:
+                ids.append(part_id)
+    groups: dict[str, tuple[str, ...]] = {}
+    for ids in by_kind.values():
+        if len(ids) < 2:
+            continue
+        members = tuple(sorted(ids))
+        for part_id in members:
+            groups[part_id] = members
+    return groups
+
+
+def _series_arm_text_seats(
+    ctx: Any,
+    members: Sequence[str],
+    boxes: Mapping[str, Box],
+    walls: Sequence[Box],
+) -> dict[str, tuple[Box, ...]] | None:
+    """One side for every same-kind arm part, each at its own rung (548D3 §24B).
+
+    The per-part ladder is a first fit: it seats a part's rows wherever the
+    walls leave room at that moment, so two members of one arm kind can end up
+    on different sides, and one block can be pushed a whole band away from its
+    own part (measured on the 548D0 MCU: ``D1`` reads to the left while ``D2``'s
+    rows land with their far edge 33 units below a body sitting at y=15, in the
+    band of `S4`'s value). Declared arms make the group explicit, so the group is
+    seated jointly instead: one side for all members, each at its own rung.
+
+    Sides are tried in the order the page itself asks for — a side every member
+    **states** (``partTexts``) first, then :data:`TEXT_SIDES` — and the first
+    side that holds the whole group wins, so the statement stays the first
+    choice. Within a side every rung assignment in
+    ``1..TEXT_ESCALATION_STEPS`` is scored by its **worst** standoff and then by
+    its total: a greedy walk would let the first member take rung 1 and squeeze
+    the second to the last rung, which is the "one arm's text pushed far out"
+    this batch forbids. ``None`` means no side holds the group inside the
+    ladder's own reach, and the caller refuses by name instead of drawing the
+    rows away from their parts.
+    """
+    stated = {_stated_part_text_side(ctx, part_id) for part_id in members}
+    ordered: list[str] = []
+    if len(stated) == 1 and "" not in stated:
+        ordered.append(next(iter(stated)))
+    ordered.extend(side for side in TEXT_SIDES if side not in ordered)
+    lines = {part_id: list(_part_lines(ctx, part_id)) for part_id in members}
+    blocked = [*walls, *[boxes[part_id] for part_id in members]]
+    for side in ordered:
+        best: tuple[tuple[int, int], dict[str, tuple[Box, ...]]] | None = None
+        for rungs in _rung_product(
+            range(1, TEXT_ESCALATION_STEPS + 1), repeat=len(members)
+        ):
+            seats = {
+                part_id: _line_boxes(
+                    boxes[part_id], [text for _, text in lines[part_id]], side, rung,
+                )
+                for part_id, rung in zip(members, rungs)
+            }
+            rows = [item for part_id in members for item in seats[part_id]]
+            clash = any(
+                _overlaps(rows[i], rows[j])
+                for i in range(len(rows)) for j in range(i + 1, len(rows))
+            ) or any(_overlaps(row, other) for row in rows for other in blocked)
+            if clash:
+                continue
+            key = (max(rungs), sum(rungs))
+            if best is None or key < best[0]:
+                best = (key, seats)
+        if best is not None:
+            return best[1]
+    return None
+
+
+def _series_arm_text_refusal(
+    ctx: Any, members: Sequence[str]
+) -> GrammarFailure:
+    """A same-kind arm group with no legal common side, refused by name (§24B).
+
+    The rows are not drawn further out to make the page compile: a block the
+    reader cannot tie to its own part is worse than a page that says why it
+    cannot be drawn (the same reading as 548B3-R's arm refusals, in the same
+    ``layout-unsat`` class).
+    """
+    arm_ids = [
+        branch.id
+        for branch in ctx.presentation.series_branches
+        if any(part_id in members for part_id in branch.parts)
+    ]
+    subject = "$.seriesBranches"
+    if arm_ids:
+        subject += f" ({', '.join(arm_ids)})"
+    return _series_seat_refusal(
+        subject,
+        "the same-kind arm parts "
+        f"{', '.join(members)} cannot put their reference and value rows on one "
+        f"side within {TEXT_ESCALATION_STEPS} rungs of their own bodies: on every "
+        "side at least one member's rows would land on a wall, a part, or another "
+        "member's rows",
+        "leave one side of the arms clear for their rows, shorten a value that "
+        "makes the row too wide, or drop the seriesBranches entries that pair "
+        "these parts",
+    )
+
+
+def _panel_text_map(
+    ctx: _Context, placed: _Placement
+) -> tuple[dict[str, tuple[tuple[str, str, Box], ...]], GrammarFailure | None]:
+    """panel/service part -> its printed rows at the template's own boxes (§34-4).
+
+    The boxes are the ones :func:`_panel_templates` and (:func:`_service_templates`
+    for a branch the placement seated beside its host) measured (`_line_boxes` on
+    the part's real extent) and the ones the placement reserved room for; they are
+    translated by the part's **current** origin, so the drawing prints exactly
+    where the reserve was promised. There is no second text model here: the
+    template is the only author, so a service cell's rows are replayed where its
+    own seat put it and no fallback ladder moves them again.
+
+    A part whose symbol declares its own text rows must agree with these (same
+    kinds and texts, in order): a page where the host would print something else
+    at another anchor is a disagreement between the reservation and the drawing,
+    and it is refused by name rather than silently re-seated.
+    """
+    regions, failure = _panel_templates(
+        ctx, getattr(placed, "residue", (0.0, 0.0)), tuple(sorted(placed.origins)),
+    )
+    if failure is not None:
+        return {}, failure
+    services, failure = _service_templates(
+        ctx, getattr(placed, "residue", (0.0, 0.0)), tuple(sorted(placed.origins)),
+    )
+    if failure is not None:
+        return {}, failure
+    out: dict[str, tuple[tuple[str, str, Box], ...]] = {}
+
+    def replay(
+        group_id: str, cell: placement.PanelCell
+    ) -> tuple[tuple[tuple[str, str, Box], ...], GrammarFailure | None]:
+        origin = placed.origins.get(cell.part_id)
+        if origin is None:
+            return (), _panel_channel_refusal(
+                group_id, cell.part_id,
+                "the cell is not placed, so its text rows have no origin",
+            )
+        lines = [
+            (kind, text) for kind, text in _part_lines(ctx, cell.part_id)
+        ]
+        if len(lines) != len(cell.text_boxes):
+            return (), _panel_channel_refusal(
+                group_id, cell.part_id,
+                f"the template states {len(cell.text_boxes)} text row(s) and "
+                f"the part prints {len(lines)}",
+            )
+        rows = tuple(
+            (kind, text, (
+                box[0] + origin[0], box[1] + origin[1],
+                box[2] + origin[0], box[3] + origin[1],
+            ))
+            for (kind, text), box in zip(lines, cell.text_boxes)
+        )
+        declared = _declared_rows(
+            ctx, cell.part_id, ctx.profile(cell.part_id), cell.pose, origin,
+        )
+        if declared and [(kind, text) for kind, text, _box in declared] != lines:
+            return (), _panel_channel_refusal(
+                group_id, cell.part_id,
+                "its symbol declares different text rows than the template "
+                f"prints ({[text for _k, text, _b in declared]} vs "
+                f"{[text for _k, text in lines]})",
+            )
+        return rows, None
+
+    for template in regions:
+        for cell in template.cells:
+            rows, failure = replay(template.group_id, cell)
+            if failure is not None:
+                return {}, failure
+            out[cell.part_id] = rows
+    for template in services:
+        rows, failure = replay(template.group_id, template.cell)
+        if failure is not None:
+            return {}, failure
+        out[template.cell.part_id] = rows
+    return out, None
+
+
+def _service_located_walls(placed: _Placement) -> list[Box]:
+    """The channels the placement already located, as text obstacles (§35D).
+
+    Every seated panel/service reserve and every **panel** host-path leg, the
+    leg grown by :data:`PIN_TEXT_WALL` — the same ruler
+    :func:`_seat_first_channel_walls` uses for the drawing. The paths are the
+    ones `placement` recorded on ``panel_plans``; nothing is routed or
+    re-measured here, so a text pass may consult them before the page's texts
+    exist.
+    """
+    walls: list[Box] = []
+    for plan in getattr(placed, "panel_plans", ()):
+        walls.extend(plan.reserved_boxes)
+        for path in plan.host_paths:
+            for start, stop in zip(path, path[1:]):
+                walls.append((
+                    min(start[0], stop[0]) - PIN_TEXT_WALL,
+                    min(start[1], stop[1]) - PIN_TEXT_WALL,
+                    max(start[0], stop[0]) + PIN_TEXT_WALL,
+                    max(start[1], stop[1]) + PIN_TEXT_WALL,
+                ))
+    for plan in getattr(placed, "service_plans", ()):
+        walls.extend(plan.reserved_boxes)
+    return walls
+
+
 def _part_texts(
     ctx: _Context, placed: _Placement, occupied: list[Box], walls: list[Box]
-) -> list[LayoutText]:
+) -> tuple[list[LayoutText], GrammarFailure | None]:
     """The reference and value of every placed part, at the anchor it draws at.
 
     A part whose symbol declares its own text anchors (146,
@@ -8844,6 +15226,12 @@ def _part_texts(
 
     A part whose symbol declares nothing keeps the old behavior, and the
     docstring below still describes it.
+
+    **Declared arms are seated as a group** (548D3 §24B): the same-kind parts of
+    ``seriesBranches`` take one side, each at its own rung
+    (:func:`_series_arm_text_seats`), and a group no side can hold is refused by
+    name (:func:`_series_arm_text_refusal`) instead of those rows being drawn far
+    from their parts. A page that declares no arms never reaches that branch.
 
     The rest of this comment is the pre-146 contract for the fallback path.
     `occupied` is the list of boxes already on the page (part extents, keep-outs
@@ -8863,12 +15251,41 @@ def _part_texts(
     tips were put in `occupied` at all ("so a value never prints across its own
     pins").
     """
+    panel_rows, panel_failure = _panel_text_map(ctx, placed)
+    if panel_failure is not None:
+        return [], panel_failure
+    # §35D: on a page whose placement seated service cells, the channels the
+    # placement already located are obstacles **for the free rows** — every
+    # panel/service reserve and every panel host-path leg as a
+    # ``PIN_TEXT_WALL`` box. They are read from the placement's own recorded
+    # paths (`_service_located_walls`), never from `_panel_channels`, which
+    # measures the very layout this pass produces: asking it first is the
+    # text -> channel -> text circle that left U1's rows standing on S1's lead.
+    # A page with no service seat keeps the list it was handed, byte for byte.
+    if getattr(placed, "service_plans", ()):
+        walls = [*walls, *_service_located_walls(placed)]
     out: list[LayoutText] = []
     pair_groups = _paired_text_groups(ctx, placed)
     pair_done: set[str] = set()
+    arm_groups = _series_arm_text_groups(ctx, placed)
+    arm_done: set[str] = set()
     for part_id in sorted(placed.origins):
         profile = ctx.profile(part_id)
         box = _part_box(profile, placed.poses[part_id], placed.origins[part_id])
+        fixed = panel_rows.get(part_id)
+        if fixed is not None:
+            # 548D3X3C (§34-4): a panel cell prints where its reservation was
+            # promised. No ladder, no declared-anchor move, no fallback side —
+            # the reserve and the text are one decision.
+            for kind, text, bbox in fixed:
+                occupied.append(bbox)
+                walls.append(bbox)
+                out.append(LayoutText(
+                    kind=kind, text=text, bbox=bbox, part_id=part_id,
+                    x=(bbox[0] + bbox[2]) / 2.0, y=(bbox[1] + bbox[3]) / 2.0,
+                    rotation=0.0,
+                ))
+            continue
         declared = _declared_rows(
             ctx, part_id, profile, placed.poses[part_id], placed.origins[part_id]
         )
@@ -8893,6 +15310,40 @@ def _part_texts(
         lines = list(_part_lines(ctx, part_id))
         blocked = [*walls, box]
         chosen = None
+        # 548D3 §24B: members of one **declared** arm kind are seated together,
+        # once, at the first of them the page reaches — before the derived 543K
+        # pair below, because a declared arm is the document's own statement and
+        # outranks one read off the netlist. No side can hold the group: refuse
+        # the variant by name rather than draw the rows away from their parts.
+        if part_id in arm_groups and part_id not in arm_done:
+            members = arm_groups[part_id]
+            seats = _series_arm_text_seats(
+                ctx, members,
+                {m: _part_box(
+                    ctx.profile(m), placed.poses[m], placed.origins[m],
+                ) for m in members},
+                walls,
+            )
+            if seats is None:
+                return out, _series_arm_text_refusal(ctx, members)
+            arm_done.update(members)
+            for member in members:
+                for (kind, text), item in zip(
+                    _part_lines(ctx, member), seats[member]
+                ):
+                    occupied.append(item)
+                    walls.append(item)
+                    out.append(LayoutText(
+                        kind=kind,
+                        text=text,
+                        bbox=item,
+                        part_id=member,
+                        x=(item[0] + item[2]) / 2.0,
+                        y=(item[1] + item[3]) / 2.0,
+                    ))
+            continue
+        if part_id in arm_done:
+            continue
         # 543K: a signal pair reads from **one** side, decided together and only
         # once per group — the members are seated back to back here, at the first
         # of them the page reaches, so the walls this reads are the ones the
@@ -8993,7 +15444,7 @@ def _part_texts(
                 x=(item[0] + item[2]) / 2.0,
                 y=(item[1] + item[3]) / 2.0,
             ))
-    return out
+    return out, None
 
 
 def _label_standoff(ctx: Any) -> float:
@@ -9327,8 +15778,13 @@ def _ground_domains(ctx: _Context) -> set[str]:
 def _flag_ref(ctx: _Context, net_id: str, cls: str) -> str:
     """The flag symbol ref a net is looked up under (173/C).
 
-    A rail is named by its own ``power_flag_prefix + net`` as before. A **ground**
-    takes the family's shared symbol (``budget.gnd_flag``) unless the page really
+    A rail is named by its own ``power_flag_prefix + net`` as before — and when the
+    book does not carry that symbol, 548D3's exact alias ``power_flag_prefix + "+" +
+    net`` (the schematic's ``PWR-+3V3`` spelling) is tried before the net is
+    declared unnamed. The alias never overrides an own name the book has, is never
+    built for a net id that already starts with ``+``, and is never a ground's.
+    A **ground** takes the family's shared symbol (``budget.gnd_flag``) unless the
+    page really
     has more than one ground domain, in which case it asks for the flag named
     after itself (173/C: 「按网的域选对应旗标族、绝不并地」).
 
@@ -9359,6 +15815,19 @@ def _flag_ref(ctx: _Context, net_id: str, cls: str) -> str:
     """
     own = f"{ctx.budget.power_flag_prefix}{net_id}"
     if cls != "gnd":
+        if ctx.book.get(own) is not None:
+            return own
+        # 548D3: the library may carry a rail's flag under the schematic's own
+        # ``PWR-+3V3`` spelling while the net is ``3V3``. The net's own name is
+        # asked for first — a book that carries ``PWR-3V3`` is answered with it,
+        # never with the alias — and the alias is only a rail's, only when the
+        # net id does not already carry the ``+``, and only when the book really
+        # has that symbol. A ground is never aliased (``PWR-+GND`` is not a
+        # name), and a rail whose symbol is under neither ref stays unnamed so
+        # :func:`_flag_wire_fallback` still records the downgrade.
+        alias = f"{ctx.budget.power_flag_prefix}+{net_id}"
+        if "+" not in net_id and ctx.book.get(alias) is not None:
+            return alias
         return own
     gnd_flag = ctx.budget.gnd_flag
     if not gnd_flag or own == gnd_flag or len(_ground_domains(ctx)) <= 1:
@@ -9371,8 +15840,9 @@ def _flag_plan(
 ) -> tuple[SymbolProfile | None, str]:
     """``(flag profile, symbol ref)`` — the library's rail/ground flag for this net.
 
-    The ref comes from :func:`_flag_ref` (173/C: a rail's own ``PWR-<net>``, a
-    ground's family symbol or — on a multi-domain page — its own), and the profile
+    The ref comes from :func:`_flag_ref` (173/C: a rail's own ``PWR-<net>`` or its
+    ``PWR-+<net>`` alias, a ground's family symbol or — on a multi-domain page —
+    its own), and the profile
     is the book's entry for it. A library that does not carry the ref is not a
     failure — the net falls back to being *wired* (:func:`_flag_wire_fallback`),
     which is what this host can express; `uniform-gnd` is what checks that one net
@@ -9398,7 +15868,7 @@ def _missing_flag_symbol(ctx: _Context, net_id: str) -> bool:
 
     Read through :func:`_flag_plan`, so the answer is the same one the flag
     expression and 069 sec.6's rail-flag pass use: `gnd_flag` for a ground and
-    `power_flag_prefix + net` for a rail.
+    :func:`_flag_ref` for a rail (its own name, or the ``PWR-+<net>`` alias).
     """
     profile, _ref = _flag_plan(ctx, net_id, _net_class(ctx, net_id) or "gnd")
     return profile is None
@@ -9776,6 +16246,7 @@ def _try_variants(
             },
             notes=[
                 f"candidate from {COMPILER_NAME} variant {variant.label}",
+                *built.series_trials,
                 *tolerance_lines,
             ],
         )
@@ -10766,6 +17237,58 @@ def _lead_crossing(
     return None
 
 
+def _lead_lattice_crossings(
+    router: _Router, start: tuple[float, float], end: tuple[float, float]
+) -> set[tuple[float, float]]:
+    """The lattice points where this lead's **continuous** run meets a lattice line.
+
+    :func:`_lattice_nodes` samples a run at grid steps and rounds every sample.
+    That is faithful where both ends are lattice points, and it is not where one
+    is not: a flag's turn is ``FLAG_JOG / 2 = 12.5`` for the half-jog rung, so a
+    lead can end off the lattice. Measured on 548D3F's wifi island — the `3V3`
+    flag lead runs ``(-30, 40) -> (-60, 40) -> (-60, 27.5)``; the walk reported
+    the turn's nodes at ``y = 40`` and ``y = 30``, while the wire the router drew
+    along ``y = 35`` crossed the lead at ``(-60, 35)``, which no one had promised,
+    and the gate has no rule that reads a later wire through a settled lead
+    (`readability` grades flag *bodies*; 074 refuses a lead through a wire, not
+    the other way round). This asks the **line** question instead: every lattice
+    line the run crosses contributes its true intersection, so a wire drawn along
+    that line stands on a reserved point.
+
+    A run that is not itself on a lattice line has no cell to promise: the
+    reservation book is keyed by lattice points and the router only ever samples
+    those, so promising a point between two of them would be a half-grid lane —
+    the defect 069 sec.11 refuses. Such a run contributes nothing rather than a
+    lane nobody can honour.
+    """
+    grid = router.grid
+    residue_x, residue_y = router.residue
+    out: set[tuple[float, float]] = set()
+    if abs(start[0] - end[0]) <= 1e-9:
+        x, low, high = start[0], start[1], end[1]
+        index = round((x - residue_x) / grid)
+        if abs(x - (residue_x + index * grid)) > 1e-9:
+            return out
+        low, high = sorted((low, high))
+        first = math.ceil((low - residue_y) / grid - 1e-9)
+        last = math.floor((high - residue_y) / grid + 1e-9)
+        for step in range(first, last + 1):
+            out.add(_key((x, residue_y + step * grid)))
+        return out
+    if abs(start[1] - end[1]) <= 1e-9:
+        y, low, high = start[1], start[0], end[0]
+        index = round((y - residue_y) / grid)
+        if abs(y - (residue_y + index * grid)) > 1e-9:
+            return out
+        low, high = sorted((low, high))
+        first = math.ceil((low - residue_x) / grid - 1e-9)
+        last = math.floor((high - residue_x) / grid + 1e-9)
+        for step in range(first, last + 1):
+            out.add(_key((residue_x + step * grid, y)))
+        return out
+    return out
+
+
 def _remember_lead(
     router: _Router,
     net_id: str,
@@ -10783,12 +17306,29 @@ def _remember_lead(
     down. The first net to claim a node keeps it: two leads of the *same* net are
     not a crowd (they are one name), and that is the only case the map's single
     owner can merge.
+
+    **21C: the lead is also a wall for the wires that come later.** Registering
+    only :attr:`_Router.flag_leads` left the drawing's own routing blind to a
+    settled lead: 145a's book (`router.reserved`) is what a wire may not stand on
+    or cross (`_reserved_hits`, the router's own `_wall`), and it was filled from
+    the turn's sampled nodes alone. So this method now also promises the points
+    where the lead's **continuous run** meets a lattice line
+    (:func:`_lead_lattice_crossings`). Three limits, all of them the existing
+    rules rather than new ones: a point another net has already spoken for keeps
+    its owner (``setdefault``), a point that is a **foreign pin tip, label or
+    flag** is never covered (a lead through one is already refused at its seat),
+    and the same net is not walled off from itself — ``_reserved_hits`` and
+    ``_wall`` exempt ``router.reserved_exempt``, which is the net being routed.
     """
     if lead is None:
         return
     for start, end in zip(lead, lead[1:]):
         for node in _lattice_nodes(router, start, end):
             router.flag_leads.setdefault(node, (net_id, kind))
+        for point in _lead_lattice_crossings(router, start, end):
+            if point in router.blocked:
+                continue
+            router.reserved.setdefault(point, net_id)
 
 
 def _lead_too_close(
@@ -10965,6 +17505,777 @@ def _no_step_out(router: _Router, point: tuple[float, float]) -> bool:
     return True
 
 
+def _point_in_boxes(
+    point: tuple[float, float], boxes: Sequence[Box]
+) -> bool:
+    """Is this point strictly inside one of the boxes?"""
+    return any(
+        box[0] - 1e-6 < point[0] < box[2] + 1e-6
+        and box[1] - 1e-6 < point[1] < box[3] + 1e-6
+        for box in boxes
+    )
+
+
+#: 548D3B: whether the compiler draws the arm's **own channel** instead of letting
+#: the router find its own way. Off, and measured off: on the 548D MCU page the
+#: one-bend channel from `U1.PA3` to `R2` has no free corner at all, so enforcing
+#: it refuses the page the only candidate it can draw. On, the channel is
+#: validated leg by leg with the router's own `_span_free` tests and injected as
+#: the net's runs, which is the loop this batch is for — it needs the placement to
+#: see the text rows (item 4) before it can hold on a page like this one.
+SERIES_CHANNEL_ENFORCED = False
+
+
+def _series_channel_enforced() -> bool:
+    return SERIES_CHANNEL_ENFORCED
+
+
+def _series_channels(
+    ctx: _Context, placed: _Placement
+) -> dict[str, tuple[LayoutSegment, ...]]:
+    """net -> the channel the arm's plan means, as segments (548D3B).
+
+    The host lead is the plan's recorded path; the middle link is the straight
+    run between the two mid-feet. A net collects every arm that names it, so two
+    arms on one rail are drawn as the one conductor they are.
+    """
+    out: dict[str, list[LayoutSegment]] = {}
+    for seat in getattr(placed, "series_plans", ()):
+        if not seat.seated or len(seat.host_path) < 2:
+            continue
+        from_net = _part_nets(ctx.circuit, seat.host_part).get(seat.host_token, "")
+        if from_net:
+            out.setdefault(from_net, []).append(
+                LayoutSegment(net=from_net, points=list(seat.host_path))
+            )
+        middle_net = _part_nets(ctx.circuit, seat.first_part).get(
+            seat.first_middle_token, ""
+        )
+        first = _pin_point(
+            ctx, seat.first_part, seat.first_middle_token, placed.poses, placed.origins
+        )
+        second = _pin_point(
+            ctx, seat.second_part, seat.second_middle_token, placed.poses,
+            placed.origins,
+        )
+        if middle_net and first is not None and second is not None:
+            out.setdefault(middle_net, []).append(
+                LayoutSegment(net=middle_net, points=[first, second])
+            )
+    return {net: tuple(items) for net, items in out.items()}
+
+
+def _panel_lead_obstacles(
+    ctx: _Context, placed: _Placement, plan, cell, *, texts=(),
+) -> tuple[set[tuple[float, float]], list[tuple[float, float]], list[Box]]:
+    """This candidate's paper: allowed ends, every other foot, every body."""
+    host_pin = _pin_point(
+        ctx, plan.host_part, cell.host_token, placed.poses, placed.origins)
+    allowed = {_key(cell.from_seat), _key(cell.to_seat)}
+    if host_pin is not None:
+        allowed.add(_key(host_pin))
+    points: list[tuple[float, float]] = []
+    bodies: list[Box] = []
+    for part_id in sorted(set(placed.origins) & set(placed.poses)):
+        profile = ctx.profile(part_id)
+        pose = placed.poses[part_id]
+        origin = placed.origins[part_id]
+        body = pose_box(
+            profile.body, rotation=pose.rotation, mirror=pose.mirror,
+            ox=origin[0], oy=origin[1],
+        )
+        if body is not None:
+            bodies.append(body)
+        for pin in profile.pins:
+            if pin.tip is None:
+                continue
+            point = _rounded(transform_point(
+                pin.tip[0], pin.tip[1], rotation=pose.rotation,
+                mirror=pose.mirror, ox=origin[0], oy=origin[1],
+            ))
+            own_pin = (
+                part_id == plan.host_part and pin.number == cell.host_token
+            ) or (
+                part_id == cell.part_id
+                and _key(point) in {_key(cell.from_seat), _key(cell.to_seat)}
+            )
+            if own_pin:
+                allowed.add(_key(point))
+                continue
+            # A foreign pin **coinciding** with an allowed point is still an
+            # obstacle: the allowance is ownership, not a coordinate. Its drawn
+            # lead is an obstacle too — the box is a stroke, not the tip point.
+            points.append(point)
+            bodies.extend(_pin_walls(replace(profile, pins=(pin,)), pose, origin))
+    # A printed row is paper on this page: the host's own, a sibling cell's and
+    # a foreign part's all count, with the box the layout already gave it. The
+    # cell's own rows are below its own foot and are not the lead's obstacle.
+    bodies.extend(
+        text.bbox for text in texts
+        if getattr(text, "part_id", "") != cell.part_id
+    )
+    return allowed, points, bodies
+
+
+def _panel_lead_legal(
+    path: Sequence[tuple[float, float]],
+    allowed: set[tuple[float, float]],
+    points: Sequence[tuple[float, float]],
+    bodies: Sequence[Box],
+    done: Sequence[Sequence[tuple[float, float]]],
+) -> bool:
+    """Every repaired lead owes the checks the cached solve passed."""
+    if len(path) < 2:
+        return False
+    for start, stop in zip(path, path[1:]):
+        if abs(start[0] - stop[0]) > 1e-9 and abs(start[1] - stop[1]) > 1e-9:
+            return False
+    if abs(path[-2][0] - path[-1][0]) > 1e-9 or path[-2][1] <= path[-1][1]:
+        return False
+    for body in bodies:
+        if any(_segment_hits_box(start, stop, body)
+               for start, stop in zip(path, path[1:])):
+            return False
+    for vertex in path:
+        if _key(vertex) not in allowed and _point_in_boxes(vertex, bodies):
+            return False
+    for point in points:
+        if _key(point) in allowed:
+            continue
+        if any(_key(point) == _key(vertex) for vertex in path):
+            return False
+        if any(_strictly_on_segment(point, start, stop)
+               for start, stop in zip(path, path[1:])):
+            return False
+    for other in done:
+        for point in path:
+            if any(_key(point) == _key(vertex) for vertex in other):
+                return False
+        for start, stop in zip(path, path[1:]):
+            for a, b in zip(other, other[1:]):
+                if _collinear_overlap(start, stop, a, b):
+                    return False
+                if (_strictly_on_segment(start, a, b)
+                        or _strictly_on_segment(a, start, stop)):
+                    return False
+    return True
+
+
+def _panel_collapse(path: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Drop repeated and collinear interior points; the endpoints stay."""
+    out: list[tuple[float, float]] = []
+    for point in path:
+        if out and _key(point) == _key(out[-1]):
+            continue
+        if len(out) >= 2:
+            a, b = out[-2], out[-1]
+            collinear = (
+                (abs(a[0] - b[0]) <= 1e-9 and abs(b[0] - point[0]) <= 1e-9)
+                or (abs(a[1] - b[1]) <= 1e-9 and abs(b[1] - point[1]) <= 1e-9)
+            )
+            if collinear:
+                out.pop()
+        out.append(point)
+    return out
+
+
+def _panel_simplify(
+    path: Sequence[tuple[float, float]],
+    allowed: set[tuple[float, float]],
+    points: Sequence[tuple[float, float]],
+    bodies: Sequence[Box],
+    done: Sequence[Sequence[tuple[float, float]]],
+) -> tuple[tuple[float, float], ...]:
+    """Shorten a final lead with straight / one-elbow runs, legally.
+
+    Only the shape changes: the first point (the host foot) and the last (the
+    cell's from seat) are never touched, and a replacement is accepted only when
+    the whole lead still passes `_panel_lead_legal` against the same bodies,
+    feet, printed rows and sibling leads. Every interior vertex of a panel lead
+    is a routing waypoint, not an electrical node — the only electrical ends are
+    the two endpoints.
+    """
+    current = _panel_collapse(path)
+    improved = True
+    while improved:
+        improved = False
+        best = None
+        for start in range(len(current) - 1):
+            for stop in range(len(current) - 1, start + 1, -1):
+                for route in _panel_elbows(current[start], current[stop]):
+                    trial = tuple(
+                        current[:start] + list(route) + current[stop + 1:])
+                    trial = tuple(_panel_collapse(trial))
+                    if len(trial) >= len(current):
+                        continue
+                    if not _panel_lead_legal(
+                            trial, allowed, points, bodies, done):
+                        continue
+                    if best is None or len(trial) < len(best):
+                        best = trial
+                if best is not None and len(best) < len(current):
+                    break
+            if best is not None and len(best) < len(current):
+                break
+        if best is not None:
+            current = list(best)
+            improved = True
+    return tuple(current)
+
+
+def _panel_elbows(
+    start: tuple[float, float], stop: tuple[float, float],
+) -> list[list[tuple[float, float]]]:
+    """Straight, or the two one-elbow routes between two points."""
+    if abs(start[0] - stop[0]) <= 1e-9 or abs(start[1] - stop[1]) <= 1e-9:
+        return [[start, stop]]
+    return [
+        [start, (start[0], stop[1]), stop],
+        [start, (stop[0], start[1]), stop],
+    ]
+
+
+def _panel_vertex_candidates(
+    vertex: tuple[float, float], bodies: Sequence[Box], grid: float,
+) -> list[tuple[float, float]]:
+    """The lattice points near a covered vertex, body edges first."""
+    xs = {vertex[0] - grid, vertex[0] + grid,
+          vertex[0] - 2 * grid, vertex[0] + 2 * grid, vertex[0]}
+    ys = {vertex[1] - grid, vertex[1] + grid,
+          vertex[1] - 2 * grid, vertex[1] + 2 * grid, vertex[1]}
+    for body in bodies:
+        # Only a box near the vertex can be the thing covering it; every text row
+        # on the page as a coordinate source made this cross product explode.
+        if not (body[0] - grid <= vertex[0] <= body[2] + grid
+                and body[1] - grid <= vertex[1] <= body[3] + grid):
+            continue
+        xs.update((body[0] - grid, body[2] + grid))
+        ys.update((body[1] - grid, body[3] + grid))
+    return sorted(
+        ((x, y) for x in xs for y in ys),
+        key=lambda point: (
+            abs(point[0] - vertex[0]) + abs(point[1] - vertex[1]), point),
+    )[:48]
+
+
+def _panel_lead_detour(
+    ctx: _Context, placed: _Placement, plan, cell,
+    path: tuple[tuple[float, float], ...],
+    done: Sequence[Sequence[tuple[float, float]]],
+    *, texts=(),
+) -> tuple[tuple[float, float], ...] | GrammarFailure:
+    """Repair only the conflicted part of one lead, on this candidate.
+
+    A body covering the **from/to foot itself** is a named refusal: the endpoint
+    is a fact of the plan and moving it would be another seat. A body covering a
+    shared **interior vertex** (the adjacent two legs) is repaired by trying the
+    grid points beside it, with one elbow on each side if the move needs it. Single
+    straight legs keep the one-grid bend. Bounds are the leg/vertex and the
+    conflict's edges only — never the page.
+    """
+    allowed, points, bodies = _panel_lead_obstacles(
+        ctx, placed, plan, cell, texts=texts)
+    grid = max(ctx.budget.grid, 1.0)
+    for foot, name in ((cell.from_seat, "from"), (cell.to_seat, "to")):
+        if _point_in_boxes(foot, bodies):
+            return _panel_channel_refusal(
+                plan.group_id, cell.part_id,
+                f"its {name} foot {foot} is covered by a foreign body — a panel "
+                "seat is not moved off its own foot",
+            )
+    current = list(path)
+    for _round in range(6):
+        changed = False
+        # 1. a covered shared vertex: both adjacent legs are replaced together.
+        for index in range(1, len(current) - 1):
+            vertex = current[index]
+            covered = _point_in_boxes(vertex, bodies) or any(
+                _key(point) not in allowed and _key(point) == _key(vertex)
+                for point in points)
+            if not covered:
+                continue
+            for candidate in _panel_vertex_candidates(vertex, bodies, grid):
+                left = _panel_elbows(current[index - 1], candidate)
+                right = _panel_elbows(candidate, current[index + 1])
+                for left_route in left:
+                    for right_route in right:
+                        middle = left_route + right_route[1:]
+                        trial = tuple(
+                            current[:index - 1] + middle + current[index + 2:])
+                        if _panel_lead_legal(
+                                trial, allowed, points, bodies, done):
+                            current = list(trial)
+                            changed = True
+                            break
+                    if changed:
+                        break
+                if changed:
+                    break
+            if changed:
+                break
+        if changed:
+            continue
+        # 2. a conflicted straight leg: the one-grid bend from the last round.
+        for index, (start, stop) in enumerate(zip(current, current[1:])):
+            clash = (
+                _point_in_boxes(start, bodies) or _point_in_boxes(stop, bodies)
+                or any(_strictly_on_segment(point, start, stop)
+                       and _key(point) not in allowed for point in points)
+                or any(_segment_hits_box(start, stop, body) for body in bodies)
+            )
+            if not clash:
+                continue
+            candidates: list[list[tuple[float, float]]] = []
+            if abs(start[0] - stop[0]) <= 1e-9:
+                xs = {start[0] - grid, start[0] + grid}
+                for body in bodies:
+                    xs.update((body[0] - grid, body[2] + grid))
+                for point in points:
+                    xs.update((point[0] - grid, point[0] + grid))
+                candidates = [
+                    [start, (x, start[1]), (x, stop[1]), stop]
+                    for x in sorted(xs, key=lambda value: abs(value - start[0]))
+                ]
+            else:
+                ys = {start[1] - grid, start[1] + grid}
+                for body in bodies:
+                    ys.update((body[1] - grid, body[3] + grid))
+                for point in points:
+                    ys.update((point[1] - grid, point[1] + grid))
+                candidates = [
+                    [start, (start[0], y), (stop[0], y), stop]
+                    for y in sorted(ys, key=lambda value: abs(value - start[1]))
+                ]
+            for trial in candidates:
+                merged = tuple(current[:index + 1] + trial[1:] + current[index + 2:])
+                if _panel_lead_legal(merged, allowed, points, bodies, done):
+                    current = list(merged)
+                    changed = True
+                    break
+            if changed:
+                break
+        if not changed:
+            break
+    current = list(_panel_simplify(current, allowed, points, bodies, done))
+    if not _panel_lead_legal(current, allowed, points, bodies, done):
+        return _panel_channel_refusal(
+            plan.group_id, cell.part_id,
+            "its host lead meets a foreign part or another lead and no local "
+            "vertex/leg repair is legal",
+        )
+    return tuple(current)
+
+
+def _panel_channels(
+    ctx: _Context, placed: _Placement, *, texts=()
+) -> tuple[dict[str, tuple[LayoutSegment, ...]], GrammarFailure | None]:
+    """net -> the channel each panel plan means, as segments (548D3X3C §34-2).
+
+    Every seated cell's host lead is the plan's own recorded path, and the plan is
+    the only author of it: the run must start on the host pin that drives the
+    cell, end on the cell's ``from`` seat, move orthogonally, and carry the net
+    the cell's ``from`` foot really sits on. Anything else is a named
+    ``layout-unsat`` — the drawing never substitutes another way round for a path
+    the plan reserved, because the reserve and the wire must be one drawing.
+
+    A page that declares no panel returns an empty map and no failure; the net
+    loop then behaves exactly as it did.
+    """
+    out: dict[str, list[LayoutSegment]] = {}
+    for plan in getattr(placed, "panel_plans", ()):
+        if not plan.seated:
+            continue
+        final: dict[str, tuple[tuple[float, float], ...]] = {}
+        for cell in plan.cells:
+            path = tuple(cell.host_path)
+            if cell.from_seat is None or len(path) < 2:
+                return {}, _panel_channel_refusal(
+                    plan.group_id, cell.part_id,
+                    "the plan states no host lead for this cell",
+                )
+            host_pin = _pin_point(
+                ctx, plan.host_part, cell.host_token,
+                placed.poses, placed.origins,
+            )
+            if host_pin is None or _key(host_pin) != _key(path[0]):
+                return {}, _panel_channel_refusal(
+                    plan.group_id, cell.part_id,
+                    f"its lead starts at {path[0]} and not on the host foot "
+                    f"{cell.host_token!r} ({host_pin})",
+                )
+            if _key(path[-1]) != _key(cell.from_seat):
+                return {}, _panel_channel_refusal(
+                    plan.group_id, cell.part_id,
+                    f"its lead ends at {path[-1]} and not on the cell's from seat "
+                    f"{cell.from_seat}",
+                )
+            for start, stop in zip(path, path[1:]):
+                if (abs(start[0] - stop[0]) > 1e-9
+                        and abs(start[1] - stop[1]) > 1e-9):
+                    return {}, _panel_channel_refusal(
+                        plan.group_id, cell.part_id,
+                        f"the leg {start} -> {stop} is not orthogonal",
+                    )
+            others = [
+                final[item.part_id] if item.part_id in final
+                else tuple(item.host_path)
+                for item in plan.cells if item.part_id != cell.part_id
+            ]
+            repaired = _panel_lead_detour(
+                ctx, placed, plan, cell, path, others, texts=texts)
+            if isinstance(repaired, GrammarFailure):
+                return {}, repaired
+            path = repaired
+            final[cell.part_id] = path
+            host_pin = _pin_point(
+                ctx, plan.host_part, cell.host_token, placed.poses, placed.origins,
+            )
+            if host_pin is None or _key(host_pin) != _key(path[0]):
+                return {}, _panel_channel_refusal(
+                    plan.group_id, cell.part_id,
+                    f"its lead starts at {path[0]} and not on the host foot "
+                    f"{cell.host_token!r} ({host_pin})",
+                )
+            if _key(path[-1]) != _key(cell.from_seat):
+                return {}, _panel_channel_refusal(
+                    plan.group_id, cell.part_id,
+                    f"its lead ends at {path[-1]} and not on the cell's from seat "
+                    f"{cell.from_seat}",
+                )
+            for start, stop in zip(path, path[1:]):
+                if (
+                    abs(start[0] - stop[0]) > 1e-9
+                    and abs(start[1] - stop[1]) > 1e-9
+                ):
+                    return {}, _panel_channel_refusal(
+                        plan.group_id, cell.part_id,
+                        f"the leg {start} -> {stop} is not orthogonal",
+                    )
+            nets = _part_nets(ctx.circuit, cell.part_id)
+            from_net = next(
+                (
+                    net_id for token, net_id in nets.items()
+                    if _pin_point(
+                        ctx, cell.part_id, token, placed.poses, placed.origins,
+                    ) is not None
+                    and _key(_pin_point(
+                        ctx, cell.part_id, token, placed.poses, placed.origins,
+                    )) == _key(cell.from_seat)
+                ),
+                "",
+            )
+            if not from_net:
+                return {}, _panel_channel_refusal(
+                    plan.group_id, cell.part_id,
+                    "the cell's from seat is not on any of its pins",
+                )
+            out.setdefault(from_net, []).append(
+                LayoutSegment(net=from_net, points=list(path))
+            )
+    return {net: tuple(items) for net, items in out.items()}, None
+
+
+def _flag_family(ctx: _Context, net_id: str) -> str:
+    """The glyph family a net's flag is drawn with (ground or rail)."""
+    net = ctx.circuit.net(net_id)
+    profile, _ref = _flag_plan(ctx, net_id, (net.cls if net is not None else "") or "gnd")
+    if profile is None:
+        return FLAG_GLYPH_KIND_RAIL
+    return flag_glyph_kind(profile)
+
+
+def _panel_terminal_seats(
+    ctx: _Context, placed: _Placement
+) -> tuple[
+    dict[tuple[str, str], tuple[tuple[float, float],
+                                 tuple[tuple[float, float], ...], float]],
+    GrammarFailure | None,
+]:
+    """The panel cells' terminal flag seats, in the joint-seat shape (§34-3).
+
+    A cell's terminal flag hangs **down** out of its ``to`` foot: the anchor is
+    ``FLAG_LEAD`` below that foot, the lead is the straight run from the foot to
+    the anchor, and the room is the compiler's own ``_flag_box`` at that anchor
+    with the downward rotation — the very geometry
+    :func:`_panel_templates` reserves, so the reservation and the flag the
+    drawing hangs are one ruler. The seat is keyed ``(net, member)`` like a joint
+    corridor seat, so `_lead_lane_reservations` promises the lane and
+    `_flag_pins` replays it.
+
+    A cell whose plan is not seated, or whose ``to`` foot is not on a pin of its
+    own part, or whose terminal flag symbol the library does not carry, is a
+    named ``layout-unsat`` — a terminal without a flag is not a panel cell this
+    drawing can state.
+    """
+    seats: dict[tuple[str, str], tuple[tuple[float, float],
+                                        tuple[tuple[float, float], ...], float]] = {}
+    for plan in getattr(placed, "panel_plans", ()):
+        if not plan.seated:
+            return {}, _panel_channel_refusal(
+                plan.group_id, plan.host_part,
+                "the panel is not seated, so its terminal flags have no seats",
+            )
+        for cell in plan.cells:
+            if cell.to_seat is None:
+                return {}, _panel_channel_refusal(
+                    plan.group_id, cell.part_id,
+                    "the cell states no terminal seat",
+                )
+            nets = _part_nets(ctx.circuit, cell.part_id)
+            to_token = next(
+                (
+                    token for token in sorted(nets)
+                    if _pin_point(
+                        ctx, cell.part_id, token, placed.poses, placed.origins,
+                    ) is not None
+                    and _key(_pin_point(
+                        ctx, cell.part_id, token, placed.poses, placed.origins,
+                    )) == _key(cell.to_seat)
+                ),
+                "",
+            )
+            if not to_token:
+                return {}, _panel_channel_refusal(
+                    plan.group_id, cell.part_id,
+                    "the cell's terminal seat is not on any of its pins",
+                )
+            net_id = nets[to_token]
+            net = ctx.circuit.net(net_id)
+            cls = net.cls if net is not None else ""
+            profile, ref = _flag_plan(ctx, net_id, cls or "gnd")
+            if profile is None:
+                return {}, _panel_channel_refusal(
+                    plan.group_id, cell.part_id,
+                    f"the terminal net {net_id!r} has no flag symbol "
+                    f"{ref!r} in the library",
+                )
+            anchor = (cell.to_seat[0], cell.to_seat[1] - FLAG_LEAD)
+            seats[(net_id, f"{cell.part_id}.{to_token}")] = (
+                anchor, (cell.to_seat, anchor), -1.0,
+            )
+    return seats, None
+
+
+def _service_terminal_seats(
+    ctx: _Context, placed: _Placement
+) -> tuple[
+    dict[tuple[str, str], tuple[tuple[float, float],
+                                 tuple[tuple[float, float], ...], float]],
+    GrammarFailure | None,
+]:
+    """The service cells' terminal flag seats, in the panel seat's shape (§35B1).
+
+    The room is the placement's own (``placed.service_plans``) and the lead is
+    the template's ``flag_lead`` — the one fact
+    :class:`~boardwise.engines.placement.ServiceSeatTemplate` carries for the
+    draw back to replay — translated by the cell's own ``to`` foot, never a
+    second geometry rule invented here. The lead's last leg is the flag run, so
+    it has to be vertical for the upright glyph the library draws; a horizontal
+    one is a named refusal, not a silently rotated flag.
+
+    A cell whose template states no lead has no terminal flag on this page (its
+    terminal is a signal, not a bus), so it states no fixed seat either. The
+    table stays separate from :func:`_panel_terminal_seats`: the panel's own
+    readers — the compile's flag grouping and its `planned_seats` — keep the
+    panel-only answer they were frozen with.
+    """
+    templates, failure = _service_templates(
+        ctx, getattr(placed, "residue", (0.0, 0.0)),
+        tuple(sorted(placed.origins)),
+    )
+    if failure is not None:
+        return {}, failure
+    by_group = {template.group_id: template for template in templates}
+    seats: dict[tuple[str, str], tuple[tuple[float, float],
+                                        tuple[tuple[float, float], ...], float]] = {}
+    for plan in getattr(placed, "service_plans", ()):
+        if not plan.seated:
+            return {}, _panel_channel_refusal(
+                plan.group_id, plan.host_part,
+                "the service seat is not seated, so its terminal flag has no seat",
+            )
+        for cell in plan.cells:
+            template = by_group.get(plan.group_id)
+            if template is None:
+                return {}, _panel_channel_refusal(
+                    plan.group_id, cell.part_id,
+                    "the seated service cell is not one of this page's service "
+                    "templates, so its terminal lead was never stated",
+                )
+            lead = template.cell.flag_lead
+            if not lead:
+                continue
+            if cell.to_seat is None:
+                return {}, _panel_channel_refusal(
+                    plan.group_id, template.cell.part_id,
+                    "the service cell states no terminal seat",
+                )
+            foot = (tuple(cell.to_seat[0:2]))
+            points = tuple(
+                (foot[0] + point[0], foot[1] + point[1]) for point in lead
+            )
+            start, end = points[-2], points[-1]
+            if abs(start[0] - end[0]) > 1e-9 or abs(start[1] - end[1]) <= 1e-9:
+                return {}, _panel_channel_refusal(
+                    plan.group_id, template.cell.part_id,
+                    f"the service lead's flag run {_point_text(start)} -> "
+                    f"{_point_text(end)} is not vertical, and the library's "
+                    "flag means an upright glyph on a vertical run",
+                )
+            nets = _part_nets(ctx.circuit, template.cell.part_id)
+            net_id = nets.get(template.cell.to_token, "")
+            if not net_id:
+                return {}, _panel_channel_refusal(
+                    plan.group_id, template.cell.part_id,
+                    f"the service cell's terminal foot {template.cell.to_token!r} "
+                    "is not on any of its nets",
+                )
+            hang = 1.0 if end[1] > start[1] else -1.0
+            seats[(net_id, f"{template.cell.part_id}.{template.cell.to_token}")] = (
+                points[-1], points, hang,
+            )
+    return seats, None
+
+
+def _seat_first_terminal_seats(
+    ctx: _Context, placed: _Placement
+) -> tuple[
+    dict[tuple[str, str], tuple[tuple[float, float],
+                                 tuple[tuple[float, float], ...], float, str]],
+    GrammarFailure | None,
+]:
+    """Every fixed terminal SeatFirst must keep, with the source that states it.
+
+    The panel's table stays panel-only (:func:`_panel_terminal_seats`) and the
+    service cells add theirs (:func:`_service_terminal_seats`); this is the one
+    merged reading the seat-first consumers use, and each entry carries
+    ``SEAT_FIRST_PANEL`` or ``SEAT_FIRST_SERVICE`` so a plan says *which*
+    declaration a fixed seat came from. One pad is one flag: a pad both a panel
+    cell and a service seat claim is a named refusal, never a silent overwrite.
+    """
+    panel, failure = _panel_terminal_seats(ctx, placed)
+    if failure is not None:
+        return {}, failure
+    service, failure = _service_terminal_seats(ctx, placed)
+    if failure is not None:
+        return {}, failure
+    out: dict[tuple[str, str],
+              tuple[tuple[float, float], tuple[tuple[float, float], ...],
+                    float, str]] = {}
+    for key, value in panel.items():
+        out[key] = (*value, SEAT_FIRST_PANEL)
+    for key, value in service.items():
+        if key in out:
+            return {}, _seat_first_refusal(
+                key[0],
+                f"the terminal pad {key[1]!r} is stated by a panel cell and by "
+                "a service seat at once: one pad is one flag, and the two "
+                "declarations are not merged or ordered",
+            )
+        out[key] = (*value, SEAT_FIRST_SERVICE)
+    return out, None
+
+
+def _panel_channel_refusal(
+    group_id: str, part_id: str, detail: str
+) -> GrammarFailure:
+    """The plan's own panel lead cannot be drawn as the plan says (§34-2)."""
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject=f"$.panelGroups ({group_id})",
+        detail=(
+            f"panel {group_id!r}, cell {part_id!r}: {detail} — the seat the "
+            "placement reserved and the wire the drawing needs would be two "
+            "different paths, and the panel's room is not taken by another route"
+        ),
+        action=(
+            "correct the group's host foot, branch terminals or columns, or drop "
+            "the group"
+        ),
+    )
+
+
+def _series_channel_refusal(
+    net_id: str, point: tuple[float, float]
+) -> GrammarFailure:
+    """The plan's own channel cannot be drawn as the plan says (548D3B)."""
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject=f"$.seriesBranches ({net_id})",
+        detail=(
+            f"the declared arm's own channel for {net_id!r} is not a run this page "
+            f"can draw: one of its legs is blocked at "
+            f"({point[0]:g}, {point[1]:g}) by a body, a text row, a flag seat or "
+            "another net's connection, so the seat the placement reserved and the "
+            "wire the drawing needs are two different paths"
+        ),
+        action=(
+            "move the arm's host or give the row it crosses some room; the "
+            "placement and the router check the same legs, so a page that refuses "
+            "here refuses the seat, not only the wire"
+        ),
+    )
+
+
+def _series_path_failure(problems: Sequence[str]) -> GrammarFailure:
+    """The drawn wire left the arm's own path (548D3B)."""
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject="$.seriesBranches",
+        detail=(
+            "the drawing's own conductors do not follow the seat the placement "
+            "reserved: " + "; ".join(problems)
+        ),
+        action=(
+            "keep the arm's lead on its declared channel, or drop the entry; a "
+            "reservation the wire does not use is a different drawing from the "
+            "one that was checked"
+        ),
+    )
+
+
+def _runs_join(
+    segments: Sequence[LayoutSegment], points: Sequence[tuple[float, float]]
+) -> bool:
+    """Do these runs form **one** connected figure through every point?
+
+    Same-net segments that touch nothing are not a connection: the measurement is
+    the geometric one (a shared point, or an endpoint of one run lying on the
+    other), not "these runs carry the same net id" (548D3B).
+    """
+    if not segments:
+        return False
+    parent = list(range(len(segments)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for i in range(len(segments)):
+        for j in range(i + 1, len(segments)):
+            joined = any(
+                _on_polyline(point, segments[j].points) for point in segments[i].points
+            ) or any(
+                _on_polyline(point, segments[i].points) for point in segments[j].points
+            )
+            if joined:
+                root_i, root_j = find(i), find(j)
+                if root_i != root_j:
+                    parent[root_i] = root_j
+    roots: set[int] = set()
+    for point in points:
+        hits = [
+            index for index, item in enumerate(segments)
+            if _on_polyline(point, item.points)
+        ]
+        if not hits:
+            return False
+        roots.update(find(index) for index in hits)
+    return len(roots) == 1
+
+
 def _connect_net(
     ctx: _Context,
     router: _Router,
@@ -11003,6 +18314,15 @@ def _connect_net(
         return [], "no wire: every pin of this net is named at its own stub"
     if len(points) == 1:
         return [], "one pin: nothing to wire"
+    if existing and _runs_join(existing, points):
+        # 548D3B: the plan's own channel already joins every pad of this net, so
+        # the drawing keeps it and adds no farthest-pair trunk on top of it —
+        # that trunk is exactly the "another way round" the reservation did not
+        # describe.
+        return (
+            list(existing),
+            "the declared arm's own channel already joins every pad of this net",
+        )
     chain_points = sorted({
         _key(point) for member, point in expression.points
         if member not in expression.detached
@@ -11380,6 +18700,160 @@ class _Built:
     plan: LayoutPlan
     checked: readability.CheckResult
     tolerated: tuple[readability.HardViolation, ...] = ()
+    #: 548D3B: every bound seat this candidate's variant tried **before** the one
+    #: that built, as printable lines naming the lane and the refusal. Empty on
+    #: the historical one-build path, so a page with nothing to choose says
+    #: nothing extra.
+    series_trials: tuple[str, ...] = ()
+
+
+def _series_candidate_placements(
+    ctx: _Context, placed: _Placement
+) -> list[tuple[str, _Placement]]:
+    """Alternative bound-seat placements for a **multi-arm** page (548D3B).
+
+    Each entry is ``(label, placement)``: one arm re-seated on one lane the
+    enumerator found, then run through the same :func:`placement.place_series_seats`
+    the base layout uses, so the ordinary parts the arm's yields name are moved
+    in the state the build will hand to the router. Nothing here measures a
+    drawing — a lane is offered because a real box on the page says so, and the
+    full build is what accepts or refuses it.
+
+    The base placement is **not** among the results: the caller keeps it as the
+    last attempt, so a page that only the current drawing satisfies keeps
+    drawing it.
+    """
+    if len(ctx.presentation.series_branches) < 2 or not placed.series_plans:
+        return []
+    templates, failure = _series_templates(
+        ctx, placed.residue, tuple(sorted(placed.origins)),
+    )
+    if failure is not None or not templates:
+        return []
+    request = _series_placement_request(ctx, templates, placed.poses)
+    limit = max(0, ctx.budget.max_candidates - 1)
+    arms = [
+        plan for plan in placed.series_plans
+        if plan.seated and plan.first_origin is not None
+        and plan.second_origin is not None
+    ]
+    if not arms:
+        return []
+    lanes = {
+        plan.branch_id: placement.series_lane_options(
+            request, plan, placed.origins, placed.poses,
+        )
+        for plan in arms
+    }
+    out: list[tuple[str, _Placement]] = []
+    seen: set[tuple] = set()
+
+    def attempt(chosen: Mapping[str, float]) -> None:
+        plans = list(placed.series_plans)
+        moved_names: list[str] = []
+        for index, plan in enumerate(plans):
+            lane = chosen.get(plan.branch_id)
+            if lane is None or not plan.seated:
+                continue
+            if plan.first_origin is None or plan.second_origin is None:
+                continue
+            span = math.hypot(plan.lateral[0], plan.lateral[1]) or 1.0
+            lateral = (plan.lateral[0] / span, plan.lateral[1] / span)
+            shift = lane - plan.lane
+            plans[index] = replace(
+                plan,
+                first_origin=(
+                    plan.first_origin[0] + lateral[0] * shift,
+                    plan.first_origin[1] + lateral[1] * shift,
+                ),
+                second_origin=(
+                    plan.second_origin[0] + lateral[0] * shift,
+                    plan.second_origin[1] + lateral[1] * shift,
+                ),
+                lane=lane,
+            )
+            moved_names.append(f"{plan.branch_id} lane {plan.lane:g} -> {lane:g}")
+        if not moved_names:
+            return
+        plans = list(placement.separate_series_lanes(
+            request, plans, placed.origins, placed.poses,
+        ))
+        try:
+            seated, state = placement.place_series_seats(
+                request, plans, placed.origins, placed.poses,
+            )
+        except placement.PlacementError:
+            return
+        key = tuple((item.branch_id, round(item.lane, 6)) for item in seated)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append((
+            "; ".join(
+                f"{item.branch_id} lane {item.lane:g}" for item in seated
+            ) or "; ".join(moved_names),
+            _Placement(
+                origins=dict(state.origins), poses=dict(state.poses),
+                residue=placed.residue, series_plans=seated,
+            ),
+        ))
+
+    # 548D3B: the arms' lanes are chosen **jointly**, not one at a time. The
+    # measured page needs `led1 = 5`, `led2 = 0` — the first arm a grid step off
+    # its host row so the second can keep its own — and a generator that only
+    # offered "all shortest" or "one arm at a time" never asks for it. The space
+    # is the finite Cartesian product of the enumerated options (seed lane
+    # included, so "leave this arm where the binder put it" is a choice too),
+    # ordered by the **total** lateral travel and then by declaration order, so
+    # the ordering states the same "shortest escape" the single-arm reading does
+    # and never depends on a part id, a net or a hand-written pair of lanes.
+    choices = [
+        (plan.branch_id, (plan.lane, *lanes[plan.branch_id])) for plan in arms
+    ]
+    for combination in _joint_lane_combinations(choices, limit):
+        if len(out) >= limit:
+            break
+        attempt(combination)
+    return out[:limit]
+
+
+def _joint_lane_combinations(
+    choices: Sequence[tuple[str, Sequence[float]]],
+    limit: int,
+) -> list[dict[str, float]]:
+    """The finite joint lane combinations, shortest total travel first (548D3B).
+
+    ``choices`` is ``(branch_id, lanes)`` per arm in **declaration order**, each
+    lane list already in the enumerator's shortest-escape order with the seed
+    lane first. The product is cut per arm at ``limit`` lanes, then sorted by
+    the sum of the absolute lanes, then by each arm's absolute lane in
+    declaration order, then by the declaration index — a total order, so the
+    same page always proposes the same combinations. The combination where every
+    arm keeps its seed lane is dropped: that is the placement the binder already
+    built, and it is the caller's last attempt, never a candidate.
+    """
+    if not choices or limit < 1:
+        return []
+    cut = [list(lanes[:max(1, limit)]) for _branch, lanes in choices]
+    seeds = tuple(lanes[0] for _branch, lanes in choices)
+    combinations: list[tuple[tuple[float, ...], int, dict[str, float]]] = []
+
+    def walk(index: int, taken: list[float], order: int) -> None:
+        if index == len(cut):
+            if tuple(taken) == seeds:
+                return
+            key = tuple(abs(value) for value in taken)
+            combinations.append((
+                key, order,
+                {choices[i][0]: taken[i] for i in range(len(choices))},
+            ))
+            return
+        for position, lane in enumerate(cut[index]):
+            walk(index + 1, [*taken, lane], order * len(cut[index]) + position)
+
+    walk(0, [], 0)
+    combinations.sort(key=lambda item: (sum(item[0]), item[0], item[1]))
+    return [entry for _key, _order, entry in combinations[:max(1, limit)]][:limit]
 
 
 def _build_candidate(
@@ -11402,16 +18876,532 @@ def _build_candidate(
     refused has to hand the downgrade back too, and the third return value is the
     gate's rendered violations — a list whose shape every reader of it,
     :func:`_refusal_signature` included, depends on.
+
+    **548D3B**: on a page that declares more than one arm, the variant is built
+    against a short list of bound seat plans (the lane the binder chose is the
+    last one tried) and the first plan that survives the *whole* build — the
+    relation gate, the seat check, the router, the text ladder and the
+    independent readability check — is the candidate. A refusal is the input to
+    the next plan, never a reason to weaken a check, and the plans that failed
+    are recorded on the delivered candidate (`_Built.series_trials`). A page
+    with no arm, or with one, builds exactly once, as it always did.
     """
     fallbacks = label_fallbacks if label_fallbacks is not None else []
-    built, failure, violations = _build_one_variant(ctx, variant, fallbacks)
-    return built, _refusal_after_downgrade(failure, fallbacks), violations
+    if len(ctx.presentation.series_branches) < 2:
+        built, failure, violations = _build_one_variant(ctx, variant, fallbacks)
+        return built, _refusal_after_downgrade(failure, fallbacks), violations
+    placed, placement_failure = _place(ctx, variant)
+    if placed is None:
+        return None, _refusal_after_downgrade(placement_failure, fallbacks), []
+    attempts = _series_candidate_placements(ctx, placed)
+    trials: list[str] = []
+    first: GrammarFailure | None = None
+    first_violations: list[str] = []
+    for label, attempt in [*attempts, ("the binder's own seat", placed)]:
+        built, failure, violations = _build_one_variant(
+            ctx, variant, fallbacks, placement_override=attempt,
+        )
+        if built is not None:
+            built.series_trials = tuple(trials)
+            return built, None, violations
+        trials.append(
+            f"{label}: refused — "
+            f"{failure.detail if failure is not None else 'no legal layout'}"
+        )
+        if first is None:
+            first, first_violations = failure, violations
+    if first is not None and attempts:
+        first = GrammarFailure(
+            category=first.category, subject=first.subject,
+            detail=(
+                f"{first.detail} — every bound seat this variant was built with "
+                f"was refused ({len(trials)}): " + "; ".join(trials)
+            ),
+            action=first.action,
+        )
+    return None, _refusal_after_downgrade(first, fallbacks), first_violations
+
+
+#: 548C4: how many times a variant's **part text** may be re-seated against the
+#: label boxes the gate itself named. Two is what the measured page needs (the
+#: first round moves the LED's rows off `LCD_SCK`, the second clears the MCU's own
+#: reference off `SWDIO`), and a page that needs a third is a page whose labels
+#: have no lane at all — refusing it with the gate's own lines is the honest
+#: answer there, not a longer search.
+TEXT_LABEL_REPAIR_ROUNDS = 4
+
+#: 548D3D-L: how many times a **straight-stub** label's own collision with a
+#: part's row may move that row. One is the whole lever: the measured case is
+#: `ESP_EN`'s box (-103,-49.5,-56,-40.5) sitting on `R1`'s row band, and a row
+#: that still collides after one measured move is a page whose lanes have no
+#: seat at all — a refusal, never a second guess.
+LABEL_TEXT_RESEAT_ROUNDS = 1
+
+
+def _label_row_conflicts(
+    labels: Sequence[LayoutLabel], texts: Sequence[LayoutText]
+) -> list[Box]:
+    """The part rows a label box actually lands on, as text walls (548D3D-L).
+
+    One entry per distinct row box, in the order the rows were seated, so the
+    repair the caller asks for is the box the picture already has — never a
+    blanket "every label is a wall". A page whose labels touch no row returns
+    the empty list and takes no second build.
+    """
+    out: list[Box] = []
+    for label in labels:
+        for text in texts:
+            if not _overlaps(label.bbox, text.bbox):
+                continue
+            if text.bbox not in out:
+                out.append(text.bbox)
+    return out
+
+
+def _text_label_repair_boxes(
+    plan: LayoutPlan, violations: Sequence[readability.HardViolation]
+) -> list[Box]:
+    """The label boxes a `text-overlap` names against a part's own row (548C4).
+
+    One entry per distinct label box, read off the plan the gate just measured —
+    the label's *seat* is the only thing this repair needs, and the plan carries
+    it. Only the kind the repair can answer is read: `texts[i] × labels[j]`. A
+    text against a **part's** drawn extent is a different sentence (the ladder
+    had no free side at this pitch, and no amount of extra walls moves a part),
+    so it is left to the gate and to the pitch, never "repaired" here.
+    """
+    out: list[Box] = []
+    for item in violations:
+        if item.kind != readability.KIND_TEXT_OVERLAP:
+            continue
+        named = list(item.objects)
+        if len(named) < 2:
+            continue
+        for text_name, label_name in (named[:2], named[:2][::-1]):
+            if not (text_name.startswith("texts[") and label_name.startswith("labels[")):
+                continue
+            try:
+                index = int(label_name[len("labels["):-1])
+            except ValueError:
+                continue
+            if not 0 <= index < len(plan.labels):
+                continue
+            box = plan.labels[index].bbox
+            if box not in out:
+                out.append(box)
+    return out
+
+
+def _series_middle_channel_problems(
+    ctx: _Context, placed: _Placement, segments: Sequence[LayoutSegment]
+) -> tuple[str, ...]:
+    """Is the arm's middle node the short link the declaration means? (548D3B)
+
+    The middle net is private to the pair (548B's V4), so the only thing it can
+    be drawn as is the rung between the two parts. Measured on the plan the build
+    just produced: at most **two** pieces — one straight rung, or an L when the
+    seat is a grid step off — and never longer than ``2 * pitch`` of travel for a
+    ``pitch``-long pair. Both numbers are the acceptance rule
+    `tests/test_548d_series_reservation.py` states for every candidate; here they
+    are applied *before* a candidate is delivered, so a seat whose rung the
+    router had to walk around is the input to the next bound seat instead of a
+    page that fails its own contract.
+    """
+    if not placed.series_plans:
+        return ()
+    plans = {plan.branch_id: plan for plan in placed.series_plans}
+    out: list[str] = []
+    for branch in ctx.presentation.series_branches:
+        plan = plans.get(branch.id)
+        if plan is None or not plan.seated:
+            continue
+        pieces = 0
+        length = 0.0
+        for segment in segments:
+            if segment.net != branch.middle_net:
+                continue
+            for start, end in zip(segment.points, segment.points[1:]):
+                pieces += 1
+                length += abs(end[0] - start[0]) + abs(end[1] - start[1])
+        if pieces == 0:
+            continue
+        if pieces > 2:
+            out.append(
+                f"{branch.id}: the middle net {branch.middle_net} is drawn as "
+                f"{pieces} pieces, not the pair's link"
+            )
+        elif plan.pitch > 0.0 and length > 2.0 * plan.pitch:
+            out.append(
+                f"{branch.id}: the middle net {branch.middle_net} runs {length:g} "
+                f"units for a {plan.pitch:g}-unit pitch"
+            )
+    return tuple(out)
+
+
+
+def _panel_boxes_overlap(left: Box, right: Box) -> bool:
+    return (
+        min(left[2], right[2]) - max(left[0], right[0]) > 1e-9
+        and min(left[3], right[3]) - max(left[1], right[1]) > 1e-9
+    )
+
+
+
+def _service_branch_parts(ctx: _Context) -> frozenset[str]:
+    """The parts this page seats as service cells (548D3S2).
+
+    The structural statement `_service_templates` makes, without a residue: a
+    two-ended branch with an owner and two nets, on a page that states
+    ``panelGroups``, that is not already a panel cell. Empty on every other
+    page, so the yields and spreads keep exactly their historical move set.
+    """
+    if not (getattr(ctx.presentation, "panel_groups", ()) or ()):
+        return frozenset()
+    panel_cells = {
+        branch.part
+        for group in ctx.presentation.panel_groups
+        for branch in group.branches
+    }
+    return frozenset(
+        part_id for part_id, slot in ctx.slots.items()
+        if slot.kind == "branch" and slot.owner and slot.shared_net
+        and slot.other_net and part_id not in panel_cells
+    )
+
+
+def _path_first_plan(
+    ctx: _Context, placed: _Placement, terminal: _SeatFirstPathFirstTerminal,
+) -> tuple[LayoutPlan, list[str], GrammarFailure | None]:
+    """The one plan a service page draws from its path-first terminal (§36).
+
+    Every conductor is the terminal's own: the panel channels (point for point,
+    never re-routed), each seat's lead, every member path and every ordinary
+    signal the pre-flight routed. The flags are exactly one per assignment — the
+    seat's own anchor and rotation, which the audit below also reads — and the
+    names are the terminal's label map (label-style nets and the generic
+    fallbacks, at their own pins). The printed rows are the terminal's scene, so
+    the text the page shows is the text the plan was measured on.
+    """
+    if not terminal.ok:
+        return LayoutPlan(), [], terminal.refusals[0]
+    scene = terminal.scene
+    channels, problem = _panel_channels(ctx, placed, texts=list(scene.texts))
+    if problem is not None:
+        return LayoutPlan(), [], problem
+    segments: list[LayoutSegment] = []
+    for net_id in sorted(channels):
+        segments.extend(channels[net_id])
+    for plan in terminal.plans:
+        for item in plan.assignments:
+            if len(item.seat.lead) > 1:
+                segments.append(LayoutSegment(
+                    net=plan.net, points=list(item.seat.lead)))
+            for _member, path in item.paths:
+                if len(path) > 1:
+                    segments.append(LayoutSegment(
+                        net=plan.net, points=list(path)))
+    for _net, runs in terminal.signals.segments:
+        segments.extend(runs)
+    symbols: list[LayoutPowerSymbol] = []
+    notes: list[str] = []
+    for plan in terminal.plans:
+        net = ctx.circuit.net(plan.net)
+        cls = net.cls if net is not None else "gnd"
+        profile, _ref = _flag_plan(ctx, plan.net, cls)
+        if profile is None:
+            continue
+        for item in plan.assignments:
+            symbols.append(LayoutPowerSymbol(
+                symbol_ref=profile.symbol_ref,
+                symbol_hash=profile.geometry_hash(),
+                net=plan.net, x=item.seat.anchor[0], y=item.seat.anchor[1],
+                rotation=item.seat.rotation,
+            ))
+    labels = [label for _net, _point, label in terminal.labels]
+    texts = list(scene.texts)
+    parts: list[LayoutPart] = []
+    for part_id in sorted(placed.origins):
+        profile = ctx.profile(part_id)
+        pose = placed.poses[part_id]
+        origin = placed.origins[part_id]
+        parts.append(LayoutPart(
+            part_id=part_id,
+            symbol_ref=profile.symbol_ref,
+            symbol_hash=profile.geometry_hash(),
+            x=origin[0], y=origin[1],
+            rotation=float(pose.rotation), mirror=pose.mirror,
+            reference=part_id,
+        ))
+    for net_id, _reason in terminal.fallbacks:
+        notes.append(
+            f"net {net_id}: the path-first pre-flight found no free run, so the "
+            "generic fallback names it at every pin (the same carrier and reason "
+            "the compiler always states — not a direct wire)")
+    return LayoutPlan(
+        source=LayoutSource(
+            circuit_sha256=ctx.circuit.sha256(),
+            presentation_sha256=ctx.presentation.sha256(),
+        ),
+        parts=parts, segments=segments, junctions=_junctions(segments),
+        labels=labels, power_symbols=symbols, texts=texts,
+        notes=[f"compiled by {COMPILER_NAME}: the path-first seat terminal", *notes],
+    ), [], None
+
+
+def _path_first_audit(
+    ctx: _Context,
+    placed: _Placement,
+    terminal: _SeatFirstPathFirstTerminal,
+    plan: LayoutPlan,
+) -> list[GrammarFailure]:
+    """Read the finished plan against the terminal: one flag per seat, every run."""
+    failures: list[GrammarFailure] = []
+    # one flag per assignment, at the seat's own anchor and rotation
+    for rail in terminal.plans:
+        mine = [item for item in plan.power_symbols if item.net == rail.net]
+        if len(mine) != len(rail.assignments):
+            failures.append(_seat_first_refusal(
+                rail.net,
+                f"{rail.net!r} states {len(mine)} flag(s) for "
+                f"{len(rail.assignments)} seat(s): one assignment is one flag",
+            ))
+            continue
+        for item in rail.assignments:
+            seat = item.seat
+            has = any(
+                _key((symbol.x, symbol.y)) == _key(seat.anchor)
+                and abs(float(symbol.rotation) - float(seat.rotation)) < 1e-9
+                for symbol in mine
+            )
+            if not has:
+                failures.append(_seat_first_refusal(
+                    rail.net,
+                    f"the {item.group!r} seat at {_point_text(seat.anchor)} has "
+                    "no flag at its own anchor and rotation",
+                ))
+    # every seat lead and member path is a conductor of its own net, point for point
+    drawn = {
+        (item.net, tuple((float(p[0]), float(p[1])) for p in item.points))
+        for item in plan.segments
+    }
+    for rail in terminal.plans:
+        for item in rail.assignments:
+            runs = [("lead", item.seat.lead)] + [
+                (member, path) for member, path in item.paths
+            ]
+            for name, path in runs:
+                points = tuple((float(p[0]), float(p[1])) for p in path)
+                if len(points) <= 1:
+                    continue
+                if (rail.net, points) not in drawn:
+                    failures.append(_seat_first_refusal(
+                        rail.net,
+                        f"the {name} of {item.group!r} "
+                        f"({_point_text(points[0])} -> {_point_text(points[-1])}) "
+                        "is not a conductor of the plan: the path decided first "
+                        "was not the path drawn",
+                    ))
+    # no point is shared by two nets (a cross-net short), and no run of one
+    # assignment reaches a point another assignment owns
+    nets_at: dict[tuple[float, float], set[str]] = {}
+    owner: dict[tuple[float, float], tuple[str, str]] = {}
+    for rail in terminal.plans:
+        for item in rail.assignments:
+            for _member, path in item.paths:
+                for point in path:
+                    owner.setdefault(_key(point), (rail.net, item.group))
+    for item in plan.segments:
+        for point in item.points:
+            nets_at.setdefault(_key(point), set()).add(item.net)
+    for point, nets in nets_at.items():
+        if len(nets) > 1:
+            failures.append(_seat_first_refusal(
+                sorted(nets)[0],
+                f"the nets {sorted(nets)} share the point {_point_text(point)}: "
+                "two different nets meet there, which is a short",
+            ))
+    for item in plan.segments:
+        mine = {owner[_key(point)] for point in item.points if _key(point) in owner}
+        if len(mine) > 1:
+            failures.append(_seat_first_refusal(
+                item.net,
+                f"the run {_point_text(item.points[0])} -> "
+                f"{_point_text(item.points[-1])} joins the assignments {sorted(mine)}: "
+                "two seats are not wired to each other",
+            ))
+    # a fallback net's names stand at its own pins, one each
+    for net_id, _reason in terminal.fallbacks:
+        pins = {
+            _key(point) for _member, point in _seat_first_points(
+                ctx, placed, net_id)
+            if point is not None
+        }
+        named = {
+            _key((label.x, label.y)) for _net, _point, label in terminal.labels
+            if _net == net_id
+        }
+        if pins != named:
+            failures.append(_seat_first_refusal(
+                net_id,
+                f"the generic fallback of {net_id!r} is not named at every pin: "
+                f"pins {sorted(pins)} vs names {sorted(named)}",
+            ))
+    return failures
+
+
+def _build_path_first_variant(
+    ctx: _Context, variant: _Variant, placed: _Placement,
+) -> tuple[_Built | None, GrammarFailure | None, list[str]]:
+    """The production build of a service page (§36).
+
+    Enabled by the placement alone — a page whose answer seated service cells
+    (`placed.service_plans` non-empty). Everything the page draws comes from the
+    one terminal: its scene's texts, its plans' flags and conductors, its
+    routed signals, its generic fallbacks and its label map. The terminal's own
+    checks and this file's audit run before the independent readability gate, so
+    a page that would draw a second flag, a missing run, a cross-net short or a
+    seat-to-seat wire is refused by name instead of shipped.
+    """
+    terminal = _seat_first_path_first_terminal(ctx, placed, replay=False)
+    if not terminal.ok:
+        return None, terminal.refusals[0], [item.detail for item in terminal.refusals]
+    plan, notes, problem = _path_first_plan(ctx, placed, terminal)
+    if problem is not None:
+        return None, problem, notes
+    refusals = _path_first_audit(ctx, placed, terminal, plan)
+    if refusals:
+        return None, refusals[0], [item.detail for item in refusals]
+    checked = readability.check(
+        plan,
+        ctx.circuit,
+        ctx.presentation,
+        ctx.book,
+        grammar_checker=partial(check_grammar, intent=ctx.intent),
+        page_box=ctx.budget.page_box,
+        keepouts=ctx.budget.keepouts,
+        grid=ctx.budget.grid,
+    )
+    if checked.hard_violations:
+        return (
+            None,
+            _gate_failure(ctx, variant, checked.hard_violations),
+            [item.render() for item in checked.hard_violations],
+        )
+    notes.append(
+        f"548D3B3: the service page is drawn from its path-first terminal "
+        f"({len(plan.power_symbols)} fixed flags, "
+        f"{len(terminal.signals.segments)} pre-flighted signal net(s), "
+        f"{len(terminal.fallbacks)} generic fallback net(s))"
+    )
+    return _Built(plan=plan, checked=checked), None, notes
+
+
+def _yield_panel_foreign_parts(ctx: _Context, placed: _Placement) -> GrammarFailure | None:
+    """Move an ordinary foreign part off the panel's room, once, on the final answer.
+
+    Only parts that already overlap a panel's reserved boxes or host leads are
+    considered; each is tried at the four grid offsets that clear the actual
+    obstacle edges. The host, the panel cells and any user-locked part are never
+    moved (a locked conflict is a named refusal). A move is accepted only if the
+    moved part stays on the page, clears every other part and the panel's room,
+    and leaves the document's relations unchanged (`_relation_failures`).
+    """
+    plans = getattr(placed, "panel_plans", ())
+    if not plans:
+        return None
+    owned = {plan.host_part for plan in plans} | {
+        cell.part_id for plan in plans for cell in plan.cells}
+    # A service cell is a seat of its own: the panel's yield may not move it,
+    # exactly as it may not move a panel cell (548D3S2).
+    owned |= _service_branch_parts(ctx)
+    obstacles: list[Box] = []
+    for plan in plans:
+        obstacles.extend(plan.reserved_boxes)
+        for cell in plan.cells:
+            for start, stop in zip(cell.host_path, cell.host_path[1:]):
+                obstacles.append((
+                    min(start[0], stop[0]) - 0.5, min(start[1], stop[1]) - 0.5,
+                    max(start[0], stop[0]) + 0.5, max(start[1], stop[1]) + 0.5,
+                ))
+    locked = {lock.part_id for lock in getattr(ctx.presentation, "user_locks", ())}
+    others = {part_id: _part_box(
+        ctx.profile(part_id), placed.poses[part_id], placed.origins[part_id])
+        for part_id in placed.origins}
+    grid = float(ctx.budget.grid)
+    for part_id in sorted(placed.origins):
+        if part_id in owned:
+            continue
+        box = others[part_id]
+        hits = [item for item in obstacles if _panel_boxes_overlap(box, item)]
+        if not hits:
+            continue
+        if part_id in locked:
+            return GrammarFailure(
+                category=FAILURE_LAYOUT_UNSAT,
+                subject=f"parts[{part_id}]",
+                detail=(
+                    f"panel: the locked part {part_id!r} at {box} stands on the "
+                    "panel's reserved room or host lead; a lock is not moved for "
+                    "the panel"),
+                action=("move the lock, or drop the panel group",),
+            )
+        offsets = sorted(
+            {
+                (item[2] - box[0] + grid, 0.0) for item in hits
+            } | {
+                (item[0] - box[2] - grid, 0.0) for item in hits
+            } | {
+                (0.0, item[3] - box[1] + grid) for item in hits
+            } | {
+                (0.0, item[1] - box[3] - grid) for item in hits
+            },
+            key=lambda offset: abs(offset[0]) + abs(offset[1]),
+        )
+        origin = placed.origins[part_id]
+        placed_ok = False
+        for dx, dy in offsets:
+            new_origin = (origin[0] + dx, origin[1] + dy)
+            new_box = _part_box(
+                ctx.profile(part_id), placed.poses[part_id], new_origin)
+            if any(_panel_boxes_overlap(new_box, item) for item in obstacles):
+                continue
+            if any(
+                other != part_id and _panel_boxes_overlap(new_box, other_box)
+                for other, other_box in others.items()
+            ):
+                continue
+            placed.origins[part_id] = new_origin
+            if _relation_failures(ctx, placed):
+                placed.origins[part_id] = origin
+                continue
+            others[part_id] = new_box
+            obstacles.append(new_box)
+            placed_ok = True
+            break
+        if not placed_ok:
+            return GrammarFailure(
+                category=FAILURE_LAYOUT_UNSAT,
+                subject=f"parts[{part_id}]",
+                detail=(
+                    f"panel: the foreign part {part_id!r} at {box} stands on the "
+                    "panel's reserved room or host lead and no four-way grid "
+                    "offset clears it without breaking another part or a declared "
+                    "relation"),
+                action=("move the part out of the panel's rows, or drop the panel",),
+            )
+    return None
 
 
 def _build_one_variant(
     ctx: _Context,
     variant: _Variant,
     label_fallbacks: list[LabelFallback],
+    *,
+    extra_text_walls: Sequence[Box] = (),
+    text_repair_round: int = 0,
+    label_text_reseat: int = 0,
+    label_replay: bool = False,
+    placement_override: _Placement | None = None,
 ) -> tuple[_Built | None, GrammarFailure | None, list[str]]:
     """One variant -> one plan, or the measured reason it could not be drawn.
 
@@ -11419,11 +19409,53 @@ def _build_one_variant(
     a wire could not reach, the box the text landed on. None of them is "tried
     and gave up silently" — the candidate is dropped with its reason, and
     :func:`compile` reports the first one when no candidate survives.
+
+    ``extra_text_walls`` is 548C4's repair lever, and it is empty on every call
+    the compiler makes from the ladder. A part's rows are seated **before** the
+    nets' label seats exist (the expressions are read at :func:`_expressions`,
+    the labels are placed in the net loop below), so a text row can be put into
+    the lane a label is about to take and the label's own four-direction ladder
+    can be full by then — the measured case is 548C's B1: a 93-unit designator
+    widened the stack into `LCD_SCK`'s lane on the MCU's right side, and the five
+    LCD labels had no free direction left. The gate refuses that page, and the
+    repair is the one this file already uses for a wire's name row (148): re-seat
+    the text with the **measured** label boxes added to its walls and grade the
+    page again. Only the boxes the gate itself named are added, so a page whose
+    text and labels do not collide never takes a second round at all — that is
+    the zero-move property, and it is a property of where the recursion sits.
     """
     fallbacks = label_fallbacks
-    placed, failure = _place(ctx, variant)
+    # 548D3B: a multi-arm candidate may be handed a **bound seat placement** the
+    # caller already produced (`_series_candidate_placements`). The override is a
+    # fresh `_Placement` built from `place_series_seats`' own state, never a
+    # rewrite of the context: `ctx.topology` is not consulted and not written, so
+    # a refused attempt cannot leak into the next one.
+    if placement_override is not None:
+        placed, failure = placement_override, None
+    else:
+        placed, failure = _place(ctx, variant)
     if placed is None:
         return None, failure, []
+    # 548B3: a declared arm is one chain of two parts. Seat it along the chain
+    # before anything is built from the placement, so the nodes, the router and
+    # the gate all see the same drawing — and so the independent checker, which
+    # re-binds and re-measures the same relation, grades the arm that is there.
+    # 548B3-R: an arm this variant cannot seat is a refusal of the **variant**,
+    # not a licence to draw the layout the declaration was meant to replace.
+    refusal = _seat_series_arms(ctx, placed)
+    if refusal is not None:
+        return None, refusal, []
+    # 548D3X3C §34-2f: an ordinary foreign part that stands on the panel's room is
+    # yielded once, on this final answer, before any drawing is built from it.
+    refusal = _yield_panel_foreign_parts(ctx, placed)
+    if refusal is not None:
+        return None, refusal, []
+    if getattr(placed, "service_plans", ()):
+        # 548D3B3 §36: a page whose placement seated service cells is drawn from
+        # the path-first terminal — its texts, its fixed flags, its member paths
+        # and the signals routed around them. Every other page keeps the
+        # historical build below, byte for byte.
+        return _build_path_first_variant(ctx, variant, placed)
 
     parts: list[LayoutPart] = []
     archipelago_islands = ctx.presentation.effective_islands()
@@ -11486,7 +19518,14 @@ def _build_one_variant(
         # the obstacle table catching up with the gate rather than a new rule.
         solids.extend(_pin_walls(profile, pose, origin))
 
-    texts = _part_texts(ctx, placed, occupied, text_walls)
+    texts, text_refusal = _part_texts(
+        ctx, placed, occupied,
+        [*text_walls, *extra_text_walls] if extra_text_walls else text_walls,
+    )
+    if text_refusal is not None:
+        # 548D3 §24B: a declared arm kind whose rows no side holds is a refusal of
+        # the variant, in the same class and with the same shape as the arm seats.
+        return None, text_refusal, []
     native_rows: list[Box] = []
     for text in texts:
         solids.append(text.bbox)
@@ -11571,7 +19610,12 @@ def _build_one_variant(
     # explicit path 543I-1's visible labels use; every other page keeps 535's
     # Euclidean ground split and 053 sec.7's per-pin power flags, untouched.
     if _flag_grouping(ctx):
-        _apply_flag_groups(ctx, router, expressions, order)
+        panel_nets = None
+        if getattr(placed, "panel_plans", ()):
+            panel_seats, _panel_failure = _panel_terminal_seats(ctx, placed)
+            if panel_seats:
+                panel_nets = {net for net, _member in panel_seats}
+        _apply_flag_groups(ctx, router, expressions, order, only=panel_nets)
         # 543I-2D: a branch's own host corridor is a keep-out for **flags** only,
         # decided once the groups are known (only a corridor a wire will actually
         # be drawn on is protected) and before any seat is taken.
@@ -11594,15 +19638,63 @@ def _build_one_variant(
     #: placement re-checks. `_seat_wire_flags`'s rail seats are not in here and keep
     #: their old replay path.
     ordinary_flag_seats: set[tuple[str, str]] = set()
+    #: 548D3D-L (§25F): the seat map exists **only** in the one build that repairs
+    #: a measured label conflict. Off by default: an ordinary build passes `None`,
+    #: so the reservation does not wall its trial boxes and the net loop places its
+    #: labels exactly as before.
+    label_seats: (
+        dict[tuple[str, tuple[float, float]], LayoutLabel] | None
+    ) = {} if label_replay else None
+    #: The map is keyword-only and handed over **only** when the replay build
+    #: carries one: an ordinary build then calls this pass with the same nine
+    #: arguments it always did, so a wrapper written before the map existed
+    #: still sees exactly those.
+    extra_seats = {} if label_seats is None else {"label_seats": label_seats}
+    # 548D3X3C (§34-2, order fix): a panel's host leads are runs of their own
+    # nets. They are validated and injected **before** the label/lead reservations
+    # run, so every label placed afterwards can see them as existing segments
+    # (`_label_at`'s `_box_across_foreign_run` avoids them) instead of being
+    # placed first and then blocking the channel it could not know about. The
+    # free-run and corner tests are the router's own; the channel is this net's
+    # geometry, so foreign edges are rebuilt per net from the segments injected
+    # so far. Nothing is exempt: a GND label box is an ordinary obstacle.
+    panel_channels, panel_failure = _panel_channels(ctx, placed, texts=texts)
+    if panel_failure is not None:
+        return None, panel_failure, []
+    for net_id in order:
+        if net_id not in panel_channels:
+            continue
+        router.reserved_exempt = net_id
+        _set_foreign_edges(router, segments, net_id)
+        blocked = _blocked_points(
+            ctx, placed, net_id, labels, symbols, segments,
+        )
+        router.blocked = blocked
+        router.boxes = [*solids, *router.flag_walls]
+        for item in panel_channels[net_id]:
+            for leg_start, leg_end in zip(item.points, item.points[1:]):
+                if not _span_free(router, leg_start, leg_end, blocked):
+                    return None, _panel_channel_refusal(
+                        "channel", item.net,
+                        f"its leg {leg_start} -> {leg_end} is blocked at "
+                        f"({leg_start[0]:g}, {leg_start[1]:g})",
+                    ), []
+                if _point_in_boxes(leg_start, router.boxes):
+                    return None, _panel_channel_refusal(
+                        "channel", item.net,
+                        f"its corner {leg_start} stands inside a body or a text row",
+                    ), []
+            segments.append(item)
     local_label_plan, local_label_reservation_failure = _lead_lane_reservations(
         ctx, placed, expressions, order, router, occupied, solids, bodies,
-        ordinary_flag_seats,
+        ordinary_flag_seats, **extra_seats,
     )
     if local_label_reservation_failure is not None:
         # 534 r15: a local-label pin with no legal carrier is a named refusal, not a
         # silent straight stub -- the drawing must not keep a 10-unit pair quietly.
         return None, local_label_reservation_failure, []
     router.boxes = [*solids, *router.flag_walls]
+    channels = _series_channels(ctx, placed)
     for net_id in order:
         expression = expressions[net_id]
         if (
@@ -11647,6 +19739,23 @@ def _build_one_variant(
         # its trunk through the flag's glyph (0 units), the gate refused the page,
         # and the page fell to the placement search, which has no `serviceLayout`.
         router.boxes = [*solids, *router.flag_walls]
+        # 548D3B: the arm's own channel goes down as **this net's** runs, checked
+        # with the same free-run and vertex tests the router's one-bend path uses.
+        # A leg the page cannot draw is a named refusal: a reservation nobody can
+        # wire is not a seat. (The panel's channels were injected before the label
+        # reservations — see that block — so they are already in `segments`.)
+        channel = channels.get(net_id, ())
+        if channel and _series_channel_enforced():
+            for item in channel:
+                for leg_start, leg_end in zip(item.points, item.points[1:]):
+                    if not _span_free(router, leg_start, leg_end, blocked):
+                        return None, _series_channel_refusal(net_id, leg_start), []
+                    # The corner is a drawn vertex, so it may not stand inside a
+                    # body or a text row either; `_span_free` excludes both ends
+                    # by construction and this is the missing half of that test.
+                    if _point_in_boxes(leg_start, router.boxes):
+                        return None, _series_channel_refusal(net_id, leg_start), []
+            segments.extend(channel)
         if (
             expression.style == "wire" and net_id in tap_nets
             and not (
@@ -11916,10 +20025,13 @@ def _build_one_variant(
         if expression.style == "label":
             for member, point in expression.points:
                 part_id, _, token = member.partition(".")
-                label = _label_for(
-                    ctx, net_id, part_id, token, point, placed, occupied,
-                    segments, _service_label_avoid(ctx, symbols, router),
-                )
+                label = label_seats.get((net_id, point)) if label_seats else None
+                if label is None:
+                    label = _label_for(
+                        ctx, net_id, part_id, token, point, placed, occupied,
+                        segments, _service_label_avoid(ctx, symbols, router),
+                    )
+                    occupied.append(label.bbox)
                 labels.append(label)
                 solids.append(label.bbox)
                 if net_id in local_label_nets(ctx.presentation):
@@ -11940,10 +20052,13 @@ def _build_one_variant(
                 )
                 for member, point in expression.points:
                     part_id, _, token = member.partition(".")
-                    label = _label_for(
-                        ctx, net_id, part_id, token, point, placed, occupied,
-                        segments, _service_label_avoid(ctx, symbols, router),
-                    )
+                    label = label_seats.get((net_id, point)) if label_seats else None
+                    if label is None:
+                        label = _label_for(
+                            ctx, net_id, part_id, token, point, placed, occupied,
+                            segments, _service_label_avoid(ctx, symbols, router),
+                        )
+                        occupied.append(label.bbox)
                     labels.append(label)
                     solids.append(label.bbox)
                 continue
@@ -12169,6 +20284,30 @@ def _build_one_variant(
         ctx, placed, segments, labels, symbols, occupied, solids, router,
     )
     if failure is not None:
+        # 548D3D-L (§25B): a **straight-stub** label that has no seat left is
+        # often blocked not by a conductor but by a part's own row — the measured
+        # page put `ESP_EN`'s box (-103,-49.5,-56,-40.5) straight onto `R1`'s
+        # band, and the last pass refuses before 548C4's text repair can look.
+        # The conflict is a concrete pair of boxes, so hand **those** rows to the
+        # existing `extra_text_walls` lever and build this same placement once
+        # more: no label wall is added wholesale, no ladder is re-tried, and a
+        # page that does not collide (or does not state `straight`) never takes
+        # this branch at all.
+        if (
+            _label_stub_policy(ctx) == LABEL_STUB_STRAIGHT
+            and label_text_reseat < LABEL_TEXT_RESEAT_ROUNDS
+            and failure.subject.startswith("labels[")
+        ):
+            repair = _label_row_conflicts(labels, texts)
+            if repair:
+                return _build_one_variant(
+                    ctx, variant, label_fallbacks,
+                    extra_text_walls=(*extra_text_walls, *repair),
+                    text_repair_round=text_repair_round,
+                    label_text_reseat=label_text_reseat + 1,
+                    label_replay=True,
+                    placement_override=placement_override,
+                )
         return None, failure, []
 
     # 053T: under `textPlacement: native-attr` a **continuous conductor run** is
@@ -12241,6 +20380,37 @@ def _build_one_variant(
     overflow = _overflow(ctx, plan)
     if overflow is not None:
         return None, overflow, []
+    # 548D3B: the two channel readings a declared arm has to keep, applied on
+    # **every multi-arm build** (a page with one arm or none keeps the historical
+    # gate, byte for byte):
+    #
+    # * the **host** lead is read as quality + envelope (`_series_host_channel_
+    #   problems`): connected, no longer than the plan's lead plus a lattice
+    #   step per leg, inside the arm's own reservation. The literal waypoint
+    #   equality `_series_path_mismatches` asks for is **not** the gate — the
+    #   measured page draws a one-step stub off the plan's corner and nothing
+    #   else, and refusing that deleted every candidate (24 builds, six variants,
+    #   all at `does not pass through (85, 35)`).
+    # * the **middle** node is the pair's link: at most two pieces, at most
+    #   `2 * pitch` of travel.
+    if len(ctx.presentation.series_branches) >= 2:
+        host = _series_host_channel_problems(ctx, placed, segments)
+        if host:
+            return None, _series_seat_refusal(
+                "$.seriesBranches",
+                "the drawn host lead is not the arm's channel: " + "; ".join(host),
+                "seat the arm where its own lead reaches it in one run, or drop "
+                "the seriesBranches entry",
+            ), []
+        middle = _series_middle_channel_problems(ctx, placed, segments)
+        if middle:
+            return None, _series_seat_refusal(
+                "$.seriesBranches",
+                "the arm's middle node is not the pair's link: "
+                + "; ".join(middle),
+                "seat the arm so its two parts are one pitch apart on the "
+                "declared chain, or drop the seriesBranches entry",
+            ), []
 
     def grade(layout: LayoutPlan) -> readability.CheckResult:
         return readability.check(
@@ -12312,6 +20482,20 @@ def _build_one_variant(
             "the midpoint of the wire's longest run, so the run is the only lever)"
         )
     if checked.hard_violations:
+        # 548C4: a part's rows are seated before the label seats exist, so the
+        # ladder can put a row in the lane a label is about to take and the label
+        # then has nowhere else to go. The gate's own line names both boxes, so
+        # the repair is measured, not guessed: add the label boxes it named to the
+        # text walls and build the variant once more (bounded, like 148's name-row
+        # ladder, and unreachable on a page that does not collide).
+        if text_repair_round < TEXT_LABEL_REPAIR_ROUNDS:
+            repair = _text_label_repair_boxes(plan, checked.hard_violations)
+            if repair:
+                return _build_one_variant(
+                    ctx, variant, label_fallbacks,
+                    extra_text_walls=(*extra_text_walls, *repair),
+                    text_repair_round=text_repair_round + 1,
+                )
         # The island policy's pin-text-press clause applies on this path too:
         # a part's own pin row against that same part's own rows is the symbol's
         # artwork, and *no* lever this path searches — not the pose ladder, not
@@ -13692,6 +21876,31 @@ def _wire_flag_seats(
     return out
 
 
+def _arm_terminal_members(ctx: _Context) -> frozenset[str]:
+    """The feet a declared series arm **ends** on (548B3).
+
+    Read from the documents only: for each declared arm, the member its
+    ``to`` net holds for the arm's second part. A rail that one of these feet
+    belongs to is a rail the reader meets at the end of an arm.
+
+    A context whose presentation is a stand-in (the flag ladder's own unit tests
+    build one from a namespace, and every document that states no arm) has no
+    ``series_branches`` at all: that is "nothing is declared", the same answer
+    the attribute would give, so it reads as the empty sequence. A real
+    `PresentationSpec` always carries the list — this is not a guard that hides
+    a broken document, only the "the attribute is not part of this object" case.
+    """
+    out: set[str] = set()
+    for branch in getattr(ctx.presentation, "series_branches", ()):
+        net = ctx.circuit.net(branch.to_net)
+        if net is None:
+            continue
+        for member in net.members:
+            if member.partition(".")[0] == branch.parts[1]:
+                out.add(member)
+    return frozenset(out)
+
+
 def _flag_seat_pins(
     ctx: _Context, expression: _Expression, cls: str
 ) -> list[tuple[str, tuple[float, float]]]:
@@ -13736,6 +21945,23 @@ def _flag_seat_pins(
     pin = _power_flag_pin(ctx, expression)
     if pin is None:
         return []
+    # 548B3: a rail a declared arm **ends** on is met by the reader at the arm's
+    # far foot, so that foot is the pad the flag hangs off — before the pin the
+    # rail supplies. It is still a pad of this net, so nothing is invented: the
+    # symbol says the name of the rail the arm terminates in, which is exactly
+    # what the declaration says the arm's last foot is.
+    arm_feet = _arm_terminal_members(ctx)
+    if arm_feet:
+        preferred = [
+            item for item in sorted(expression.points)
+            if item[0] in arm_feet and item[0] != pin[0]
+        ]
+        if preferred:
+            rest = [
+                item for item in sorted(expression.points)
+                if item != preferred[0] and item[0] != pin[0]
+            ]
+            return [preferred[0], pin, *rest]
     others = sorted(
         (item for item in sorted(expression.points) if item[0] != pin[0]),
         key=lambda item: (
@@ -14019,6 +22245,244 @@ def _seat_wire_flags(
     return walls
 
 
+# ------------------------------------------------- 548D3G: joint flag corridors
+
+
+def _corridor_boxes_overlap(first: Box, second: Box) -> bool:
+    return (
+        min(first[2], second[2]) - max(first[0], second[0]) > 0.0
+        and min(first[3], second[3]) - max(first[1], second[1]) > 0.0
+    )
+
+
+def _corridor_segment_hits_box(
+    segment: tuple[tuple[float, float], tuple[float, float]], box: Box
+) -> bool:
+    (ax, ay), (bx, by) = segment
+    low_x, high_x = sorted((ax, bx))
+    low_y, high_y = sorted((ay, by))
+    return (
+        low_x < box[2] and high_x > box[0]
+        and low_y < box[3] and high_y > box[1]
+    )
+
+
+def _corridor_segments_cross(
+    first: tuple[tuple[float, float], tuple[float, float]],
+    second: tuple[tuple[float, float], tuple[float, float]],
+) -> bool:
+    fx0, fx1 = sorted((first[0][0], first[1][0]))
+    fy0, fy1 = sorted((first[0][1], first[1][1]))
+    sx0, sx1 = sorted((second[0][0], second[1][0]))
+    sy0, sy1 = sorted((second[0][1], second[1][1]))
+    return (
+        max(fx0, sx0) <= min(fx1, sx1) + 1e-9
+        and max(fy0, sy0) <= min(fy1, sy1) + 1e-9
+    )
+
+
+def _corridor_pair_clash(first, second) -> bool:
+    """Do two settled flag seats press on each other? (548D3G)"""
+    _fa, fl, _fh, _fr, fbox = first
+    _sa, sl, _sh, _sr, sbox = second
+    if _corridor_boxes_overlap(fbox, sbox):
+        return True
+    for start, end in zip(fl, fl[1:]):
+        if _corridor_segment_hits_box((start, end), sbox):
+            return True
+    for start, end in zip(sl, sl[1:]):
+        if _corridor_segment_hits_box((start, end), fbox):
+            return True
+    for left in zip(fl, fl[1:]):
+        for right in zip(sl, sl[1:]):
+            if _corridor_segments_cross(left, right):
+                return True
+    return False
+
+
+def _flag_alternates(
+    ctx: _Context,
+    placed: _Placement,
+    net_id: str,
+    profile: SymbolProfile,
+    member: str,
+    point: tuple[float, float],
+    router: _Router,
+    blocked: set[tuple[float, float]],
+    solids: Sequence[Box],
+    bodies: Sequence[Box] | None,
+) -> list[tuple]:
+    """Every real grade :func:`_flag_pin_lead` would take for this pad, in order.
+
+    The ladder's own alternates, not a new shape family: each call is the same
+    function with the grades already answered added to ``blocked``, so the next
+    answer is the next rung the ladder itself would have drawn. The loop stops
+    when the ladder has no further rung — the rung space is finite — and each
+    answer is a real ``_flag_box`` measured with the compiler's own model.
+    """
+    family = flag_glyph_kind(profile)
+    extra: set[tuple[float, float]] = set()
+    out: list[tuple] = []
+    seen: set[tuple] = set()
+    while True:
+        anchor, lead, hang, _crossings = _flag_pin_lead(
+            ctx, placed, net_id, profile, member, point, router,
+            blocked | extra, solids, bodies,
+        )
+        if lead is None:
+            break
+        rotation = _flag_rotation((0.0, hang), family)
+        box = _flag_box(profile, rotation, anchor, net_id)
+        key = (anchor, tuple(lead), hang)
+        if key not in seen:
+            seen.add(key)
+            out.append((anchor, lead, hang, rotation, box))
+        extra.add(_key(anchor))
+        for start, end in zip(lead, lead[1:]):
+            extra |= _lattice_nodes(router, start, end)
+        extra |= _nodes_in_box(router, box)
+        if len(out) > 64:
+            break
+    return out
+
+
+def _corridor_pair_choice(
+    ctx: _Context,
+    placed: _Placement,
+    router: _Router,
+    solids: Sequence[Box],
+    bodies: Sequence[Box] | None,
+    first: tuple[str, str, tuple[float, float], SymbolProfile],
+    second: tuple[str, str, tuple[float, float], SymbolProfile],
+):
+    """The first joint grade pair that does not press, or ``None``.
+
+    The first grades are asked exactly as the ordinary loop asks them; when they
+    already keep apart the answer is ``None`` — the page is not this batch's
+    business and must keep its bytes. Only a pressing pair walks the alternates.
+    """
+    def blocked_of(row):
+        return _blocked_points(ctx, placed, row[0], [], [], [])
+
+    def settled(row, answer):
+        net_id, _member, _point, profile = row
+        anchor, lead, hang, _crossings = answer
+        if lead is None:
+            return None
+        rotation = _flag_rotation((0.0, hang), flag_glyph_kind(profile))
+        return (anchor, lead, hang, rotation,
+                _flag_box(profile, rotation, anchor, net_id))
+
+    left = settled(first, _flag_pin_lead(
+        ctx, placed, first[0], first[3], first[1], first[2], router,
+        blocked_of(first), solids, bodies,
+    ))
+    right = settled(second, _flag_pin_lead(
+        ctx, placed, second[0], second[3], second[1], second[2], router,
+        blocked_of(second), solids, bodies,
+    ))
+    if left is not None and right is not None and not _corridor_pair_clash(left, right):
+        return None
+    lefts = _flag_alternates(
+        ctx, placed, first[0], first[3], first[1], first[2], router,
+        blocked_of(first), solids, bodies,
+    )
+    rights = _flag_alternates(
+        ctx, placed, second[0], second[3], second[1], second[2], router,
+        blocked_of(second), solids, bodies,
+    )
+    for candidate_left in lefts:
+        for candidate_right in rights:
+            if not _corridor_pair_clash(candidate_left, candidate_right):
+                return (
+                    (candidate_left[0], candidate_left[1], candidate_left[2]),
+                    (candidate_right[0], candidate_right[1], candidate_right[2]),
+                )
+    return None
+
+
+def _joint_flag_corridor_seats(
+    ctx: _Context,
+    placed: _Placement,
+    net_order: Sequence[str],
+    expressions: Mapping[str, _Expression],
+    router: _Router,
+    solids: Sequence[Box],
+    bodies: Sequence[Box] | None,
+) -> dict[tuple[str, str], tuple[tuple[float, float],
+                                     tuple[tuple[float, float], ...], float]]:
+    """The pins whose flags must be seated **jointly**, and the grade picked.
+
+    Only the structure §22C names forms a corridor: two pads of the **same part**
+    at the symbol's own nearest pin pitch, carrying **different** flag-style nets,
+    whose first grades press on each other (box overlap or a lead running into
+    the other's box). A page without that structure returns ``{}`` and every
+    later byte is the historical one — the CH34 page included.
+
+    The choice is deterministic and finite: each pad's alternates are the ladder's
+    own rungs (:func:`_flag_alternates`), the combination is the first one whose
+    real boxes and leads do not touch, in the order the nets and pads are walked.
+    No weight, no annealing, no new shape.
+    """
+    pads: dict[str, list[tuple[str, str, tuple[float, float], SymbolProfile]]] = {}
+    for net_id in net_order:
+        expression = expressions.get(net_id)
+        if expression is None:
+            continue
+        cls = _net_class(ctx, net_id) or "gnd"
+        if cls not in ("power", "gnd"):
+            continue
+        profile, _ref = _flag_plan(ctx, net_id, cls)
+        if profile is None:
+            continue
+        if expression.style == "flag":
+            rows = list(expression.points)
+        elif cls == "gnd":
+            # 22D: a ground net is drawn wire-style, but the pads it actually
+            # carries a flag on are `_flag_seat_pins`' own outlets. Those pads
+            # enter this joint choice; nothing else about the ground pass (its
+            # cluster, alias, return or name) is touched.
+            rows = list(_flag_seat_pins(ctx, expression, cls))
+        else:
+            continue
+        for member, point in rows:
+            pads.setdefault(member.partition(".")[0], []).append(
+                (net_id, member, point, profile)
+            )
+    planned: dict[tuple[str, str], tuple[tuple[float, float],
+                                          tuple[tuple[float, float], ...], float]] = {}
+    for part_id in sorted(pads):
+        rows = pads[part_id]
+        nets = {row[0] for row in rows}
+        if len(rows) < 2 or len(nets) < 2:
+            continue
+        pitches: list[float] = []
+        for index, first in enumerate(rows):
+            for second in rows[index + 1:]:
+                if first[0] == second[0]:
+                    continue
+                pitches.append(math.hypot(
+                    first[2][0] - second[2][0], first[2][1] - second[2][1]))
+        if not pitches:
+            continue
+        pitch = min(pitches)
+        for index, first in enumerate(rows):
+            for second in rows[index + 1:]:
+                if first[0] == second[0]:
+                    continue
+                distance = math.hypot(
+                    first[2][0] - second[2][0], first[2][1] - second[2][1])
+                if abs(distance - pitch) > 1e-6:
+                    continue
+                picked = _corridor_pair_choice(
+                    ctx, placed, router, solids, bodies, first, second,
+                )
+                if picked is not None:
+                    planned[(first[0], first[1])] = picked[0]
+                    planned[(second[0], second[1])] = picked[1]
+    return planned
+
+
 def _lead_lane_reservations(
     ctx: _Context,
     placed: _Placement,
@@ -14029,6 +22493,8 @@ def _lead_lane_reservations(
     solids: list[Box],
     bodies: Sequence[Box] | None,
     ordinary_seats: set[tuple[str, str]] | None = None,
+    *,
+    label_seats: dict[tuple[str, tuple[float, float]], "LayoutLabel"] | None = None,
 ) -> list[Box]:
     """145a T3: promise every **lead the plan will draw** its lane, before any wire.
 
@@ -14125,6 +22591,22 @@ def _lead_lane_reservations(
                           list[tuple[float, float]], Box]] = {}
     rows_by_net: dict[str, list[Box]] = {}
     partner_nets = _local_label_partner_nets(ctx.presentation, list(net_order))
+    #: 548D3G: the pads whose flags press on each other as first grades are
+    #: seated **jointly** here, before any lane is taken — the ladder's own
+    #: alternates, chosen once, in pad order. A page with no such pair gets
+    #: ``{}`` and every byte below is the historical one (CH34 included).
+    planned_seats = _joint_flag_corridor_seats(
+        ctx, placed, net_order, expressions, router, solids, bodies,
+    )
+    # 548D3X3C (§34-3): a panel cell's terminal flag is a seat the plan states, so
+    # it takes precedence over any automatic joint grade on the same pad. The
+    # seats are the ones `_panel_templates` reserved, with the flag hanging down.
+    panel_seats, panel_seat_failure = _panel_terminal_seats(ctx, placed)
+    if panel_seat_failure is not None:
+        # The contract is `(plan, failure)`; this was a three-value return.
+        return None, panel_seat_failure
+    if panel_seats:
+        planned_seats = {**planned_seats, **panel_seats}
     for ordered in passes:
       for net_id in ordered:
         expression = expressions[net_id]
@@ -14144,6 +22626,7 @@ def _lead_lane_reservations(
                 ctx, placed, net_id, expression, router, occupied, tips, taken,
                 service_walls,
                 committed=committed, pairs=pairs, rows_by_net=rows_by_net,
+                seats=label_seats,
             )
             if sub_failure is not None:
                 return plan, sub_failure
@@ -14165,10 +22648,14 @@ def _lead_lane_reservations(
         # of this net may not be blocked by its own earlier lane.
         router.reserved_exempt = net_id
         for member, point in expression.points:
-            anchor, lead, hang, _crossings = _flag_pin_lead(
-                ctx, placed, net_id, profile, member, point, router, blocked,
-                solids, bodies,
-            )
+            joint = planned_seats.get((net_id, member))
+            if joint is not None:
+                anchor, lead, hang = joint
+            else:
+                anchor, lead, hang, _crossings = _flag_pin_lead(
+                    ctx, placed, net_id, profile, member, point, router, blocked,
+                    solids, bodies,
+                )
             if lead is None:
                 continue
             cells: set[tuple[float, float]] = set()
@@ -14200,6 +22687,51 @@ def _lead_lane_reservations(
                     # placement re-checks exactly these and leaves every seat
                     # `_seat_wire_flags` filled (wire-style rails) on its old path.
                     ordinary_seats.add((net_id, member))
+    #: 22D: a wire-style **ground** pad that was chosen by the joint pass is
+    #: promised its lane here and stored as its seat, exactly the way the flag
+    #: loop stores its own — the wire pass then replays it (`_rail_flag_seat`),
+    #: so there is one decision and one reservation, not two positions.
+    for (flag_net, member), (flag_anchor, flag_lead, flag_hang) in planned_seats.items():
+        expression = expressions.get(flag_net)
+        if expression is None or expression.style == "flag":
+            continue
+        cls = _net_class(ctx, flag_net) or "gnd"
+        flag_profile, _ref = _flag_plan(ctx, flag_net, cls)
+        if flag_profile is None:
+            continue
+        point = next(
+            (spot for spot_member, spot in expression.points if spot_member == member),
+            None,
+        )
+        if point is None:
+            point = next(
+                (spot for spot_member, spot in _flag_seat_pins(ctx, expression, cls)
+                 if spot_member == member),
+                None,
+            )
+        if point is None:
+            continue
+        cells: set[tuple[float, float]] = set()
+        for start, end in zip(flag_lead, flag_lead[1:]):
+            cells |= _lattice_nodes(router, start, end)
+        cells.add(_key(flag_anchor))
+        cells |= _nodes_in_box(
+            router,
+            _flag_box(
+                flag_profile,
+                _flag_rotation((0.0, flag_hang), flag_glyph_kind(flag_profile)),
+                flag_anchor, flag_net,
+            ),
+        )
+        own = {_key(spot) for _member, spot in expression.points}
+        router.reserved_exempt = flag_net
+        if _take_lane(taken, cells, tips, own, flag_net):
+            _remember_lead(router, flag_net, flag_glyph_kind(flag_profile), flag_lead)
+            router.flag_seats[(flag_net, member)] = (
+                flag_anchor,
+                _flag_rotation((0.0, flag_hang), flag_glyph_kind(flag_profile)),
+                flag_lead,
+            )
     router.flag_walls = _seat_wire_flags(
         ctx, placed, expressions, net_order, router, solids, bodies, tips, taken,
     )
@@ -14225,6 +22757,29 @@ def _lead_lane_reservations(
     router.flag_walls.extend(service_walls)
     router.reserved_exempt = ""
     router.reserve_strict = False
+    # 548D3X3C (§34-3): a panel terminal seat the plan stated must be the seat the
+    # pass stored. A pad whose lane was refused keeps the ordinary ladder — which
+    # is exactly what a panel may not do — so the drop is named here rather than
+    # papered over by a flag that hangs the other way.
+    for (net_id, member), (anchor, lead, hang) in panel_seats.items():
+        stored = router.flag_seats.get((net_id, member))
+        if stored is None:
+            return None, _panel_channel_refusal(
+                "terminal", member.split(".")[0],
+                f"its terminal flag on {net_id!r} has no promised lane, so the "
+                "drawing would fall back to the ordinary ladder",
+            )
+        want_rotation = _flag_rotation((0.0, hang), _flag_family(ctx, net_id))
+        if (
+            _key(stored[0]) != _key(anchor)
+            or abs(stored[1] - want_rotation) > 1e-9
+            or [ _key(point) for point in stored[2] ] != [ _key(point) for point in lead ]
+        ):
+            # The panel's terminal seat is the plan's own statement; a grouping
+            # pass may have seated the same (net, member) elsewhere first. The
+            # explicit seat wins — it is not re-seated into the ordinary ladder.
+            router.flag_seats[(net_id, member)] = (
+                anchor, want_rotation, tuple(lead))
     return plan, None
 
 
@@ -14562,6 +23117,7 @@ def _reserve_label_stubs(
                           list[tuple[float, float]], Box]] | None = None,
     pairs: dict[tuple[float, float], tuple[str, str, tuple[float, float]]] | None = None,
     rows_by_net: dict[str, list[Box]] | None = None,
+    seats: dict[tuple[str, tuple[float, float]], "LayoutLabel"] | None = None,
 ) -> tuple[dict[tuple[str, tuple[float, float]],
                tuple[tuple[float, float], tuple[float, float],
                      list[tuple[float, float]]]], GrammarFailure | None]:
@@ -14631,6 +23187,17 @@ def _reserve_label_stubs(
             ctx, net_id, part_id, token, point, placed, list(occupied)
         )
         _reserve_service_label_box(ctx, router, label.bbox, service_walls)
+        # 548D3D-L (§25F): only a build that was asked to repair a measured label
+        # conflict (`seats is not None`) keeps this seat and walls it early. Then
+        # the per-net pass replays the very object, so the box the page prints is
+        # the box the router already knew about. Every other build — the initial
+        # one, `auto`, WiFi, CH34 — gets `None` here and keeps its old path.
+        if seats is not None and _label_stub_policy(ctx) == LABEL_STUB_STRAIGHT:
+            seats.setdefault((net_id, point), label)
+            for table in ((router.boxes, service_walls) if service_walls is not None
+                          else (router.boxes,)):
+                if label.bbox not in table:
+                    table.append(label.bbox)
         direction = _label_stub_lane(label, point)
         if direction[0] == 0.0:
             # 534 r17: the carrier pass has always drawn the run **horizontally**
@@ -16159,6 +24726,12 @@ def check_grammar(
     book = _checker_book(profiles)
     out: list[GrammarFinding] = []
     binding = bind_grammar(circuit_spec, presentation_spec, book, intent=intent)
+    # 548B3: the checker re-binds and injects the same arm relation the compiler
+    # did, so a folded arm is reported by the layer that owns the promise.
+    binding = _with_series_arms(binding, presentation_spec)
+    # 548D3X3C: the checker re-binds and applies the same panel replacement, so a
+    # cell that is not below its host is reported by the layer that owns it.
+    binding = _with_panel_groups(binding, presentation_spec, circuit_spec)
     if not binding.ok:
         return [GrammarFinding(
             kind=KIND_BINDING_UNPLACED,
@@ -16427,6 +25000,7 @@ def _points_for_relation(
         nets_of=lambda part_id: _part_nets(circuit_spec, part_id),
         origin_of=origin_of,
         pin_of=pin_of,
+        class_of=lambda net_id: _circuit_net_class(circuit_spec, net_id),
     )
 
 

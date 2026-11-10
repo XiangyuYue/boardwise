@@ -3,7 +3,7 @@
 > **这份文件是路由，不是规格。** 它只回答三件事：这是什么项目、三条线现在各在哪、
 > 干活要去读哪份权威文件。细节一律不在这里复制；两处说法冲突时以它指的文件为准。
 > 写它的场合：从 Kimi Code 迁到 DeepSeek Harness（dsh）这类**换 harness**、开新会话、
-> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-06**。
+> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-08**。
 
 ## 1. 一句话
 
@@ -34,13 +34,31 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 [`docs/pits.md`](pits.md)｜V3/V4 边界 [`docs/v3-v4-boundary.md`](v3-v4-boundary.md)｜
 测试与保密闸地图 [`docs/testing-doctrine.md`](testing-doctrine.md)。
 
-## 3. 三条线的当前状态（核对日期 2026-11-06）
+## 3. 三条线的当前状态（核对日期 2026-11-08）
 
 ### 3.0 0.6.x与派单路由（先看这里）
 
 - **当前是 0.6.1 内测发布候选**：审查线 `cdff88b` 与绘制线 `44901da` 已提交；发布只带
   已提交内容，不带候选货架、临时测试计划、锁文件和探针产物。版本骨架见 `docs/roadmap.md`，
   发布结果与能力边界以本版 Release 为准。
+- **549 首次配对显式授权：本地实现与离线验收完成，待真机/发布**（工作树，未提交/未发布）：`boardwise bridge pair <CODE>`
+  用 CLI token 调 daemon-owned `pair.authorize`，daemon 内存单槽 5 分钟 grant（8 位公开编号、
+  授权时记指纹、一次性消费、重启失效）；未认证的任何 Origin 都不能首配或换配，有效旧配对任意
+  Origin 可重连；**错码不作废 grant**（红队 2026-11-10 推翻“10 次作废”，次数只进审计）；
+  记录写盘同目录临时文件 + `os.replace`，写完才消费；Connector 编号 Web Crypto only、
+  `pairCodeUsed===true` 才轮换。`pair.authorize` 是政策测试里的第四个 `design_write=False` 例外
+  （`risk=write` 不变）。读数：主代理 Python 聚焦 **455 passed / 3 skipped**、Connector
+  **608 passed** + typecheck、DSH **137 passed / 1 skipped** + typecheck/build、Rust
+  **111 passed / 4 ignored**、CLI 合同一致。**全量一轮 10611 passed / 25 skipped / 1 xfailed /
+  23 failed / 5 errors（27:15）——不是全绿**：两条 `test_537a_daemon_write_policy` 是 549 新动作
+  未登记例外（已补，聚焦 126 passed 关闭），4 处 549 测试审计写根目录已改 `tmp_path`，其余为
+  既有货架数据、绘制线在途与已知 MSYS 环境错误；未跑第二轮全量。红队两轮 7 条 + 3 条非阻断项
+  已修，无已知阻断项。4.1.71 只有模拟 Origin 证据，朋友的真实候选跑通不是本实现的验收；
+  部署时新版 daemon 与 Connector 必须同步（旧内嵌 Connector 的热更不算安全包）。**未做**：提交、
+  推送、版本 bump、发布、真实 EDA/Connector 端到端、生产升级回滚。
+- **daemon / connector 版本纪律（岳 2026-11-06 定）**：只要求 major.minor 系列同步，补丁号独立；
+  同系列混跑为 `compatible`，不是全功能相等，新动作仍按能力探测，缺失时明确 `UNKNOWN_ACTION`。
+  0.6.1 daemon 可与 0.6.0 connector 做常规审查；`attributeMoves` 仍需要支持它的 connector。
 - **0.6.0 功能门槛已收口**：200A/B/C 已随 `d2130b7` 入库；542 P0 反激三关、岳人眼和重开
   `saved_verified` 全过；527D2/D3 已落。CH343 示例随 `a8613c5` 入库。
 - **540 已完成**：A/B/C + 对抗修复 + 只读真机验收；142 模块/0 legacy、24 CLI 命令、DSH 10 工具。
@@ -122,6 +140,71 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   `tasks/89b_fb_same_net_distance.md`。
 - **下一段**：0.6.x 绘制算法与 Rust strangler 并行，V4 后续样本/多板 + 库组合和 041 跨板网络分批；
   R4 stub 仍冻结。版本骨架见 `docs/roadmap.md` §1–§2。
+- **绘制下一批路由**：`tasks/548_drawing_capability_ladder.md`。A、C4-B1 与 **548C6/C6R 的 B2
+  同岛二维支路座位**已落并通过离线三关：普通/加宽轮无候选后才启用单模块救援轮，真实文字与器件
+  度量闭式分配 line 轴座位；绕针后再以同一 `_foreign_pins_on_run` 尺复核 leg+tail，残留外来针
+  整组回退。B2 自动产出 1 候选 `814ed66f…`、hard=0、26 网各一节点、0 短路、全文完整；C5
+  摘标 3 passed、C6 **13 passed**。主代理聚焦 **121 passed / 2 skipped / 1 xfailed**（四负控
+  74/2）、CH34 pinned不变；关闭救援/绕针/最终复核三项变异均先红并 cp 字节恢复，最终生产渲染
+  已逐区目检。最终完整 pytest **10038 passed / 25 skipped / 1 xfailed / 16 failed / 1 warning、
+  0 errors**，与548R及修复前第一轮均无新增失败/错误；connector **576 passed + typecheck**、
+  DSH **137 passed / 1 skipped + typecheck/build**、Rust **111 passed / 4 ignored + fmt/clippy**。
+  仓库卫生与文档声明钉通过，不称全绿。
+  下一批仍从 `tasks/draw-line.md` 进入。**548C7/C7A/C7B 库内旗标三次未通过、生产零改动**，
+  剩余聚簇与预留/布线契约另派小批，C3 strict xfail未摘。**548B1/B2 已完成各自离线范围；548B3 正例 + 不可落座负例通过，「禁止静默回退」已落地（checker 六点检查未做，不宣称）；A-R/B3-R 第二轮全量 **16 failed / 10130 passed / 25 skipped / 1 xfailed、0 errors**（`evidence/548D/full-pytest-rs.log`，added=[]、removed=[]，不称全绿）**：B1 数据合同（41 passed、聚焦369/2、旧摘要与CH34 pinned
+  不变、两项变异恢复）、B2 V1–V8 跨文档校验（前红24/2转26 passed、聚焦423/2、本批不做几何）、
+  B3 串联几何与独立 checker 合同（`_with_series_arms` 让 `compile` 与 `check_grammar` 共见
+  同一组两件关系；宿主→parts[0]→middleNet→parts[1]→终端，pitch 取原布局中心距，非GND终端
+  旗优先挂臂尾真实脚；未声明/[]不变；前红10/4转14 passed，聚焦232 passed/2 skipped，三项
+  变异均完成（第三项先暴露⑤b覆盖洞、测试加强后复红；恢复点`2cc92fc0…`，其后520b2兼容修复
+  得到最终hash`d9ba64ab…`），渲染经主代理目检）。完整四线：B1 pytest **10086 passed / 25 skipped / 1 xfailed /
+  16 failed / 1 warning、0 errors**，B2 **10112 passed / 25 skipped / 1 xfailed / 16 failed /
+  1 warning、0 errors**，16 条均为既有（12条货架/分类漂移、2条115/116、2条Windows环境）；
+  connector 576+typecheck、DSH 137/1+typecheck/build、Rust 111/4+fmt/clippy；B3 第一轮全量
+  **18 failed / 10124 passed / 25 skipped / 1 xfailed**（= 既有16条 + 520b2 两条新红：
+  SimpleNamespace 无 `series_branches` → AttributeError；`getattr` 最小兼容修后 520b2+B3
+  21 passed，测试未改）；第二轮最终全量 **16 failed / 10126 passed / 25 skipped / 1 xfailed、
+  0 errors**（`full-pytest-final.log`，与 548B2 基线比较 added=[]、removed=[]，16 条均既有，
+  不称全绿）。下一步：548C7 聚簇/预留/
+  布线缺口另批，**548D 暂停于跨轮串联预留（D2/D2R 两版均未通过、生产净零改动、未进入整页实施）**、
+  548E 真机未做，不能把离线通过记成 548D/548E 完成；
+  547G 保持暂停，其只读复核依原任务书单独收口，不借548成果关闭547D/E、自动整页或真机。
+
+  **548D3 当前交接（2026-11-09）**：base MCU 的原 7 条 xfail 已真实通过后摘除；连续旗引线、
+  相邻 power/GND 联合选档、页/岛 `PWR-+3V3` 回退及局部文字修复已保留，WiFi 单岛候选通过
+  机器、逐脚和主代理放大目检，CH34 `allMatch=true`。但强制 topology 仍 0 候选，完整页面
+  需要 **1694.75×1009**、放不进 1170×825，MCU/整页视觉未签，**548D 仍未闭环**。
+  corridor binder/service_gaps 只有内部测试、未接生产消费者，不写成可用能力。局部让位轴、
+  全局标签回放与删 ghost-lane 等实验均已还原，未调预算/排名或放大图幅。第二轮全量
+  **10261 passed / 25 skipped / 1 xfailed / 16 failed**，新增7条兼容回归全部消除，余16条与既有
+  名单一致，不称全绿；connector 576+typecheck、DSH 137/1+typecheck/build、Rust 111/4+fmt/clippy。
+  最新生产哈希、全量复验状态和失败矩阵见 **`evidence/548D/HANDOFF.md`**；548E/547G 继续暂停，未做 git 写。
+
+  **548D3X 通用小批（2026-11-10）**：岳选页级二维路线。参考辅助页普通岛框最小净距为 40；实测
+  当前 MCU/WiFi 页端口后 frame 横放需 1373.5 宽、竖放需 844 高，故只换 packing 仍不能放进
+  1170×825。新增默认关闭的 `pageArrangement=compact`、有限二维 packer 与页面 consumer，支持
+  attach、端口方向定点回放、mainPath 实际布线及原网格回退；未写新键时旧 variant/digest 不变。
+  主代理聚焦 **215 passed / 1 skipped**，有效变异均先红并 cp/hash 恢复；两个旧用例的覆盖洞已补。
+  主代理随后固定页实测 compact 及 compact+attach bottom，各 **6 变体、0 候选**，只改附着方向
+  仍不足，证据 `evidence/548D/page-layout/full-compact-baseline.md`。
+  `panelGroups` 的数据、电气与页面切片校验已落：两脚两网、每支路唯一宿主脚、全组同一宿主件，
+  主代理 **272 passed / 1 skipped**、两项变异恢复。topology 已真实产生2×2 panel plan，宿主逐候选
+  重投影、panel件禁止单独move。base与topology `_Placement` 随后均真实通过2×2，默认near=300，
+  host逃逸/spread预留/重绑与hard面积梯度均落地；主代理两项有效变异恢复。terminal向下预留、
+  host channel、terminal seat与模板文字已分段回放；宿主相对route cache已落地，最小fixture
+  `dc.compile` 已 **ok=True / hard=0**。但主代理亲看最新渲染：2×2成立、GND外框仍在，
+  **9交叉31弯，视觉拒收**。per-pin无座、聚簇与seat回放不一致、簇内短接出现5簇3座；
+  seat-first需要新合同，目标在本轮 **blocked**。后续A新建seat-first合同，B接受
+  `agent-adjusted`，不得冒称automatic。真实整页与本轮全量四线未做，交接见
+  `evidence/548D/HANDOFF.md`。
+
+  **548D3S7/B3（2026-11-10）**：ServiceSeat与path-first生产已接，`dc.compile` ok=True / hard0，
+  3V3六枚、GND五枚，LED2真实fallback；缺seat与跨seat变异先红恢复、CH34 MATCH。主代理亲看
+  `service-seat/path-first-final.svg`：LED1长1220、全页4交叉，视觉拒收。下一缺口是LED信号走廊与
+  标签/布局共同约束，不是继续调座位。真实MCU/整页未验收；提交前全量pytest
+  **10628 passed / 25 skipped / 1 xfailed / 16 failed**（均既有），connector 608、DSH 137/1、
+  Rust 111/4通过，不称全绿；548E/547G暂停，提交前未做git写。
+  当前权威交接 `evidence/548D/HANDOFF.md` 与 `service-seat/visual-review.md`。
 
 > 以下 3.1–3.4 保留 2026-10-23/24 的业务与发布历史；当前派单和平台状态以 §3.0 为准。
 
@@ -203,6 +286,34 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
   `evidence/543n/`、`evidence/543h/`。P39持久化未重开验证。最终全量 **9962 passed /
   25 skipped / 14 failed**（12条其他agent货架漂移+2条既有Windows环境红，本批6条回归已修）；
   connector 576、dsh 129+1、Rust、draw smoke、CLI合同与仓库卫生均过。
+- **547 复杂 MCU 自动整页实测未通过（2026-11-07，工作树）**：以只读 `E:\SmartMedicineBox` 固件证据形成
+  30 件 / 31 网 / 5 NC / 8 岛的逻辑重绘规格；observed/assumed/optional 分账，HSI 与 `.ioc` HSE
+  冲突未臆画晶振。全页 **0 候选**，只有 7/8 单岛机器通过；自动线 WiFi 单岛主代理视觉仍不通过
+  （辅助线 G2 已过三关，见下条，不互记）。
+  G1 是 N>=3 重复 shunt 的共享网、座位与回流联合缺口，G2 是 GPIO→R→LED 二件串联支路未表达。
+  三轮窄修复均未形成可验证交付，`drawcompiler.py` 已按 sha256 恢复；547C2/真机 547B 未开。
+  复现 `tests/test_547_repeated_shunts.py` 为 **1 passed / 1 strict xfailed**，修通 XPASS 必须摘标。
+  任务与停止边界 `tasks/547_smart_medicine_box.md`，证据 `evidence/547/`；该阶段未写原工程或
+  真机页，辅助线的后续 live 验收见下条。
+- **547S 已通过，547D 暂停待续（2026-11-07，工作树）**：`placement.shared_net_order` 以
+  signal→非GND→GND 统一支路座位、搜索/终审关系尺、修复和 lane；VCC+GND 不再落 GND，四键已锚各自 KEY。
+  主代理 **87 passed / 1 strict xfailed**，独立变异先红后 cp+sha256 还原。整页仍 0 候选；
+  547D 已确认 straight→auto 消除左列死墙，但右列成为 LED2 走线穿 LCD_SDA 标签，尚无生产修复。
+  547E 串联支路与自动线真机串跑未开（辅助线 live 见下条，不互记）。证据 `evidence/547/s/`、
+  `evidence/547/d/`，生产基线见任务书。
+- **547G 辅助整页（2026-11-07，工作树，当前暂停）**：自动线保留 547D/E 整页缺口（547F 命名脚修复单记）；辅助线
+  `agent-adjusted` 复用现有 LayoutPlan/ChangePlan、lint、逐脚与渲染入口，未另造几何引擎。
+  G1 接口盘点、G2 WiFi 单岛三关、G3 30件/31网/5NC/8岛离线双层页面闸+独立逐脚/NC+主代理逐岛视觉
+  均完成；真机 profiles 18 份 / 122 条引脚记录。test V4 / P41（uuid=`037f5a63d7825dfe`，
+  sheet=`93e5fa80765af875`）apply 走实时位号池，30件/95线/57旗、write.calls=242、未 force，
+  位号非一一对应（U1→U5、R1→R6、D1→D2）。主代理 lint 0E/0W/13I（12 条 90°/270° 旗标方向
+  INFO + 1 无结点交叉；`sch.modify_primitive` 不支持 netflag，未伪造姿态），独立宿主网表
+  30/30件、31/31网、5/5NC、0 短路；DRC 已跑但 **不能称通过**（0 error/200 warn，`passed=false`）。
+  全页与局部渲染主代理已亲看。持久化仅 `saved_unverified`（未关闭重开；多窗口返回
+  `WINDOW_UNSPECIFIED`）。G4 仅部分完成；**待岳手动关闭重开 test V4 后只读比对 + 完整四线/卫生
+  检查/最终复验**，本批未跑四线。547F 命名脚修复仅聚焦 197 passed/1 strict xfailed，未提交。
+  辅助页是固件约束重绘（observed/assumed/optional 分账），不是自动整页、不是参考临摹，不可直接投板。
+  详见 `tasks/547_smart_medicine_box.md` §547G，证据 `evidence/547/g4/`。
 - **合并记录**：worktree `E:/boardwise-wt-layout` 分支 `534b-layout` 已合并 main
   （`b74ee91`）；本批（053C–053F）直接在 main 提交（`263929e`），全量
   **8980 passed / 23 skipped / 2 failed**（两条环境红：pytest-slots ACL、

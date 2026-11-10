@@ -58,8 +58,8 @@ def compiled():
     original_apply = dc._apply_flag_groups
     original_audit = dc._flag_group_audit
 
-    def apply(ctx, router, expressions, order):
-        original_apply(ctx, router, expressions, order)
+    def apply(ctx, router, expressions, order, **kwargs):
+        original_apply(ctx, router, expressions, order, **kwargs)
         for net_id in order:
             expression = expressions[net_id]
             if not expression.clusters:

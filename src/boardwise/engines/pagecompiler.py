@@ -58,7 +58,12 @@ alternative is worse):
   drawing and, on the second generation, its runner-up. Frames are placed on the
   compilation lattice, aligned to the page's top-left corner; the flow is a soft
   reading aid, and an arrangement that fights it loses on the ranking rather than
-  being refused.
+  being refused. A document that states ``pageArrangement.strategy='compact'``
+  (548D3X) asks for the frames to be **packed** instead: those variants are tried
+  first, :mod:`boardwise.engines.pagepacking` computes the origins from the real
+  frames, the ports are rebuilt from the placement they got until the two agree,
+  and the grid variants stay in the list as the fallback. A document that states
+  nothing new is placed exactly as it was.
 
 **The four failure categories** are 053 sec.4's vocabulary, read at page scale,
 and a page-level failure names the module it belongs to:
@@ -130,6 +135,8 @@ from boardwise.core.presentationspec import (
     DirectWiringObligation,
     FlowEdge,
     LocalLabelObligation,
+    PanelBranch,
+    PanelGroup,
     PresentationModule,
     PresentationPath,
     PresentationSpec,
@@ -150,7 +157,7 @@ from boardwise.core.symbolprofile import (
 from boardwise.core.textmetrics import flag_name_box
 from boardwise.core.geometry import transform_point
 
-from . import drawcompiler, readability
+from . import drawcompiler, pagepacking, readability
 from .grammar.base import (
     FAILURE_FACTS_MISSING,
     FAILURE_LAYOUT_UNSAT,
@@ -161,8 +168,15 @@ from .grammar.base import (
 __all__ = [
     "FRAME_PADDING",
     "GAP_LADDER",
+    "KIND_PACKING_LOCKED",
+    "KIND_PACKING_NO_FIXED_POINT",
+    "KIND_PACKING_OSCILLATION",
+    "KIND_PACKING_REJECTED",
+    "KIND_PACKING_TRUNCATED",
+    "KIND_PACKING_UNSAT",
     "KIND_PAGE_LOCK_CONFLICT",
     "KIND_PAGE_LOCK_CONTRADICTION",
+    "MAX_COMPACT_REPLAY",
     "PAGE_COMPILER_NAME",
     "PageCandidate",
     "PageCompileBudget",
@@ -224,6 +238,30 @@ GAP_LADDER: tuple[float, ...] = (1.0, 1.6)
 #: modules no room.
 KIND_PAGE_LOCK_CONTRADICTION = "page-lock-contradiction"
 KIND_PAGE_LOCK_CONFLICT = "page-lock-conflict"
+
+#: The compact-arrangement refusals (548D3X §30C). The packer's three answers are
+#: kept apart on purpose: ``unsat`` is "this discrete corner space has no packing",
+#: ``truncated`` is "the search budget ran out before the space was exhausted", and
+#: ``rejected`` is "the packer refused its own input". A caller that read all three
+#: as "does not fit" would enlarge a page that was never proven too small.
+KIND_PACKING_UNSAT = "packing-unsat"
+KIND_PACKING_TRUNCATED = "packing-truncated"
+KIND_PACKING_REJECTED = "packing-rejected"
+#: A compact page whose ports change the frames they are derived from, so that the
+#: replay returns to an earlier answer instead of settling. Named, never delivered
+#: from one of the two states — the two states state different drawings of one net.
+KIND_PACKING_OSCILLATION = "packing-port-oscillation"
+KIND_PACKING_NO_FIXED_POINT = "packing-port-replay-exhausted"
+#: A compact page that also states a page lock. The packer computes every origin
+#: from the frames it places, so there is no stated origin for a lock to keep.
+KIND_PACKING_LOCKED = "packing-page-lock"
+
+#: How many times a compact page may rebuild its ports from its own packed frames
+#: before the replay is declared non-convergent. Each round is one build + one
+#: packing; four rounds is far more than the two a page needs to settle (the
+#: direction of a port is derived from frames whose size it barely changes), and
+#: the bound is what makes the search finite.
+MAX_COMPACT_REPLAY = 4
 
 
 def wants_page(presentation_spec: PresentationSpec) -> bool:
@@ -589,6 +627,25 @@ def compile_page(
         + f"), frame padding {budget.frame_padding:g}"
     )
 
+    # 0. 548B2: the declared series arms are checked on the **whole** documents,
+    #    before any module is compiled. `_module_view` can only carry an arm whose
+    #    two parts the module owns, so an arm spanning two modules would be
+    #    dropped there and the page drawn as if it had never been declared —
+    #    refused here, by name, from the documents the author actually wrote.
+    arms = drawcompiler.validate_series_branches(circuit_spec, presentation_spec)
+    if arms:
+        result.failures = arms
+        return result
+
+    # 0b. 548D3X3B: the reading panels are a statement about the circuit too, and
+    #    the page is where a group could be split across modules — so the whole
+    #    documents are checked here, before any module is compiled or sliced. A
+    #    cross-module group is refused by name rather than sliced in half.
+    panels = drawcompiler.validate_panel_groups(circuit_spec, presentation_spec)
+    if panels:
+        result.failures = panels
+        return result
+
     # 1. the page's own facts: who owns which part, where the flow points, and
     #    whether every page lock names a placed part at a point of this page.
     blockers = _reference_failures(circuit_spec, presentation_spec)
@@ -613,7 +670,18 @@ def compile_page(
         result.failures = failures
         return result
 
-    # 3. the variant search: orders x grid shapes x gap rungs x generations.
+    # 3. the variant search: orders x grid shapes x gap rungs x generations, with
+    #    the packed variants first when the document states pageArrangement
+    #    (548D3X §30C). A document that states nothing new gets exactly the list
+    #    it had, in the same order.
+    compact = ctx.presentation.page_arrangement is not None
+    if compact:
+        result.notes.append(
+            f"{PAGE_COMPILER_NAME}: pageArrangement.strategy="
+            f"{ctx.presentation.page_arrangement.strategy!r} — compact candidates "
+            "are packed from the ports' own frames first, and the grid variants "
+            "follow as the fallback they always were"
+        )
     orders = _placement_orders(ctx)
     seen: set[str] = set()
     for variant in _variants(
@@ -621,6 +689,7 @@ def compile_page(
         columns_hint=ctx.presentation.module_columns or None,
         reading_bands=bool(ctx.presentation.module_columns)
         and _flow_fills_every_module(ctx.presentation),
+        compact=compact,
     ):
         page, failure, violations, need, kind = _assemble(ctx, variant)
         if page is None:
@@ -1172,6 +1241,36 @@ def _module_view(
             lock for lock in presentation_spec.user_locks
             if lock.part_id in part_ids and not lock.is_page
         ],
+        # 548B2: an arm travels only when this module owns **both** of its parts.
+        # A slice that carried half an arm would hand the module compiler an arm
+        # whose other part it never draws; a slice that dropped a same-module arm
+        # would draw the module as if the document had not named it. The
+        # cross-module case never reaches a slice: `compile_page` refuses it by
+        # name (V7) on the whole documents before any module is compiled.
+        series_branches=[
+            branch for branch in presentation_spec.series_branches
+            if set(branch.parts) <= part_ids
+        ],
+        # 548D3X3B: a panel group travels **whole or not at all**. `compile_page`
+        # refuses a cross-module group by name before any module is compiled
+        # (P2), so a slice that sees only some of its branches is a page that
+        # was never validated — and half a panel handed to a module compiler is
+        # a group the document did not declare. The test is the group's own
+        # branch parts, so a module holding none of them drops the group too.
+        panel_groups=[
+            PanelGroup(
+                id=group.id, side=group.side, columns=group.columns,
+                branches=tuple(
+                    PanelBranch(
+                        from_net=branch.from_net, to_net=branch.to_net,
+                        part=branch.part,
+                    )
+                    for branch in group.branches
+                ),
+            )
+            for group in getattr(presentation_spec, "panel_groups", ())
+            if all(branch.part in part_ids for branch in group.branches)
+        ],
     )
     return sub_circuit, sub_presentation
 
@@ -1392,6 +1491,14 @@ class _Variant:
     same modules in the same grid; only the slot the *sequence* walks through
     changes, so it is a property of the page (its stated reading direction), not
     of one module.
+
+    ``compact`` (548D3X §30C) says the page's frames are packed by
+    :mod:`boardwise.engines.pagepacking` instead of arranged on the grid. The
+    order is still the document's priority sequence, and ``columns``/``rung``
+    carry no meaning for it: a compact page reads its directions from the frames
+    it actually placed, not from a grid shape. The flag is what makes the
+    variant's label distinguishable in the rejection trail, and what tells the
+    port stage that no grid adjacency exists to be read.
     """
 
     generation: int
@@ -1399,9 +1506,15 @@ class _Variant:
     columns: int
     rung: float
     reading_bands: bool = False
+    compact: bool = False
 
     @property
     def label(self) -> str:
+        if self.compact:
+            return (
+                f"arrangement=compact generation={self.generation} "
+                f"order={'/'.join(self.order)}"
+            )
         return (
             f"generation={self.generation} columns={self.columns} "
             f"gap={self.rung:g}x order={'/'.join(self.order)}"
@@ -1412,6 +1525,7 @@ class _Variant:
 def _variants(
     orders: Sequence[tuple[str, ...]], count: int, budget: PageCompileBudget,
     *, columns_hint: int | None = None, reading_bands: bool = False,
+    compact: bool = False,
 ) -> list[_Variant]:
     """The finite search space, in a fixed order and cut at `max_variants`.
 
@@ -1428,8 +1542,25 @@ def _variants(
     bands, and the flow's own sequence is walked **down** one band and on into
     the next (:func:`_arrange`). A page that states neither keeps the row-major
     fill it has always had, so old inputs are placed byte for byte as before.
+
+    ``compact`` prepends one packed variant per (generation, order) to the same
+    finite list — the document asked for a packed page, so a packed page is what
+    is tried first — and the historical grid variants follow it as the fallback.
+    The list is still cut at ``budget.max_variants`` and still generated in a
+    fixed sequence, so the search stays finite and deterministic. A document
+    that does not state the strategy never enters this branch, and its variant
+    list, labels and order are exactly the ones it had.
     """
     variants: list[_Variant] = []
+    if compact:
+        for generation in (0, 1):
+            for order in orders:
+                variants.append(_Variant(
+                    generation=generation, order=order,
+                    columns=max(1, len(order)), rung=1.0, compact=True,
+                ))
+                if len(variants) >= budget.max_variants:
+                    return variants
     column_choices = (
         (min(columns_hint, count),) if columns_hint else range(1, count + 1)
     )
@@ -1728,7 +1859,23 @@ def _assemble(
     PageLayoutPlan | None, GrammarFailure | None, list[str],
     tuple[float, float] | None, str,
 ]:
-    """One variant -> one gated page, or the measured reason there is none."""
+    """One variant -> one gated page, or the measured reason there is none.
+
+    The stages after the placement are shared by both arrangements and live in
+    :func:`_finish`; the placement itself is the one thing the two do differently.
+    A grid variant (:func:`_place`) reads a slot from the sequence and a column
+    count; a compact variant (:func:`_compact_assembly`) asks
+    :func:`pagepacking.pack_frames` where the frames go, and rebuilds the ports
+    from the frames that answer produced until the two agree. Nothing below the
+    placement — the attach settle, the merge, the wires, the two gates — knows
+    which arrangement put the frames where they are.
+    """
+    if variant.compact:
+        placed = _compact_assembly(ctx, variant)
+        if placed.failure is not None:
+            return None, placed.failure, [], placed.need, placed.kind
+        return _finish(ctx, variant, placed)
+
     index = {name: position for position, name in enumerate(variant.order)}
     assembled: list[_Assembled] = []
     sources: dict[str, LayoutPlan] = {}
@@ -1785,7 +1932,56 @@ def _assemble(
         )
         if failure is not None:
             return None, failure, [], need, ""
+    return _finish(
+        ctx, variant,
+        _Placed(
+            assembled=assembled, by_id=by_id, offsets=offsets,
+            frames=placed_frames, attachments=attachments, shifts=shifts,
+            hosts=hosts,
+        ),
+    )
 
+
+@dataclass
+class _Placed:
+    """One arrangement's answer: where each module's frame and drawing sit.
+
+    The modules carry their own (already copied) plans and ports; the frames are
+    in page coordinates; an attached module's origin is derived from its host's,
+    and ``shifts``/``hosts`` say which module is placed by which. Both
+    arrangements hand the rest of the pipeline this one object, so the stages
+    that judge the page read one shape rather than two.
+    """
+
+    assembled: list[_Assembled]
+    by_id: dict[str, _Assembled]
+    offsets: dict[str, tuple[float, float]]
+    frames: dict[str, Box]
+    attachments: list[_Attachment]
+    shifts: dict[str, tuple[float, float]]
+    hosts: dict[str, str]
+    failure: GrammarFailure | None = None
+    need: tuple[float, float] | None = None
+    kind: str = ""
+
+
+def _finish(
+    ctx: _Context, variant: _Variant, placed: _Placed
+) -> tuple[
+    PageLayoutPlan | None, GrammarFailure | None, list[str], None, str,
+]:
+    """Everything after the placement: wires, relocation, the plan, the two gates.
+
+    Extracted unchanged (548D3X §30C) so the compact arrangement can share it:
+    two copies of this stage would be two places where a page could be built one
+    way for the grid and another way for the packer.
+    """
+    assembled = placed.assembled
+    by_id = placed.by_id
+    offsets = placed.offsets
+    placed_frames = placed.frames
+    attachments = placed.attachments
+    index = {name: position for position, name in enumerate(variant.order)}
     drawn = _merge(by_id, variant.order, offsets)
     wired = _wire_shared_nets(ctx, variant, index, by_id, drawn, placed_frames)
     if isinstance(wired, GrammarFailure):
@@ -1874,6 +2070,450 @@ def _assemble(
     return _gate(ctx, variant, page, assembled, offsets)
 
 
+def _compact_assembly(ctx: _Context, variant: _Variant) -> _Placed:
+    """A packed page: real frames, real ports, replayed until they agree.
+
+    The order of work is the one 548D3X §30C states, and each step exists because
+    the previous one is wrong without it:
+
+    1. **Ports first, from clean copies.** Every round starts from the module's own
+       compiled candidate again (:func:`_copy_plan`), so a round never inherits a
+       label or a flag an earlier round added — no accumulated port tables.
+    2. **Frames from those ports.** A page port adds a label or a flag to the
+       module's drawing, and that changes the module's frame; the packer must see
+       the frame *with* its ports, not the candidate's own.
+    3. **Attach, then pack.** An attached module is not packed — its host is packed
+       with a frame that already reserves the attach side (:func:`_attached_placement`),
+       and its origin is derived from the host's afterwards (:func:`_settle_attached`).
+       The packer therefore sees one placeholder box per attach pair, never two.
+    4. **Direction from the placed frames.** ``_module_ports``' historical
+       direction reads a *grid* slot; a packed page has no grid, so the direction
+       of each port is derived from the frames the packer actually placed —
+       towards its unique partner, or towards the nearest one when a net reaches
+       more than two modules.
+    5. **Replay until the ports follow the placement.** Changing a direction can
+       move a label, which moves a frame, which can change a direction. The round
+       is accepted only when the directions derived from the placement are the
+       ones that produced it — a fixed point. A cycle is refused by name
+       (:data:`KIND_PACKING_OSCILLATION`) and an unsettled replay at
+       :data:`MAX_COMPACT_REPLAY` by another (:data:`KIND_PACKING_NO_FIXED_POINT`);
+       neither state is delivered, because the two states state one net two ways.
+    """
+    attachments = _attachments(ctx.presentation)
+    locks = ctx.presentation.page_locks()
+    if locks:
+        # The packer's whole answer is the origin it computed. A page lock states
+        # an origin, so the two cannot both be honoured — and honouring the lock
+        # by moving the frame afterwards is exactly the "事后挪 frame" §30C forbids.
+        return _Placed(
+            assembled=[], by_id={}, offsets={}, frames={},
+            attachments=attachments, shifts={}, hosts={},
+            failure=GrammarFailure(
+                category=FAILURE_PRESENTATION_POOR,
+                subject=_lock_name(locks[0]),
+                detail=(
+                    f"{variant.label}: the page states both a page lock and "
+                    "pageArrangement.strategy='compact'. A compact page derives "
+                    "every module origin from the frames it packs, so there is no "
+                    "stated origin the lock could keep, and moving a frame onto the "
+                    "lock point after the packing would be a coordinate this page "
+                    "did not compute"
+                ),
+                action=(
+                    "drop pageArrangement (the grid honours page locks), or drop "
+                    "the page lock — a compact page is packed, not pinned"
+                ),
+            ),
+            kind=KIND_PACKING_LOCKED,
+        )
+    sources: dict[str, LayoutPlan] = {}
+    for module in ctx.modules:
+        candidates = ctx.results[module.id].candidates
+        sources[module.id] = candidates[min(variant.generation, len(candidates) - 1)]
+
+    directions = _seed_directions(ctx, variant)
+    replay: list[dict[tuple[str, str], tuple[float, float]]] = []
+    need: tuple[float, float] | None = None
+    for _round in range(MAX_COMPACT_REPLAY):
+        assembled, by_id, failure = _compact_modules(
+            ctx, variant, sources, directions,
+        )
+        if failure is not None:
+            return _Placed(
+                assembled=assembled, by_id=by_id, offsets={}, frames={},
+                attachments=attachments, shifts={}, hosts={}, failure=failure,
+            )
+        placement, place_variant, shifts, hosts = (
+            _attached_placement(ctx, assembled, variant, attachments)
+            if attachments else (list(assembled), variant, {}, {})
+        )
+        offsets, frames, failure, need, kind = _compact_place(
+            placement, place_variant, ctx.budget,
+        )
+        if failure is not None:
+            return _Placed(
+                assembled=assembled, by_id=by_id, offsets=offsets, frames=frames,
+                attachments=attachments, shifts=shifts, hosts=hosts,
+                failure=failure, need=need, kind=kind,
+            )
+        if shifts:
+            failure = _settle_attached(
+                ctx, by_id, attachments, shifts, hosts, offsets, frames,
+            )
+            if failure is not None:
+                return _Placed(
+                    assembled=assembled, by_id=by_id, offsets=offsets, frames=frames,
+                    attachments=attachments, shifts=shifts, hosts=hosts,
+                    failure=failure, need=need,
+                )
+        derived = _placed_directions(ctx, frames)
+        if derived == directions:
+            return _Placed(
+                assembled=assembled, by_id=by_id, offsets=offsets, frames=frames,
+                attachments=attachments, shifts=shifts, hosts=hosts, need=need,
+            )
+        if any(previous == derived for previous in replay):
+            return _Placed(
+                assembled=assembled, by_id=by_id, offsets=offsets, frames=frames,
+                attachments=attachments, shifts=shifts, hosts=hosts, need=need,
+                failure=_unsettled_ports(
+                    variant, "oscillates", _moved_ports(derived, directions),
+                ),
+                kind=KIND_PACKING_OSCILLATION,
+            )
+        replay.append(derived)
+        directions = derived
+    return _Placed(
+        assembled=[], by_id={}, offsets={}, frames={},
+        attachments=attachments, shifts={}, hosts={}, need=need,
+        failure=_unsettled_ports(
+            variant, "has not settled",
+            _moved_ports(replay[-1], replay[-2]) if len(replay) > 1 else [],
+        ),
+        kind=KIND_PACKING_NO_FIXED_POINT,
+    )
+
+
+def _compact_modules(
+    ctx: _Context,
+    variant: _Variant,
+    sources: Mapping[str, LayoutPlan],
+    directions: Mapping[tuple[str, str], tuple[float, float]],
+) -> tuple[list[_Assembled], dict[str, _Assembled], GrammarFailure | None]:
+    """One replay round: clean module copies, their ports, their frames.
+
+    ``sources`` is the module candidates this variant's generation chose — never
+    a plan an earlier round edited — so the round's frames are the candidate's
+    drawing plus **this** round's ports and nothing else.
+    """
+    index = {name: position for position, name in enumerate(variant.order)}
+    assembled: list[_Assembled] = []
+    for module in ctx.modules:
+        source = sources[module.id]
+        plan = _copy_plan(source)
+        ports, failure = _module_ports(
+            ctx, module, plan, variant, index, directions=directions,
+        )
+        if failure is not None:
+            return assembled, {}, failure
+        assembled.append(_Assembled(
+            module=module,
+            plan=plan,
+            internal_sha256=source.geometry_sha256(),
+            ports=ports,
+            frame=_module_frame(plan, ctx.book, ctx.budget.frame_padding),
+        ))
+    return assembled, {item.module.id: item for item in assembled}, None
+
+
+def _compact_place(
+    placement: Sequence[_Assembled],
+    variant: _Variant,
+    budget: PageCompileBudget,
+) -> tuple[
+    dict[str, tuple[float, float]], dict[str, Box], GrammarFailure | None,
+    tuple[float, float] | None, str,
+]:
+    """Where the packer puts these frames, translated back into module origins.
+
+    The packer is asked with the **page's own** numbers — ``budget.module_gap``,
+    ``budget.grid``, ``budget.keepouts`` and :func:`_page_inner` — and never with a
+    smaller gap invented here. The one addition is the lattice step the grid
+    arrangement also adds (``rung * module_gap + grid`` at rung 1): every module
+    origin is snapped to the compilation lattice so a module's pin tips stay on
+    one lattice, and snapping can move two frames at most half a step closer, so
+    packing at ``module_gap + grid`` is what keeps the *delivered* pair at or above
+    ``module_gap`` — the checker's threshold, not a relaxed one.
+
+    ``unsat``, ``truncated`` and ``rejected`` keep their own names: the first says
+    this discrete corner space holds no packing, the second says the search ran out
+    of nodes, the third says the packer refused its input. None of them is
+    delivered as a partial or overlapping page — the packer returns no placements
+    on a refusal, and this function returns no offsets.
+
+    The answer is *checked*, not trusted (548D3X §30C: the packer's answer is not
+    a hint). A packed frame that leaves the page it was asked about is refused by
+    name (:data:`KIND_PACKING_REJECTED`) rather than pulled back inside: pulling
+    would turn a broken answer into a page the packer never computed. Frames that
+    touch each other are *not* pre-refused here — :func:`_gate`'s page checker owns
+    that judgement (`module-frame-overlap`), and it is the one place a page is
+    allowed to be refused for it.
+    """
+    page = budget.page_box
+    assert page is not None  # `_check_budget` refuses a page without one
+    inner = _page_inner(page, budget)
+    local = {item.module.id: item.frame for item in placement}
+    order = tuple(name for name in variant.order if name in local)
+    gap = budget.module_gap + budget.grid
+    packed = pagepacking.pack_frames(
+        local, order, inner,
+        gap=gap, grid=budget.grid, keepouts=budget.keepouts,
+    )
+    if not packed.ok:
+        return {}, {}, _packing_failure(variant, packed, budget, inner, local), None, (
+            _PACKING_KINDS.get(packed.status, KIND_PACKING_REJECTED)
+        )
+    missing = sorted(set(local) - set(packed.frames))
+    outside = sorted(
+        name for name, box in packed.frames.items()
+        if (
+            box[0] < inner[0] - 1e-6 or box[1] < inner[1] - 1e-6
+            or box[2] > inner[2] + 1e-6 or box[3] > inner[3] + 1e-6
+        )
+    )
+    if missing or outside:
+        named = outside or missing
+        return {}, {}, GrammarFailure(
+            category=FAILURE_LAYOUT_UNSAT,
+            subject=f"modules[{named[0]}]",
+            detail=(
+                f"{variant.label}: the packer answered `packed` but its answer "
+                "leaves the page it was asked about — "
+                + (
+                    f"module(s) {', '.join(repr(name) for name in outside)} placed at "
+                    + ", ".join(
+                        f"{name} {_box_text(packed.frames[name])}" for name in outside
+                    )
+                    + f", outside the usable area {_box_text(inner)}"
+                    if outside else
+                    f"it stated no frame for module(s) "
+                    + ", ".join(repr(name) for name in missing)
+                )
+                + " — a packed frame is not pulled back onto the page silently, "
+                "because that would deliver a page the packer never computed"
+            ),
+            action=(
+                "report this run: the packer broke its own contract and the page "
+                "compiler refuses the answer rather than repairing it"
+            ),
+        ), None, KIND_PACKING_REJECTED
+    offsets: dict[str, tuple[float, float]] = {}
+    frames: dict[str, Box] = {}
+    for item in placement:
+        box = packed.frames[item.module.id]
+        dx = _snap(box[0] - item.frame[0], budget.grid)
+        dy = _snap(box[1] - item.frame[1], budget.grid)
+        offsets[item.module.id] = (dx, dy)
+        frames[item.module.id] = _shift_box(item.frame, dx, dy)
+    offsets, frames = _pull_inside(offsets, frames, inner, budget.grid)
+    # Snapping and the rigid pull can each touch paper the packer avoided; both
+    # are reported rather than repaired by narrowing a gap or moving one frame.
+    for kept, keepout in enumerate(budget.keepouts):
+        for name in sorted(frames):
+            if _overlaps(frames[name], keepout):
+                return {}, {}, GrammarFailure(
+                    category=FAILURE_LAYOUT_UNSAT,
+                    subject=f"modules[{name}] + keepouts[{kept}]",
+                    detail=(
+                        f"{variant.label}: the packing put module {name!r} clear of "
+                        f"keepouts[{kept}] {_box_text(keepout)}, and snapping the "
+                        f"module origin to the {budget.grid:g}-unit lattice moved its "
+                        f"frame to {_box_text(frames[name])} onto it — the module is "
+                        "not nudged off the keep-out silently"
+                    ),
+                    action=(
+                        "move the keep-out, state a page whose free area has room "
+                        "for the frame beside it, or state a page grid the frame's "
+                        "own drawing sits on"
+                    ),
+                ), None, KIND_PACKING_UNSAT
+    occupied = _union(frames.values())
+    inset = _frame_inset(budget)
+    need = (
+        occupied[2] - occupied[0] + 2 * inset,
+        occupied[3] - occupied[1] + 2 * inset,
+    )
+    return offsets, frames, None, need, ""
+
+
+#: The packer's statuses as the page compiler's own refusal kinds.
+_PACKING_KINDS = {
+    pagepacking.STATUS_UNSAT: KIND_PACKING_UNSAT,
+    pagepacking.STATUS_TRUNCATED: KIND_PACKING_TRUNCATED,
+    pagepacking.STATUS_REJECTED: KIND_PACKING_REJECTED,
+}
+
+
+def _packing_failure(
+    variant: _Variant,
+    packed: pagepacking.PackingResult,
+    budget: PageCompileBudget,
+    inner: Box,
+    local: Mapping[str, Box],
+) -> GrammarFailure:
+    """One packer refusal, in words that keep its three answers apart.
+
+    A truncated search is *not* a proof of unsat: the message says so, and asks for
+    the run to be reported rather than for a smaller page. An ``unsat`` names the
+    frames and the area it tried them in, so a caller can change one of the two.
+    """
+    shapes = ", ".join(
+        f"{name} {_box_text(box)}" for name, box in sorted(local.items())
+    )
+    reason = packed.failure.detail if packed.failure is not None else "no detail"
+    code = packed.failure.code if packed.failure is not None else packed.status
+    action = (
+        "enlarge the page, move the keep-out that takes the room, or split the page "
+        "— the frames are rigid bodies and no gap is narrowed to make them fit"
+        if packed.status == pagepacking.STATUS_UNSAT else
+        "report this run: the packing search stopped on its node budget, which is "
+        "not a proof that no packing exists — or state a larger page, which shrinks "
+        "the space searched"
+        if packed.status == pagepacking.STATUS_TRUNCATED else
+        "report this run: the packer refused its own input, which is a compiler "
+        "defect and not a property of the page"
+    )
+    return GrammarFailure(
+        category=(
+            FAILURE_PRESENTATION_POOR
+            if packed.status == pagepacking.STATUS_TRUNCATED
+            else FAILURE_LAYOUT_UNSAT
+        ),
+        subject="page",
+        detail=(
+            f"{variant.label}: pageArrangement.strategy='compact' could not pack "
+            f"{len(local)} frame(s) ({shapes}) into the page's usable area "
+            f"{_box_text(inner)} at a {budget.module_gap:g}-unit module gap on the "
+            f"{budget.grid:g}-unit lattice — packer status {packed.status!r} "
+            f"(code {code!r}): {reason}"
+        ),
+        action=action,
+    )
+
+
+def _seed_directions(
+    ctx: _Context, variant: _Variant
+) -> dict[tuple[str, str], tuple[float, float]]:
+    """The first round's port directions, from the document's order alone.
+
+    A packed page has no grid to read, and the first round has no placement
+    either. The seed therefore uses only what the document states — the priority
+    sequence — and the replay replaces it with directions derived from real
+    frames. It is a *seed*, not an arrangement: no frame is placed from it, and a
+    seed that the first packing contradicts is simply replaced (and the page is
+    built again from clean copies until the two agree).
+    """
+    rank = {name: position for position, name in enumerate(variant.order)}
+    out: dict[tuple[str, str], tuple[float, float]] = {}
+    for net_id in sorted(ctx.nets_by_module):
+        owners = ctx.nets_by_module[net_id]
+        if len(owners) < 2:
+            continue
+        for name in owners:
+            later = any(
+                rank.get(other, -1) > rank.get(name, -1)
+                for other in owners if other != name
+            )
+            out[(name, net_id)] = (1.0, 0.0) if later else (-1.0, 0.0)
+    return out
+
+
+def _placed_directions(
+    ctx: _Context, frames: Mapping[str, Box]
+) -> dict[tuple[str, str], tuple[float, float]]:
+    """Each port's direction, read from the frames the page actually placed.
+
+    A shared net's port faces its partner: the unique other module when the net
+    reaches exactly two, and otherwise the nearest of them (ties broken by name,
+    so the answer does not depend on mapping order). The direction is the dominant
+    axis of the two frames' centre distance, which is what a leader drawn from
+    inside one frame to the other one actually follows — not a slot in a grid that
+    this page never used.
+    """
+    out: dict[tuple[str, str], tuple[float, float]] = {}
+    for net_id in sorted(ctx.nets_by_module):
+        owners = ctx.nets_by_module[net_id]
+        if len(owners) < 2:
+            continue
+        for name in owners:
+            partners = [other for other in owners if other != name]
+            chosen = min(
+                partners,
+                key=lambda other: (
+                    pagepacking.frame_gap(frames[name], frames[other]), other,
+                ),
+            )
+            out[(name, net_id)] = _towards(frames[name], frames[chosen])
+    return out
+
+
+def _towards(source: Box, target: Box) -> tuple[float, float]:
+    """The cardinal direction from one placed frame's centre to another's."""
+    dx = ((target[0] + target[2]) - (source[0] + source[2])) / 2.0
+    dy = ((target[1] + target[3]) - (source[1] + source[3])) / 2.0
+    if abs(dx) >= abs(dy):
+        return (1.0, 0.0) if dx >= 0.0 else (-1.0, 0.0)
+    return (0.0, 1.0) if dy >= 0.0 else (0.0, -1.0)
+
+
+def _moved_ports(
+    derived: Mapping[tuple[str, str], tuple[float, float]],
+    used: Mapping[tuple[str, str], tuple[float, float]],
+) -> list[tuple[str, str]]:
+    """The ports whose direction the next round asked for and the last did not."""
+    return sorted(
+        (module, net)
+        for (module, net), direction in derived.items()
+        if used.get((module, net)) != direction
+    )
+
+
+def _unsettled_ports(
+    variant: _Variant,
+    behaviour: str,
+    moved: Sequence[tuple[str, str]],
+) -> GrammarFailure:
+    """The named refusal for a compact page whose ports do not hold still.
+
+    ``moved`` lists the ports whose direction the last round asked for and the
+    next round did not keep: the concrete evidence that the replay is cycling,
+    rather than a claim that "the page did not converge".
+    """
+    named = ""
+    if moved:
+        shown = ", ".join(f"{module}.{net}" for module, net in moved[:4])
+        named = (
+            f" The port(s) that changed sides: {shown}"
+            + (", …" if len(moved) > 4 else "")
+        )
+    return GrammarFailure(
+        category=FAILURE_PRESENTATION_POOR,
+        subject="pageArrangement.strategy=compact",
+        detail=(
+            f"{variant.label}: the compact page {behaviour} where its ports face. "
+            "A port's statement moves the frame it is drawn in, and that frame is "
+            "what the direction is read from, so the round after it asks for another "
+            "side." + named + " — the page is refused rather than delivered from one "
+            "of the two states, because the two state one net two different ways"
+        ),
+        action=(
+            "drop pageArrangement (the grid states one direction) or remove the "
+            "shared net that makes the port move — a page whose ports oscillate is "
+            "not a page that was packed"
+        ),
+    )
+
+
 def _copy_plan(plan: LayoutPlan) -> LayoutPlan:
     """A working copy of a module's drawing.
 
@@ -1944,6 +2584,8 @@ def _module_ports(
     plan: LayoutPlan,
     variant: _Variant,
     index: Mapping[str, int],
+    *,
+    directions: Mapping[tuple[str, str], tuple[float, float]] | None = None,
 ) -> tuple[list[PagePort], GrammarFailure | None]:
     """How this module states each shared net to the page.
 
@@ -1953,6 +2595,13 @@ def _module_ports(
     globally. Where the module's drawing already says something of the other kind
     for that net, the page rewrites it at the same point — see the module
     docstring's third decision.
+
+    ``directions`` (548D3X §30C) is the compact arrangement's own answer:
+    ``(module, net) -> which way that port faces``, derived from the frames the
+    packer placed. When it is given, the grid formula is not consulted at all —
+    a packed page has no columns to read a direction from, and inventing one
+    would be the fake adjacency §30C refuses. When it is ``None`` (every page
+    that does not state `pageArrangement`) the historical formula runs untouched.
     """
     occupied = _module_boxes(plan, ctx.book)
     pins = _pin_points(plan, ctx.book)
@@ -1960,14 +2609,17 @@ def _module_ports(
     for net_id in ctx.shared_nets(module.id):
         style, reason = _net_style(ctx, variant, net_id, index)
         plan.notes.append(f"net {net_id}: {reason}")
-        direction = _port_direction(
-            index[module.id], variant.columns, len(variant.order),
-            _has_later_partner(ctx, net_id, module.id, index),
-        )
-        local = ctx.views[module.id][0].net(net_id)
-        point = _port_point(
-            local.members if local is not None else (), pins, direction
-        )
+        if directions is not None:
+            direction = directions[(module.id, net_id)]
+        else:
+            direction = _port_direction(
+                index[module.id], variant.columns, len(variant.order),
+                _has_later_partner(ctx, net_id, module.id, index),
+            )
+        members, member_failure = _port_members(ctx, plan, module, net_id)
+        if member_failure is not None:
+            return [], member_failure
+        point = _port_point(members, pins, direction)
         if point is None:
             return [], GrammarFailure(
                 category=FAILURE_LAYOUT_UNSAT,
@@ -1982,8 +2634,15 @@ def _module_ports(
                     "a compiler defect"
                 ),
             )
+        preferred = direction
+        if style == PAGE_PORT_LABEL and not any(
+            item.net == net_id for item in plan.labels
+        ):
+            point, preferred = _label_port_point(
+                plan, net_id, members, pins, point, direction, occupied
+            )
         port, failure = _port(
-            ctx, module, plan, net_id, style, point, direction, occupied, pins
+            ctx, module, plan, net_id, style, point, preferred, occupied, pins
         )
         if failure is not None:
             return [], failure
@@ -2060,6 +2719,20 @@ def _net_style(
             "069 sec.7: a rail is a bus at any fan-out)",
         )
     if main_path:
+        if variant.compact:
+            # 548D3X §30C: a packed page has no grid, so `_adjacent` has nothing to
+            # read. The edge is attempted as one wire from the two real ports, and
+            # it is the *route* and the page checker that decide whether that wire
+            # is legal — a route that cannot be drawn refuses the variant
+            # (`_wire_shared_nets`), so the edge is never quietly downgraded to a
+            # name here.
+            return (
+                PAGE_PORT_WIRE,
+                f"the edge {modules[0]} -> {modules[1]} is marked main-path and the "
+                "page packs its frames, so the connection is attempted as one wire "
+                "between the two real ports; the route and the page checker accept "
+                "or refuse it (a packed page has no grid adjacency to read)",
+            )
         if _adjacent(index[modules[0]], index[modules[1]], variant.columns, len(index)):
             return (
                 PAGE_PORT_WIRE,
@@ -2485,22 +3158,54 @@ def _is_lead(points: Sequence[tuple[float, float]], anchor: tuple[float, float])
     return False
 
 
+def _rail_flag_ref(
+    book: Mapping[str, SymbolProfile], prefix: str, net_id: str
+) -> str:
+    """The ref a **rail** is looked up under — `drawcompiler._flag_ref`'s rule.
+
+    The rail's own ``prefix + net`` is asked for first, and only when the book does
+    not carry it is 548D3's exact alias ``prefix + "+" + net`` tried (the
+    schematic's ``PWR-+3V3`` spelling of a ``3V3`` net).  The alias never overrides
+    an own name the book has — a book carrying both may state two glyphs for one
+    symbol name, and silently drawing the other one would move geometry the
+    document never asked to move — it is never built for a net id that already
+    carries the ``+`` (``+5V`` is ``PWR-+5V``, not ``PWR-++5V``), and a net whose
+    symbol is under neither ref keeps its own ref so the caller still names the
+    spelling the rule asked for.
+
+    548D 24A: `drawcompiler._flag_ref` gained this alias in 548D3 and the page and
+    island copies did not, so the same library and the same net were answered two
+    ways — the reason the 548D full page's `3V3` ports were named with labels while
+    its island flags carried `PWR-+3V3` (`evidence/548D/full-page/mcu-current.json`).
+    """
+    own = f"{prefix}{net_id}"
+    if book.get(own) is not None:
+        return own
+    alias = f"{prefix}+{net_id}"
+    if "+" not in net_id and book.get(alias) is not None:
+        return alias
+    return own
+
+
 def _flag_profile(
     ctx: _Context, net: SpecNet | None
 ) -> tuple[SymbolProfile | None, str]:
     """``(flag profile, symbol ref)`` — the library's flag for this net.
 
     The ref is derived from the net, never from a scenario: the ground flag is the
-    module budget's `gnd_flag`, a rail's is `power_flag_prefix` + the net id. The
-    same rule the module compiler applies, so a page and the drawings on it cannot
-    disagree about which symbol means "VIN".
+    module budget's `gnd_flag`, a rail's is :func:`_rail_flag_ref`'s answer — its
+    own ``power_flag_prefix + net``, or the ``PWR-+<net>`` alias when the book
+    carries only that.  The same rule the module compiler applies, so a page and
+    the drawings on it cannot disagree about which symbol means "VIN".
     """
     cls = net.cls if net is not None else "gnd"
     net_id = net.id if net is not None else ""
     ref = (
         ctx.budget.module_budget.gnd_flag
         if cls == "gnd"
-        else f"{ctx.budget.module_budget.power_flag_prefix}{net_id}"
+        else _rail_flag_ref(
+            ctx.book, ctx.budget.module_budget.power_flag_prefix, net_id,
+        )
     )
     profile = ctx.book.get(ref)
     if profile is None:
@@ -3723,12 +4428,21 @@ def _gate(
             "page constraints, against the frames the page states",
         ],
     )
-    page.notes.append(
-        f"page of {len(assembled)} module(s) in "
-        f"{max(1, min(variant.columns, len(variant.order)))} column(s): "
-        + ", ".join(f"{item.module.id}@{offsets[item.module.id][0]:g}"
-                    for item in assembled)
-    )
+    if variant.compact:
+        page.notes.append(
+            f"page of {len(assembled)} module(s) packed compact "
+            f"(pageArrangement.strategy='compact', module gap "
+            f"{ctx.budget.module_gap:g}, origins from pagepacking.pack_frames): "
+            + ", ".join(f"{item.module.id}@{offsets[item.module.id][0]:g}"
+                        for item in assembled)
+        )
+    else:
+        page.notes.append(
+            f"page of {len(assembled)} module(s) in "
+            f"{max(1, min(variant.columns, len(variant.order)))} column(s): "
+            + ", ".join(f"{item.module.id}@{offsets[item.module.id][0]:g}"
+                        for item in assembled)
+        )
     return page, None, [], None, ""
 
 
@@ -4025,6 +4739,296 @@ def _port_point(
         candidates, key=lambda item: (-sign * item[axis], item[2], item[0], item[1])
     )
     return _round((ranked[0][0], ranked[0][1]))
+
+
+def _port_members(
+    ctx: _Context,
+    plan: LayoutPlan,
+    module: PresentationModule,
+    net_id: str,
+) -> tuple[list[str], GrammarFailure | None]:
+    """This net's members in the drawing's own pin spelling (548C3-②).
+
+    A spec names a pin either way: ``U1.VSS`` is the **number** the MCU profile
+    gives that pad, ``J1.VCC`` is a **name** on the LCD one, while
+    :func:`_pin_points` is keyed by the profile's numbers only. The one ruler
+    that maps a token to that number is
+    :func:`readability._profile_pin_ruler` ("number first, then name"), so the
+    page asks it instead of comparing spellings — a second table here would be
+    the two-rulers defect (115-②/548C2 C3). A member the symbol genuinely lacks
+    is a named refusal, never a silent ``None`` and never a near match.
+    """
+    local = ctx.views[module.id][0].net(net_id)
+    if local is None:
+        return [], None
+    # Local import: readability owns the ruler, and importing it at module level
+    # would make the page compiler depend on the gate it is judged by.
+    from boardwise.engines.readability import _profile_pin_ruler
+
+    parts = {part.part_id: part for part in plan.parts}
+    out: list[str] = []
+    for member in sorted(local.members):
+        part_id, _, token = member.partition(".")
+        part = parts.get(part_id)
+        profile = ctx.book.get(part.symbol_ref) if part is not None else None
+        number = _profile_pin_ruler(profile, token)
+        if profile is None or not any(
+            str(pin.number) == number for pin in profile.pins
+        ):
+            numbers = (
+                [
+                    f"{pin.number}/{pin.name}" if pin.name and pin.name != pin.number
+                    else str(pin.number)
+                    for pin in profile.pins
+                ]
+                if profile
+                else []
+            )
+            where = (
+                f"this module's drawing holds no part {part_id!r}"
+                if part is None
+                else f"symbol {profile.symbol_ref!r} carries no pin {token!r}"
+            )
+            return [], GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=f"modules[{module.id}]",
+                detail=(
+                    f"net {net_id!r} names member {member!r}, but {where} "
+                    f"(the symbol's pins are "
+                    f"{', '.join(numbers) if numbers else 'none'})"
+                ),
+                action=(
+                    "name the member with a pin the symbol carries (number or "
+                    "name), or fix the symbol; the page resolves a member through "
+                    "the profile's own ruler and does not guess a near match"
+                ),
+            )
+        out.append(f"{part_id}.{number}")
+    return out, None
+
+
+def _label_port_point(
+    plan: LayoutPlan,
+    net_id: str,
+    members: Sequence[str],
+    pins: Mapping[str, tuple[float, float]],
+    point: tuple[float, float],
+    direction: tuple[float, float],
+    occupied: list[Box],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Where a page-added fallback label stands **and which way its box faces**.
+
+    The host names a label's net on the **conductor the label's anchor lies on**
+    (:func:`core.layoutplan.label_wire_indices`): every run through that point
+    becomes a name carrier, and the name is printed at the midpoint of each
+    carrier's longest run. A fallback label put straight on a module pin tip
+    therefore turns the module's own wiring into printed rows — the E2 page got
+    ``texts[7] 'LED'`` pressed by the GND name row and a vertical GND row on the
+    LCD connector's 50-unit vertical run.
+
+    So when the port point already lies on the module's conductor, the page
+    gives the label a short **lead of its own** instead: the only carrier is then
+    the lead, and the lead is chosen horizontal (S-20: text is always horizontal,
+    `readability`'s ``name-row-vertical``) with its body, name row and box all
+    clear of the module's existing ink. The lead length is the compiler's own
+    straight-stub ladder (:data:`drawapply.LABEL_STUB_LENGTHS_STRAIGHT`), not a
+    new threshold. When no lead is legal the old anchor is kept — the
+    readability gate then refuses the page by name instead of hiding the row.
+    """
+    if not _rides_conductor(plan, net_id, point):
+        # A bare pin tip (no conductor under it) is not a name carrier at all —
+        # that is how the module draws its own local labels, and it needs no lead.
+        return point, direction
+    lead = _own_label_lead(plan, net_id, members, pins, direction, occupied)
+    if lead is None:
+        plan.notes.append(
+            f"net {net_id}: the page's label at {_point_text(point)} would ride "
+            "the module's own conductor and no legal horizontal lead was found; "
+            "the anchor is kept and the readability gate refuses it by name"
+        )
+        return point, direction
+    origin, end, step = lead
+    plan.segments.append(LayoutSegment(net=net_id, points=[origin, end]))
+    occupied.append(
+        (min(origin[0], end[0]) - 1.0, origin[1] - 1.0,
+         max(origin[0], end[0]) + 1.0, origin[1] + 1.0)
+    )
+    plan.notes.append(
+        f"net {net_id}: the page's label is carried by its own lead "
+        f"{_point_text(origin)} -> {_point_text(end)} (548C3: a page label must "
+        "not turn the module's existing conductor into a name carrier)"
+    )
+    return end, step
+
+
+def _rides_conductor(
+    plan: LayoutPlan, net_id: str, point: tuple[float, float]
+) -> bool:
+    """Does `point` lie on a conductor of `net_id` (a name carrier if labelled)?"""
+    for segment in plan.segments:
+        if segment.net != net_id:
+            continue
+        points = [(float(x), float(y)) for x, y in segment.points]
+        for start, stop in zip(points, points[1:]):
+            if _on_run(point, start, stop):
+                return True
+    return False
+
+
+def _on_run(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    stop: tuple[float, float],
+) -> bool:
+    """Is `point` on the axis-aligned run ``start``-``stop`` (ends included)?"""
+    if abs(start[0] - stop[0]) <= 1e-9:
+        return abs(point[0] - start[0]) <= 1e-6 and (
+            min(start[1], stop[1]) - 1e-6
+            <= point[1]
+            <= max(start[1], stop[1]) + 1e-6
+        )
+    if abs(start[1] - stop[1]) <= 1e-9:
+        return abs(point[1] - start[1]) <= 1e-6 and (
+            min(start[0], stop[0]) - 1e-6
+            <= point[0]
+            <= max(start[0], stop[0]) + 1e-6
+        )
+    return False
+
+
+def _own_label_lead(
+    plan: LayoutPlan,
+    net_id: str,
+    members: Sequence[str],
+    pins: Mapping[str, tuple[float, float]],
+    direction: tuple[float, float],
+    occupied: Sequence[Box],
+) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]] | None:
+    """The first legal horizontal lead ``(pin tip, far end, direction)``.
+
+    Order: the compiler's straight-stub ladder shortest first (a name stub is as
+    short as the picture allows), then the net's member pins in the port's own
+    facing order (:func:`_port_point`'s key), then the two horizontal directions
+    with the port's preferred side first. A candidate is legal only when its
+    body, the name row the host would print on it, and the label's box are all
+    clear of the module's existing ink. A lead that would duplicate a conductor
+    of its own net is refused, unless the pin's own run already leaves in that
+    direction: then the lead starts at that run's **far end**, so the straight
+    line is drawn once and the label's anchor stands beyond it.
+    """
+    from boardwise.core.textmetrics import wire_name_row
+    from boardwise.engines.drawapply import LABEL_STUB_LENGTHS_STRAIGHT
+
+    tips: list[tuple[tuple[float, float], str]] = []
+    for member in members:
+        tip = pins.get(member)
+        if tip is not None:
+            tips.append((tip, member))
+    if not tips:
+        return None
+    axis = 0 if direction[0] != 0 else 1
+    sign = direction[0] if axis == 0 else direction[1]
+    tips.sort(
+        key=lambda item: (-sign * item[0][axis], item[1], item[0][0], item[0][1])
+    )
+    horizontal = [(1.0, 0.0), (-1.0, 0.0)]
+    if direction[0] < 0:
+        horizontal.reverse()
+    runs = [
+        tuple((float(x), float(y)) for x, y in segment.points)
+        for segment in plan.segments
+        if segment.net == net_id
+    ]
+    for length in LABEL_STUB_LENGTHS_STRAIGHT:
+        for tip, _member in tips:
+            for step in horizontal:
+                for origin in _lead_origins(tip, step, runs):
+                    end = (
+                        origin[0] + step[0] * length,
+                        origin[1] + step[1] * length,
+                    )
+                    body = (
+                        min(origin[0], end[0]) - 1.0, origin[1] - 1.0,
+                        max(origin[0], end[0]) + 1.0, origin[1] + 1.0,
+                    )
+                    if any(
+                        _overlaps(body, box)
+                        for box in occupied
+                        if not _holds(box, origin)
+                    ):
+                        continue
+                    if any(
+                        _collinear_overlap(origin, end, points) for points in runs
+                    ):
+                        continue
+                    row = wire_name_row([origin, end], net_id)
+                    if row is None or not row.horizontal:
+                        continue
+                    if any(_overlaps(row.box, box) for box in occupied):
+                        continue
+                    box = _label_box(net_id, end, step, occupied)
+                    if any(_overlaps(box, other) for other in occupied):
+                        continue
+                    return origin, end, step
+    return None
+
+
+def _lead_origins(
+    tip: tuple[float, float],
+    step: tuple[float, float],
+    runs: Sequence[Sequence[tuple[float, float]]],
+) -> list[tuple[float, float]]:
+    """Where a lead may leave the pin: the tip, then its own run's far end.
+
+    A connector's pin often already has a short conductor of that net running
+    straight away from it (the LCD's GND stubs are 15 units west of each pin), so
+    a lead drawn from the *tip* would duplicate that run. Extending from the
+    run's **far end** is the same straight line drawn once: the label anchor sits
+    beyond the existing conductor, and the only carrier is the new lead. The
+    existing run is not a second carrier — the anchor is not on it.
+    """
+    origins = [tip]
+    for points in runs:
+        for first, second in zip(points, points[1:]):
+            if abs(first[1] - tip[1]) > 1e-6 or abs(second[1] - tip[1]) > 1e-6:
+                continue
+            if not (_near(first, tip) or _near(second, tip)):
+                continue
+            far = second if _near(first, tip) else first
+            along = far[0] - tip[0]
+            if step[0] * along > 0.5:
+                origins.append(far)
+    return origins
+
+
+def _near(a: tuple[float, float], b: tuple[float, float]) -> bool:
+    return abs(a[0] - b[0]) <= 1e-6 and abs(a[1] - b[1]) <= 1e-6
+
+
+
+def _holds(box: Box, point: tuple[float, float]) -> bool:
+    """Does the box hold the point (its closed area)?"""
+    return box[0] - 1e-6 <= point[0] <= box[2] + 1e-6 and (
+        box[1] - 1e-6 <= point[1] <= box[3] + 1e-6
+    )
+
+
+def _collinear_overlap(
+    start: tuple[float, float],
+    stop: tuple[float, float],
+    points: Sequence[tuple[float, float]],
+) -> bool:
+    """Does the horizontal lead ``start``-``stop`` duplicate an existing run?"""
+    if abs(start[1] - stop[1]) > 1e-9:
+        return False
+    low, high = min(start[0], stop[0]), max(start[0], stop[0])
+    for first, second in zip(points, points[1:]):
+        if abs(first[1] - start[1]) > 1e-6 or abs(second[1] - start[1]) > 1e-6:
+            continue
+        a, b = min(first[0], second[0]), max(first[0], second[0])
+        if min(high, b) - max(low, a) > 0.5:
+            return True
+    return False
 
 
 def _port_direction(

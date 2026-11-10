@@ -95,6 +95,7 @@
     "engines/liveevidence.py": "review",
     "engines/moveblock.py": "draw",
     "engines/pagecompiler.py": "draw",
+    "engines/pagepacking.py": "draw",
     "engines/partvisibility.py": "draw",
     "engines/patchpin.py": "draw",
     "engines/pcbreview.py": "review",

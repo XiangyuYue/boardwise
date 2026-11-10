@@ -4,6 +4,197 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-11-10] 548D3S7/B3 path-first生产候选已出；LED视觉未过
+
+- ServiceSeatTemplate与base/topology两消费者已落地，service/panel分离、panel host_path墙、模板文字和
+  service固定旗进入SeatFirst；S2主代理70 passed、两项变异先红恢复、CH34 MATCH。
+- 独立 `_seat_first_path_first_terminal` 与生产 `_build_path_first_variant` 已接：同一文字/plans/
+  signals/fallbacks/labels，真实 `dc.compile` ok=True / hard0，3V3六枚、GND五枚，BOOT0/LED1直接线、
+  LED2两枚真实fallback。生产 `drawcompiler=08c1d17e…`、`placement=e2eb191a…`。
+- 主代理缺失seat与错误跨seat接线两项变异均先红并cp/hash恢复；CH34 MATCH。证据
+  `evidence/548D/service-seat/mutations-b3.md`。S6偏移无收益已回滚。
+- **视觉未通过**：`path-first-final.svg` 中LED1仍长1220并绕至y=130，全页4交叉；主代理拒收。
+  扇出边界与六种信号顺序探针均未得到短直解，证据 `visual-review.md`、`led-fanout-probe.log`、
+  `signal-order-probe.log`。548D3B3不记完成，真实MCU/整页未验收；提交前全量pytest
+  **10628 passed / 25 skipped / 1 xfailed / 16 failed**（均既有），connector 608、DSH 137/1、
+  Rust 111/4通过，不称全绿；548E/547G暂停，提交前未做git写。
+  下一步只处理LED信号走廊与标签/布局共同约束，权威交接 `evidence/548D/HANDOFF.md`。
+
+## [2026-11-10] 548D3X 页级 compact 小批通过；MCU 与整页仍未闭环
+
+- 岳选定页级二维路线并提示参考岛布局。实测 agent-adjusted A2 参考页普通岛框最小净距为 **40**；
+  当前生产 MCU/WiFi 的真实页端口后 frame 横放需 1373.5 宽、竖放需 844 高，均超过固定
+  1170×825。网格单元留白确实存在，但只换 packing 仍不能使当前整页成立，证据
+  `evidence/548D/page-layout/README.md` 与 `frame-anatomy.md`。
+- 新增默认关闭的 `pageArrangement={"strategy":"compact"}`、独立有限 `pagepacking` 与页面 consumer：
+  真实端口后 frame、attach 占位、干净候选端口方向回放、mainPath 实际布线、原网格回退和双层终审。
+  不写新键的旧 variant/digest 不变；普通岛框最终净距仍 ≥40。声明、纯几何、真实三模块参差排布和
+  坏 packer 答案负例均通过；主代理聚焦 **215 passed / 1 skipped**。
+- 主代理变异先发现两个测试覆盖洞，补对角净距与假想网格非邻接主路径判据后，禁用净距/错误主路径
+  回退均真实变红并 cp+SHA-256 恢复；两次未变红的旧用例明确不算有效变异。生产
+  `pagecompiler.py` hash `54b2426ae2ee5709f9be04511e1d8a2c0ec357d56ea7bc4e2d17afe988014cd8`，
+  `pagepacking.py` hash `68f6bae73669d1b7bd13006047fff40297e95d0206d041f9f08d629c891b0c84`。
+- 主代理随后以固定 1170×825 实测 compact 及 compact+attach bottom：各自 **2 个 compact
+  `unsat` + 4 个 grid 拒绝 = 6 变体、0 候选**，输入逐键差异/hash/命令见
+  `evidence/548D/page-layout/full-compact-baseline.md`。只改附着方向或 packer 仍不能成页。
+- `panelGroups` 数据合同已落：Agent 可显式声明重复二端支路的组、阅读侧与列数，不写坐标；
+  模块成员与 panel/series 互斥有负例。主代理 **163 passed**，两项语义变异均先红并恢复。
+  电气与页面切片校验随后落地：两脚两网、每支路唯一宿主脚、全组同一宿主件、跨模块拒绝与整组切片；
+  主代理 **272 passed / 1 skipped**，两项变异均先红并恢复。topology `placement.place` 随后真实产生
+  2×2 panel plan，宿主逐候选重投影、panel件禁止单独move。随后base/topology `_Placement` 均真实
+  通过2×2，默认near=300，host逃逸/spread预留/重绑与hard面积梯度均落地；主代理两项有效变异恢复，
+  spread无效变异单列。terminal向下预留、host channel、terminal seat与模板文字回放已分段落地；
+  宿主相对route cache已落地：同姿态后续79次bind零新增路由、topology约11s；channel先于label注入。
+  外国环境进cache key使topology >300s，动态短段detour使topology >150s、compile >200s，均回滚。
+  **动态外国锚点未闭环，不宣称完整2×2原理图。**任务书 §31–§34B、证据
+  `evidence/548D/page-layout/panel-route-cache.log`、`panel-order.log`、`panel-pins.log` 与
+  `panel-detour.log`。
+- 最小fixture随后 `dc.compile` **ok=True / hard=0**，但主代理亲看最新图：2×2成立、GND外框仍在，
+  **9交叉31弯，视觉拒收**。per-pin无座、聚簇与既有seat回放不一致、簇内短接出现5簇3座，
+  seat-first需要新的seat枚举/member分配/短接/审计合同；多次实现均回滚。目标在本轮 **blocked**：
+  机器候选不等于可读图。后续A新建seat-first合同，B接受 `agent-adjusted`，不得冒称automatic。
+- **仍未做**：MCU 面板二维支路、强制 topology、真实 SmartMedicineBox 1170×825 整页候选、逐脚/
+  渲染视觉、548E 真机与本轮全量四线。子代理额度告警后在通用小批边界暂停扩展，不记 548D 完成；
+  任务书 §30–§34C 与 `evidence/548D/HANDOFF.md` 是后续入口。未做 git 写。
+
+## [2026-11-09] 548D3 局部能力推进，强制 topology 与整页仍未闭环
+
+- base MCU 的原 7 条 strict xfail 已真实通过后摘除；冻结展示件只补两条既有 LED 串联声明，
+  电路/库/原展示件不变。主代理双向复验了 MCU 失败来自声明缺位，不是页面切片丢数据。
+- 保留连续旗引线格线交点预留、相邻 power/GND 实际出口的联合选档、页/岛 `PWR-+3V3` 原名优先
+  回退、声明串联支路的文字成组排座，以及只在实际冲突修复构建启用的一次标签重排/同源回放。
+  WiFi 单岛已出候选并过机器、逐脚和主代理放大目检；CH34 冻结读数 `allMatch=true`。
+- **仍未完成**：强制 topology 的 S3 只是首败之一，后续 R1.2、标号和 245/215 臂通道各自独立；
+  最新整页虽八岛均有局部候选，但布局需 **1694.75×1009**，放不进固定 1170×825。
+  MCU 长供电走线与信号区密度的视觉验收未签，不称 548D、自动整页或 548E 完成。
+- 角色让位轴、全局标签回放、删除整条 ghost lane 等试验均已还原；未调候选预算/排名/near，
+  未放大页框或伪造锁。当前权威交接与哈希、失败矩阵、复验状态见 `evidence/548D/HANDOFF.md`，
+  分块证据在 `evidence/548D/full-page/`。548E/547G 继续暂停，未做 git 写。
+- 第二轮全量 **10261 passed / 25 skipped / 1 xfailed / 16 failed**：新增的7条兼容回归全部消除，
+  剩余16条与既有名单一致，不称全绿。connector **576 passed + typecheck**、DSH **137 passed /
+  1 skipped + typecheck/build**、Rust **111 passed / 4 ignored + fmt/clippy**。三项独立变异均先红
+  并cp/hash恢复，见 `evidence/548D/full-page/mutations.md` 与 `toolchain.md`。
+
+## [2026-11-09] 548D2 / D2R 串联预留两版均未通过（生产净零改动，548D 暂停）
+
+- D2 首版让开 `S1` 后 `D1×D2`，既有 B3 额外 6 红，已撤回；D2R 统一座位方程后单臂邻域
+  91 passed，但 MCU 仍 0 候选（base 兄弟让开不足、topology 轮不经 `_chain_and_shelf_layout`
+  致 `D2` 压 `D1`）。按停止条件不做第三轮。
+- `drawcompiler.py` 仍 `300157d5…`；新测试 7 strict xfail + 1 控制未摘，主代理组合
+  28 passed / 7 xfailed。548D 暂停于跨轮串联预留、未进入整页实施；548E 禁止，547G 暂停。
+  证据 `evidence/548D/series-reservation2/summary.md`。§17 的 10130/25/16 全量跑在 D2 之前。
+
+## [2026-11-08] 548A 语义窄门：完整 N≥3 面板支路出口通过（A-R 补齐灯/蜂鸣器独立断言；限已测电路族）
+
+### Problem / Task
+- 上一轮 548A 的坐标窄门（「另一脚落在宿主外来网引脚行」）被证伪并回退：它让 547A 见绿，
+  却把飞反激页面 5 条改红。本批只做任务书 §5 的下一步最小动作——补一条**语义**条件，
+  不调坐标阈值、不调权重、不扫数值；判据写清、负控钉住之前不改生产代码。
+
+### Resolution
+- **步骤 A（断言级证据）**：从上一轮 gate 开 junit 抽出 5 条失败的断言/期望/实际；按派单
+  §4（G1–G7）+ 旧证书 §1（G8）把已删的窄门重建为只读探针，先验证等价：547A `--runxfail`
+  2 passed、4 负控 gate 开 5 failed/69 passed/2 skipped 且失败节点逐条相同。命中面：飞反激
+  只 `C5`/`R15`（`90`→`0` 位姿）、534 只 `C3`（`270`→`180`）；5 条红分别是 `SRC` 降级、
+  `left-of(U5,U4)` 差 2.5、`near(R15,T1)` 余量 4.3228、ch343 模块窄 15。
+- **步骤 B（判据先落纸）**：新证书 `evidence/548A/narrow-gate-semantic-certificate.md` 写
+  **G9「同宿主同回流支路组」**：`b.kind=="branch" ∧ b.owner==S.owner ∧
+  b.other_net==S.other_net ∧ 两脚件`，组 **≥3** 才允许行向体位；成员只读网表拓扑与符号脚数。
+  实测组规模：548A U1 的 GND=5、3V3=4；飞反激 T1 的 CLAMP=2、CLAMP_B=1；ch343 GND=2 →
+  后三条负控支路被 G9 排除。预测（547A 命中 8、4 负控 74 passed/2 skipped）先写后跑，
+  只读探针全中。
+- **步骤 C（生产落码）**：`drawcompiler._foreign_row_body_direction()`（G1–G9）+ 新
+  `_same_return_bank()`；调用点在 543K 之后、`_branch_body_direction` 之前。硬顺序读数：
+  `--runxfail` → 2 passed；不带 → `[XPASS(strict)]`（1 failed/1 passed）；此后才摘 `xfail`
+  装饰器（断言一字未动）→ 2 passed。4 负控 gate 开 **74 passed / 2 skipped**、gate 关
+  **74 passed / 2 skipped**。邻域 543K + 547 三文件 + 115/116：42 passed，3 条红在 gate 关时
+  同样红（工作树既有 `098_scene08` 两条 + `116::test_the_pass_moves_nothing_…`）；
+  `test_547_named_pin_plan` 4 个 `tmp_path` error 仍是沙箱 `os.scandir` PermissionError。
+- **边界**：未跑真机、未落画布、不宣称自动整页；548B 串联语义不属本批。证据
+  `evidence/548A/narrow-gate-semantic-certificate.md`；复跑开关 `.tmp_548A/gate_switch.py`。
+- **边界（2026-11-08 复审 → A-R 后已关闭）**：当时只到「G9 实现与四键反短接回归通过」，
+  `tests/test_547_repeated_shunts.py:281` 只查 `D1`/`D2`/`BZ1` 已放置。**548A-R 已补齐**：
+  新增灯/蜂鸣器用例，用独立 `derive_netlist` 对照本地 `CircuitSpec` 全部分区，`D1`/`D2`/`BZ1`
+  逐脚、七信号七节点、0 短路/分裂/未放置；本文件 **3 passed**、547 邻域 24 passed、四负控
+  74 passed / 2 skipped。**完整 N≥3 面板支路出口通过，仅限已测电路族。**
+- **全量合树**（`-n 4 --dist loadfile`，`--junitxml=.tmp_548A/full3.xml`）：**10054 tests /
+  18 failed / 2178 errors / 22 skipped**。与上一轮基准（10054 / 25 failed / 2178 errors /
+  22 skipped）逐节点比较：少掉的 7 条正是旧坐标窄门打红的 5 条 + 115/116 的两条序关系夹具；
+  剩余 18 条全部在旧基准里（parts library、harvest、rehome、process guards、098 等），
+  **无新增失败**；2178 个 error 全是沙箱 `failed on setup with PermissionError`（`os.scandir`）。
+  汇总行被 `pytest_sessionfinish` 的 basetemp PermissionError 吞掉，计数取自 junit XML。
+
+## [2026-11-07] 548A 窄门尝试：判据被证伪，生产代码已回退（未通过）
+
+### Problem / Task
+- 上一轮 548A 只到杠杆：`probe_pose.py` 的「体厚 > 一个引脚行距」把四键、两灯、蜂鸣器一起改了，
+  不是可交付补丁。本批按任务书 §5 的下一步最小动作，在 `_signal_pair_body_direction` 旁加
+  坐标感知窄门（宿主 `_accepted_poses` + 支路两脚偏移），只拦「另一脚落在外来网引脚行」。
+
+### Resolution
+- `src/boardwise/engines/drawcompiler.py` 新增 `_foreign_row_body_direction()`：G1–G7 逐条布尔
+  （二端件、两脚共轴、宿主 chain + `_accepted_poses`、旧体位竖向、宿主异网脚、seat 同侧全部宿主
+  位姿下另一脚行 = 异网引脚行、seat 水平）；调用点在 543K 之后、`_branch_body_direction` 之前。
+  不做形状启发式、不放宽硬闸、不调权重、不扫数值。
+- 冻结夹具命中 8/9：`C1/R1/D1/D2/S1–S4` 被拦，`BZ1` 不拦（PC0 行减 40 无宿主脚）——窄门确实
+  比旧宽门窄。`probe_gate.py`：`ok=True candidates=1`、`four KEY nets: ok`；窄门前同夹具 `ok=False`。
+- 目标测试：`--runxfail` → 2 passed（4.26s）；不带 runxfail → `[XPASS(strict)]`（1 failed/1 passed）；
+  两条都成立后才删 `xfail` 装饰器（断言一字未动）；摘标后 2 passed。
+- 邻域 `tests/test_547*.py` + `tests/test_543k_signal_pair_pose.py`：22 passed；4 errors 全在
+  `tests/test_547_named_pin_plan.py` 的 `tmp_path` 用例，根因是沙箱下 pytest 运行时新建的 basetemp
+  目录不可 `os.scandir`（WinError 5；换仓库根/子目录/平台 TEMP/关 guard 均复现）——记「未跑干净」。
+- **反证与回退**：窄门在 `201b`（2 条）、`119`、`120`、`534` 上把飞反激页面改红（gate 开
+  5 failed/69 passed，gate 关 74 passed/2 skipped），说明坐标判据必要不充分；N≥3 收窄也不够。
+  已删除 `_foreign_row_body_direction`（125 行）恢复原调用点、恢复 `xfail` 标记；复验
+  `1 passed, 1 xfailed` 与附带 4 文件 `74 passed, 2 skipped`。证据 `evidence/548A/`
+  （`dispatch_narrow_gate.md`、`gate_hits.txt`、`green_readings.txt`、`narrow-gate-certificate.md`）。
+  **548A 未通过**；未跑真机、未落画布、未宣称自动整页。
+
+## [2026-11-07] 548A 冻结与 547D 夹具缺脚
+
+### Problem / Task
+- 按 `tasks/548_drawing_capability_ladder.md` 推进 548A：先把 547D 的失败夹具与证据冻结成可复现件，
+  再解「支路座位 / 回流 / 标签走廊」的联合几何。548B 的串联语义合同不属本批。
+
+### Resolution
+- 新增 `evidence/548A/`：`repro.py` 先把 547A 岛输入写进 `fixture/`、再**回读**编译，所以改测试文件
+  动不了冻结；`fixture-manifest.json`/`baseline-hashes.json` 记夹具与基线哈希（drawcompiler
+  `f6825e8a…`、placement `ec1182d7…`，与 547D 记录的 547S 验收基线逐位一致）；`dirty-baseline.txt`
+  存开工前 33 项未提交改动快照；`red_baseline.txt`/`red_runxfail.txt` 存红读数；三个只读探针
+  `probe_seat.py`/`probe_band.py`/`probe_pose.py`。
+- **查出 547D 夹具输入缺陷**：`BUZZ` 声明的 `U1.PC0` 不在同文件内联的 `MCU32` 里（真实 547A 库
+  `evidence/547/a/smart_medicine_box.library.json:170` 有）。`BZ1` 的 anchor 因此落在岛原点，
+  独立可读性闸以 `required-pin-not-connected` 拒稿——修复前该用例不可能绿。已按真实库**左侧**
+  补回 `PC0`（tip `(-80,-55)`），电路、网表、断言、`stubMin` 不动；修后左列 15 引脚、多一条 GND 跑线。
+- **联合几何只到杠杆，未落生产代码**：单改逃逸方向无解（上行让 3V3 八个脚无法连通）；
+  改「体厚超过一个引脚行距的两端件沿自己那行摆」可 `ok=True`、1 候选，且 strict xfail 自己的
+  分区算术通过（四键各成独立节点）。该探针门太宽，仅证明杠杆。
+- 同步 `tasks/548_drawing_capability_ladder.md` §5、`tasks/draw-line.md`、`tasks/TASKMAP.md`、
+  `tasks/SCHEDULE.md`、`docs/roadmap.md`。**548A 判定未通过**：生产代码零改动、xfail 未摘、
+  未跑邻域/全量四线/真机、无候选落画布，不得记为自动能力。
+
+## [2026-11-07] 548 原理图自动绘制能力阶梯文档
+
+### Problem / Task
+- 将已讨论的“agent 声明语义、工具负责确定性几何与校验”落实为后续可派单的绘制路线，避免把 547G 辅助整页误记为自动能力。
+
+### Resolution
+- 新增 `tasks/548_drawing_capability_ladder.md`：按 N≥3 支路与标签走廊、显式二件串联、扰动/多岛组合、547 自动整页、真机闭环分批，逐批写明出口、停止条件和三轨证据口径；标为规划，未实施。
+- 在 `tasks/draw-line.md`、`tasks/SCHEDULE.md`、`tasks/TASKMAP.md`、`docs/roadmap.md`、`docs/handoff.md` 增量加入派单与路线指针。保留 547S 已完成、547D/E 未解、547G 暂停及 DRC/持久化的原有状态。
+
+### Prevention / Follow-up
+- 首个实施批从 547D 的同宿主重复支路与标签走廊联合几何开始；每批冻结输入并保留独立逐脚、视觉、拒因和旧拓扑回归证据。算法与 Rust 迁移不同批。
+
+### Verification
+- `.venv/Scripts/python.exe -m pytest tests/test_doc_claims.py -q --basetemp=.tmp_pt_548_docs`：40 passed、1 个 pytest cache 写入警告。
+- 文档路径存在性、`git diff --check` 与新任务书尾随空白检查通过；未运行全量代码测试或真机 EDA（本批仅文档规划）。
+
+### Commit
+- Branch: `main`
+- Commit: `1965d8421d61def71438e5ed344301060f1bb722`
+- Status: working tree changes not committed yet；原有未提交改动保留，未做 Git 写操作。
+- Files: `tasks/548_drawing_capability_ladder.md`、`tasks/draw-line.md`、`tasks/SCHEDULE.md`、`tasks/TASKMAP.md`、`docs/roadmap.md`、`docs/handoff.md`、`PROGRESS.md`。
+
 ## [2026-10-20] 原理图布局布线算法方案评审（仅方案）
 
 ### Problem / Task
@@ -1016,3 +1207,11 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 2026-11-01 **534B 重做：attach / partTexts / 地网分簇 / 标签规格开关（commit `263929e`）**：岳验收六岛版 20/100 后逐轮重做。**053C `attach`**（`modules[].attach = {to, side, gap}`，去耦模块贴宿主岛一侧，只影响摆放，两岛之间 0 根连接线）；**053D `partTexts`**（位号/型号按器件选边、让开引脚道；`_module_view` 补传播，修掉“页面路径不生效”）；**053E `gndClustering.radius`**（地网焊盘按**直径上限**贪心分簇，每簇一枚 GND 旗标、簇间不连线；usb_c 实测 GND 总长 940→565、最长段 205→85、旗标 1→4）；**053F 三个开关改成规格声明**（`gndClustering.radius` / `labelPolicy.stubMin` / `labelPolicy.rowModel`，不写＝旧行为逐字节不变；`LayoutLabel.stub_min`/`row_model` 只在非默认时序列化），把上一轮“直接改默认行为”造成的 44 条红收回到 2 条环境红。**审计**（4 个子代理、21 条发现）修掉：模块预算漏传 `flag_lead_limit`（文档写 120、实际按 60 跑）、`flagLeadLimit: NaN/Infinity` 过校验并静默取消上限、注释里的 `"U1"` 触发“场景常量”红。**真机**：Board1 **P13 `9e6240c6c29a8642`**（唯一原理图页，旧 P2–P12 全删）11 器件 / 54 wire / 18 flag，宿主 `draw lint` **0E/1W**、DRC **0E/5W**、独立逐脚 **55/55**；证据 `evidence/534h/`、`evidence/534i/`。**全量 8980 passed / 23 skipped / 2 failed**（`test_193_process_guards` 槽位 ACL、`test_193_secrecy_hooks` POSIX 安装器，两条既有环境红）。**未解**：CH343 左列标签仍挤（10 单位节距；强制 ≥40 桩会让右侧 TXD 四向无解、整页拒绝，短桩只能兜底）、去耦行间距 41、USB3 岛回环、D+/D− 背对背。
 
 - 2026-11-06 **v0.6.1 内测发布准备**：审查线 `cdff88b`、绘制线 `44901da` 已推送；boardwise/connector/DSH 统一为 0.6.1。审查与绘制增量含 V4 多 PCB、记录一致性、跨板声明、焊盘/货架/去耦/跨视图修复、541 R1/R2/R4 opt-in 闸、CH343 持久化与 CH340 第二拓扑。**Python 隔离全量**为 **9913 passed / 87 skipped / 1 failed**，唯一失败是快照缺 `.venv` 子解释器，补目录链接后该用例 **1 passed**；文档/DSH 同步聚焦 **116 passed**。**connector 576 passed + typecheck**；**Rust 111 passed / 4 ignored**，fmt/clippy/test 通过。**DSH 0.2.2-rc.1 适配**等待并持有 projection ready handle，旧 then-only disposer 不被误 await；0.2.1 与 0.2.2 两套真实依赖均 **137 passed / 1 skipped** + typecheck/build，隔离 CLI profile `bw022` 的 `plugin why` 与 `tool-boardwise` 配置通过。桌面 DSH NEXT 2.0.22、真实多板＋库、原始 PCB-A、4.1.94+ 探针、541 R3 与 CH340 重开仍未覆盖；发布件哈希以 Release 为准。
+
+- 2026-11-06 **546 daemon / connector 同系列兼容**：岳裁定以后只要求 major.minor 系列同步、补丁号独立；connector 无改动不随 daemon 补丁升号，系列升级时两边必须同升。`connectorVersionStatus` 新增 compatible，同系列双向补丁差不再误判 mismatch；doctor 与报告共用判据，常规 live 证据不降级，attributeMoves 等新动作仍以能力探测和 UNKNOWN_ACTION 为边界。0.6.1 daemon 可与 0.6.0 connector 做既有动作。最终聚焦 **457 passed / 3 skipped**，桥协议邻域 **153 passed**；变异系列判定恒 False 后 15 红，cp 恢复并核对 SHA-256 / cmp 一致。版本纪律同步 README、bridge、roadmap、testing-doctrine、SCHEDULE、TASKMAP、handoff 与 CLI 合同。真实编辑器混跑待岳验收。
+- 2026-11-08 **548C 扰动与组合（子代理执行，未 commit）**：固定 547A 同一电气夹具，只换表面，13 个变体走同一套闸（`evidence/548C/tools/gate.py`：编译 + `readability.check/check_page` + `derive_netlist` 独立逐脚/NC/短路 + 文本契约；官方 `draw compile` 另复核 A1/A2/A4/C2/E2）。**结论：部分通过**——A 同功能换符号 4/4（KEY 横脚、LED/蜂鸣器竖脚、MCU 体窄脚长 70，几何 `32d614e0…`/`764f2b2c…`/`47399909…`/`be51891f…`）、C 长网名 2/2（全 26 网 20–32 字符，16 条跨模块长名全整行印出，`051eb4fe…`）、D 允许姿态 2/2（全翻+KEY 镜像脚序，`846afd79…`）过；**B 长位号/长值行 0/3 全被结构化拒绝**（B1 `[text-overlap] texts[7] 'LED' [113.5,51,137.5,60] × labels[10] 'LCD_SCK' [92,50.5,147,59.5]`、B2 同类 4 条+1 网降级、B3 3V3 八脚无法并线；7 variant 全拒，0 候选）⇒ **对短文本过拟合**；**E 2–3 岛组合 0/2**（`layout-unsat/modules[mcu]`：GND 的 7 脚被画成 4 个独立节点 `BZ1.2`；`C1.2,R1.2`；`D1.2,D2.2`；`U1.VSS,U1.VSSA`，lcd 岛本身 ok、整页 0 页）。逐岛视觉：`cand1.svg` 经本机 WPF 栅格化后看过 A1/A2/A4/D2/C2，宿主/四键/两灯/蜂鸣器/去耦/BOOT0 支路归属与长名均可读。**零移动**：CH340 pinned `6ed82091…`+plan json `3757542a…`、CH343 pinned `2ec6b700…` 前后均 MATCH；`ch34-before.json`/`ch34-after.json` 整文件 sha256 同为 `213931eb…a4a`，逐字节 identical。**全量合树** `-n 4 --dist loadfile --basetemp=.tmp_pt_548C_full`：**10054 tests / 18 failed / 2178 errors / 22 skipped**，与 548A `full3.xml` 逐节点比较新增 0/减少 0，error 全是沙箱 `os.scandir`。未改 `src/`/`tests/`、未动 git、未跑真机/未落画布；证据 `evidence/548C/`（README、summary.json、results/、render/、pytest.txt）。
+- 2026-11-08 **548C2 多岛共享电源网统一（子代理执行，未 commit）**：**结论未通过，且批次前提被证伪**。判据先写成文（`evidence/548C2/criteria.md` C1–C6 + P1–P5 预测），8 个只读探针验证。**E2/E3 的 `layout-unsat/modules[mcu]` 不是多岛问题**：把 547A 自己的 mcu 用页面同一预算（`gndClustering.radius=100`）编译，它**同样失败、同样 4 节点**；547A 绿是因为出厂测试 `dc.compile(...)` 不传预算（radius=0），535 拆分地路径从未被这份夹具走过——`radius 0 → ok=True（GND 5 段 1 节点）` / `radius 100 → ok=False（4 节点：BZ1.2；C1.2,R1.2；D1.2,D2.2；U1.VSS,U1.VSSA）`。**真缺口三层**：A 模块层拆分地每簇零命名陈述（库无 `PWR-*`，`_flag_plan` None 后整网 continue）+ `BZ1.2` 悬空；B 页面端口用裸成员名 `J1.VCC` 查按脚号 `J1.1…J1.8` 建的 `_pin_points` → `_port_point` None（`modules[lcd]` 拒）；C 页面 label 兜底承载杆压 `texts[7] 'LED' [488,726,512,735]`、`segments[20] 'GND'` 竖命名。**「不拆」已被反证**：radius=0 的 GND 母线 (100,580)→(190,580) 横穿 `parts[U1] [210,585,350,785]`，即 535 要消灭的形态。**生产代码零改动**（`src/` 全部 mtime 早于 03:30:04 开工时刻）。**零移动**：548A 四负控 **74 passed / 2 skipped**、`test_547_repeated_shunts` **2 passed**、CH340 `6ed82091…`/CH343 `2ec6b700…` MATCH、ch34 两文件 sha256 均 `213931eb…a4a` 逐字节不变。**还缺一条语义事实**：拆分地每个邻域必须有可读命名陈述，库无旗符号时只能是标签（页层已如此、模块层为零陈述）——采不采「模块层标签兜底」要岳拍板（与「地/电源网一律旗标」的交付红线冲突待裁）。证据 `evidence/548C2/`（criteria.md、README.md、probes/、readings_e*.txt）。
+- 2026-11-08 **548C3 页面端口成员名解析 + 页 label 兜底承载杆（子代理执行，未 commit）**：只做 548C2 的 ②③④，**① 一行未碰**（拆分地每簇命名待岳裁定）。**判据先写成文**（`evidence/548C3/criteria.md` C1–C6 + P1–P6 预测），3 个只读探针（provenance / 合法自有杆枚举 / 修后合并页）。**② 落**：`pagecompiler._port_members` 把 `J1.VCC/J1.GND/J1.CS` 过 `readability._profile_pin_ruler`（脚号优先、再脚名）解析成 `J1.1/J1.2/J1.7` 再查 `_pin_points`；`J1.NOPE` 成为点名拒因（detail 含成员、符号 `'LCD'`、脚表 `1/VCC…`）。**③ 落**：页兜底 label 不再骑模块导线，改画**自己的水平承载杆**（既有 stub 梯级 40…240 短→长 × 端口朝向排序的成员脚 × 水平两向；引脚已有同向短桩则从其远端续画；杆体/名字行/label 盒三者都过 `_module_boxes` occupied；竖直杆不做）。模拟页（radius 按 548C2 单变量改 0）读数：`ok=True pages=4 captured=0`，548C2 的三条违规（`texts[7] 'LED'`×`segments[9]`、`segments[8]`×`U1`、`segments[20]` 竖排）全部消失，GND 9 脚 1 节点、3V3 9 脚 1 节点。**④ 落**：新增 `tests/test_548c3_page_port_members.py` 的 strict xfail，钉住「547A 在页面预算 radius=100 下仍失败」（1 xfailed；转绿即 ① 已落的信号）。新测试 **3 passed / 1 xfailed**。**零移动**：548A 四负控 **74 passed / 2 skipped**、`test_547_repeated_shunts` **2 passed**、CH340 `6ed82091…`/CH343 `2ec6b700…` MATCH、ch34 两文件 sha256 均 `213931eb…a4a` 逐字节不变。生产只改 `pagecompiler.py` 一个文件（派单写的 `drawcompiler.py` 是文件域笔误）；未跑真机/未落画布。证据 `evidence/548C3/`。
+- 2026-11-08 **548C4 长位号/长值行文字压线（子代理执行，未 commit）**：**B1 落、B2/B3 未落**。判据先写成文（`evidence/548C4/criteria.md` C1–C6 + P1–P7，写于任何 `src/` 改动之前），7 个只读探针。失败层实测：文字栈按「最宽行定宽」落到 above 侧，93 宽位号把 value 行拖进 MCU 的 `LCD_SCK` 行，而 `_part_texts` 的墙集**没有标签走廊**（表达式 11700 才算、标签 12085 才落座），标签自己的 4 方向 × 4 梯级已被五条 LCD 标签占满。修法只改 `drawcompiler.py`：`_build_one_variant` 增 `extra_text_walls`/`text_repair_round`，闸报 `texts × labels` 时把闸点名的 label 盒补进文字墙集重建（≤4 轮，148 逃生梯同一形状），**没相撞的页面 0 轮 ⇒ 零移动**。读数：B1 `ok=True`、1 候选 `868cc95b…`、hard 0、26/26 网 sameNode、0 短路、0 未放置、长位号与长值行全部整行印出；基线几何 `b71fcbcf…` 逐字节不变；负控 82 tests/0 failed/3 skipped、CH34 pinned 逐字节不变。B2 只剩 159.5 宽值行无自由侧（实测 2.93×–4.79× 节距下同一修复可过）⇒ 缺「节距由文字宽度解出」，属布局层，未落；B3 仍是 3V3 无旗符号（与 548C2 ① 同族，待岳拍板）。未跑真机/未落画布。证据 `evidence/548C4/`。
+
+- 2026-11-10 **549 首次配对显式授权（工作树，未提交/未发布/未做真机）**：取消“Origin + TOFU 即可写配对”的授权模型。CLI 新增 `boardwise bridge pair <CODE>`，用既有 CLI token 调 daemon-owned `pair.authorize`（`risk=write`、`design_write=false`、仅 ROLE_CLI），daemon 内存单槽 grant：8 位 Crockford base32 编号（公开可显示，token 永不显示）、单调时钟 5 分钟、授权时记录配对指纹、一次性消费、重启失效；写记录改同目录临时文件 + `os.replace`，**成功后才消费** grant；活动窗口不许顶掉。**红队 2026-11-10 推翻任务书旧的「10 次错码作废」**：错码只拒本次握手 + 记次数进服务端审计，因为计数绑定不到对端，任何未认证 socket 都能借此取消用户授权；未认证 `detail` 只保留 `pairCodeRequired`+`reason`（指纹/次数不出线，`_close` allowlist 兜底）；严格非法码 `BAD_REQUEST` 且不覆盖有效 grant。Connector 侧编号 Web Crypto only（无 `Math.random`，零/恒定随机失败关闭）、独立 `pairCode` 键、重连稳定、re-pair 换 token 与编号、`hello.data.pairCodeUsed===true` 才轮换；旧无编号 Connector 首配报 `code-missing` 要求升级，有效旧配对任意 Origin 仍可重连。**最终读数（2026-11-10 收尾）**：主代理独立 Python 聚焦 **455 passed / 3 skipped**；Connector **608 passed** + typecheck；DSH **137 passed / 1 skipped** + typecheck/build；Rust `fmt`/`clippy`/`test` **111 passed / 4 ignored**；CLI 合同一致（`tools.cli_contract`）。**全量 Python 一轮**：**10611 passed / 25 skipped / 1 xfailed / 23 failed / 5 errors**（27:15）——**不宣称全绿，也不把 23+5 全记到既有基线**：其中 `test_537a_daemon_write_policy` 两条是 549 新动作未登记非 design-write 例外（`pair.authorize` 现为第四个 `design_write=False` 例外，`risk=write` 不变），补登记后由 `test_537a_daemon_write_policy.py + tests/test_549_pairing_authorization.py + tests/test_bridge_cli.py` 聚焦 **126 passed** 关闭；另有 4 处 549 测试把审计写到仓库根，已改 `tmp_path`、残留走回收站；其余失败为既有货架数据、绘制线在途改动与已知 MSYS 环境错误。**未跑第二轮全量**。红队两轮：7 条已修，后续 3 条非阻断项亦已修，最终无已知阻断项。测试临时目录清理 24 个进回收站，日志与证据保留。文档同步 `docs/bridge.md` §3.4/§4/§5/§6/§8/§9/§10、README、getting-started、两份 SKILL.md（逐字节一致）；两处过期 HELP 文案（`protocol.py` summary、`shared.py` pair description）已改正并重生成 `contracts/cli/v1.json`。**状态：本地实现与离线验收完成，待真机/发布。未做**：提交、推送、版本 bump、发布、真实 EDA / 真实 Connector 端到端、4.1.71 真机、生产升级回滚——朋友那台真实候选跑通不是本实现的验收。
