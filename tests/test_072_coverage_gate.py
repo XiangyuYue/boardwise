@@ -1454,10 +1454,26 @@ def test_the_coverage_clause_for_withheld_conclusions_names_the_family():
 
 
 def test_real_boards_report_a_clean_coverage(tmp_path):
-    """The regression guard behind the 072 sweep: no fixture trips the gate."""
-    for name in ("ch340_golden.epro2", "llc_board.epro2"):
+    """The regression guard behind the 072 sweep: no fixture trips the gate.
+
+    038R2 的最小期望更新（唯一一处）：clean 仍是对**整份** coverage 取**相等**，
+    但带 PCB 文档的归档在离线路径上多一个真事实——`hostPcbDrcUnchecked`（`--file`
+    不连编辑器，宿主 PCB DRC 按构造没跑）。这不是把断言放宽成子集：期望逐夹具写明，
+    少了这个键、多了别的键、或值不是 True，都照样红。
+
+    两个夹具的差别正是 038R2 的分界：`ch340_golden` 没有 PCB 文档（不发生，键集与
+    038R2 之前一字不差），`llc_board` 有（事实为真，键在）。下面的 verdict 断言不变：
+    这两块板本来就有各自的旧理由读 incomplete，比开放项更强，两条陈述不冲突。
+    """
+    readings = {
+        # No PCB document: nothing was obliged to run, so the key is absent.
+        "ch340_golden.epro2": {**CLEAN_COVERAGE},
+        # PCB documents read offline: the host never answered, so it says so.
+        "llc_board.epro2": {**CLEAN_COVERAGE, "hostPcbDrcUnchecked": True},
+    }
+    for name, coverage in readings.items():
         _code, report, _out = _checkup(tmp_path, FIXTURES / name, name=f"sweep-{name}")
-        assert report["completion"]["coverage"] == CLEAN_COVERAGE, name
+        assert report["completion"]["coverage"] == coverage, name
         assert report["completion"]["verdict"] == "incomplete", (
             "these boards are incomplete for their own (pre-existing) reasons"
         )

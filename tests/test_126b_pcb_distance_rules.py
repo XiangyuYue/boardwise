@@ -639,6 +639,132 @@ def test_a_degenerate_one_point_outline_files_no_board_frame_errors():
 
 
 # ---------------------------------------------------------------------------
+# 038R3: a frame that read, parts that exist, and nothing measurable
+# ---------------------------------------------------------------------------
+
+#: ``BoardOutline.fragment_kind`` for the one ring that reads as a stroke's
+#: centre line (187A M2). Spelled here as a literal for the same reason
+#: ``test_187a_outline_holes`` does: the pin is the rule's reading, not a
+#: constant the test imports from the rule it is testing.
+STROKE_PIECE = "stroke_piece"
+
+
+def test_a_frame_that_read_but_no_part_has_pads_is_not_a_silent_pass():
+    """038R3: 板框读出来了、器件也在，但一个焊盘都没有 → 恰一条聚合 WARN。
+
+    修前 = ``[]``：``_measurable_designators`` 为空，逐器件循环空转，而报告里
+    的 ``outlineNote`` 沉默只挂在「板框没读出来」那一档上——读者于是看到
+    「跑过了、什么也没发现」，把「没跑」当成了「全过」。这条 fake 就是那个形状：
+    (0,0)-(500,500) 的闭合四角点板框 + 两个带位号的器件 + ``pads=[]``。
+
+    修后：**一条** WARN（不是每个器件一条、不是 ERROR），文案写明检查未运行、
+    不是全过，证据给出位号与数量。它不新造 coverage schema，也不改任何走
+    逐器件判定的路径。
+    """
+    board = _board([("J1", 100.0, 100.0), ("MH1", 300.0, 300.0)], [])
+    board.outline = _outline_board(0.0, 0.0, 500.0, 500.0)
+
+    findings = BoardOffEdge().check(_ctx(board))
+    assert len(findings) == 1, "exactly one aggregate row, not one per part"
+    finding = findings[0]
+    assert finding.severity == "WARN", "「没量到」不是 ERROR"
+    assert finding.rule_id == "pcb-component-off-board"
+    assert finding.target is None, "板级聚合行不冒充逐器件 target"
+    assert "未运行" in finding.message and "不是全过" in finding.message, finding.message
+    assert "2" in finding.message, f"数量要说出来: {finding.message}"
+    evidence = " ".join(finding.evidence)
+    assert "J1" in evidence and "MH1" in evidence, evidence
+    assert "0" in evidence, evidence
+    # The clean-board reading must not be reachable from this row's prose.
+    assert "无违规" not in finding.message and "通过" not in finding.message
+
+
+def test_a_board_with_no_parts_files_no_unmeasurable_warn():
+    """没有器件就没有可问的对象：空文档不新增 WARN（旧行为保持）。"""
+    board = _board([], [])
+    board.outline = _outline_board(0.0, 0.0, 500.0, 500.0)
+    assert BoardOffEdge().check(_ctx(board)) == []
+
+
+def test_parts_with_pads_keep_the_per_part_sweep_and_gain_no_aggregate_warn():
+    """只要有一个带焊盘的器件，就走原来的逐器件判定，聚合 WARN 不出现。
+
+    同一块板上放着 ``C9``（越界 40 mil，有焊盘）和 ``MH1``（无焊盘）：结果是
+    既有那一条 ERROR，不是 1 ERROR + 1 WARN —— 聚合行只属于「一个都量不了」。
+    """
+    board = _board(
+        [("C9", 520.0, 100.0), ("MH1", 100.0, 100.0)],
+        [_pad("C9", "1", x=520.0, y=100.0)],
+    )
+    board.outline = _outline_board(0.0, 0.0, 500.0, 500.0)
+    findings = BoardOffEdge().check(_ctx(board))
+    assert [f.severity for f in findings] == ["ERROR"], (
+        "正常焊盘判定不变，且不叠加聚合 WARN"
+    )
+    assert findings[0].target.component_ref == "C9"
+    assert findings[0].target.measurement == {
+        "kind": "distance", "value": 40.0, "unit": "mil",
+    }
+
+
+def test_the_no_frame_open_frame_and_degenerate_frame_stay_silent():
+    """无框 / 开放框 / 退化框维持既有合同：一条都不出（含新的聚合 WARN）。"""
+    frames = {
+        "no frame": None,
+        "one point (degenerate)": BoardOutline(
+            closed=True, points=[Point(17.4999, 27.5)], source_id="one-point"
+        ),
+        "open polyline": BoardOutline(
+            closed=False,
+            points=[Point(0.0, 0.0), Point(500.0, 0.0), Point(500.0, 500.0)],
+            source_id="open",
+        ),
+    }
+    for label, outline in frames.items():
+        board = _board([("J1", 100.0, 100.0), ("MH1", 300.0, 300.0)], [])
+        board.outline = outline
+        assert BoardOffEdge().check(_ctx(board)) == [], f"{label} 仍是静默"
+
+
+def test_a_stroke_piece_frame_keeps_its_one_warn_without_stacking():
+    """描边碎片既有的那一条 WARN 优先：不叠加成两条。
+
+    bug98-B 的护栏在 ``check()`` 里先于 ``_outside_outline`` 返回，因此碎片板
+    无论有没有焊盘都只有那一行「拼合失败/已抑制」——038R3 的聚合行不许冒出
+    第二条（那会把「板框没拼成」和「器件没焊盘」两个原因混成一张账单）。
+    """
+    board = _board([("J1", 100.0, 100.0), ("MH1", 300.0, 300.0)], [])
+    board.outline = BoardOutline(
+        points=[
+            Point(0.0, 0.0),
+            Point(500.0, 0.0),
+            Point(500.0, 500.0),
+            Point(0.0, 500.0),
+        ],
+        source_id="stroke-piece",
+        segments=16,
+        closed=True,
+        stitched=False,
+        fragment_kind=STROKE_PIECE,
+    )
+    board.outline_fragments = 15
+    findings = BoardOffEdge().check(_ctx(board))
+    assert len(findings) == 1
+    assert findings[0].severity == "WARN"
+    assert "拼合失败" in findings[0].message and "已抑制" in findings[0].message
+    assert "未运行" not in findings[0].message, "碎片行优先，聚合行不叠加"
+    assert "带位号器件" not in " ".join(findings[0].evidence)
+
+    # 同一块碎片板上有焊盘器件时，答案还是那一条（既有 187A 合同）。
+    padded = _board(
+        [("C9", 520.0, 100.0)], [_pad("C9", "1", x=520.0, y=100.0)]
+    )
+    padded.outline = board.outline
+    padded.outline_fragments = 15
+    assert len(BoardOffEdge().check(_ctx(padded))) == 1
+
+
+# ---------------------------------------------------------------------------
 # the runner call site moved: the three properties that move with it
 # ---------------------------------------------------------------------------
 

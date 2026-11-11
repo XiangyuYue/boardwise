@@ -116,6 +116,7 @@
     "parsers/board_source.py": "shared",
     "parsers/enet.py": "shared",
     "parsers/eprj3.py": "shared",
+    "parsers/elibz.py": "shared",
     "parsers/epro2_model.py": "shared",
     "parsers/epru.py": "shared",
     "parsers/epru_stream.py": "shared",

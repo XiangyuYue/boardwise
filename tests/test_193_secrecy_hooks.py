@@ -686,6 +686,7 @@ def test_the_tracked_hooks_are_executable_in_the_index():
 
 
 @_skip_without_git
+@_skip_without_msys_shared_objects
 def test_the_posix_installer_sets_hooks_path_and_the_exec_bit(hook_repo):
     """`scripts/install-hooks.sh` — the POSIX half install-hooks.bat cannot do.
 
@@ -693,13 +694,25 @@ def test_the_posix_installer_sets_hooks_path_and_the_exec_bit(hook_repo):
     checks these hooks out needs them executable ... this batch file cannot do it
     for you"). The shell script sets the config **and** chmods the hooks, so the
     documented POSIX route stops at one command.
+
+    Driven under :func:`_hook_shell` — git's **own** ``sh.exe``, the interpreter
+    the hooks themselves run under — so this measures the route the hooks take,
+    not any other shell that happens to be on PATH.
+
+    038R8: ``@_skip_without_msys_shared_objects`` separates two verdicts this test
+    used to merge. "``sh.exe`` cannot start here at all" (a restricted token
+    refusing ``NtCreateDirectoryObject`` with ``0xC0000022``, before the script's
+    first line) is **the environment**, and it is a SKIP carrying the probe's own
+    reason. Once the shell does start, every failure below is the **script's** —
+    the assertions stay unconditional, and a non-zero exit is a FAILED, never a
+    skip.
     """
-    shell = shutil.which("sh")
+    shell = _hook_shell()
     if shell is None:
         pytest.skip("no `sh` on PATH: the POSIX installer cannot be driven here")
     assert _INSTALLER_SH.is_file(), f"{_INSTALLER_SH} must be tracked with the Windows installer"
     completed = subprocess.run(
-        [shell, str(hook_repo / "scripts" / "install-hooks.sh")],
+        [str(shell), str(hook_repo / "scripts" / "install-hooks.sh")],
         cwd=hook_repo,
         capture_output=True,
     )

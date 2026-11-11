@@ -312,6 +312,18 @@ def _try_lock(path: Path) -> "tuple[int, object] | None":
 
     The handle is returned open on purpose — the lock lives exactly as long as
     it does, and closing it would release the slot.
+
+    The open is ``r+b`` because the window the slots live in is normally the
+    caller's own; a **read-only** window is not a reason to skip the lock on
+    Windows, where a session token can be granted read on an existing slot file
+    and nothing else (``open(..., "r+b")`` → ``PermissionError``, WinError 5).
+    ``msvcrt.locking`` needs no write access, so an existing regular file is
+    locked through ``rb`` just as hard: a second reader and a ``r+b`` handle
+    both conflict, and the release still happens on close/exit. Anything else —
+    a missing file, a path that is not a regular file, a platform where
+    ``PermissionError`` means "no permission, really" — is left to fail as it
+    did: the fallback is a narrower way to hold the same lock, never a way to
+    pretend it is held.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
@@ -319,7 +331,12 @@ def _try_lock(path: Path) -> "tuple[int, object] | None":
             path.write_bytes(b"\0" * SLOT_COUNT)
         except OSError:
             pass  # another run created it first, or a lock is in the way
-    handle = open(path, "r+b")
+    try:
+        handle = open(path, "r+b")
+    except PermissionError:
+        if os.name != "nt" or not path.is_file():
+            raise
+        handle = open(path, "rb")
     for index in range(SLOT_COUNT):
         handle.seek(index)
         try:

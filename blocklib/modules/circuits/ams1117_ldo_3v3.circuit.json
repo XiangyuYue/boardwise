@@ -1,0 +1,97 @@
+{
+  "draft": true,
+  "kind": "boardwise-circuit-spec",
+  "nc": [],
+  "nets": [
+    {
+      "class": "power",
+      "id": "port.3V3",
+      "members": [
+        "C_BYP.1",
+        "C_OUT.1",
+        "U.VOUT*"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "gnd",
+      "id": "port.GND",
+      "members": [
+        "C_BYP.2",
+        "C_IN.2",
+        "C_OUT.2",
+        "U.GND"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "power",
+      "id": "port.VIN_5V",
+      "members": [
+        "C_IN.1",
+        "U.VIN"
+      ],
+      "provenance": "ai_asserted"
+    }
+  ],
+  "openInterfaces": [
+    {
+      "direction": "load",
+      "net": "port.3V3",
+      "provenance": "ai_asserted",
+      "role": "3V3"
+    },
+    {
+      "direction": "",
+      "net": "port.GND",
+      "provenance": "ai_asserted",
+      "role": "GND"
+    },
+    {
+      "direction": "source",
+      "net": "port.VIN_5V",
+      "provenance": "ai_asserted",
+      "role": "VIN_5V"
+    }
+  ],
+  "operatingConditions": {},
+  "parts": [
+    {
+      "id": "C_BYP",
+      "lcsc": "C1525",
+      "mpn": "CL05B104KO5NNNC",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-C_BYP",
+      "value": "100nF"
+    },
+    {
+      "id": "C_IN",
+      "lcsc": "C440198",
+      "mpn": "GRM21BR61H106KE43L",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-C_IN",
+      "value": "10µF"
+    },
+    {
+      "id": "C_OUT",
+      "lcsc": "C45783",
+      "mpn": "CL21A226MAQNNNE",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-C_OUT",
+      "value": "22µF"
+    },
+    {
+      "id": "U",
+      "lcsc": "C6186",
+      "mpn": "AMS1117-3.3",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-U",
+      "value": "AMS1117-3.3"
+    }
+  ],
+  "specVersion": 1
+}

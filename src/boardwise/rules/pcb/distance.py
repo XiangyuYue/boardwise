@@ -1581,6 +1581,13 @@ class BoardOffEdge(PcbRule):
     That silence is a gap, not a pass, and it is stated here rather than dressed
     up as a finding about the parts.
 
+    **「Nothing to measure」 is likewise a gap, and it is said out loud (038R3).**
+    A valid frame plus parts with no pads at all used to iterate over an empty
+    designator list and return ``[]`` — the one silence a reader cannot tell
+    from a clean board. It is now **one aggregate WARN** naming the counts and
+    the designators, with 「检查未运行」 in the text; see
+    :meth:`BoardOffEdge._nothing_measurable`.
+
     **A frame that is a *piece* of one is not a frame either (bug98-B)**, and
     that case is loud rather than silent: when the parser's stitching fails and
     it falls back to one record's own closed ring while other ``BOARD_OUTLINE``
@@ -1719,6 +1726,17 @@ class BoardOffEdge(PcbRule):
         the field board's left-edge arc as its only record) is not a frame
         either, and must not measure parts against it. ``BoardOutline.closed``
         exists for exactly this guard.
+
+        **A frame that read, parts that exist, and nothing to measure is a
+        fourth state and it is not a pass (038R3).** With the frame valid the
+        loop below has nothing to iterate when :func:`_measurable_designators`
+        is empty, so the rule returned ``[]`` — and because the report's
+        ``outlineNote`` silence is scoped to an *unread* frame, the reader saw
+        nothing anywhere: 「never ran」 turned into 「ran, found nothing」. A
+        board whose parts carry no pads at all (mechanical/special parts the
+        board file does not give copper) therefore came back clean. That
+        aggregate WARN names the counts and designators and says the check did
+        not run; see :meth:`_nothing_measurable`.
         """
         outline = board.outline
         if (
@@ -1727,6 +1745,8 @@ class BoardOffEdge(PcbRule):
             or not outline.closed
         ):
             return []
+        if not designators:
+            return self._nothing_measurable(board)
         polygon = list(outline.points)
         findings: list[Finding] = []
         for designator in designators:
@@ -1781,6 +1801,59 @@ class BoardOffEdge(PcbRule):
                 )
             )
         return findings
+
+    def _nothing_measurable(self, board: BoardGeometry) -> list[Finding]:
+        """One aggregate WARN when a real frame read but no part has copper.
+
+        038R3's state, the one between 「did not run」 and 「ran」: the frame is
+        closed and has the corners (:meth:`_outside_outline` already said so),
+        the board places parts with designators, and **not one of them carries a
+        pad** — so :func:`_measurable_designators` is empty and the per-part loop
+        would have iterated over nothing, i.e. filed nothing. Silence there reads
+        as a pass, and a pass is a claim this rule cannot make: it never looked
+        at a pad.
+
+        So it says that, once, at board scope: **WARN, not ERROR** (whether a
+        pad-less part is a design error is a human question — a mechanical or
+        special part legitimately has no copper, 岳's triage), and **one row,
+        not one per part** (the message carries the count, the evidence the
+        designators — 98 rows of 「no pads」 would be the same noise bug98-B
+        removed). Nothing here re-judges a part: a board where *some* parts have
+        pads and others do not keeps the per-part sweep untouched, since the
+        sweep only needs one measurable designator to run.
+
+        A board with **no designator'd parts at all** stays silent — an empty
+        document is not 「a check that cannot run」, there is nothing a frame
+        could be asked about. The no-frame / open-frame / degenerate-frame
+        guards sit above this call and keep their own answers.
+        """
+        named = sorted(
+            {str(comp.designator) for comp in board.components if comp.designator}
+        )
+        if not named:
+            return []
+        shown = "、".join(named[:12]) + (
+            f" 等（共 {len(named)} 个）" if len(named) > 12 else ""
+        )
+        return [
+            Finding(
+                rule_id=self.id,
+                severity="WARN",
+                level=self.level,
+                message=(
+                    f"板框已读出，但本次没有任何带焊盘的器件可判定——"
+                    f"「器件出板框」检查未运行（不是全过）：板上 {len(named)} 个"
+                    f"带位号的器件一个焊盘都没读到，逐器件判定无从下手"
+                ),
+                evidence=[
+                    f"带位号器件 {len(named)} 个、其中可测量（有焊盘）0 个：{shown}",
+                    "判据：逐器件判定要在焊盘四角与板框多边形之间量距离，"
+                    "没有焊盘就没有可量的东西——这一行披露的是「没跑」，"
+                    "不是「全在板内」；无焊盘不等于设计错误，"
+                    "机械件/特殊件由工程师分诊（038R3）",
+                ],
+            )
+        ]
 
 
 def _outside_by(corners: list[Point], polygon: list[Point]) -> float:

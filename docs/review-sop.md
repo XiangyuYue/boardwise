@@ -267,6 +267,11 @@ PCB 模块 → 器件）→ 模块/规则族」分组、层内按严重度、每
   `per-page` 档位说明就是那句「agreement by name is not a verified connection」。
   **单页工程与 project-file 档行为一字不变**（单页的网按构造即为已验证）。
   `drc.*.checked=false` + `reason` 一律是"**没查**"，不是"零错误"。
+  **工程真有 PCB 文档而这回宿主 PCB DRC 没跑（`drc.pcb.checked=false`，离线/在线拒绝一样）时，
+  verdict 是 `complete-with-open-items` 而不是 `complete`**（038R2）：`coverage.hostPcbDrcUnchecked`=true
+  把它写进 `verdictWhy`，`conclusion.mayQuotePassed=false`、整板结论**不得写「可以投板」**；
+  无 ERROR 时 `exitCode` 仍是 0，`checked=false` 也不会被改写成 ERROR 或 Finding。
+  自有规则没新增 clearance finding **不等于**宿主 DRC 通过。无 PCB 文档的工程不受此闸影响。
 - 只读：`doc.open` 只切焦点、`userInterface` 恒 false（不弹底部面板），每个阶段 `finally`
   把焦点复位。旧版 connector 缺某个动作时报告会记 `note` 并降级，不会瞎报。
 

@@ -1,0 +1,183 @@
+{
+  "draft": true,
+  "kind": "boardwise-circuit-spec",
+  "nc": [],
+  "nets": [
+    {
+      "id": "internal.01",
+      "members": [
+        "EN_PULLUP.1",
+        "REG.1"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "internal.02",
+      "members": [
+        "FB_BOTTOM.2",
+        "FB_CAP.1",
+        "FB_TOP.1",
+        "REG.5"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "internal.03",
+      "members": [
+        "IND.1",
+        "REG.3"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "power",
+      "id": "port.POWER_OUT",
+      "members": [
+        "FB_CAP.2",
+        "FB_TOP.2",
+        "IND.2",
+        "OUT_BULK.2",
+        "OUT_DECOUP.2"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "power",
+      "id": "port.POWER_IN",
+      "members": [
+        "EN_PULLUP.2",
+        "IN_BULK.2",
+        "IN_DECOUP.2",
+        "REG.4"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "gnd",
+      "id": "port.GND",
+      "members": [
+        "FB_BOTTOM.1",
+        "IN_BULK.1",
+        "IN_DECOUP.1",
+        "OUT_BULK.1",
+        "OUT_DECOUP.1",
+        "REG.2"
+      ],
+      "provenance": "ai_asserted"
+    }
+  ],
+  "openInterfaces": [
+    {
+      "direction": "load",
+      "net": "port.POWER_OUT",
+      "provenance": "ai_asserted",
+      "role": "POWER_OUT"
+    },
+    {
+      "direction": "source",
+      "net": "port.POWER_IN",
+      "provenance": "ai_asserted",
+      "role": "POWER_IN"
+    },
+    {
+      "direction": "",
+      "net": "port.GND",
+      "provenance": "ai_asserted",
+      "role": "GND"
+    }
+  ],
+  "operatingConditions": {},
+  "parts": [
+    {
+      "id": "REG",
+      "lcsc": "C78988",
+      "mpn": "",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-REG",
+      "value": ""
+    },
+    {
+      "id": "IN_BULK",
+      "lcsc": "C45783",
+      "mpn": "",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-IN_BULK",
+      "value": ""
+    },
+    {
+      "id": "IN_DECOUP",
+      "lcsc": "C14663",
+      "mpn": "",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-IN_DECOUP",
+      "value": ""
+    },
+    {
+      "id": "IND",
+      "lcsc": "C167206",
+      "mpn": "",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-IND",
+      "value": ""
+    },
+    {
+      "id": "OUT_BULK",
+      "lcsc": "C45783",
+      "mpn": "",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-OUT_BULK",
+      "value": ""
+    },
+    {
+      "id": "OUT_DECOUP",
+      "lcsc": "C14663",
+      "mpn": "",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-OUT_DECOUP",
+      "value": ""
+    },
+    {
+      "id": "FB_CAP",
+      "lcsc": "C1653",
+      "mpn": "",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-FB_CAP",
+      "value": ""
+    },
+    {
+      "id": "FB_TOP",
+      "lcsc": "C25803",
+      "mpn": "",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-FB_TOP",
+      "value": ""
+    },
+    {
+      "id": "FB_BOTTOM",
+      "lcsc": "C2960862",
+      "mpn": "",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-FB_BOTTOM",
+      "value": ""
+    },
+    {
+      "id": "EN_PULLUP",
+      "lcsc": "C25804",
+      "mpn": "",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-EN_PULLUP",
+      "value": ""
+    }
+  ],
+  "specVersion": 1
+}

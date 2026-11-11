@@ -18,6 +18,7 @@ Two things about the environment of those children, both deliberate:
 
 from __future__ import annotations
 
+import builtins
 import ctypes
 import os
 import subprocess
@@ -222,6 +223,72 @@ def test_broken_slot_file_fails_open(guard_tmp):
     code, text = _run([str(PROBE_DIR)], guard_tmp / "failopen", env)
     assert code == 0, text
     assert "fail-open" in text, text
+
+
+@pytest.mark.skipif(
+    os.name != "nt", reason="the read-only fallback exists for a Windows PermissionError"
+)
+def test_a_read_only_slot_file_still_takes_a_real_lock(tmp_path, monkeypatch):
+    """038R7: `r+b` refused, `rb` allowed — the slot must still be *held*.
+
+    The environment this was written in has a session token with read-only
+    access to ``~/.boardwise``: the slot file exists and reads fine, while
+    ``open(..., "r+b")`` raises ``PermissionError`` (WinError 5). The old
+    ``_try_lock`` raised, ``acquire_slot``'s fail-open swallowed it, and every
+    full run silently ran without a lock — the queue it prints was decoration.
+
+    Here ``r+b`` is the only thing mocked away, so what is measured is the
+    lock: the fallback handle is read-only, it conflicts with a second reader
+    on the same byte, the two slots are still two, and closing gives the slot
+    back. ``SLOT_COUNT`` is 2, so "the next caller loses" is the third one.
+    """
+    slot = tmp_path / "pytest-slots"
+    slot.write_bytes(b"\0" * GUARDS.SLOT_COUNT)
+
+    import msvcrt
+
+    real_open = builtins.open
+
+    def read_only_only(path, mode="r", *args, **kwargs):
+        if "+" in mode:
+            raise PermissionError(13, "Access is denied", str(path))
+        return real_open(path, mode, *args, **kwargs)
+
+    # `_try_lock` calls the builtin by name; a module-level name shadows it for
+    # this module alone, so the rest of the session keeps its own `open`.
+    monkeypatch.setattr(GUARDS, "open", read_only_only, raising=False)
+
+    first = GUARDS._try_lock(slot)
+    assert first is not None, "r+b was refused and the rb fallback did not take the slot"
+    index, handle = first
+    handles = [handle]
+    assert "+" not in handle.mode, f"the fallback is supposed to be read-only, got {handle.mode!r}"
+
+    # The lock is real: a raw read-only handle on the same byte conflicts, which
+    # is what `msvcrt.locking` on a read-only handle buys us.
+    rival = real_open(slot, "rb")
+    rival.seek(index)
+    try:
+        with pytest.raises(OSError):
+            msvcrt.locking(rival.fileno(), msvcrt.LK_NBLCK, 1)
+    finally:
+        rival.close()
+
+    while len(handles) < GUARDS.SLOT_COUNT:  # slot 1, the other half of a two-slot machine
+        more = GUARDS._try_lock(slot)
+        assert more is not None, "the second slot was free and was not taken"
+        handles.append(more[1])
+
+    started = time.monotonic()
+    assert GUARDS._try_lock(slot) is None, "both slots are held; a third caller must not get one"
+    assert time.monotonic() - started < 5.0, "`_try_lock` must not block; `acquire_slot` waits"
+
+    for held in handles:
+        held.close()
+    again = GUARDS._try_lock(slot)
+    assert again is not None, "the slot was not released by closing its handle"
+    assert again[0] == index
+    again[1].close()
 
 
 @_guards_on_only

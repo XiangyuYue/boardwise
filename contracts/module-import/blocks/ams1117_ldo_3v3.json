@@ -1,0 +1,61 @@
+{
+  "author": "@zhoushoujianwork",
+  "category": "power",
+  "contributors": [],
+  "id": "block.ams1117_ldo_3v3",
+  "internal_nets": [
+    [
+      "U.VIN",
+      "C_IN.1",
+      "PORT:VIN_5V"
+    ],
+    [
+      "U.VOUT*",
+      "C_OUT.1",
+      "C_BYP.1",
+      "PORT:3V3"
+    ],
+    [
+      "U.GND",
+      "C_IN.2",
+      "C_OUT.2",
+      "C_BYP.2",
+      "PORT:GND"
+    ]
+  ],
+  "parts": {
+    "C_BYP": {
+      "part": "cap.100nf_0402",
+      "qty": 1
+    },
+    "C_IN": {
+      "part": "cap.10uf_0805",
+      "qty": 1
+    },
+    "C_OUT": {
+      "part": "cap.22uf_0805",
+      "qty": 1
+    },
+    "U": {
+      "part": "ldo.ams1117_3v3",
+      "qty": 1
+    }
+  },
+  "ports": {
+    "3V3": {
+      "at": "U.VOUT*",
+      "default_net": "+3V3",
+      "dir": "out"
+    },
+    "GND": {
+      "at": "U.GND",
+      "default_net": "GND",
+      "dir": "bidir"
+    },
+    "VIN_5V": {
+      "at": "U.VIN",
+      "default_net": "+5V",
+      "dir": "in"
+    }
+  }
+}

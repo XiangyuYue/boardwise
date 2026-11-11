@@ -1,0 +1,93 @@
+{
+  "author": "@zhoushoujianwork",
+  "category": "power",
+  "contributors": [],
+  "id": "block.sy8089_buck_3v3",
+  "internal_nets": [
+    [
+      "U.IN",
+      "C_IN.1",
+      "PORT:VIN"
+    ],
+    [
+      "U.EN",
+      "PORT:EN"
+    ],
+    [
+      "U.LX",
+      "L.1"
+    ],
+    [
+      "L.2",
+      "C_OUT.1",
+      "C_HF.1",
+      "R_FBT.1",
+      "PORT:3V3"
+    ],
+    [
+      "U.FB",
+      "R_FBT.2",
+      "R_FBB.1"
+    ],
+    [
+      "U.GND",
+      "R_FBB.2",
+      "C_IN.2",
+      "C_OUT.2",
+      "C_HF.2",
+      "PORT:GND"
+    ]
+  ],
+  "parts": {
+    "C_HF": {
+      "part": "cap.100nf_0402",
+      "qty": 1
+    },
+    "C_IN": {
+      "part": "cap.10uf_0805",
+      "qty": 1
+    },
+    "C_OUT": {
+      "part": "cap.22uf_0805",
+      "qty": 1
+    },
+    "L": {
+      "part": "ind.22uh_1210",
+      "qty": 1
+    },
+    "R_FBB": {
+      "part": "res.10k_0402",
+      "qty": 1
+    },
+    "R_FBT": {
+      "part": "res.453k_0402__2",
+      "qty": 1
+    },
+    "U": {
+      "part": "buck.sy8089_tsot23",
+      "qty": 1
+    }
+  },
+  "ports": {
+    "3V3": {
+      "at": "L.2",
+      "default_net": "+3V3",
+      "dir": "out"
+    },
+    "EN": {
+      "at": "U.EN",
+      "default_net": "VSYS",
+      "dir": "in"
+    },
+    "GND": {
+      "at": "U.GND",
+      "default_net": "GND",
+      "dir": "bidir"
+    },
+    "VIN": {
+      "at": "U.IN",
+      "default_net": "VSYS",
+      "dir": "in"
+    }
+  }
+}

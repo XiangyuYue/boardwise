@@ -2996,6 +2996,32 @@ def _clean_coverage() -> dict:
     }
 
 
+def _host_pcb_drc_unchecked(drc: dict | None, *, pcb_had_documents: bool) -> bool:
+    """038R2: the engineering has a PCB and this run never got the host's DRC on it.
+
+    Both halves are facts the CLI's PCB block and its DRC stage already hold, and
+    neither is derivable from the other: ``pcb_had_documents`` says the board is
+    **there** (the runner's own answer, so a folder project whose boards are files
+    counts), and ``drc.pcb.checked`` says whether the **host** answered. A
+    schematic-only project is not a gap — nothing was obliged to run — and
+    ``checked=true`` is the run that did ask, so neither may be reported.
+
+    The test is ``is not True`` rather than ``== False`` on purpose: the task's
+    wording is 「`drc.pcb.checked` 非 true」, and a segment that answered ``None``
+    (a bridge refusal that stored no boolean) is the same open item as the offline
+    absence. What the **absence** of the key in `coverage` means is only "this
+    batch added no such coverage fact" — no PCB document, or the host really did
+    answer ``checked=true``. It is **not** a pass: 自有规则零新增 ≠ 宿主 DRC 通过,
+    and the report never claims the host checked anything. For a report written
+    before this batch the absence is the compatibility-neutral reading (a gate
+    that postdates an archive does not re-litigate it), which is a third reason
+    absence carries no claim either.
+    """
+    pcb = (drc or {}).get("pcb")
+    checked = (pcb or {}).get("checked") if isinstance(pcb, dict) else None
+    return bool(pcb_had_documents) and checked is not True
+
+
 def _coverage_section(
     *,
     model: object,
@@ -3011,6 +3037,12 @@ def _coverage_section(
     # the same sense as `modelEmpty`: the run was obliged to look and could not,
     # so the verdict may not call it complete.
     shelf_unreadable: bool = False,
+    # 038R2: the project really has PCB documents **and** the host's PCB DRC was
+    # not `checked` this run (offline `--file` by construction, an online refusal
+    # or a tier that could not ask). Computed where both halves are in hand —
+    # `_host_pcb_drc_unchecked` in `_cmd_checkup` — never derived from "no
+    # clearance finding came back", which is not the same statement.
+    host_pcb_drc_unchecked: bool = False,
 ) -> dict:
     """The coverage gate's **facts**, read off the parse the report is about (#30).
 
@@ -3128,6 +3160,15 @@ def _coverage_section(
       that the report said nothing at all about a check it never ran. See
       :func:`_pcb_online_not_run` for why the online path is disclosed while the
       offline one is gated.
+    * ``hostPcbDrcUnchecked`` (038R2) — the project has PCB documents and this run
+      never got the host's PCB DRC on them (``drc.pcb.checked`` is not true), so
+      the board's own clearance/geometry verdict from the **host** is missing. It
+      is an **open item**, not an ``incomplete`` gate: everything this run could
+      read, it read, and 自有规则零新增 finding 不等于宿主通过 — the two answer
+      different questions. Present **only when true** (absent-not-zero, like the
+      keys around it), so a report written before this batch and every run that
+      did ask the host keep their exact key set, and the re-gate path (which
+      carries `coverage` from the report) reads absence as False.
     """
     from .engines.review import refused_conclusions, rules_for
 
@@ -3222,6 +3263,13 @@ def _coverage_section(
         # every report whose shelf was readable) keeps its exact key set, and the
         # re-gate path carries whatever this run stored.
         **({"shelfUnreadable": True} if shelf_unreadable else {}),
+        # 038R2: an **open item**, and absent unless true — the same discipline as
+        # the four keys above, and the reason an old report's verdict is not
+        # re-litigated by a gate that postdates it. `checked=false` is *not* turned
+        # into an ERROR or a Finding here (or anywhere): `drc.summarise` decides the
+        # exit code from what the host said, and this key only says the host never
+        # said anything.
+        **({"hostPcbDrcUnchecked": True} if host_pcb_drc_unchecked else {}),
     }
 
 
@@ -3329,6 +3377,18 @@ def _coverage_reasons(coverage: dict) -> list[str]:
             "货架读不了（源文件缺失/不可读，见 source.notes 与 shelfPath）："
             "facts 驱动的器件判据整层没有输入 —— 未审器件节说的是「没有货架」，"
             "不是「货架为空」"
+        )
+    if coverage.get("hostPcbDrcUnchecked"):
+        # 038R2: last, beside the other two "we did not look" clauses and after
+        # every non-coverage clause. Worded as what is missing, and it names the
+        # segment a reader has to open (`drc.pcb.reason`) because "not run" has
+        # several causes (offline, a bridge refusal, a tier that could not ask).
+        # The half-sentence 「自有规则零新增不等于宿主通过」 is the whole point of
+        # the open item: it is what keeps 0 new findings from reading as a pass.
+        reasons.append(
+            "工程含 PCB 文档但本次宿主 PCB DRC 未运行（drc.pcb.checked=false，"
+            "原因见该段 reason）：自有规则零新增不等于宿主通过 —— 整板间距/几何的"
+            "宿主结论缺失，属开放项"
         )
     return reasons
 
@@ -4071,7 +4131,7 @@ def _review_conclusion(
     if coverage_gaps:
         text += (
             f"；另有 {coverage_gaps} 类覆盖缺口（少页/空板/规则 withheld/解析丢弃记录或定义/"
-            "规则报错，逐条见 completion.verdictWhy 与 completion.coverage）"
+            "规则报错/宿主 PCB DRC 未跑，逐条见 completion.verdictWhy 与 completion.coverage）"
         )
     # 126d: the eighth clause. `pcbReviewMissing` is an **incomplete** gate (not
     # a gap count), so it needs its own flag rather than riding in
@@ -4129,6 +4189,12 @@ def _completion_coverage_gates(*, completion: dict) -> dict:
         bool(coverage.get("rulesRefused")),
         bool(coverage.get("recordsDropped")),
         bool(coverage.get("rulesErrored")),
+        # 038R2: the host PCB DRC never ran on a project that has PCB documents.
+        # An open-item gap like the five around it — **not** 126d's flag: nothing
+        # is missing from the *reading*, the host's own verdict is. Counting it
+        # here is what keeps `completion.verdict` and the quotable line from
+        # splitting (the line's 「N 类覆盖缺口」 is this number).
+        bool(coverage.get("hostPcbDrcUnchecked")),
     ]
     return {
         "coverage_missing": missing,
@@ -8550,6 +8616,15 @@ def _cmd_checkup_run(args: argparse.Namespace) -> int:
         # input, and the verdict must say so rather than let "no part was judged"
         # read as "no part needed judging".
         shelf_unreadable=shelf is None,
+        # 038R2: the PCB block's `pcb_had_documents` and the DRC stage's own
+        # `drc.pcb.checked`, read where both exist. `checked=false` is not a
+        # finding and not an ERROR — it is 「the host never said anything about
+        # this board」, which the verdict may state as an open item but never as a
+        # pass. Computed by the one predicate both halves live in, never inferred
+        # from "the PCB rules returned no clearance finding".
+        host_pcb_drc_unchecked=_host_pcb_drc_unchecked(
+            drc, pcb_had_documents=pcb_had_documents
+        ),
     )
     if coverage["modelEmpty"]:
         notes.append(

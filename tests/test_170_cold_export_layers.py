@@ -116,6 +116,12 @@ def test_a_cold_export_is_disclosed_in_source_notes_and_moves_no_verdict(
     count really does read 0 (so the silence was the only defect), the sentence
     lands in the channel a human reads (``source.notes`` → ``report.md`` → the
     console), and the report's own verdict does not move for it.
+
+    038R2 adds one PCB clause to `verdictWhy` that is **not** this test's
+    subject: the DRC stage is held down here (``drc=False``), so coverage carries
+    ``hostPcbDrcUnchecked`` and the reasons say the host's own DRC never ran. The
+    assertion below pins that clause, filters exactly it out, and then checks
+    that the cold layer reading added no PCB reason of its own.
     """
     cold = _cold_export_bytes()
     base._FakeBridgeClient.answers = _answers(cold)
@@ -152,7 +158,23 @@ def test_a_cold_export_is_disclosed_in_source_notes_and_moves_no_verdict(
     coverage = report["completion"]["coverage"]
     assert coverage["pcbReviewMissing"] is False
     assert "pcbReviewNotRun" not in coverage
-    assert not any("PCB" in why for why in report["completion"]["verdictWhy"])
+
+    # 038R2 keeps one PCB clause of its own, and it is *not* this test's subject:
+    # the DRC stage was held down (`drc=False`), so the run has to say the host's
+    # own DRC never ran. Pin it, then take it out of the list — what remains is
+    # the statement under test, that a cold export's layer reading adds no PCB
+    # verdict reason of its own (the disclosure lives in `source.notes`).
+    assert coverage["hostPcbDrcUnchecked"] is True, (
+        "038R2: the host DRC stage did not run, and the coverage says so"
+    )
+    assert report["drc"]["pcb"]["checked"] is False
+    reasons = report["completion"]["verdictWhy"]
+    host_drc = [why for why in reasons if "drc.pcb.checked=false" in why]
+    assert len(host_drc) == 1, "the host DRC open item is one clause, stated once"
+    assert not any("PCB" in why for why in reasons if why not in host_drc), (
+        "a cold export is disclosed, not judged: no second PCB reason may ride "
+        "on the layer count"
+    )
 
 
 def test_a_warm_export_says_nothing_about_layers(fake_bridge, tmp_path, capsys):

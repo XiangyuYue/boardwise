@@ -291,6 +291,13 @@ def test_a_raising_pcb_runner_is_disclosed_and_gates_nothing(
     The runner is broken from the outside (the same seam `_run_pcb_runner`
     imports it through) rather than by feeding a corrupt archive, so what is
     tested is the disclosure and not a parser edge case.
+
+    038R2 adds one PCB clause to `verdictWhy` that is **not** this test's
+    subject: the DRC stage is held down here (`drc=False`), so coverage carries
+    `hostPcbDrcUnchecked` and the reasons say the host's own DRC never ran. The
+    assertion below pins that clause, filters exactly it out, and then checks
+    that nothing else PCB-shaped appeared — 「宿主没查」 is an open item, a
+    runner that raised is not.
     """
     import boardwise.engines.pcbreview as engine
 
@@ -308,8 +315,26 @@ def test_a_raising_pcb_runner_is_disclosed_and_gates_nothing(
     assert "PCB 审查未完成" in notes and "RuntimeError" in notes
     disclosure = report["completion"]["coverage"]["pcbReviewNotRun"]
     assert "审查管线未出结果" in disclosure["reason"]
-    assert report["completion"]["coverage"]["pcbReviewMissing"] is False
-    assert not any("PCB" in why for why in report["completion"]["verdictWhy"])
+    coverage = report["completion"]["coverage"]
+    assert coverage["pcbReviewMissing"] is False
+
+    # 038R2 keeps one PCB clause of its own, and it is *not* this test's subject:
+    # the DRC stage was held down (`drc=False`), so the run has to say the host's
+    # own DRC never ran — an open item about the **host's** verdict, worded about
+    # what is missing rather than about this board. Pin it, then take it out of
+    # the list: what is left is the statement under test, that a refused bridge
+    # call (the runner raised) adds no second PCB reason of its own.
+    assert coverage["hostPcbDrcUnchecked"] is True, (
+        "038R2: the host DRC stage did not run, and the coverage says so"
+    )
+    assert report["drc"]["pcb"]["checked"] is False
+    reasons = report["completion"]["verdictWhy"]
+    host_drc = [why for why in reasons if "drc.pcb.checked=false" in why]
+    assert len(host_drc) == 1, "the host DRC open item is one clause, stated once"
+    assert not any("PCB" in why for why in reasons if why not in host_drc), (
+        "a runner that raised may not become a PCB verdict reason: 「没跑」和"
+        "「跑崩了」不进 verdict，宿主 DRC 那条独立理由除外"
+    )
 
 
 # --------------------------------------------------------------------------

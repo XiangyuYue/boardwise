@@ -813,6 +813,47 @@ ACTIONS: tuple[Action, ...] = (
         params_schema="uuid: library footprint uuid (required); libraryUuid: optional",
         risk="read",
     ),
+    # --- 038Q1: the host's own reuse modules (CBB), reads only --------------
+    Action(
+        name="lib.cbb.search",
+        summary=(
+            "Read-only: one page of the host's native reuse modules (复用模块) by "
+            "keyword; an empty query is the legal inventory entry point. Every hit "
+            "is re-read through lib_Cbb.get and must come back with the same uuid "
+            "and a matching libraryUuid — a non-array answer, an over-sized page, "
+            "a malformed item or a missing get answer is CONNECTOR_ERROR, never an "
+            "empty library. count is this page's size, not a library total."
+        ),
+        params=("query", "libraryUuid", "limit", "page"),
+        returns=(
+            "{query, libraryUuid, limit, page, count, items, "
+            "source: 'lib_Cbb.search', apiStatus: 'beta'}"
+        ),
+        params_schema=(
+            "query: search text, default '' (empty inventories the library); "
+            "libraryUuid: optional, omitted = the host's system library; "
+            "limit: 1..100, default 20; page: >=1, default 1"
+        ),
+        risk="read",
+    ),
+    Action(
+        name="lib.cbb.get",
+        summary=(
+            "Read-only: one native reuse module's identity and boards metadata. "
+            "Never opens the module project. A uuid the host does not know answers "
+            "found:false; a uuid that comes back as a different module, without a "
+            "libraryUuid or without a boards array is CONNECTOR_ERROR."
+        ),
+        params=("uuid", "libraryUuid"),
+        returns=(
+            "{uuid, libraryUuid, found, cbb, source: 'lib_Cbb.get', apiStatus: 'beta'}"
+        ),
+        params_schema=(
+            "uuid: reuse-module uuid (required); libraryUuid: optional, omitted = "
+            "the host's system library"
+        ),
+        risk="read",
+    ),
     Action(
         name="sch.set_component_attribute",
         summary=(
@@ -846,6 +887,34 @@ ACTIONS: tuple[Action, ...] = (
         params=("uuid", "libraryUuid"),
         returns="{uuid, libraryUuid, found, item, readErrors?}",
         params_schema="uuid: library symbol uuid (required); libraryUuid: optional",
+        risk="read",
+    ),
+    Action(
+        name="lib.symbol_file.get",
+        summary=(
+            "Read-only (038Q3): ONE library symbol's own file, by explicit uuid "
+            "(sys_FileManager.getSymbolFileBySymbolUuid, @beta, gated 团队库 > 下载库). "
+            "lib.symbol.get is measured to answer metadata only — no pins, no body "
+            "geometry — so the container file is the remaining honest source for it. "
+            "The bytes come back whole as base64 and are NOT unpacked: isZip reports "
+            "the file header alone, and neither the request uuid nor the file name is "
+            "treated as proof of identity inside the container. Whether a host actually "
+            "exports the file is unmeasured on EDA 4.1.93; a throw is reported with the "
+            "host's own words plus the documented gate, never as a diagnosed grant."
+        ),
+        params=("uuid", "libraryUuid", "fileType"),
+        returns=(
+            "{uuid, libraryUuid, fileType, source, apiStatus, encoding, name, mime, "
+            "bytes, data, isZip}"
+        ),
+        params_schema=(
+            "uuid: ONE library symbol uuid, a single non-empty string (an array is "
+            "refused, not fanned out); libraryUuid: optional non-empty uuid — omitted "
+            "is forwarded as undefined so the host's system library applies, and an "
+            "empty string is refused rather than defaulted; fileType: REQUIRED, "
+            "'elibz2' or 'elibz' (the declaration's optional default is not measured, "
+            "so the caller states the container)"
+        ),
         risk="read",
     ),
     Action(

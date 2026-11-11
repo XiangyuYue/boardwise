@@ -1,0 +1,114 @@
+{
+  "author": "@zhoushoujianwork",
+  "category": "usb-serial",
+  "contributors": [
+    "Codex"
+  ],
+  "id": "block.ch340c_usb_serial",
+  "internal_nets": [
+    [
+      "J_USB.VBUS*",
+      "U.VCC",
+      "C_VCC.1",
+      "D_ESD.VBUS",
+      "PORT:VBUS_5V"
+    ],
+    [
+      "J_USB.GND*",
+      "J_USB.EP*",
+      "U.GND",
+      "C_VCC.2",
+      "C_V3.2",
+      "D_ESD.GND",
+      "R_CC1.2",
+      "R_CC2.2",
+      "PORT:GND"
+    ],
+    [
+      "U.V3",
+      "C_V3.1"
+    ],
+    [
+      "U.D+",
+      "J_USB.DP1",
+      "J_USB.DP2",
+      "D_ESD.I/O2*"
+    ],
+    [
+      "U.D-",
+      "J_USB.DN1",
+      "J_USB.DN2",
+      "D_ESD.I/O1*"
+    ],
+    [
+      "J_USB.CC1",
+      "R_CC1.1"
+    ],
+    [
+      "J_USB.CC2",
+      "R_CC2.1"
+    ]
+  ],
+  "parts": {
+    "C_V3": {
+      "part": "cap.100nf_0402",
+      "qty": 1
+    },
+    "C_VCC": {
+      "part": "cap.100nf_0402",
+      "qty": 1
+    },
+    "D_ESD": {
+      "part": "esd.usblc6_2sc6",
+      "qty": 1
+    },
+    "J_USB": {
+      "part": "conn.usb_c_16p",
+      "qty": 1
+    },
+    "R_CC1": {
+      "part": "res.5k1_0402",
+      "qty": 1
+    },
+    "R_CC2": {
+      "part": "res.5k1_0402",
+      "qty": 1
+    },
+    "U": {
+      "part": "ic.ch340c",
+      "qty": 1
+    }
+  },
+  "ports": {
+    "DTR": {
+      "at": "U.DTR#",
+      "default_net": "USB_DTR",
+      "dir": "out"
+    },
+    "GND": {
+      "at": "U.GND",
+      "default_net": "GND",
+      "dir": "bidir"
+    },
+    "RTS": {
+      "at": "U.RTS#",
+      "default_net": "USB_RTS",
+      "dir": "out"
+    },
+    "RXD": {
+      "at": "U.RXD",
+      "default_net": "MCU_TX",
+      "dir": "in"
+    },
+    "TXD": {
+      "at": "U.TXD",
+      "default_net": "MCU_RX",
+      "dir": "out"
+    },
+    "VBUS_5V": {
+      "at": "J_USB.VBUS",
+      "default_net": "5V",
+      "dir": "out"
+    }
+  }
+}

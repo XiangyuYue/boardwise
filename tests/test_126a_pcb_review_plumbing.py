@@ -1618,8 +1618,15 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `completion.sourceVersions.rulebody` 一致，均由官方
     # `tools.build_differential_fixtures` 重生成同步。B5 本批只动生成器的脱敏
     # （`shelfPath` 与 checkout 根路径），`rules/` 下一个文件都没碰。
+    # **038R1 + 038R3**：direct 仍为 626e16ef，recursive 424e2fd2 -> **d2ff8ae4**。
+    # `rules/pcb/foc.py` 让 sharpest 的角度/网名/位置来自同一 corner，并把带线网计数
+    # 改为 tracks 的非空 net 去重；`rules/pcb/distance.py` 对有效板框、有位号器件但
+    # 零可测量焊盘的静默补一条聚合 WARN。两文件都只进递归摘要。真实行为回归分别在
+    # test_133b 与 test_126b；188a 合成夹具补真实 PAD，不靠放宽断言通过。
+    # recursive 与 manifest/input 的 rulebody 均由官方生成器同步；生成器另外带出的
+    # toolVersion/expectedConnectorVersion 漂移不属于本批，已按生成前字节保留。
     assert old_digest == "626e16ef"
-    assert recursive == "424e2fd2", (
+    assert recursive == "d2ff8ae4", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

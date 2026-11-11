@@ -1,0 +1,215 @@
+{
+  "draft": true,
+  "kind": "boardwise-circuit-spec",
+  "nc": [],
+  "nets": [
+    {
+      "id": "auto:C_V3.1|U.V3",
+      "members": [
+        "C_V3.1",
+        "U.V3"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "auto:D_ESD.I/O1*|J_USB.DN1|J_USB.DN2|U.D-",
+      "members": [
+        "D_ESD.I/O1*",
+        "J_USB.DN1",
+        "J_USB.DN2",
+        "U.D-"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "auto:D_ESD.I/O2*|J_USB.DP1|J_USB.DP2|U.D+",
+      "members": [
+        "D_ESD.I/O2*",
+        "J_USB.DP1",
+        "J_USB.DP2",
+        "U.D+"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "auto:J_USB.CC1|R_CC1.1",
+      "members": [
+        "J_USB.CC1",
+        "R_CC1.1"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "auto:J_USB.CC2|R_CC2.1",
+      "members": [
+        "J_USB.CC2",
+        "R_CC2.1"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "signal",
+      "id": "port.DTR",
+      "members": [
+        "U.DTR#"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "gnd",
+      "id": "port.GND",
+      "members": [
+        "C_V3.2",
+        "C_VCC.2",
+        "D_ESD.GND",
+        "J_USB.EP*",
+        "J_USB.GND*",
+        "R_CC1.2",
+        "R_CC2.2",
+        "U.GND"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "signal",
+      "id": "port.RTS",
+      "members": [
+        "U.RTS#"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "signal",
+      "id": "port.RXD",
+      "members": [
+        "U.RXD"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "signal",
+      "id": "port.TXD",
+      "members": [
+        "U.TXD"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "power",
+      "id": "port.VBUS_5V",
+      "members": [
+        "C_VCC.1",
+        "D_ESD.VBUS",
+        "J_USB.VBUS*",
+        "U.VCC"
+      ],
+      "provenance": "ai_asserted"
+    }
+  ],
+  "openInterfaces": [
+    {
+      "direction": "output",
+      "net": "port.DTR",
+      "provenance": "ai_asserted",
+      "role": "DTR"
+    },
+    {
+      "direction": "",
+      "net": "port.GND",
+      "provenance": "ai_asserted",
+      "role": "GND"
+    },
+    {
+      "direction": "output",
+      "net": "port.RTS",
+      "provenance": "ai_asserted",
+      "role": "RTS"
+    },
+    {
+      "direction": "input",
+      "net": "port.RXD",
+      "provenance": "ai_asserted",
+      "role": "RXD"
+    },
+    {
+      "direction": "output",
+      "net": "port.TXD",
+      "provenance": "ai_asserted",
+      "role": "TXD"
+    },
+    {
+      "direction": "load",
+      "net": "port.VBUS_5V",
+      "part": "J_USB",
+      "provenance": "ai_asserted",
+      "role": "VBUS_5V"
+    }
+  ],
+  "operatingConditions": {},
+  "parts": [
+    {
+      "id": "C_V3",
+      "lcsc": "C1525",
+      "mpn": "CL05B104KO5NNNC",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-C_V3",
+      "value": "100nF"
+    },
+    {
+      "id": "C_VCC",
+      "lcsc": "C1525",
+      "mpn": "CL05B104KO5NNNC",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-C_VCC",
+      "value": "100nF"
+    },
+    {
+      "id": "D_ESD",
+      "lcsc": "C2687116",
+      "mpn": "USBLC6-2SC6",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-D_ESD",
+      "value": "USBLC6-2SC6"
+    },
+    {
+      "id": "J_USB",
+      "lcsc": "C9900012665",
+      "mpn": "USB3.1TYPE-C16P",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-J_USB",
+      "value": "TYPE-C-16P"
+    },
+    {
+      "id": "R_CC1",
+      "lcsc": "C25905",
+      "mpn": "0402WGF5101TCE",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-R_CC1",
+      "value": "5.1kΩ"
+    },
+    {
+      "id": "R_CC2",
+      "lcsc": "C25905",
+      "mpn": "0402WGF5101TCE",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-R_CC2",
+      "value": "5.1kΩ"
+    },
+    {
+      "id": "U",
+      "lcsc": "C84681",
+      "mpn": "CH340C",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-U",
+      "value": "CH340C"
+    }
+  ],
+  "specVersion": 1
+}

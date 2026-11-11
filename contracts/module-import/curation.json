@@ -1,0 +1,125 @@
+{
+  "assets": [
+    {
+      "id": "block.ams1117_ldo_3v3",
+      "kind": "block_template",
+      "output": "circuits/ams1117_ldo_3v3.circuit.json",
+      "ports": {
+        "3V3": {
+          "class": "power",
+          "direction": "load"
+        },
+        "GND": {
+          "class": "gnd",
+          "direction": ""
+        },
+        "VIN_5V": {
+          "class": "power",
+          "direction": "source"
+        }
+      },
+      "source": "contracts/module-import/blocks/ams1117_ldo_3v3.json",
+      "sourcePath": "internal/blocks/data/ams1117_ldo_3v3.json",
+      "sourceSha256": "cdcfd6e92dfa308aff994e357aa4c8effb5e562a01dba53be7a7591fe6807fe5",
+      "upstreamMaturity": "unstated"
+    },
+    {
+      "id": "block.sy8089_buck_3v3",
+      "kind": "block_template",
+      "output": "circuits/sy8089_buck_3v3.circuit.json",
+      "ports": {
+        "3V3": {
+          "class": "power",
+          "direction": "load"
+        },
+        "EN": {
+          "class": "signal",
+          "direction": "input"
+        },
+        "GND": {
+          "class": "gnd",
+          "direction": ""
+        },
+        "VIN": {
+          "class": "power",
+          "direction": "source"
+        }
+      },
+      "source": "contracts/module-import/blocks/sy8089_buck_3v3.json",
+      "sourcePath": "internal/blocks/data/sy8089_buck_3v3.json",
+      "sourceSha256": "888a9c4c90fd88721605754dea3c1669746091d64129f6e9dffee8bbd3d76b03",
+      "upstreamMaturity": "unstated"
+    },
+    {
+      "id": "lib.sy8089_buck_3v3_live",
+      "kind": "role_topology",
+      "output": "circuits/sy8089_buck_3v3_live.circuit.json",
+      "ports": {
+        "GND": {
+          "class": "gnd",
+          "direction": ""
+        },
+        "POWER_IN": {
+          "class": "power",
+          "direction": "source"
+        },
+        "POWER_OUT": {
+          "class": "power",
+          "direction": "load"
+        }
+      },
+      "source": "contracts/module-import/topologies/sy8089_buck_3v3_live.json",
+      "sourcePath": ".agents/skills/easyeda-agent/library/modules/sy8089-buck-3v3.topology.json",
+      "sourceSha256": "9ac3fd6971641f45050ecaf73d742321e516640ae56c2597f452fa396b73dd1a",
+      "upstreamMaturity": "topology_ready"
+    },
+    {
+      "id": "block.ch340c_usb_serial",
+      "kind": "block_template",
+      "output": "circuits/ch340c_usb_serial.circuit.json",
+      "ports": {
+        "DTR": {
+          "class": "signal",
+          "direction": "output",
+          "netSource": "port_pin_only"
+        },
+        "GND": {
+          "class": "gnd",
+          "direction": ""
+        },
+        "RTS": {
+          "class": "signal",
+          "direction": "output",
+          "netSource": "port_pin_only"
+        },
+        "RXD": {
+          "class": "signal",
+          "direction": "input",
+          "netSource": "port_pin_only"
+        },
+        "TXD": {
+          "class": "signal",
+          "direction": "output",
+          "netSource": "port_pin_only"
+        },
+        "VBUS_5V": {
+          "class": "power",
+          "direction": "load",
+          "part": "J_USB"
+        }
+      },
+      "source": "contracts/module-import/blocks/ch340c_usb_serial.json",
+      "sourcePath": "internal/blocks/data/ch340c_usb_serial.json",
+      "sourceSha256": "09296d21b70b1edd79d97dea6f2946aca5b53c5d6a9c1f480efa6790c1d89019",
+      "upstreamMaturity": "unstated"
+    }
+  ],
+  "schema": "boardwise.module-import-curation/1",
+  "license": "contracts/module-import/LICENSE",
+  "sourceManifest": "contracts/module-import/source-manifest.json",
+  "standardParts": "contracts/module-import/standard-parts.json",
+  "upstream": {
+    "commit": "69af00c0db3960757bff36a68edb286adcd64458",
+    "repo": "https://github.com/zhoushoujianwork/easyeda-agent"
+  }
+}

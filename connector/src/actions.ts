@@ -16,6 +16,9 @@
  */
 
 import { PROBE_CHECKS, ADDED_SINCE } from './api-names';
+// 038Q1: the native CBB (复用模块) reads. `library-cbb.ts` imports only the
+// *types* of this module, so this is the one value edge and there is no cycle.
+import { libCbbGet, libCbbSearch } from './library-cbb';
 import { ActionError, isActionError, type ResponseContext } from './protocol';
 import { ambientRandomHost, describeRandomHost } from './random';
 import { sysSelfUpdate } from './self-update';
@@ -7891,6 +7894,245 @@ export const sysGetDocumentFile: ActionHandler = (params, eda) =>
 export const sysGetProjectFile: ActionHandler = (params, eda) =>
   readArchive('sys.get_project_file', PROJECT_FILE_READ, params, eda);
 
+// --------------------------------------------------------------------------
+// 038Q3: one library symbol's file, read-only
+// --------------------------------------------------------------------------
+
+/** The `eda.*` path, spelled so every refusal names the exact method. */
+const LIBRARY_SYMBOL_FILE_PATH = 'sys_FileManager.getSymbolFileBySymbolUuid';
+/** The two container types the declaration allows — and nothing else. */
+const LIBRARY_SYMBOL_FILE_TYPES: readonly string[] = ['elibz2', 'elibz'];
+/** Parameters this action accepts; anything else is refused by name. */
+const LIBRARY_SYMBOL_FILE_KEYS: readonly string[] = ['uuid', 'libraryUuid', 'fileType'];
+/**
+ * The gate the declaration attaches to *this* call, quoted on its own.
+ *
+ * Kept separate from `FILE_READ_GATES` on purpose: that array is the 025
+ * archive reads' refusal detail, it is a contract old consumers read, and this
+ * batch does not get to grow it. A refusal here names this call's gate and
+ * carries it in `detail.permissions` as a one-element list.
+ */
+const LIBRARY_DOWNLOAD_GATE =
+  '团队库 > 下载库 — getSymbolFileBySymbolUuid';
+/**
+ * The connector's deadline for the one call.
+ *
+ * Equal to the daemon's default `ACTION_TIMEOUT` (30 s) for the reason the
+ * archive reads document: a connector deadline longer than the daemon's can
+ * never be observed, because the caller has already been told TIMEOUT. Not a
+ * parameter — this batch does not widen the contract.
+ */
+const LIBRARY_SYMBOL_FILE_TIMEOUT_MS = 30_000;
+
+/** A value as a short JSON-safe phrase, for refusal messages only. */
+function describeParam(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `an array of ${value.length}`;
+  if (typeof value === 'object') return 'an object';
+  if (typeof value === 'string') return `a string of ${value.length} chars`;
+  return `a ${typeof value}`;
+}
+
+/**
+ * The refusal of the symbol-file read.
+ *
+ * Same belief as `fileReadFailure` — the connector observes a `throw` and
+ * cannot read the extension's grants, so "you lack a permission" is a claim it
+ * has no way to check — with this call's own gate and its own one-element
+ * permission list. A `NOT_IMPLEMENTED` from `requireFn` is *not* a refusal and
+ * travels first, so a missing method is never dressed as a permission problem.
+ */
+function symbolFileFailure(error: unknown): ActionError {
+  if (isActionError(error)) return error;
+  const host = hostErrorText(error);
+  return new ActionError(
+    'CONNECTOR_ERROR',
+    `${LIBRARY_SYMBOL_FILE_PATH} threw ${host.text}. The connector cannot read this `
+      + "extension's grants, so whether a permission is missing is not knowable from "
+      + `here; the type package documents this call's gate as "${LIBRARY_DOWNLOAD_GATE}" `
+      + '(team library > download library)',
+    {
+      path: LIBRARY_SYMBOL_FILE_PATH,
+      thrown: true,
+      errorName: host.name,
+      errorMessage: host.message,
+      gate: LIBRARY_DOWNLOAD_GATE,
+      permissions: [LIBRARY_DOWNLOAD_GATE],
+    },
+  );
+}
+
+/**
+ * `lib.symbol_file.get` — one library symbol's **file**, by explicit uuid (038Q3).
+ *
+ * `lib.symbol.get` answers metadata: measured 2026-11-11 on EDA 4.1.93, one
+ * real symbol came back with name, uuid, classification and otherProperty and
+ * **no pins and no body geometry** (`outputs/review/038q3/ams1117.symbol.get.json`).
+ * The geometry exists, but inside the symbol's own container, and the host call
+ * that hands that container over is `getSymbolFileBySymbolUuid` — present as a
+ * `function` with arity 3 in the same run's `sys.probe`. Present is not
+ * *working*: permissions, the returned `File` and the container format are all
+ * still unmeasured, which is why this action reports what the host produced and
+ * claims nothing about the bytes beyond their first two bytes.
+ *
+ * The contract is narrow on purpose, because every wider shape would be a guess:
+ *
+ * 1. **One uuid, one file.** `uuid` is a single non-empty string. An array is
+ *    refused rather than fanned out: a batch answer would make "which of these
+ *    files is this?" a question about position, and `lib.symbol.get`'s tolerance
+ *    of arrays is not a precedent for a call whose answer is bytes.
+ * 2. **`fileType` is required.** The declaration makes it optional, which means
+ *    "the host picks" — and what the host picks has not been measured. A caller
+ *    states the container it wants rather than silently accepting an unstated
+ *    default; the returned bytes still need their own format inspection.
+ * 3. **An omitted `libraryUuid` is forwarded as `undefined`**, because the
+ *    system library is the host's own default. An empty string is *refused*
+ *    instead of being read as "no library": it is neither a library nor an
+ *    absence, and defaulting it would answer a question nobody asked.
+ * 4. **A file name is not an identity.** `File.name` is forwarded (cleaned, as
+ *    every file payload is), but no uuid is ever derived from it *and* the
+ *    requested uuid is not echoed back as proof of what the container holds —
+ *    that comparison needs an unpacker, which this batch deliberately lacks.
+ *
+ * `isZip` describes the header only: a `PK` prefix is an observation about two
+ * bytes, not a verdict on the elibz/elibz2 layout inside. Reading a file is not
+ * permission to open it in the editor or to place anything on a canvas — neither
+ * `importProject*`, nor `setDocumentSource`, nor any create/modify/delete is
+ * reached from here.
+ */
+export const libSymbolFileGet: ActionHandler = async (params, eda) => {
+  const action = 'lib.symbol_file.get';
+
+  if (params !== undefined && params !== null
+      && (typeof params !== 'object' || Array.isArray(params))) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `${action} params must be an object, got ${describeParam(params)}`,
+    );
+  }
+  const input = (params ?? {}) as Record<string, unknown>;
+  const unknown = Object.keys(input).filter((key) => !LIBRARY_SYMBOL_FILE_KEYS.includes(key));
+  if (unknown.length) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `${action} does not take ${unknown.join(', ')}; it accepts `
+        + `${LIBRARY_SYMBOL_FILE_KEYS.join(', ')}`,
+      { unknown, allowed: [...LIBRARY_SYMBOL_FILE_KEYS] },
+    );
+  }
+
+  const rawUuid = input.uuid;
+  if (typeof rawUuid !== 'string' || rawUuid.trim() === '') {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `${action} needs uuid to be a single non-empty string, got `
+        + `${describeParam(rawUuid)} — one symbol per call, never a batch`,
+      { param: 'uuid' },
+    );
+  }
+  const uuid = rawUuid.trim();
+
+  let libraryUuid: string | undefined;
+  if (input.libraryUuid !== undefined) {
+    if (typeof input.libraryUuid !== 'string') {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `${action} libraryUuid must be a string when given, got `
+          + `${describeParam(input.libraryUuid)}`,
+        { param: 'libraryUuid' },
+      );
+    }
+    if (input.libraryUuid.trim() === '') {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `${action} libraryUuid must be a non-empty uuid when given — an empty `
+          + 'string is neither omitted nor a library, and it does not silently '
+          + 'become the system library',
+        { param: 'libraryUuid' },
+      );
+    }
+    // Forwarded as given: the caller's uuid is a key, not something to rewrite.
+    libraryUuid = input.libraryUuid;
+  }
+
+  if (typeof input.fileType !== 'string' || !LIBRARY_SYMBOL_FILE_TYPES.includes(input.fileType)) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `${action} needs fileType to be one of ${LIBRARY_SYMBOL_FILE_TYPES.join(', ')}, `
+        + `got ${describeParam(input.fileType)}${
+          input.fileType === undefined
+            ? ' — the declaration makes it optional, which leaves the container '
+              + 'format to the host, and that is not measured yet'
+            : ''
+        }`,
+      { param: 'fileType', allowed: [...LIBRARY_SYMBOL_FILE_TYPES] },
+    );
+  }
+  const fileType = input.fileType;
+
+  // Outside the try on purpose: a missing method is `NOT_IMPLEMENTED` naming the
+  // path, never a permission story. The wrapper is not decoration — `requireFn`
+  // walks `eda.sys_FileManager.getSymbolFileBySymbolUuid` with bare member reads,
+  // and the host hands out objects whose reads can throw (the hazard measured on
+  // 2026-09-14, see `getState`). An unreadable path is "this editor cannot be
+  // asked", which is what NOT_IMPLEMENTED says; letting the raw throw out would
+  // answer INTERNAL and hide the method name.
+  let call: (...args: any[]) => any;
+  try {
+    call = requireFn(eda, LIBRARY_SYMBOL_FILE_PATH);
+  } catch (error) {
+    if (isActionError(error)) throw error;
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      `${LIBRARY_SYMBOL_FILE_PATH} is not readable in this editor version `
+        + `(${String((error as Error)?.message ?? error)})`,
+      { path: LIBRARY_SYMBOL_FILE_PATH, readError: true },
+    );
+  }
+
+  let file: any;
+  try {
+    // Declaration order, positionally: (symbolUuid, libraryUuid?, fileType?).
+    // An omitted library travels as `undefined` rather than as `''` — the host
+    // drops an argument it dislikes without rejecting, so the *shape* of the
+    // call is part of the measurement.
+    file = await raceHostCall(
+      settle(call(uuid, libraryUuid, fileType)),
+      LIBRARY_SYMBOL_FILE_PATH,
+      LIBRARY_SYMBOL_FILE_TIMEOUT_MS,
+      'the three arguments are positional (uuid, libraryUuid, fileType) and an '
+        + 'omitted library must be forwarded as undefined',
+    );
+  } catch (error) {
+    throw symbolFileFailure(error);
+  }
+
+  if (file === undefined || file === null) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${LIBRARY_SYMBOL_FILE_PATH} returned ${file === null ? 'null' : 'undefined'} — `
+        + 'the declaration says that means no file was produced for this uuid '
+        + '(not found, not downloadable, or a grant the connector cannot see); '
+        + 'an absent file is not an empty symbol and nothing was read',
+      { path: LIBRARY_SYMBOL_FILE_PATH, uuid, libraryUuid: libraryUuid ?? null, fileType, empty: true },
+    );
+  }
+
+  // Complete bytes or a failure: `hostFilePayload` refuses a missing
+  // `arrayBuffer` and a zero-byte answer rather than reporting a truncated file.
+  const payload = await hostFilePayload(file, LIBRARY_SYMBOL_FILE_PATH);
+  return {
+    uuid,
+    libraryUuid: libraryUuid ?? null,
+    fileType,
+    source: LIBRARY_SYMBOL_FILE_PATH,
+    apiStatus: 'beta',
+    encoding: 'base64',
+    ...payload,
+  };
+};
+
 /** Default and ceiling for `sys.get_document_source`'s `maxChars`. */
 const SOURCE_DEFAULT_MAX_CHARS = 65_536;
 const SOURCE_MAX_MAX_CHARS = 4_000_000;
@@ -9464,10 +9706,22 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'pcb.drc_ruleset': bind(pcbDrcRuleset),
     'sch.readback': bind(schReadback),
     'lib.symbol.get': bind(libSymbolGet),
+    // 038Q3: the symbol's own *file*, by explicit uuid — the read that can
+    // answer "does the library path expose pin geometry?" now that the
+    // metadata action is measured to carry none. Read-only; the bytes are
+    // handed back base64 and nothing here opens or unpacks them.
+    'lib.symbol_file.get': bind(libSymbolFileGet),
     'lib.device.get': bind(libDeviceGet),
     'sch.component_pins': bind(schComponentPins),
     'lib.footprint.get': bind(libFootprintGet),
     'lib.device.search': bind(libDeviceSearch),
+    // 038Q1: the host's own reuse modules — one keyword page and one module's
+    // identity. Both are reads; `search` re-reads every hit through
+    // `lib_Cbb.get` before reporting it, and neither is on the probe's call
+    // allowlist above (that list is for actions a not-yet-restarted daemon
+    // cannot reach, and these two ride the catalogue like every other action).
+    'lib.cbb.search': bind(libCbbSearch),
+    'lib.cbb.get': bind(libCbbGet),
     'sch.set_component_attribute': bind(schSetComponentAttribute),
     'pcb.readback': bind(pcbReadback),
     'export.screenshot': bind(exportScreenshot),

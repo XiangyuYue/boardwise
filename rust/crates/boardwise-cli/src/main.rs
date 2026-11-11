@@ -21,6 +21,8 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod module_import;
+
 const DIFFERENTIAL_USAGE: &str =
     "usage: boardwise-cli differential [--cases PATH] [--root DIR] [--output PATH]";
 
@@ -225,9 +227,10 @@ fn run(arguments: Vec<String>) -> Result<Run, Failure> {
     let mut rest = arguments.into_iter().skip(1);
     match command.as_str() {
         "differential" => differential(&mut rest),
+        "module-import" => module_import::run(&mut rest),
         "smoke" => smoke(&mut rest),
         other => Err(ContractError::Shape(format!(
-            "unknown command {other:?}; expected differential or smoke"
+            "unknown command {other:?}; expected differential, module-import or smoke"
         ))
         .into()),
     }

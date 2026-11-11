@@ -449,7 +449,7 @@
 | 038T | **Rust 声明解析投影垂直迁移**：`footprint-declared-sample` 成为第 10 个 kind，输入 `text`+`value` 走同一对 Python 阅读器（`_collect_footprint_titles` → `_resolve_declared_footprint`），只回答原理图 `Footprint` 字段声明了什么；输出 `schema`+`footprint`+`libraryId`，三个分支不单独出字段 | 已落 `a4fc387`；case book 13→15，Python/Rust 15/15 一致，旧 13 input 不变 | rust/crates/boardwise-core/src/footprint.rs；tests/test_038t_footprint_declared.py；docs/rust-platform.md |
 | 038W | **`PAD_NET` 增量日志的每脚判优**：PCB 每脚投影键只有 `(component, pin)`，旧实现用 `setdefault` 让文件靠前的旧网获胜；改为复用 038U 原子视图的同一 ticket/client 判优，不复制第二套比较规则 | 工作树（2026-11-06 完成，未提交）；最终全量在途 | tasks/038w_pad_net_journal.md；tests/test_038w_pad_net_journal.py |
 | 038X | **默认货架路径与缺失披露**：非 frozen 的默认读写改用 `resources.parts_library()` 绝对路径，只读入口不再把「文件不存在」静默读成「货架为空」；`load_parts` 的「缺文件可建空架」合同不变 | 工作树（2026-11-06 完成，未提交）；最终全量在途 | tasks/038x_shelf_resolution.md；tests/test_038x_shelf_resolution.py |
-| 038Q | **原生 CBB（`block_symbol`）接入调研**：库搜索/身份/归档 → 受控个人库样件与放置 → 写后回读真实 `block_symbol` → 块端口规则；仓库当前无原生实现，`core/blocks.py` 的 `BlockSymbol` 是绘图模板域不是宿主原生块 | **调研/任务书完成（11-03），未开工**；**待真实 CBB 样本**，无样本不开阶段 A；**type 17 待证实**，不得写成事实；不承诺版本/发布日期 | tasks/038q_cbb_native.md；tests/test_doc_claims.py；docs/v3-v4-boundary.md |
+| 038Q | **原生 CBB 与复用模块准备**：Q1 库只读搜索/身份，Q2 上游候选归一化，Q3 符号文件只读通路，Q4 单符号 elibz2 profile；原生 `block_symbol` 另按真实样件推进 | **Q1–Q4 已完成各自范围（2026-11-11）**；AMS1117 单符号身份/几何已核对，其余器件身份、原生块样件/端口规则和个人库放置未覆盖，**type 17 待证实**；四个模块仍为 candidate/unverified/notForDrawCompile | tasks/038q_cbb_native.md；tasks/038q1_cbb_readonly_inventory.md；tasks/038q2_upstream_module_seed.md；tasks/038q3_symbol_file_read.md；tasks/038q4_elibz2_symbol_profile.md |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）
 

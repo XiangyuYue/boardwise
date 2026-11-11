@@ -1,0 +1,67 @@
+{
+  "inputs": [
+    {
+      "path": "contracts/module-import/LICENSE",
+      "sha256": "56e2b73f041848e87de1c6a805f462f064bfcb4b31a69b135d9f2376281611ad"
+    },
+    {
+      "path": "contracts/module-import/blocks/ams1117_ldo_3v3.json",
+      "sha256": "92fb86dfeab3c4b4534cb8e474ec16ac833750f36e97770d0657cabda37292ed"
+    },
+    {
+      "path": "contracts/module-import/blocks/ch340c_usb_serial.json",
+      "sha256": "224cf24ed14d369f1380e819a6dcd0b25fe5efeea949c76ed6c0e3ac2f78887e"
+    },
+    {
+      "path": "contracts/module-import/blocks/sy8089_buck_3v3.json",
+      "sha256": "35dd6f197428838d74dd5cb220e237046f63a88a798182184735a2a8ccbcba73"
+    },
+    {
+      "path": "contracts/module-import/curation.json",
+      "sha256": "c8b0ccbafa36f1764a1ced89d9f5c59127f3f325682290de1467ef80e8189650"
+    },
+    {
+      "path": "contracts/module-import/source-manifest.json",
+      "sha256": "4182de4b7fa60cf71ea766678d640152935ce0492cde5bf12b48e2b158f0b5f5"
+    },
+    {
+      "path": "contracts/module-import/standard-parts.json",
+      "sha256": "79c49e63fbf7b1a9d1ac63e38b360bd25007d27c7b2076b36878d89317ce6657"
+    },
+    {
+      "path": "contracts/module-import/topologies/sy8089_buck_3v3_live.json",
+      "sha256": "6d88b0cfdefcb3ce410fd6f72cc5acbcb6f348bfad36ce9f8046a40e99e9ddc4"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "catalog.json",
+      "sha256": "367d0f1d8c541685d19398afebeb80c0314af70b3903996f9f46f461e997a192"
+    },
+    {
+      "path": "circuits/ams1117_ldo_3v3.circuit.json",
+      "sha256": "7df7c83a27d5f323c3afc3dcb65101970c9fad8cac3344980682a27944d166ab"
+    },
+    {
+      "path": "circuits/ch340c_usb_serial.circuit.json",
+      "sha256": "3b7700233796db33b8f221a678a78f6aa423c3cabea256affd3051c1cb16d38a"
+    },
+    {
+      "path": "circuits/sy8089_buck_3v3.circuit.json",
+      "sha256": "b2742be1120fad999f79aff019c80f67e9cf643fd9c0ee545836993e8e006894"
+    },
+    {
+      "path": "circuits/sy8089_buck_3v3_live.circuit.json",
+      "sha256": "4c16e5d5b51db5a53505c4a762dd650cd4524bdd8cb4b3002e20ab64c2d6e2c6"
+    },
+    {
+      "path": "upstream/LICENSE",
+      "sha256": "56e2b73f041848e87de1c6a805f462f064bfcb4b31a69b135d9f2376281611ad"
+    }
+  ],
+  "schema": "boardwise.module-import-manifest/1",
+  "upstream": {
+    "commit": "69af00c0db3960757bff36a68edb286adcd64458",
+    "repo": "https://github.com/zhoushoujianwork/easyeda-agent"
+  }
+}

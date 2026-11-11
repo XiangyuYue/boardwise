@@ -136,10 +136,11 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   `tasks/541_offline_runtime_gates.md`。最终全量 **9893 passed / 25 skipped / 14 failed /
   1 warning**（12 条工作树既有货架数据漂移 + 2 条既有 Windows 环境失败，不宣称全量全绿）；
   connector、DSH、Rust 均通过。541 R3 与公开接口 allowlist 仍未实施，不写成 R3/R4 全部完成。
-- **原生 CBB 已排为独立方向（038Q，11-03 调研/任务书完成）**：仓库当前**没有**原生 CBB
-  实现；`core/blocks.py` 的 `BlockSymbol` 是绘图模板域，不是宿主原生块。type 17 只是线索，
-  **待证实**，不得写成事实。**需真实 CBB 样本**才开阶段 A（离线只读），先读后写；
-  与 038P / FOOTPRINT / Rust 迁移**不混批**，未承诺版本与发布日期。
+- **038Q 的 Q1–Q4 支撑批已完成各自范围（2026-11-11）**：库只读 `lib.cbb.search/get`、
+  上游候选归一化、符号文件只读通路与单符号 elibz2 profile；AMS1117 单符号身份/几何已核对。
+  四模块仍 candidate/unverified/notForDrawCompile，其余器件身份未齐。原生 `block_symbol`
+  样件、端口规则与个人库放置未做，type 17 仍待真实样本证实；库搜索成功不等于原生块兼容。
+  `core/blocks.py` 的 `BlockSymbol` 是绘图模板域，不是宿主原生块。
 - **独立派单**：审查读 `tasks/review-line.md`，绘制读 `tasks/draw-line.md`，shared/CLI/bridge/
   parser/model 的集成改动读 `tasks/shared-platform.md`。两线可独立派小批，shared、全量、真机串行；
   算法与迁移不同批。旧档案 worktree 不当可写工作区；新建/删除 worktree 仍逐次问岳。

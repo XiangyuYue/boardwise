@@ -1,0 +1,157 @@
+{
+  "draft": true,
+  "kind": "boardwise-circuit-spec",
+  "nc": [],
+  "nets": [
+    {
+      "id": "auto:L.1|U.LX",
+      "members": [
+        "L.1",
+        "U.LX"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "auto:R_FBB.1|R_FBT.2|U.FB",
+      "members": [
+        "R_FBB.1",
+        "R_FBT.2",
+        "U.FB"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "power",
+      "id": "port.3V3",
+      "members": [
+        "C_HF.1",
+        "C_OUT.1",
+        "L.2",
+        "R_FBT.1"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "signal",
+      "id": "port.EN",
+      "members": [
+        "U.EN"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "gnd",
+      "id": "port.GND",
+      "members": [
+        "C_HF.2",
+        "C_IN.2",
+        "C_OUT.2",
+        "R_FBB.2",
+        "U.GND"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "class": "power",
+      "id": "port.VIN",
+      "members": [
+        "C_IN.1",
+        "U.IN"
+      ],
+      "provenance": "ai_asserted"
+    }
+  ],
+  "openInterfaces": [
+    {
+      "direction": "load",
+      "net": "port.3V3",
+      "provenance": "ai_asserted",
+      "role": "3V3"
+    },
+    {
+      "direction": "input",
+      "net": "port.EN",
+      "provenance": "ai_asserted",
+      "role": "EN"
+    },
+    {
+      "direction": "",
+      "net": "port.GND",
+      "provenance": "ai_asserted",
+      "role": "GND"
+    },
+    {
+      "direction": "source",
+      "net": "port.VIN",
+      "provenance": "ai_asserted",
+      "role": "VIN"
+    }
+  ],
+  "operatingConditions": {},
+  "parts": [
+    {
+      "id": "C_HF",
+      "lcsc": "C1525",
+      "mpn": "CL05B104KO5NNNC",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-C_HF",
+      "value": "100nF"
+    },
+    {
+      "id": "C_IN",
+      "lcsc": "C440198",
+      "mpn": "GRM21BR61H106KE43L",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-C_IN",
+      "value": "10µF"
+    },
+    {
+      "id": "C_OUT",
+      "lcsc": "C45783",
+      "mpn": "CL21A226MAQNNNE",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-C_OUT",
+      "value": "22µF"
+    },
+    {
+      "id": "L",
+      "lcsc": "C250183",
+      "mpn": "NLCV32T-2R2M-PF",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-L",
+      "value": "2.2µH"
+    },
+    {
+      "id": "R_FBB",
+      "lcsc": "C25744",
+      "mpn": "0402WGF1002TCE",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-R_FBB",
+      "value": "10kΩ"
+    },
+    {
+      "id": "R_FBT",
+      "lcsc": "C26980",
+      "mpn": "0402WGF4532TCE",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-R_FBT",
+      "value": "45.3k"
+    },
+    {
+      "id": "U",
+      "lcsc": "C479074",
+      "mpn": "SY8089A1AAC",
+      "params": {},
+      "provenance": "ai_asserted",
+      "symbolRef": "GENERIC-U",
+      "value": "SY8089A1AAC"
+    }
+  ],
+  "specVersion": 1
+}

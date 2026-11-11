@@ -246,12 +246,14 @@
 
 ## 038Q 原生 CBB（独立方向，2026-11-03 起）
 
-- **11-03：调研/任务书完成**（`tasks/038q_cbb_native.md`）。状态是**样本驱动**——
-  没有真实 CBB 样本就不开阶段 A，**未承诺版本、未承诺发布日期**。
-- 与 038P（多 PCB 工作树）、FOOTPRINT、Rust 迁移**不混批**；shared / connector / 规则 /
-  真机各自单独成批，先读后写。CBB 目前在仓库里没有原生实现，`core/blocks.py` 的
-  `BlockSymbol` 是绘图模板域，不是宿主原生块。
-- type 17 是线索不是事实：样本证实前只许写「待证实」；证实/证伪都按实测改口径。
+- **11-11：Q1–Q4 支撑批已完成各自范围**：库只读 `lib.cbb.search/get`、上游候选归一化、
+  符号文件只读通路、单符号 elibz2 profile；AMS1117 单符号身份/几何已核对。任务书分别为
+  `tasks/038q1_cbb_readonly_inventory.md` 至 `tasks/038q4_elibz2_symbol_profile.md`。
+  四模块仍 candidate/unverified/notForDrawCompile，其余器件身份未齐。
+- **原生 `block_symbol` 仍是样本驱动**：没有真实 CBB 样件就不开阶段 A，库搜索成功不等于
+  原生块解析、放置或端口规则完成；**未承诺版本、未承诺发布日期**。
+- shared / connector / 规则 / 真机各自单独成批，先读后写；`core/blocks.py` 的
+  `BlockSymbol` 是绘图模板域，不是宿主原生块。type 17 仍只是线索，按实测证实或证伪。
 
 ## 待岳拍板（不排期就不动）
 

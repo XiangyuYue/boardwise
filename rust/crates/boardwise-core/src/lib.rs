@@ -25,6 +25,7 @@ pub const DIFFERENTIAL_CASES_SCHEMA: &str = "boardwise.differential-cases/1";
 pub mod device;
 pub mod epru;
 pub mod footprint;
+pub mod module_import;
 pub mod schema;
 pub mod symbol;
 

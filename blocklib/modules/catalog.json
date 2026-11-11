@@ -1,0 +1,525 @@
+{
+  "modules": [
+    {
+      "attribution": {
+        "author": "@zhoushoujianwork",
+        "contributors": []
+      },
+      "circuit": "circuits/ams1117_ldo_3v3.circuit.json",
+      "id": "block.ams1117_ldo_3v3",
+      "identityStatus": "unverified",
+      "kind": "block_template",
+      "limitations": [
+        "candidate: the electrical facts come from the pinned upstream sample; this repository has verified neither the symbol nor the device identity (see identityStatus)",
+        "not for draw compile: no SymbolProfile has been read, so pin numbers and bodies are unverified, and every part's circuit symbolRef is the GENERIC-<role> placeholder rather than a resolved symbol",
+        "no compose, native CBB, PCB or hardware claim is made here",
+        "each port's default_net is a suggestion for a future composition and is not wiring: ports that suggest the same net (VIN and EN) stay separate nets here",
+        "wildcard pin groups are kept as written (U.VOUT*) and were not expanded to physical pads — no pin number was guessed"
+      ],
+      "maturity": "candidate",
+      "notForDrawCompile": true,
+      "parts": [
+        {
+          "deviceUuid": "87bb635d0b2f489a9f60e7cd225beb3c",
+          "footprint": "C0402",
+          "lcsc": "C1525",
+          "mpn": "CL05B104KO5NNNC",
+          "role": "C_BYP",
+          "standardPart": "cap.100nf_0402",
+          "symbolRef": "",
+          "value": "100nF"
+        },
+        {
+          "deviceUuid": "6e5726223dd84f70bc3b626fc7d1f72c",
+          "footprint": "C0805",
+          "lcsc": "C440198",
+          "mpn": "GRM21BR61H106KE43L",
+          "role": "C_IN",
+          "standardPart": "cap.10uf_0805",
+          "symbolRef": "",
+          "value": "10µF"
+        },
+        {
+          "deviceUuid": "159c3da60be9490abf4e97599788a0d5",
+          "footprint": "C0805",
+          "lcsc": "C45783",
+          "mpn": "CL21A226MAQNNNE",
+          "role": "C_OUT",
+          "standardPart": "cap.22uf_0805",
+          "symbolRef": "",
+          "value": "22µF"
+        },
+        {
+          "deviceUuid": "9f9c6cb41c7449fd8acf96aceed2661a",
+          "footprint": "SOT-223-3",
+          "lcsc": "C6186",
+          "mpn": "AMS1117-3.3",
+          "role": "U",
+          "standardPart": "ldo.ams1117_3v3",
+          "symbolRef": "",
+          "value": "AMS1117-3.3"
+        }
+      ],
+      "ports": [
+        {
+          "class": "power",
+          "defaultNet": "+3V3",
+          "direction": "load",
+          "name": "3V3",
+          "net": "port.3V3"
+        },
+        {
+          "class": "gnd",
+          "defaultNet": "GND",
+          "direction": "",
+          "name": "GND",
+          "net": "port.GND"
+        },
+        {
+          "class": "power",
+          "defaultNet": "+5V",
+          "direction": "source",
+          "name": "VIN_5V",
+          "net": "port.VIN_5V"
+        }
+      ],
+      "source": {
+        "commit": "69af00c0db3960757bff36a68edb286adcd64458",
+        "path": "internal/blocks/data/ams1117_ldo_3v3.json",
+        "sha256": "cdcfd6e92dfa308aff994e357aa4c8effb5e562a01dba53be7a7591fe6807fe5"
+      },
+      "title": "block.ams1117_ldo_3v3",
+      "unresolvedWildcards": [
+        "U.VOUT*"
+      ],
+      "unstatedPins": [],
+      "upstreamMaturity": "unstated"
+    },
+    {
+      "attribution": {
+        "author": "@zhoushoujianwork",
+        "contributors": [
+          "Codex"
+        ]
+      },
+      "circuit": "circuits/ch340c_usb_serial.circuit.json",
+      "id": "block.ch340c_usb_serial",
+      "identityStatus": "unverified",
+      "kind": "block_template",
+      "limitations": [
+        "candidate: the electrical facts come from the pinned upstream sample; this repository has verified neither the symbol nor the device identity (see identityStatus)",
+        "not for draw compile: no SymbolProfile has been read, so pin numbers and bodies are unverified, and every part's circuit symbolRef is the GENERIC-<role> placeholder rather than a resolved symbol",
+        "no compose, native CBB, PCB or hardware claim is made here",
+        "each port's default_net is a suggestion for a future composition and is not wiring: ports that suggest the same net (VIN and EN) stay separate nets here",
+        "wildcard pin groups are kept as written (D_ESD.I/O1*, D_ESD.I/O2*, J_USB.EP*, J_USB.GND*, J_USB.VBUS*) and were not expanded to physical pads — no pin number was guessed",
+        "ports DTR, RTS, RXD, TXD have no upstream internal net; their net is the port pin alone (curated netSource=port_pin_only), not an inferred connection"
+      ],
+      "maturity": "candidate",
+      "notForDrawCompile": true,
+      "parts": [
+        {
+          "deviceUuid": "87bb635d0b2f489a9f60e7cd225beb3c",
+          "footprint": "C0402",
+          "lcsc": "C1525",
+          "mpn": "CL05B104KO5NNNC",
+          "role": "C_V3",
+          "standardPart": "cap.100nf_0402",
+          "symbolRef": "",
+          "value": "100nF"
+        },
+        {
+          "deviceUuid": "87bb635d0b2f489a9f60e7cd225beb3c",
+          "footprint": "C0402",
+          "lcsc": "C1525",
+          "mpn": "CL05B104KO5NNNC",
+          "role": "C_VCC",
+          "standardPart": "cap.100nf_0402",
+          "symbolRef": "",
+          "value": "100nF"
+        },
+        {
+          "deviceUuid": "1e5e214711544da8ba71fb2137ae703f",
+          "lcsc": "C2687116",
+          "mpn": "USBLC6-2SC6",
+          "role": "D_ESD",
+          "standardPart": "esd.usblc6_2sc6",
+          "symbolRef": "",
+          "value": "USBLC6-2SC6"
+        },
+        {
+          "deviceUuid": "fafc5d2de09d4595b0cc7abedc0530e6",
+          "footprint": "USB-C-SMD_TYPE-C-16PIN",
+          "lcsc": "C9900012665",
+          "mpn": "USB3.1TYPE-C16P",
+          "role": "J_USB",
+          "standardPart": "conn.usb_c_16p",
+          "symbolRef": "",
+          "value": "TYPE-C-16P"
+        },
+        {
+          "deviceUuid": "ef1f93374e0c4079b48a2d1a3cec8f6b",
+          "footprint": "R0402",
+          "lcsc": "C25905",
+          "mpn": "0402WGF5101TCE",
+          "role": "R_CC1",
+          "standardPart": "res.5k1_0402",
+          "symbolRef": "",
+          "value": "5.1kΩ"
+        },
+        {
+          "deviceUuid": "ef1f93374e0c4079b48a2d1a3cec8f6b",
+          "footprint": "R0402",
+          "lcsc": "C25905",
+          "mpn": "0402WGF5101TCE",
+          "role": "R_CC2",
+          "standardPart": "res.5k1_0402",
+          "symbolRef": "",
+          "value": "5.1kΩ"
+        },
+        {
+          "deviceUuid": "4951b3094e3e48a7b4c8c708b64932e4",
+          "footprint": "SOP-16_L10.0-W3.9-P1.27-LS6.0-BL",
+          "lcsc": "C84681",
+          "mpn": "CH340C",
+          "role": "U",
+          "standardPart": "ic.ch340c",
+          "symbolRef": "",
+          "value": "CH340C"
+        }
+      ],
+      "ports": [
+        {
+          "class": "signal",
+          "defaultNet": "USB_DTR",
+          "direction": "output",
+          "name": "DTR",
+          "net": "port.DTR"
+        },
+        {
+          "class": "gnd",
+          "defaultNet": "GND",
+          "direction": "",
+          "name": "GND",
+          "net": "port.GND"
+        },
+        {
+          "class": "signal",
+          "defaultNet": "USB_RTS",
+          "direction": "output",
+          "name": "RTS",
+          "net": "port.RTS"
+        },
+        {
+          "class": "signal",
+          "defaultNet": "MCU_TX",
+          "direction": "input",
+          "name": "RXD",
+          "net": "port.RXD"
+        },
+        {
+          "class": "signal",
+          "defaultNet": "MCU_RX",
+          "direction": "output",
+          "name": "TXD",
+          "net": "port.TXD"
+        },
+        {
+          "class": "power",
+          "defaultNet": "5V",
+          "direction": "load",
+          "name": "VBUS_5V",
+          "net": "port.VBUS_5V",
+          "part": "J_USB"
+        }
+      ],
+      "source": {
+        "commit": "69af00c0db3960757bff36a68edb286adcd64458",
+        "path": "internal/blocks/data/ch340c_usb_serial.json",
+        "sha256": "09296d21b70b1edd79d97dea6f2946aca5b53c5d6a9c1f480efa6790c1d89019"
+      },
+      "title": "block.ch340c_usb_serial",
+      "unresolvedWildcards": [
+        "D_ESD.I/O1*",
+        "D_ESD.I/O2*",
+        "J_USB.EP*",
+        "J_USB.GND*",
+        "J_USB.VBUS*"
+      ],
+      "unstatedPins": [],
+      "upstreamMaturity": "unstated"
+    },
+    {
+      "attribution": {
+        "author": "@zhoushoujianwork",
+        "contributors": []
+      },
+      "circuit": "circuits/sy8089_buck_3v3.circuit.json",
+      "id": "block.sy8089_buck_3v3",
+      "identityStatus": "unverified",
+      "kind": "block_template",
+      "limitations": [
+        "candidate: the electrical facts come from the pinned upstream sample; this repository has verified neither the symbol nor the device identity (see identityStatus)",
+        "not for draw compile: no SymbolProfile has been read, so pin numbers and bodies are unverified, and every part's circuit symbolRef is the GENERIC-<role> placeholder rather than a resolved symbol",
+        "no compose, native CBB, PCB or hardware claim is made here",
+        "each port's default_net is a suggestion for a future composition and is not wiring: ports that suggest the same net (VIN and EN) stay separate nets here"
+      ],
+      "maturity": "candidate",
+      "notForDrawCompile": true,
+      "parts": [
+        {
+          "deviceUuid": "87bb635d0b2f489a9f60e7cd225beb3c",
+          "footprint": "C0402",
+          "lcsc": "C1525",
+          "mpn": "CL05B104KO5NNNC",
+          "role": "C_HF",
+          "standardPart": "cap.100nf_0402",
+          "symbolRef": "",
+          "value": "100nF"
+        },
+        {
+          "deviceUuid": "6e5726223dd84f70bc3b626fc7d1f72c",
+          "footprint": "C0805",
+          "lcsc": "C440198",
+          "mpn": "GRM21BR61H106KE43L",
+          "role": "C_IN",
+          "standardPart": "cap.10uf_0805",
+          "symbolRef": "",
+          "value": "10µF"
+        },
+        {
+          "deviceUuid": "159c3da60be9490abf4e97599788a0d5",
+          "footprint": "C0805",
+          "lcsc": "C45783",
+          "mpn": "CL21A226MAQNNNE",
+          "role": "C_OUT",
+          "standardPart": "cap.22uf_0805",
+          "symbolRef": "",
+          "value": "22µF"
+        },
+        {
+          "deviceUuid": "7bd4ff00682f4a949fb4f4c7273ae493",
+          "lcsc": "C250183",
+          "mpn": "NLCV32T-2R2M-PF",
+          "role": "L",
+          "standardPart": "ind.22uh_1210",
+          "symbolRef": "",
+          "value": "2.2µH"
+        },
+        {
+          "deviceUuid": "c3b9baa5ef2e4070a4c0f9e9cd04fe6e",
+          "footprint": "R0402",
+          "lcsc": "C25744",
+          "mpn": "0402WGF1002TCE",
+          "role": "R_FBB",
+          "standardPart": "res.10k_0402",
+          "symbolRef": "",
+          "value": "10kΩ"
+        },
+        {
+          "deviceUuid": "0e6f5e403c1640769543df189249ab4d",
+          "lcsc": "C26980",
+          "mpn": "0402WGF4532TCE",
+          "role": "R_FBT",
+          "standardPart": "res.453k_0402__2",
+          "symbolRef": "",
+          "value": "45.3k"
+        },
+        {
+          "deviceUuid": "00111ae499794742b81a699a4ff88fc8",
+          "lcsc": "C479074",
+          "mpn": "SY8089A1AAC",
+          "role": "U",
+          "standardPart": "buck.sy8089_tsot23",
+          "symbolRef": "",
+          "value": "SY8089A1AAC"
+        }
+      ],
+      "ports": [
+        {
+          "class": "power",
+          "defaultNet": "+3V3",
+          "direction": "load",
+          "name": "3V3",
+          "net": "port.3V3"
+        },
+        {
+          "class": "signal",
+          "defaultNet": "VSYS",
+          "direction": "input",
+          "name": "EN",
+          "net": "port.EN"
+        },
+        {
+          "class": "gnd",
+          "defaultNet": "GND",
+          "direction": "",
+          "name": "GND",
+          "net": "port.GND"
+        },
+        {
+          "class": "power",
+          "defaultNet": "VSYS",
+          "direction": "source",
+          "name": "VIN",
+          "net": "port.VIN"
+        }
+      ],
+      "source": {
+        "commit": "69af00c0db3960757bff36a68edb286adcd64458",
+        "path": "internal/blocks/data/sy8089_buck_3v3.json",
+        "sha256": "888a9c4c90fd88721605754dea3c1669746091d64129f6e9dffee8bbd3d76b03"
+      },
+      "title": "block.sy8089_buck_3v3",
+      "unresolvedWildcards": [],
+      "unstatedPins": [],
+      "upstreamMaturity": "unstated"
+    },
+    {
+      "circuit": "circuits/sy8089_buck_3v3_live.circuit.json",
+      "id": "lib.sy8089_buck_3v3_live",
+      "identityStatus": "unverified",
+      "kind": "role_topology",
+      "limitations": [
+        "candidate: the electrical facts come from the pinned upstream sample; this repository has verified neither the symbol nor the device identity (see identityStatus)",
+        "not for draw compile: no SymbolProfile has been read, so pin numbers and bodies are unverified, and every part's circuit symbolRef is the GENERIC-<role> placeholder rather than a resolved symbol",
+        "no compose, native CBB, PCB or hardware claim is made here",
+        "net ids are kept as written, so internal.* and port.* nets of one variant are never merged with another variant",
+        "upstream pinNetReadback: passed",
+        "upstream deviceIdentityResolution: passed",
+        "upstream geometry: not_captured",
+        "upstream pcb: not_tested",
+        "upstream bringup: not_tested",
+        "upstream maturity: topology_ready"
+      ],
+      "maturity": "candidate",
+      "notForDrawCompile": true,
+      "parts": [
+        {
+          "deviceName": "SY8089AAAC",
+          "deviceUuid": "8cfd65b3cdf844cdadfefd57318dcba1",
+          "footprint": "SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BR",
+          "lcsc": "C78988",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "role": "REG",
+          "symbolRef": ""
+        },
+        {
+          "deviceName": "CL21A226MAQNNNE",
+          "deviceUuid": "159c3da60be9490abf4e97599788a0d5",
+          "footprint": "C0805",
+          "lcsc": "C45783",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "role": "IN_BULK",
+          "symbolRef": ""
+        },
+        {
+          "deviceName": "CC0603KRX7R9BB104",
+          "deviceUuid": "96b39256cc3f4d80bd3b503deb4f3328",
+          "footprint": "C0603",
+          "lcsc": "C14663",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "role": "IN_DECOUP",
+          "symbolRef": ""
+        },
+        {
+          "deviceName": "FXL0420-2R2-M",
+          "deviceUuid": "235fe1411dd644e688b4fc00afdc5c09",
+          "footprint": "IND-SMD_L4.4-W4.2",
+          "lcsc": "C167206",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "role": "IND",
+          "symbolRef": ""
+        },
+        {
+          "deviceName": "CL21A226MAQNNNE",
+          "deviceUuid": "159c3da60be9490abf4e97599788a0d5",
+          "footprint": "C0805",
+          "lcsc": "C45783",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "role": "OUT_BULK",
+          "symbolRef": ""
+        },
+        {
+          "deviceName": "CC0603KRX7R9BB104",
+          "deviceUuid": "96b39256cc3f4d80bd3b503deb4f3328",
+          "footprint": "C0603",
+          "lcsc": "C14663",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "role": "OUT_DECOUP",
+          "symbolRef": ""
+        },
+        {
+          "deviceName": "CL10C220JB8NNNC",
+          "deviceUuid": "ad1b2fdc99ef4ce998dd40fce460c2d4",
+          "footprint": "C0603",
+          "lcsc": "C1653",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "role": "FB_CAP",
+          "symbolRef": ""
+        },
+        {
+          "deviceName": "0603WAF1003T5E",
+          "deviceUuid": "40ff282b3d594c33b798d1707d8406cb",
+          "footprint": "R0603",
+          "lcsc": "C25803",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "role": "FB_TOP",
+          "symbolRef": ""
+        },
+        {
+          "deviceName": "FRC0603F2212TS",
+          "deviceUuid": "b5144eb014ce41d7a72a460b56c18b84",
+          "footprint": "R0603",
+          "lcsc": "C2960862",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "role": "FB_BOTTOM",
+          "symbolRef": ""
+        },
+        {
+          "deviceName": "0603WAF1002T5E",
+          "deviceUuid": "b948db94476e4027ac8953235755ec96",
+          "footprint": "R0603",
+          "lcsc": "C25804",
+          "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+          "role": "EN_PULLUP",
+          "symbolRef": ""
+        }
+      ],
+      "ports": [
+        {
+          "class": "gnd",
+          "direction": "",
+          "name": "GND",
+          "net": "port.GND"
+        },
+        {
+          "class": "power",
+          "direction": "source",
+          "name": "POWER_IN",
+          "net": "port.POWER_IN"
+        },
+        {
+          "class": "power",
+          "direction": "load",
+          "name": "POWER_OUT",
+          "net": "port.POWER_OUT"
+        }
+      ],
+      "source": {
+        "commit": "69af00c0db3960757bff36a68edb286adcd64458",
+        "path": ".agents/skills/easyeda-agent/library/modules/sy8089-buck-3v3.topology.json",
+        "sha256": "9ac3fd6971641f45050ecaf73d742321e516640ae56c2597f452fa396b73dd1a"
+      },
+      "title": "SY8089 5V 转 3.3V 降压",
+      "unresolvedWildcards": [],
+      "unstatedPins": [],
+      "upstreamMaturity": "topology_ready"
+    }
+  ],
+  "schema": "boardwise.module-catalog/1",
+  "standardPartsLibraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+  "upstream": {
+    "commit": "69af00c0db3960757bff36a68edb286adcd64458",
+    "repo": "https://github.com/zhoushoujianwork/easyeda-agent"
+  }
+}

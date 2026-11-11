@@ -1475,7 +1475,30 @@ def collect_symbol_details(path: str | Path) -> dict[str, SymbolDetail]:
     text, meta = load_epru_text(Path(path))
     stats = ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
     records = _iter_schematic_records(text, stats)
-    symbols = _collect_symbols(records, stats, pin_key=_pin_key_for(meta))
+    return _symbol_details_from_records(
+        records, stats, pin_key=_pin_key_for(meta)
+    )
+
+
+def _symbol_details_from_records(
+    records: list[Any],
+    parse_stats: ParseStats | None = None,
+    *,
+    pin_key: str = "zIndex",
+) -> dict[str, SymbolDetail]:
+    """The records -> details half of :func:`collect_symbol_details`.
+
+    Split out (038Q4) so a **single-symbol** container reader can reuse the one
+    implementation of "what a SYMBOL document contributes" instead of copying
+    the RECT/POLY/CIRCLE and PIN rules. The rules are unchanged: the pin map
+    comes from :func:`_collect_symbols` keyed by the caller's ``pin_key``, the
+    drawn extent is the union of every RECT/POLY/CIRCLE under the document's own
+    ``DOCHEAD``, and a document with geometry but no pins is still included.
+
+    ``records`` is expected in the shape :func:`_iter_schematic_records` returns
+    (``DOCHEAD`` boundaries kept, non-schematic documents already dropped).
+    """
+    symbols = _collect_symbols(records, parse_stats, pin_key=pin_key)
 
     extents: dict[str, tuple[float, float, float, float]] = {}
 

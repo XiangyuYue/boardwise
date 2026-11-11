@@ -187,9 +187,18 @@ def test_the_conclusion_may_not_claim_a_pass_while_parts_are_unreviewed(
     # `incomplete` -- the quotable line may not leave it out.
     pending = report["completion"]["warningsPendingTriage"]
     assert report["completion"]["verdict"] == "incomplete"
+    # 038R2: this fixture carries PCB documents and `--file` never asks a host for
+    # PCB DRC, so the quotable line also carries the one open item that is not
+    # this test's subject — the coverage-gap clause (the host DRC never ran). It
+    # is spelled out **in full** rather than matched loosely: the sentence is the
+    # report's quotable verdict, so the whole of it is what gets pinned.
+    assert report["completion"]["coverage"]["hostPcbDrcUnchecked"] is True
     assert report["summary"]["conclusion"] == (
         f"DRC/连接性已审，{count} 颗器件缺手册未审"
         + (f"；另有 {pending} 条 warning 待分诊" if pending else "")
+        + "；另有 1 类覆盖缺口（少页/空板/规则 withheld/解析丢弃记录或定义/"
+          "规则报错/宿主 PCB DRC 未跑，逐条见 completion.verdictWhy 与 "
+          "completion.coverage）"
     )
     assert "无 ERROR" not in report["summary"]["conclusion"]
     assert "通过" not in report["summary"]["conclusion"]
@@ -332,7 +341,11 @@ def test_a_clean_gate_end_to_end_reaches_complete_with_open_items(capsys, tmp_pa
     assert "completion: complete-with-open-items" in printed
 
     # ... and with nothing open at all (no warning to triage, no unreviewed part,
-    # nothing stale) the same command reaches `complete` with an empty reason list.
+    # nothing stale) the same command leaves exactly one open item — 038R2's: this
+    # fixture carries PCB documents and `--file` never asks a host for PCB DRC, so
+    # 「自有规则零新增」不再等于 `complete`。The verdict is the open-item state and
+    # the reason names the host DRC, which is the contract; there is no reading of
+    # this board that is `complete`.
     monkeypatch.setattr(cli, "warning_triage_slots", lambda **kwargs: [])
     assert cli.main([
         "checkup", "--file", str(BOARD), "--out", str(tmp_path / "out2"),
@@ -340,9 +353,30 @@ def test_a_clean_gate_end_to_end_reaches_complete_with_open_items(capsys, tmp_pa
     ]) == 0
     capsys.readouterr()
     report = json.loads((tmp_path / "out2" / "report.json").read_text(encoding="utf-8"))
+    assert report["completion"]["verdict"] == "complete-with-open-items"
+    assert len(report["completion"]["verdictWhy"]) == 1, report["completion"]["verdictWhy"]
+    assert "宿主 PCB DRC 未运行" in report["completion"]["verdictWhy"][0]
+    assert report["conclusion"]["mayQuotePassed"] is False, (
+        "that reading may not be quoted as a pass"
+    )
+
+    # The state machine this test exists for, with 038R2's fact held at
+    # 「asked」 — the same way `unreviewed_parts` and `warning_triage_slots` are
+    # lifted above: nothing else open, so the rest of the statement reaches
+    # `complete` with an empty reason list.
+    monkeypatch.setattr(
+        cli, "_host_pcb_drc_unchecked", lambda drc, *, pcb_had_documents: False
+    )
+    assert cli.main([
+        "checkup", "--file", str(BOARD), "--out", str(tmp_path / "out3"),
+        "--library", str(SHELF),
+    ]) == 0
+    capsys.readouterr()
+    report = json.loads((tmp_path / "out3" / "report.json").read_text(encoding="utf-8"))
     assert report["completion"]["verdict"] == "complete"
     assert report["completion"]["verdictWhy"] == []
-    markdown = (tmp_path / "out2" / "report.md").read_text(encoding="utf-8")
+    assert report["conclusion"]["mayQuotePassed"] is True
+    markdown = (tmp_path / "out3" / "report.md").read_text(encoding="utf-8")
     assert "**verdict：`complete`**（无 ERROR、无未审、无 stale、无待分诊、无覆盖缺口）" in markdown
 
 

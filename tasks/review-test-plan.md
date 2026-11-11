@@ -14,6 +14,7 @@
 | 绘制离线 | `draw compile`、`draw lint` |
 | DSH 工具面 | 10 个 `boardwise_*` 工具（`driver` 是 DSH，不是 CLI） |
 | 极端与对抗 | 坏输入、坏路径、坏版本、坏状态、超时、重复、并发 |
+| 焊盘几何 | 圆盘 / `OVAL` / 非圆 `ELLIPSE` 的间距读数、外接框假阳性回归、已知残留（038V） |
 
 **不测**：绘制落图（`draw apply` / `review-mark`）的视觉质量——那要人眼验收，另见 `docs/schematic-style-spec.md`。
 
@@ -140,6 +141,85 @@ $BW --version                                       # 期望 boardwise 0.6.0
 | T-E14 | 报告被手改后 finalize | 改坏 `report.json` 再 finalize | 拒绝签发，指出坏在哪 |
 | T-E15 | 超大器件数 | 用 500+ 器件的样本 | 有界时间返回，或明确报「超限」；不许 OOM/静默丢器件 |
 
+### F. 焊盘形状与间距测量（038V，几何假阳性族）
+
+> **背景**：PCB-A 的 Ø1.7 mm 圆盘焊盘被外接方框建模，对角方向半径放大成 `r·√2`，
+> 把真实 **14.08 mil** 报成 **0.22 mil**，触发 `pcb-voltage-spacing` 假 WARN（宿主 DRC 0 条）。
+> 038V 已修（`src/boardwise/core/measure.py` 的 `_pad_copper`）：圆盘 = 圆心 + 半径、
+> `OVAL` = 体育场、非圆 `ELLIPSE` = 32 边**外切**多边形、其余仍走 `pad_corners()`。
+> 本组钉的是**修复本身 + 同族边界 + 已知残留**，防回归。已有单测锚：
+> `tests/test_125b_pcb_clearance.py` 的 `test_round_pad_inside_a_pour_void_is_fourteen_mil_clear` 等三条。
+
+**F.0 构造器（复制到 `.tmp_t_F*/probe.py`，每条用例只改 `pads` / 期望）**：
+
+```python
+import math
+from boardwise.core.geometry import BoardGeometry, LayerInfo, PadGeometry, Point, PourShape, StackupEntry
+from boardwise.core.measure import net_clearance
+
+LAYERS = {1: LayerInfo(1, "Top Layer", "TOP"), 2: LayerInfo(2, "Bottom Layer", "BOTTOM")}
+STACKUP = [StackupEntry(1, 1000, "cu", 1.378), StackupEntry(2, 9000, "cu", 1.378)]
+
+def pad(pid, net, x, y, w, h, shape="ELLIPSE", angle=0.0, layer=1):
+    return PadGeometry(id=pid, component=None, pin_number=None, net=net,
+                       footprint_layer_id=layer, x=x, y=y, width=w, height=h,
+                       shape=shape, angle=angle, hole_diameter=None)
+
+def board(pads=(), pours=()):
+    return BoardGeometry(layers=LAYERS, stackup=STACKUP, pads=list(pads), pours=list(pours))
+```
+
+| ID | 目的 | 构造 | 期望 |
+|---|---|---|---|
+| T-F01 | **PCB-A 原案**：圆盘 ↔ 圆角挖空 | A：`pad(66.929, 66.929, ELLIPSE)` @(0,0)；B：`POURED` 铺铜，挖空为 512 边形、半径 47.548 | `net_clearance == 14.0826 ± 0.002`；**且读数与 0.22205 的差 > 1**（旧矩形值必须被排除）；`overlapping=False` |
+| T-F02 | 对角圆盘 | 两个 60×60 圆盘，圆心在 45° 线上相距 100 | `40.0 ± 1e-9`；与 15.147186 相差 > 1 |
+| T-F03 | 矩形 negative control | 同 T-F02，但 `shape="RECT"` | `15.147186 ± 1e-9`（矩形路径不许被改） |
+| T-F04 | OVAL 体育场 ↔ 圆盘 | A：`OVAL 100×40` @(0,0)；B：`pad(20,20)` @(0,100) | `70.0`（体育场短轴半径 20，不是长轴 50） |
+| T-F05 | 非圆椭圆·切点方向 | A：`ELLIPSE 200×100` @(0,0)；B：`pad(20,20)` @(0,200) | `140.0`（切点方向多边形与椭圆相切，精确） |
+| T-F06 | 非圆椭圆·斜向（最差方向） | 同 T-F05，B 放在 45° 方向、距原点 200 | `116.75 ± 0.5`；数值法真实椭圆为 117.058，**多边形只许更小**（保守低估 ≤ 0.48% 半长轴） |
+| T-F07 | 小圆盘对 | 两个 20×20 圆盘 @(0,0) 与 @(50,0) | `30.0 ± 1e-9` |
+| T-F08 | 阈值边界 | 两个 20×20 圆盘 @(0,0) 与 @(30,0)，间隙正好 10.0 mil | 测量值 `10.0`；再跑 `pcb-voltage-spacing`，规则集平面间距 10 mil 时**不得**判违规（等于阈值不是小于） |
+| T-F09 | 旋转 OVAL | T-F04 的 A 加 `angle=30` | 读数与 `angle=0` 相同（体育场旋转后仍是同一形状） |
+| T-F10 | 端到端：真实夹具 | `$BW checkup --file tests/fixtures/llc_board.epro2 --out .tmp_t_F10`，读 `CHS`/`DC+` 的间距证据 | 间距读数为 **95.0 mil**（038V §7 记录），不再是 85.965；findings 里没有由该对引起的电压间距 WARN |
+| T-F11 | 已知残留：`vias_on_pad` 外接框 | 圆盘焊盘外接方框的**角点**放一个过孔、圆盘外、方框内 | **不判 FAIL**：记录实际行为（过孔是否被算进焊盘），并核对 `docs` 里「非矩形焊盘仍用外接框做保守包含」的披露是否一致；不一致记 DOC |
+| T-F12 | 已知残留：KiCad `roundrect`/`custom` | 有此类焊盘的 KiCad 夹具（若无则 BLOCKED） | 仍是矩形保守模型；读数偏小但不报错；文档披露一致 |
+
+**F 组的判定要点**：
+
+1. **方向性**：多边形近似只许**低估**（间隙更小），不允许高估——高估会把真问题藏起来。
+2. **不许吞真问题**：T-F03 与 T-F08 是 negative control，修假阳性不能把「真小间隙」也放过。
+3. **读数变化要能解释**：038V 让 llc 的 `CHS/DC+` 从 85.965 变 95.0、毕设 FOC 的 `+24V/PGND` 从 1.0387 变 14.078——这些是**真实值变准**，不是规则被放松；若某条读数变了但无法用几何解释，记 FAIL。
+
+### G. 审查线 038W / 038X / 529 / 527C2 / 541 回归（2026-11-06）
+
+> 这批是最近落地的审查线工作。**「本轮实测」列是 2026-11-06 主代理在真机 `test V4` 上跑过的结果**；
+> 标「待跑」的留给测试员按同一格式补。真机红线不变：只碰 `test` / `test2`，
+> 动手前 `doctor --project` 核对焦点工程名逐字一致。
+
+| ID | 目的 | 操作 | 期望 | 本轮实测 |
+|---|---|---|---|---|
+| T-G01 | 真机身份 | `$BW doctor --project "test V4"` | 9/9 项 PASS；焦点工程名逐字为 `test V4` | ✅ 9/9，编辑器 4.1.93、daemon 0.6.0 |
+| T-G02 | 真机在线审查 | `$BW checkup --project "test V4" --out .tmp_t_G02/out` | 两板两页（P1/P2 + P38/P1）；四件产物齐；exit 0/1/3 且结论可解释 | ✅ exit 1（23 项 ERROR），2 板 / 2 页 / 20 槽 |
+| T-G03 | **038X** 非仓库 CWD | `cd /d && TMPDIR=<可写目录> E:/boardwise/.venv/Scripts/python.exe -m boardwise.cli checkup --project "test V4" --out <out>` | `shelf` 显示**绝对路径** `E:\boardwise\blocklib\parts.json` 且确实加载；不因 CWD 静默变空架 | ✅ 绝对路径正确、货架加载 |
+| T-G04 | **038X** 坏货架 | `checkup --file <夹具> --library <不存在的 parts.json> --out <out>` | 明确「货架读取失败」+ 路径；`shelfMissing: true`；**不许**当成 0 条空架 | ✅ exit 3，报告顶层 `shelfMissing: true` |
+| T-G05 | **038X** 空货架 | 造一个 0 条的合法 `parts.json`，`--library` 指它 | 空架 + note 说明「这是空货架，不是读取失败」；**不设** `shelfMissing` | 待跑 |
+| T-G06 | **038W** PAD_NET 判优 | 合成四负例：①旧网→新空网（两文件顺序）②旧空网→新网（高 ticket 在前）③同票 client 大者胜 ④无法唯一判优 | ①②必须得到新值（空网要真的覆盖）；③按 client 判；④该脚键**缺席**且 `stats.consistency_unresolved` 有诊断；四条都不许「文件靠前胜」 | 待跑 |
+| T-G07 | **529** mid 去耦 | 含 2.2µF 输入档的夹具跑 `checkup --file`，再与纯 bulk 样本对比 | 2.2/4.7µF 进 mid 池，输入档不再报「没有高频去耦」假 WARN；只有 bulk 的输入档仍 WARN；四个距离档 200/300/800/200 不变 | 待跑 |
+| T-G08 | **527C2** 跨视图几何 | 真机 `checkup --project "test V4"` 后读 cross-view 段（`cross_view_section`） | `checked=true` 且 lonely 非空时带 `geometry`（端点绑定）；`checked=false` / `lonely=[]` / KiCad 模型时键集合逐字不变 | 待跑（本轮 report.json 顶层无 `cross_view` 键，需按 review 段核） |
+| T-G09 | **#87θ** 库元素身份 | 同一库元素多副本 + 重复脚号 | 合并成同一结构化身份；副本不算两个器件 | 待跑 |
+| T-G10 | **541 R1** RunManifest | `make_manifest → write → load → semantic_diff`；再喂坏 JSON / 未知版本 / `..` 路径 | 同基准 `sameBaseline=true`；只换输入哈希 `attribution="input:<path>"`；多变量变化必须是 `multi-variable-change`；坏输入一律 `RunManifestError` | 待跑（单测 `tests/test_541_run_manifest.py` 69 例可先跑） |
+| T-G11 | **541 R2** strict 闸 | ①`checkup --file <夹具> --out <out> --strict`（首次，无 `run.json` 基线）②同 out 再跑 `--strict` ③再跑 `--strict --new-evidence archive-bytes-changed` | ①正常出报告（无基线不拒）；②无新证据的重算必须被拒并说明原因；③显式声明后放行并记入 manifest | ①② 已实测：① exit 3 正常出报告；② **exit 2 `reject-use-existing`**，明确说「在取锁、读模型、跑规则、写报告之前就停下」；`--new-evidence` 只收枚举 `archive-bytes-changed`（自由文本 exit 2） |
+| T-G12 | **541 R4** strict-partial | `$BW review finalize --out <已审查目录> --strict-partial` | 四档披露校验：披露不完整即拒签；**不许**被 re-gate 洗白 | 待跑 |
+| T-G13 | 对抗：自我哈希 | 检查 `run.json` 的 `inputs` | 不含 `report.json` / `run.json` 自身哈希；输出目录产物不进入自己的基准 | 待跑 |
+| T-G14 | 对抗：侧车漏入基准 | 跑一次 triage 产生 `warning-triage.json` 后再生成 manifest | 侧车**不**被算进 `inputs`（否则每轮基准都变） | 待跑 |
+
+**G 组判定要点**：
+
+1. **038X 的「绝对路径」是有意变化**：默认 `shelfPath` 从相对字符串变成绝对路径，不是 bug；显式 `--library` 仍逐字使用用户输入。
+2. **038W 不许「最后一条赢」也不许「靠前赢」**：只能复用原子视图的 ticket/client 判优；判不了就缺席 + 诊断。
+3. **529 只改分类**：四个距离阈值一个都不许动；bulk 的 INFO 特例必须保留。
+4. **strict 是 opt-in**：默认路径行为不变；不带 strict 的回归不能因为 strict 新增而变红。
+
 ## 5. 反馈模板
 
 每条用这个格式回填（缺一不可）：
@@ -164,6 +244,9 @@ $BW --version                                       # 期望 boardwise 0.6.0
 | C 在线通道 | 9 | | | | |
 | D 绘制离线 | 4 | | | | |
 | E 极端对抗 | 15 | | | | |
+| F 焊盘形状与间距（038V） | 12 | | | | |
+| G 审查线 038W/038X/529/527C2/541 | 14 | | | | |
+| **合计** | **78** | | | | |
 
 ## 6. 测试员的自我约束
 

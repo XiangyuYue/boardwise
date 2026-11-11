@@ -62,7 +62,7 @@ def test_owner_manifest_covers_the_two_command_modules():
     assert data["batch"] == "540B6"
     assert data["modules"]["commands/__init__.py"] == "assembly"
     assert data["modules"]["commands/draw.py"] == "draw"
-    assert len(data["modules"]) == 147
+    assert len(data["modules"]) == 148
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

@@ -36,10 +36,28 @@ def _rect(width: float, height: float) -> list:
 
 
 def _board(rings: list[list], parts: list[tuple[str, float, float]] = ()):
+    """合成板：一个 FOOTPRINT 文档（带 40 mil 方焊盘）+ PCB 文档。
+
+    038R3 起「有效板框 + 有带位号器件 + 零可测量」会出一条聚合 WARN（检查未运行），
+    而 v1 的这份夹具只写 COMPONENT/ATTR、没有 FOOTPRINT/PAD，``parts`` 里的器件
+    一个焊盘都没有 —— 于是「规则照跑」这条断言只能靠空结果真空成立。焊盘补成真实
+    的 ``fp1`` 焊盘（复用 183 的 ``_line``/``_component`` 构造器），``COMPONENT`` 的
+    ``Footprint`` 属性本来就指向 ``fp1``，所以器件的几何照旧、只是现在量得动。
+    """
     lines = [
+        t183._line("DOCHEAD", "h_fp", {
+            "docType": "FOOTPRINT", "uuid": "fp1", "editVersion": "3.2.186",
+        }),
+        t183._line("PAD", "pad1", {
+            "num": "1", "layerId": 1, "centerX": 0, "centerY": 0, "padAngle": 0,
+            "defaultPad": {"padType": "RECT", "width": 40, "height": 40},
+            "hole": None, "plated": True,
+        }),
         t183._line("DOCHEAD", "h_pcb", {
             "docType": "PCB", "uuid": "pcb1", "editVersion": "3.2.186",
         }),
+        t183._line("LAYER", '["LAYER",1]', {"layerName": "Top Layer", "layerType": "TOP"}),
+        t183._line("LAYER", '["LAYER",2]', {"layerName": "Bottom Layer", "layerType": "BOTTOM"}),
     ]
     for index, ring in enumerate(rings):
         lines.append(t183._line("POLY", f"outline{index}", {

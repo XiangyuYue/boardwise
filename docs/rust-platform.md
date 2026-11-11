@@ -185,6 +185,56 @@ bash .tmp_540/rust-buildtools/cargo-local.sh test -p boardwise-core \
 `tests/test_540c_workspace.py`，覆盖 CLI 漂移与跨语言进程边界、真实/合成 JSON 正例、
 schema 负例、来源哈希、golden 失败路径与 workspace/文档边界。
 
+## 3.6 `module-import`（038Q2）
+
+第三个 CLI 子命令，也是 Rust 侧第一处**带业务输入结构**的纯转换：把固定上游
+（`easyeda-agent@69af00c0db3960757bff36a68edb286adcd64458`）的两种模块 JSON
+归一化成既有的 `boardwise-circuit-spec` v1，并生成候选 catalog/manifest。
+
+```bash
+rust/target/debug/boardwise-cli.exe module-import --output blocklib/modules
+# 显式输入：--curation <PATH>（默认 <repo>/contracts/module-import/curation.json）
+#          --root <DIR>（默认仓库根，curation 里的相对路径相对它解析）
+```
+
+边界与纪律：
+
+- **输入只能是脱敏派生物**（`contracts/module-import/`）。原始下载留在
+  `.tmp_038q2_upstream/` 不入库；`source-manifest.json` 同时记原始 SHA、脱敏派生
+  物 SHA、上游 LICENSE 与过滤口径，`curation.json` 逐条记端口的人工 direction/class
+  裁定——端口缺裁定、或裁定的方向不在 `source/load/input/output/feedback` 里一律拒绝，
+  `dir` 与端口名从不被猜成方向。curation 的 `sourceManifest` / `license` 指向这两份
+  输入，run 会校验：ledger 与 curation 的 upstream repo/commit 一致、每个 asset 的
+  `sourcePath`/`sourceSha256` 与 ledger 一致、脱敏源文件与 LICENSE 的字节哈希与
+  ledger 记录一致，否则整批拒绝。
+- 输出**只到目录**：`circuits/*.circuit.json`、`catalog.json`、`manifest.json`、
+  `upstream/LICENSE`（curation 那份的逐字节副本）。先算完所有候选再预检写盘；同名
+  同字节允许（可重跑），不同则拒绝，不覆盖、无 `--force`。manifest 记全部输入/输出
+  SHA（含 `source-manifest.json`、`LICENSE` 与 `upstream/LICENSE`），自身不入哈希，
+  不写时间戳。
+- **路径边界**：curation 内的一切输入相对路径（`standardParts`/`sourceManifest`/
+  `license`/`source`）必须是相对 root 的普通组件，绝对路径与 `..` 一律拒绝；`output`
+  必须是非绝对的、仅 Normal 组件的相对路径。`write_outputs` 自己再查一遍，不依赖上层。
+- 全部事实 `provenance: ai_asserted`、`draft: true`；catalog 一律
+  `maturity: candidate`、`identityStatus: unverified`、`notForDrawCompile: true`。
+  **catalog 的器件 `symbolRef` 为空**（没有识别出任何符号）；**CircuitSpec 的
+  `symbolRef` 用 `GENERIC-<role>` 占位**——它的 loader 对 `symbolRef` 是
+  `required=True`，空串直接拒绝。占位不是已解析身份，device UUID 绝不进该字段；
+  本批不接入 draw compile，catalog 同时标记 `notForDrawCompile`。接口 `role` 同理不可空，
+  写上游端口名。
+- Block 的 `author`/`contributors` 作为结构化 `attribution` 写进 catalog；没有该字段的
+  Role Topology 不编造。
+- 通配脚（`U.VOUT*`、`J_USB.VBUS*`…）原样留在 members 并列入
+  `unresolvedWildcards`，不猜脚号；本批不声称 compose、原生 CBB、PCB 或硬件验证，
+  也不进入 draw compile。
+- 退出码：0 写出候选；usage error（缺 `--output`、未知 flag）纯文本 2；输入/归一化
+  拒绝是 `boardwise.cli-result/1` envelope（`command: module-import`）2。
+- 测试：`rust/crates/boardwise-core/tests/module_import.rs`（真实四资产 + 合成拒绝用例，
+  scratch 目录每次唯一、不删除）、`rust/crates/boardwise-cli/tests/module_import.rs`
+  （进程面、LICENSE 字节一致）、`tests/test_038q2_upstream_module_seed.py`（用既有
+  CircuitSpec loader 读回四个输出，核对端口映射、来源 allowlist、catalog/manifest
+  哈希，并在原始样本存在时用运行期收集的 free text 反查泄漏——具体标识不写进仓库）。
+
 ## 4. 迁移与派单纪律
 
 迁移顺序固定为 **纯函数/几何 → parser/model → review → draw → daemon 最后**。

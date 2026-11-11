@@ -1,0 +1,89 @@
+{
+  "files": [
+    {
+      "originalSha256": "cdcfd6e92dfa308aff994e357aa4c8effb5e562a01dba53be7a7591fe6807fe5",
+      "redactedPath": "blocks/ams1117_ldo_3v3.json",
+      "redactedSha256": "92fb86dfeab3c4b4534cb8e474ec16ac833750f36e97770d0657cabda37292ed",
+      "upstreamPath": "internal/blocks/data/ams1117_ldo_3v3.json"
+    },
+    {
+      "originalSha256": "888a9c4c90fd88721605754dea3c1669746091d64129f6e9dffee8bbd3d76b03",
+      "redactedPath": "blocks/sy8089_buck_3v3.json",
+      "redactedSha256": "35dd6f197428838d74dd5cb220e237046f63a88a798182184735a2a8ccbcba73",
+      "upstreamPath": "internal/blocks/data/sy8089_buck_3v3.json"
+    },
+    {
+      "originalSha256": "09296d21b70b1edd79d97dea6f2946aca5b53c5d6a9c1f480efa6790c1d89019",
+      "redactedPath": "blocks/ch340c_usb_serial.json",
+      "redactedSha256": "224cf24ed14d369f1380e819a6dcd0b25fe5efeea949c76ed6c0e3ac2f78887e",
+      "upstreamPath": "internal/blocks/data/ch340c_usb_serial.json"
+    },
+    {
+      "originalSha256": "9ac3fd6971641f45050ecaf73d742321e516640ae56c2597f452fa396b73dd1a",
+      "redactedPath": "topologies/sy8089_buck_3v3_live.json",
+      "redactedSha256": "6d88b0cfdefcb3ce410fd6f72cc5acbcb6f348bfad36ce9f8046a40e99e9ddc4",
+      "upstreamPath": ".agents/skills/easyeda-agent/library/modules/sy8089-buck-3v3.topology.json"
+    },
+    {
+      "originalSha256": "6117156c4b3173555ca888dbb3cbb1c958b9166915ad2a3c546bcd978ae01a85",
+      "redactedPath": "standard-parts.json",
+      "redactedSha256": "79c49e63fbf7b1a9d1ac63e38b360bd25007d27c7b2076b36878d89317ce6657",
+      "upstreamPath": ".agents/skills/easyeda-agent/references/standard-parts.json"
+    },
+    {
+      "originalSha256": "56e2b73f041848e87de1c6a805f462f064bfcb4b31a69b135d9f2376281611ad",
+      "redactedPath": "LICENSE",
+      "redactedSha256": "56e2b73f041848e87de1c6a805f462f064bfcb4b31a69b135d9f2376281611ad",
+      "upstreamPath": "LICENSE"
+    }
+  ],
+  "filters": {
+    "block": [
+      "id",
+      "category",
+      "author",
+      "contributors",
+      "parts: role -> part/qty/value_override?",
+      "internal_nets (verbatim token lists)",
+      "ports: name -> dir/at/default_net?"
+    ],
+    "dropped": [
+      "desc",
+      "source",
+      "validated",
+      "schematic_layout",
+      "schematic_notes",
+      "pcb_layout",
+      "placement",
+      "signals",
+      "silk",
+      "bom_note",
+      "note",
+      "alt",
+      "_internal_nets_note",
+      "_doc",
+      "datasheetUrl",
+      "datasheetPdfUrl",
+      "roleTopology.source (evidence prose)"
+    ],
+    "roleTopology": [
+      "schemaVersion",
+      "kind",
+      "module: id/title/maturity",
+      "module.parts: role/lcsc/device(libraryUuid,deviceUuid,name)/footprint/pins(number,name,net,connectionState?)",
+      "module.nets: id/members/port?",
+      "module.verification: pinNetReadback/deviceIdentityResolution/geometry/pcb/bringup"
+    ],
+    "standardParts": [
+      "root libraryUuid",
+      "only the part refs the three Block assets depend on",
+      "per part: value/mpn/lcsc/manufacturer/deviceUuid/footprint/package/basic"
+    ],
+    "why": "raw free text can carry historical project identities; only the electrical facts and the structured provenance are published"
+  },
+  "schema": "boardwise.module-import-source-manifest/1",
+  "upstream": {
+    "commit": "69af00c0db3960757bff36a68edb286adcd64458",
+    "repo": "https://github.com/zhoushoujianwork/easyeda-agent"
+  }
+}

@@ -15,7 +15,7 @@
   },
   "producerVersions": {
     "ruleset": "a0c5e0a0",
-    "rulebody": "424e2fd2"
+    "rulebody": "d2ff8ae4"
   },
   "schemas": {
     "contracts/json/review-report-v1.schema.json": "644470549812db3d440fd72966b99801da58e845514eb163890f407e48b7ea20",
@@ -52,7 +52,7 @@
     "no real project container is read or copied; inputs come only from the public/synthetic sources above"
   ],
   "inputs": {
-    "contracts/differential/inputs/review-report.json": "f0818da8b3832bbaeda0c7a8b2e1df27c154ab5c0cbb29fa877eb46555bbd54a",
+    "contracts/differential/inputs/review-report.json": "9457f6d0c5210033027ab74148f9dace2f8a630b1fb82b85ef95c0b22a549243",
     "contracts/differential/inputs/divider-cand1.layout.json": "5241c07f5f0417ea8226720cfbd39f74c813c2a0513635fb1d83cf866f48a233",
     "contracts/differential/inputs/divider-compile-result.json": "2b91af1b5bdac828b08f5b471a565ad6e37c7734c71e3ea5f8344623733e71c1",
     "contracts/differential/inputs/page-compile-result.json": "e1b32d0b7b6280f411dc0741d97e4091ec0c4ef60251afbad6e2e4ec8bce42ab",

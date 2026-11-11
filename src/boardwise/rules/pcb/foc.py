@@ -1510,7 +1510,8 @@ class FocGateTraceWidth(PcbRule):
                 "these families would land here"
             ),
             evidence=[
-                f"nets carrying tracks on this board: {len(board.net_names())}",
+                "named nets with routed track segments on this board: "
+                f"{len({track.net for track in board.tracks if track.net})}",
                 "net-name sieve (the acknowledged fragile step): "
                 + f"{GATE_NET_PATTERN.pattern!r} plus the "
                 + ", ".join(repr(p) for p in POWER_NET_PREFIXES)
@@ -1641,7 +1642,7 @@ class FocTrackCorners(PcbRule):
         for angle in angles:
             key = f"{round(angle / 5.0) * 5:.0f}°"
             histogram[key] = histogram.get(key, 0) + 1
-        sharpest = corners[min(range(len(corners)), key=lambda i: angles[i])]
+        sharpest = min(corners, key=lambda c: c.angle_deg)
         per_net: dict[str, int] = {}
         for corner in corners:
             key = corner.net or "(no net)"

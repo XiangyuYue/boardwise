@@ -52,6 +52,7 @@ from boardwise.core.geometry import (
     BBox,
     BoardGeometry,
     LayerInfo,
+    NetGeometry,
     PadGeometry,
     Point,
     PourShape,
@@ -62,6 +63,7 @@ from boardwise.core.geometry import (
 from boardwise.core.measure import OBTUSE_CORNER_DEG, track_corner_angle
 from boardwise.engines.pcbreview import BUILTIN_PCB_RULES, run_pcb_review
 from boardwise.parsers.schematic import build_project_model
+from boardwise.rules.pcb.base import PcbReviewContext
 from boardwise.rules.pcb.foc import (
     BULK_FARADS,
     FocDecapProximity,
@@ -593,6 +595,56 @@ def test_r11_reads_zero_gate_nets_on_robot_and_says_so_rather_than_guessing():
     assert len(_rows(ROBOT, R16)) == 6
 
 
+def test_r11_no_net_row_counts_routed_nets_not_every_net_with_geometry():
+    """038R1: the 「no net recognised」 row's count is **routed** nets.
+
+    ``board.net_names()`` is every net carrying *any* geometric element — a
+    lone pad or a pour counts — so quoting it as 「nets carrying tracks」 was a
+    false statement on both boards here: llc has nine pour-only / pad-only nets
+    (25 named, 16 routed) and 药箱's ``SPI_MISO`` is a single pad with no track
+    at all (40 named, 39 routed). The row now counts the distinct non-empty
+    ``track.net`` values, which is the set its sentence names, and says so in
+    those words.
+    """
+    for path in (LLC, PILLBOX):
+        board = _board_for(path, "PCB1")
+        routed = {track.net for track in board.tracks if track.net}
+        named = set(board.net_names())
+        assert len(routed) < len(named), (path.name, len(routed), len(named))
+        assert board.tracks, "the fixture must actually route something"
+        rows = _rows(path, R11)
+        assert len(rows) == 1, path.name
+        evidence = _evidence(rows[0])
+        assert (
+            f"named nets with routed track segments on this board: {len(routed)}"
+            in evidence
+        ), (path.name, evidence)
+        assert "nets carrying tracks on this board" not in evidence, path.name
+
+
+def test_r11_counts_no_routed_net_on_a_board_with_no_tracks_at_all():
+    """The count follows ``board.tracks``, not the net table (038R1).
+
+    A hand-built board with one named, padded net and **zero** tracks has a
+    non-empty ``net_names()`` but nothing routed, so the row must read 0 — the
+    old ``len(board.net_names())`` read it as 1, i.e. it would have called a
+    pad-only net a net 「carrying tracks」.
+    """
+    board = BoardGeometry(source="synthetic-038r1")
+    pad = PadGeometry(id="p1", component="J1", pin_number="1", net="SPI_MISO")
+    board.pads = [pad]
+    board.nets = {"SPI_MISO": NetGeometry(name="SPI_MISO", pads=[pad])}
+    board.tracks = []
+    assert board.net_names() == ["SPI_MISO"]
+
+    rows = FocGateTraceWidth().check(PcbReviewContext(board=board))
+    assert len(rows) == 1
+    assert "no net on this board has a power-path name" in rows[0].message
+    evidence = "\n".join(rows[0].evidence)
+    assert "named nets with routed track segments on this board: 0" in evidence
+    assert "nets carrying tracks on this board" not in evidence
+
+
 # ---------------------------------------------------------------------------
 # 五、R13 — pcb-foc-track-corners
 # ---------------------------------------------------------------------------
@@ -622,6 +674,51 @@ def test_r13_whole_board_count_is_the_measured_64_on_bishe_foc_100():
     assert "angle histogram" in _evidence(whole[0])
     assert "图 4-3" in whole[0].message
     assert "nothing is graded" in whole[0].message
+
+
+def test_r13_sharpest_is_one_corner_object_not_sorted_angle_against_raw_order():
+    """038R1: the sharpest fold is ``min(corners, key=angle)``, one object.
+
+    The reader used to sort the angles and then index the **unsorted** corner
+    list with the sorted order's first slot, so ``sharpest`` was silently
+    ``corners[0]`` — the angle in the message and the net name beside it could
+    therefore belong to different folds. Both fixtures here discriminate: on
+    1.0.0's PCB1 the first fold is 45° on ``$1N66466`` while the sharpest is
+    45° on ``$2N1061`` (same angle, different fold — an angle-only assertion
+    would pass the bug), and 药箱's first fold is 90° on ``+5V`` against a 45°
+    sharpest on ``VCC``.
+    """
+    checked = 0
+    for path in (FOC_100, PILLBOX):
+        board = _board_for(path, "PCB1")
+        primitive = track_corner_angle(board)
+        expected = min(primitive, key=lambda corner: corner.angle_deg)
+        assert primitive[0] is not expected, (
+            f"{path.name}: the fixture no longer distinguishes the two readings"
+        )
+
+        rows = [r for r in _rows(path, R13) if r.board == "PCB1"]
+        whole = [
+            r for r in rows
+            if "non-obtuse fold(s) in this board's routing" in r.message
+        ]
+        assert len(whole) == 1, (path.name, [r.message[:60] for r in rows])
+        row = whole[0]
+        # The angle and the net are asserted as **one** substring, so they
+        # cannot come from different corners.
+        assert (
+            f"sharpest {expected.angle_deg:.1f}° on {expected.net!r}"
+            in row.message
+        ), (path.name, row.message)
+        assert f"sharpest fold: {expected.angle_deg:.2f}° at " in _evidence(row)
+        assert (
+            f"({expected.position.x:.1f}, {expected.position.y:.1f}) on "
+            f"{expected.net!r} layer {expected.layer_id} between tracks "
+            f"{expected.track_a} and {expected.track_b}"
+        ) in _evidence(row), (path.name, _evidence(row))
+        assert row.target.net_refs == [expected.net]
+        checked += 1
+    assert checked == 2
 
 
 def test_r13_reports_one_row_per_power_path_fold_and_nothing_else():

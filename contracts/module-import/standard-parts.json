@@ -1,0 +1,110 @@
+{
+  "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+  "parts": {
+    "buck.sy8089_tsot23": {
+      "basic": false,
+      "deviceUuid": "00111ae499794742b81a699a4ff88fc8",
+      "lcsc": "C479074",
+      "mpn": "SY8089A1AAC",
+      "package": "TSOT-23-5",
+      "value": "SY8089A1AAC"
+    },
+    "cap.100nf_0402": {
+      "basic": true,
+      "deviceUuid": "87bb635d0b2f489a9f60e7cd225beb3c",
+      "footprint": "C0402",
+      "lcsc": "C1525",
+      "manufacturer": "SAMSUNG",
+      "mpn": "CL05B104KO5NNNC",
+      "value": "100nF"
+    },
+    "cap.10uf_0805": {
+      "basic": false,
+      "deviceUuid": "6e5726223dd84f70bc3b626fc7d1f72c",
+      "footprint": "C0805",
+      "lcsc": "C440198",
+      "manufacturer": "muRata",
+      "mpn": "GRM21BR61H106KE43L",
+      "value": "10µF"
+    },
+    "cap.22uf_0805": {
+      "basic": false,
+      "deviceUuid": "159c3da60be9490abf4e97599788a0d5",
+      "footprint": "C0805",
+      "lcsc": "C45783",
+      "manufacturer": "SAMSUNG",
+      "mpn": "CL21A226MAQNNNE",
+      "value": "22µF"
+    },
+    "conn.usb_c_16p": {
+      "basic": false,
+      "deviceUuid": "fafc5d2de09d4595b0cc7abedc0530e6",
+      "footprint": "USB-C-SMD_TYPE-C-16PIN",
+      "lcsc": "C9900012665",
+      "manufacturer": "Korean Hroparts",
+      "mpn": "USB3.1TYPE-C16P",
+      "value": "TYPE-C-16P"
+    },
+    "esd.usblc6_2sc6": {
+      "basic": false,
+      "deviceUuid": "1e5e214711544da8ba71fb2137ae703f",
+      "lcsc": "C2687116",
+      "manufacturer": "UMW(友台半导体)",
+      "mpn": "USBLC6-2SC6",
+      "package": "SOT-23-6",
+      "value": "USBLC6-2SC6"
+    },
+    "ic.ch340c": {
+      "basic": false,
+      "deviceUuid": "4951b3094e3e48a7b4c8c708b64932e4",
+      "footprint": "SOP-16_L10.0-W3.9-P1.27-LS6.0-BL",
+      "lcsc": "C84681",
+      "manufacturer": "WCH",
+      "mpn": "CH340C",
+      "value": "CH340C"
+    },
+    "ind.22uh_1210": {
+      "basic": false,
+      "deviceUuid": "7bd4ff00682f4a949fb4f4c7273ae493",
+      "lcsc": "C250183",
+      "mpn": "NLCV32T-2R2M-PF",
+      "package": "1210",
+      "value": "2.2µH"
+    },
+    "ldo.ams1117_3v3": {
+      "basic": false,
+      "deviceUuid": "9f9c6cb41c7449fd8acf96aceed2661a",
+      "footprint": "SOT-223-3",
+      "lcsc": "C6186",
+      "manufacturer": "AMS",
+      "mpn": "AMS1117-3.3",
+      "value": "AMS1117-3.3"
+    },
+    "res.10k_0402": {
+      "basic": true,
+      "deviceUuid": "c3b9baa5ef2e4070a4c0f9e9cd04fe6e",
+      "footprint": "R0402",
+      "lcsc": "C25744",
+      "manufacturer": "UNI-ROYAL",
+      "mpn": "0402WGF1002TCE",
+      "value": "10kΩ"
+    },
+    "res.453k_0402__2": {
+      "basic": false,
+      "deviceUuid": "0e6f5e403c1640769543df189249ab4d",
+      "lcsc": "C26980",
+      "mpn": "0402WGF4532TCE",
+      "package": "0402",
+      "value": "45.3k"
+    },
+    "res.5k1_0402": {
+      "basic": true,
+      "deviceUuid": "ef1f93374e0c4079b48a2d1a3cec8f6b",
+      "footprint": "R0402",
+      "lcsc": "C25905",
+      "manufacturer": "UNI-ROYAL",
+      "mpn": "0402WGF5101TCE",
+      "value": "5.1kΩ"
+    }
+  }
+}

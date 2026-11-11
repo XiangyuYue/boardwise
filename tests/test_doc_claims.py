@@ -923,7 +923,7 @@ def test_rust_platform_names_the_real_case_book_size():
 def test_the_cbb_book_pins_its_negative_controls_and_its_unproven_lead():
     """护 038Q 的两处口径钉，它们都是「删掉一句就变成假话」的脆弱点。
 
-    ① 原生 CBB 目前**不存在**实现，`type 17` 只是线索。任务书一旦把「待证实」写丢、
+    ① 原生 `block_symbol` 的本地解析与放置尚未实现，`type 17` 只是线索。任务书一旦把「待证实」写丢、
     或把「先读后写」写丢，后来的人就会照着线索去写解析或先写后补证据（R3 的反面）。
     ② 三条 negative control 是「兼容 CBB」这句话的全部支撑：已接块端口静默、真悬空仍报、
     普通器件读数不变。少一条，误报修复就会退化成全局静默。
@@ -1382,3 +1382,68 @@ def test_bridge_doc_files_role_not_allowed_under_bad_request():
         "the role gate now raises UNAUTHENTICATED — that is the doc defect the 549 review "
         "fixed, and it has come back in the code"
     )
+
+
+def test_the_sop_pcb_drc_claim_matches_the_verdict_the_code_writes():
+    """护 038R2：SOP 说「PCB 工程宿主 DRC 没跑 → 开放项，不是可引用通过」必须与代码对拍。
+
+    失效时的样子（本钉就是为此写的）：038R2 之前 SOP 只有一句
+    「`drc.*.checked=false` + `reason` 一律是"没查"，不是"零错误"」——读者据此可以
+    正确地理解「这不是零错误」，却仍以为报告会给出干净结论；而当时
+    `completion.coverage` 根本没有这一项，其余闸全清时报告给 `complete` +
+    `mayQuotePassed=true` +「可以投板」（离线 `--file` 的 PCB 工程常态）。说法与行为
+    分家的那一段，就是这块闸的整条缺口。
+
+    钉子读三处：SOP 正文必须写下新口径（开放项 / `coverage.hostPcbDrcUnchecked` /
+    `mayQuotePassed=false` / 不得写「可以投板」/ 退出码仍 0）；`cli` 的 coverage 段
+    必须真的发这个键；而**行为**必须是这句话——同一份 fake 读数带上这个键时 verdict
+    是 `complete-with-open-items`、`mayQuotePassed` 为假，不带时才是 `complete`。
+    改代码不改文案、或改文案不改代码，这条都红。
+    """
+    from boardwise.cli import _clean_coverage, _completion_body
+    from boardwise.engines.checkup import conclusion_section
+
+    flat = re.sub(r"\s+", " ", SOP)
+    assert "`coverage.hostPcbDrcUnchecked`" in flat, (
+        "the SOP no longer names the coverage key that carries the fact"
+    )
+    assert "`complete-with-open-items`" in flat and "`conclusion.mayQuotePassed=false`" in flat, (
+        "the SOP must state the verdict and the quotable flag for a PCB project whose "
+        "host DRC did not run"
+    )
+    assert "不得写「可以投板」" in flat.replace("**", ""), (
+        "the SOP must forbid the shipping sentence on that reading"
+    )
+    assert "不是 `complete`" in flat.replace("**", ""), (
+        "the SOP must say it is **not** `complete` — that is the whole ruling"
+    )
+
+    # 代码真的发这个键：`hostPcbDrcUnchecked` 必须出现在 cli 的 coverage 段里。
+    import boardwise.cli as cli_module
+
+    source = Path(cli_module.__file__).read_text(encoding="utf-8")
+    assert '"hostPcbDrcUnchecked"' in source, (
+        "cli no longer emits the key the SOP promises"
+    )
+
+    # 行为跟着文案走：同一份读数，带键 vs 不带键。
+    def verdict_of(coverage: dict) -> dict:
+        body = _completion_body(
+            scope={"rules": 74, "boards": 1, "pages": 1},
+            summary={"errorCount": 0, "errors": [], "exitCode": 0, "countsIncomplete": False},
+            unreviewed=[],
+            triage=[],
+            needs_datasheet=[],
+            architecture={"totals": {"slots": 1, "filled": 1, "stale": 0}},
+            coverage=coverage,
+        )
+        return conclusion_section(
+            {"summary": {"exitCode": 0}, "completion": body, "findings": []}
+        )
+
+    flagged = verdict_of({**_clean_coverage(), "hostPcbDrcUnchecked": True})
+    assert flagged["verdict"] == "complete-with-open-items", flagged
+    assert flagged["mayQuotePassed"] is False, flagged
+    assert "可以投板" not in flagged["oneLiner"], flagged["oneLiner"]
+    clean = verdict_of(_clean_coverage())
+    assert clean["verdict"] == "complete" and clean["mayQuotePassed"] is True, clean
