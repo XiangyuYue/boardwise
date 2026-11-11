@@ -2162,3 +2162,93 @@ owner与文档卫生 **60 passed**。但主代理亲看 `path-first-final.svg`�
 走廊/标签与布局共同约束，不是再调seat档位；真实MCU/整页未验收。提交前全量pytest
 **10628 passed / 25 skipped / 1 xfailed / 16 failed**（均既有），connector 608、DSH 137/1、
 Rust 111/4通过，不称全绿；548E继续暂停，提交前未做git写。
+
+### 37. 548D3B4：LED标签走廊反证完成，转联合走廊布局（2026-11-10）
+
+本批先核 `_connect_net` / `_seat_first_signal_preflight` 的真实障碍，再验现有
+`localLabelObligations`。显式命名候选 `led-named.svg` 虽生产compile、readability、grammar和独立
+逐脚分区全过，主代理放大后发现裸名锚点与文字盒跨到相邻支路且无可见载体，视觉拒收。证据
+`service-seat/visual-review.md`、`led-named.svg/.json`。
+
+两版path-first载体WIP都因真实readability失败cp/hash回滚，第三版以正确外逃方向逐档反证而未写
+生产：D1/D2侧可画10单位短载体，MCU侧被KEY4 x=90、KEY3 x=110等固定通道约束，host name row
+与name box无共同可读合法档。主代理直接证实D1/D2外逃均-x，旧+x报告作废。详细判据见
+`.tmp_548D3/led_corridor/carrier-b4-verdict.md` 与 `v3-review.md`，结论固化于
+`service-seat/led-corridor-verdict.md`。两轮回滚后原四文件各 **99 passed**；生产仍为
+`drawcompiler=08c1d17e…`、`placement=e2eb191a…`，没有留下红测试或假验收。
+
+**下一批B5只做一个缺口：panel/service联合走廊。** 保持功能岛、固定页框和automatic，先设计四键
+host channel与成对LED服务支路的有限几何候选及联合接线，不再调标签梯子。若改placement，必须先在
+`tasks/shared-platform.md` 登记集成锁，base/topology消费同一binder，空模板等价、宿主随动、默认
+near/reach不变，并有独立变异。最终仍需生产compile、逐脚分区、grammar/readability、CH34 MATCH和
+主代理SVG视觉；机器候选不等于B4签收。禁止第四轮同题标签调参、功能拆岛、参考坐标、userLocks、
+near/reach/排名/页框/字体调整或agent-adjusted冒充automatic。
+
+### 38. 548D3B5–B7：KEY/LED独立岛三关通过（2026-11-11）
+
+B5先在同岛联合走廊与局部多腿两条路线取证。后者曾实现111 passed，但生产图达13交叉且未解决功能归属，
+已用cp完整回滚，补丁与测试仅留 `.tmp_548D3/led_corridor/` 作拒收证据，不恢复。岳随后明确“key单独做岛，
+LED也可以单独做岛”并给纵向KEY、上下同向LED参考；§37的同岛路线和shared §14随即停止，不再把功能
+拆岛禁令机械套用到用户明确认可的功能岛。
+
+B6形成 `semantic-islands-spec.json`：mcu(U1,C1,R1)、keys(S1–S4)、led(D1,D2)，KEY声明power/right+
+output/left，LED声明gnd/right+output/left；无panelGroups、坐标或userLocks，冻结电路未加电阻。初测
+暴露两个通用缺口：coreless只认共同GND，以及free shelf/标签逐件偶然不一致。
+
+B7最终落地：`_coreless_supply_bank`共同power→rail/out/shunt，双轨具名拒绝；`_coreless_common_return`
+与free shelf仅在return显式left/right时纵向等节距并对齐公共端，缺省横排不变；`_coreless_group_flag_length`
+让同类旗桩全组共同合法选档。生产 `drawcompiler=95b52424…`、`ic_periphery=7346edba…`、placement不变。
+
+三岛automatic page compile ok，页闸/grammar/逐脚0差，跨岛只有名字。KEY四支路同向等距、3V3旗桩均10；
+LED两支路上下等距、名字同向同距、GND本地汇聚。主代理亲看 `semantic-islands-led-vertical.png` 与
+`semantic-islands-keys.png` 通过；`semantic-islands-page-b7.png` 的MCU边界名拥挤，真实MCU整页不签，
+留与岳共同规划。邻域514/3、复审350/3、主代理恢复态25 passed；禁用power-bank与联合旗桩两项主代理
+变异分别4红/1红后cp/hash恢复。CH34 pinned、548E与真机不变，未做git写。最终证据与全量边界见
+`evidence/548D/service-seat/semantic-islands-final.md`。
+
+### 39. 548D3C0–C2：MCU 本地供电 / BOOT0 / GND 离线三关通过（2026-11-11）
+
+岳明确把右侧标签密度与不齐往后排，先修MCU：C1去耦和R1下拉随意落座导致走线混乱，绕既有GND旗
+进一步形成外框。座位与导线诊断确认外框全在模块 `_connect_net`，服务模板又因没有panelGroups而休眠。
+C0直接开通serviceLayout虽能出候选，但C1地旗穿BOOT0行、3V3仍绕，主代理亲看拒收并恢复生产，证据
+`mcu-local/route-attempt-3c0.md`，不当作交付。
+
+C1先以既有serviceLayout开通本地服务支路，读取同网全部脚并按真实姿态取终端旗方向最外侧脚；
+联合排序让低行R1先占近端、C1向外让。固定host通道同时参与文字墙、信号preflight、通道分组与端点
+局部豁免；同一owner的后续合法旗档进入联合选择。服务固定文字只有压到别的支路通道时才重走原四向
+侧梯，最终共线点压缩，不保存23点假折线。
+
+`PlacementInput.service_joint_order` 是内部默认False开关，base/topology都由 `_service_layout_page` 同源
+设置。C1第一轮全量 **158 failed / 10534 passed / 25 skipped / 22 errors**，证明直接挂在已有
+serviceLayout上会改变旧543/547/548页面，不签收。C2因此新增 `serviceLayout.localSeats:bool=False`
+公共子键：只在True时序列化并开启本批能力，非布尔/未知键拒绝；旧pinGap字节/digest/图与旧panelGroups
+逐候选轨迹不变，CH34 pinned不变。当前生产 `drawcompiler=48c2c89d…`、`presentationspec=9f72836f…`、
+`placement=a8aa1d35…`、`ic_periphery=7346edba…`。
+
+定稿C1横放VBAT行、R1横放BOOT0行；3V3短通道两端点、两枚本地旗，GND三枚各贴本支路，BOOT0单段0弯，
+原三网外框消失。三岛页/单MCU compile、readability/grammar、独立逐脚均通过，跨岛只有名字。主代理亲看
+最终 `final-mcu-island.svg` 与 `final-three-island.svg`，MCU本地结构通过，KEY/LED岛形未退化；右侧标签
+拥挤仍按岳要求后置，真实SmartMedicineBox整页与强制topology不因此关闭。
+
+C1主代理六文件 **126 passed**、恢复态25 passed；两项变异分别9红/3红后cp+SHA-256恢复。C2旧失败族
+**81 passed**、本批六文件 **129 passed**，旧期望未改。**topology边界另列**：request无placed姿态时
+仍读首脚，同一MCU实测C1=VDD，与base VBAT不同；开关同源不等于宿主座位/强制topology统一，后续另批。
+证据 `evidence/548D/service-seat/mcu-local/final-c1.md`、`compat-local-seats.md` 与
+`main-six-review.log`。**岳复验绘制线全量2 failed**；本 agent混合工作区全量
+**10702 passed / 25 skipped / 1 xfailed / 16 failed / 1 warning**，含其他线未提交改动与既有环境项，
+不能全归绘制线，不称全绿；Connector 660+typecheck、DSH 137/1+build、
+Rust 150/4+fmt/clippy。最终源码变异6红后cp恢复15 passed，hash一致；未真机、未做548E或git写。
+
+### 40. 547S 098 scene08 两条拒因基线红修复（2026-11-11）
+
+岳指出绘制线全量只有115/116两条failed。逐commit取证：47713c2的547S把支路共网读取统一为
+signal优先、GND最后，落座/near/修复/lane四读共用，旧基线仍记录按字典序取GND的拒因。旧提交
+1965d84可逐字节复现1e7a8583；HEAD与当前工作树均为68340ef2，且scene08不产SVG，故不是
+localSeats回归，也不应回退已审定的547S。
+
+未动生产代码。旧版存 `098_scene08_narrow_refused.pre_547s.txt`，114基线与116 hash依法重钉为
+68340ef2，两个docstring补根因与证据；断言仍为重新生成后逐字节/摘要比较，未skip/xfail。
+主代理 `test_098_ic_periphery + test_547_shared_branch_nets + 115 + 116` **93 passed**。
+`shared_net_order`改回旧sorted变异使两条先红，cp/hash恢复后两条通过。证据
+`evidence/548D/scene08-baseline-repair.md`。最终全量 **10775 passed / 26 skipped / 1 xfailed /
+0 failed / 0 errors**，两条目标测试均消失，绘制线全绿（另有1条既有编码警告）；未真机、未git写。

@@ -60,6 +60,26 @@
   **10628 passed / 25 skipped / 1 xfailed / 16 failed**（均既有），connector 608、DSH 137/1、
   Rust 111/4通过，不称全绿；548E/547G继续暂停，提交前未做git写。
   权威交接 `evidence/548D/HANDOFF.md`，任务书§35–§36。
+  **548D3B7（2026-11-11，KEY/LED独立岛离线三关通过）**：共同power coreless bank、return显式left/right
+  时纵向等节距及全组旗桩联合选档已接生产，缺省GND/横排与CH34 pinned不变。三岛automatic compile、页闸、
+  逐脚通过，主代理亲看LED/KEY独立岛PNG通过；生产 `drawcompiler=95b52424…`、`ic_periphery=7346edba…`，
+  两项主代理变异先红恢复。旧同岛与13交叉局部多腿方案不采用。真实MCU整页/强制topology/548E未关闭，
+  下一步与岳共同规划整页。证据 `evidence/548D/service-seat/semantic-islands-final.md`，任务书§38。
+  **548D3C1（2026-11-11，MCU本地供电/BOOT0/GND离线三关通过）**：serviceLayout.localSeats=true显式启用本地服务支路，
+  C1/R1联合落座，固定host通道、本地旗与冲突文字重排同一几何；BOOT0直连，3V3两枚、GND三枚本地旗，
+  原外框消失。主代理亲看最终MCU/三岛SVG通过本地结构，C1六文件 **126 passed**，两项变异先红恢复。
+  第一轮全量158 failed/22 errors暴露误用旧serviceLayout，C2以默认False的localSeats子键恢复旧文档；
+  旧失败族 **81 passed**、本批六文件 **129 passed**。新能力仅在localSeats=true且无panelGroups时开启，
+  base/topology同源设置内部联合开关；旧panelGroups逐候选恢复，CH34 pinned不变。右侧标签、真实整页、
+  强制topology与548E未关闭，未做git写。**岳复验绘制线全量2 failed**；本 agent混合工作区全量
+  **10702 passed / 25 skipped / 1 xfailed / 16 failed / 1 warning**，含其他线未提交改动与既有环境项，
+  不能全归绘制线，不称全绿。证据
+  `evidence/548D/service-seat/mcu-local/final-c1.md`、`compat-local-seats.md`，任务书§39。
+  **547S 098 scene08基线修复（2026-11-11）**：岳指出绘制线全量仅115/116两条failed；逐commit证明
+  547S统一支路网尺的合法拒因变化，场景不产图、localSeats无影响。保留pre_547s旧版后依法重钉114基线
+  与116 hash，生产未改。主代理相关四文件 **93 passed**，变异先红并cp/hash恢复。证据
+  `evidence/548D/scene08-baseline-repair.md`，任务书§40。最终全量 **10775 passed / 26 skipped /
+  1 xfailed / 0 failed / 0 errors**，两条目标测试均消失，绘制线全绿（另有1条既有编码警告）。
   **548B1 数据合同已落（2026-11-08，41 passed；完整四线 10086 passed / 16 failed 均既有）**：`evidence/548B1/`。
   **548C2 多岛共享电源网统一（2026-11-08，未通过，批次前提被证伪）**：E2/E3 的 `layout-unsat/modules[mcu]`
   与「岛数」无关——547A 自己的 mcu 用页面预算（radius 100）编译同样 4 节点；真缺口是三层（模块层拆分地

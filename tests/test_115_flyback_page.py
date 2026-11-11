@@ -425,6 +425,35 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     拒绝理由因此退回到页面装不下（该场景本就不产出图，几何无物可动）。旧字节留在
     ``098_scene08_narrow_refused.pre_d1.txt``，四版可对拍。同批 088/088b/053b
     预览测试 152 passed，053b/056/115 除本条外全绿。
+
+    **547S 重钉**：``1e7a8583…`` → ``68340ef2…``，仍是**拒因文本**，且**仍无图可动**：
+    该场景 300x200 的页在任何变体上都装不下，编译结果 ``ok=False``、
+    ``candidates=0``，预览器只写这一份拒绝报告、不产 SVG。
+
+    根因是 547S（commit ``47713c2`` 引入）把「这一对共用哪条网」统一成一条契约：
+    **声明为 signal 的网优先，``gnd`` 最后**，并由落座、``near`` 的尺子
+    （``placement.relation_points_between``）、修复趟与 lane 边沿**四读共用**一把尺
+    （契约与四读的钉子：``tests/test_547_shared_branch_nets.py``）。本场景
+    ``C1..C4`` 每颗都与 ``U1`` 共用一条信号网加 ``GND``：旧读法按 ``sorted()`` 首位
+    取 ``GND``，``near(C1, U1)`` 因此量在**地脚**上、支路也落在地脚；新读法量在
+    ``XI``/``XO``/``V3`` 上。逐行差异（``pre_547s`` → 现在，共 5 行）：
+
+    * ``spacing=1.5 pose-variant=0``：``near(C1, U1)``（地脚量得 382 > 300）→
+      ``region``（该变体的落子实测 641 x 340）；
+    * ``spacing=1.5 pose-variant=1``：``near(C1, U1)`` → ``left-of(C1, U1)``
+      （信号网上 ``near`` 实测 270 ≤ 300，下一个不满足的才是形状级的 ``left-of``）；
+    * ``spacing=2.2`` 两个位姿：仍是 ``near`` 拒绝，只是量得的两个点随落座换到信号脚；
+    * ``topology-search``：最小布局 ``379 x 220`` → ``365.5 x 333.5``（同一套关系闸下
+      拓扑轮的另一个合格落子）。
+
+    这三处都不是「更松/更严」，而是**换了一条被审定过的量尺**：``spacing=1
+    pose-variant=0`` 那一行在新旧两版里逐字相同，说明单倍距的画面没被这次换尺动到。
+
+    复算证据（``evidence/548D/scene08-baseline-repair.md``）：用同一份
+    ``tools/098_previews.py`` 的报告格式重放，**547S 之前的 commit ``1965d84`` 逐字节
+    复现旧基线**，**0.6.1 的 commit ``2df6926`` 与当前工作树逐字节相同**——所以这不是
+    548D3B7（``serviceLayout.localSeats``）的产物；不应为迁就旧拒因而回退547S，
+    这里按已审定的契约重钉。旧字节留在 ``098_scene08_narrow_refused.pre_547s.txt``，五版可对拍。
     """
     baseline = (
         ROOT / "outputs" / "114" / "previews" / "098"

@@ -48,6 +48,26 @@
 
 ## 当前主攻（2026-10-31：**0.6.0 已收口，随后进入 0.6.x**）
 
+- **547S 098 scene08基线修复（2026-11-11）**：岳指出绘制线全量仅115/116两条failed；逐commit证明
+  547S统一支路网尺的合法拒因变化，场景不产图、localSeats无影响。保留pre_547s旧版后依法重钉114基线
+  与116 hash，生产未改。主代理相关四文件 **93 passed**，变异先红并cp/hash恢复。证据
+  `evidence/548D/scene08-baseline-repair.md`。最终全量 **10775 passed / 26 skipped / 1 xfailed /
+  0 failed / 0 errors**，两条目标测试均消失，绘制线全绿（另有1条既有编码警告）。
+
+- **548D3C1 MCU本地供电/BOOT0/GND（2026-11-11，离线三关通过）**：岳明确先修MCU、右侧标签后置。
+  serviceLayout.localSeats=true显式启用服务支路，C1/R1联合落座，BOOT0直连，3V3/GND本地旗取代外框；主代理亲看定稿
+  MCU/三岛SVG通过本地结构，C1六文件 **126 passed**，两项变异先红恢复。第一轮全量158 failed/22 errors
+  暴露误用旧serviceLayout，C2以默认关闭的localSeats子键恢复；旧失败族81 passed、本批六文件129 passed。
+  旧panelGroups逐候选兼容、CH34 pinned不变。下一步才处理右侧标签、真实整页与强制topology，不进入548E。
+  证据 `evidence/548D/service-seat/mcu-local/final-c1.md` 与 `compat-local-seats.md`。最终全量
+  **岳复验绘制线全量2 failed**；本 agent混合工作区全量 **10702 passed / 25 skipped / 1 xfailed /
+  16 failed / 1 warning**，含其他线未提交改动与既有环境项，不能全归绘制线，不称全绿；最终源码变异6红后cp恢复15 passed，hash一致。
+
+- **548D3B7 KEY/LED独立岛（2026-11-11，离线三关通过）**：岳明确两功能可独立成岛。共同power coreless
+  bank、return侧向驱动的纵向支路与全组旗桩联合选档已接生产；三岛automatic compile、页闸、逐脚通过，
+  LED/KEY独立岛渲染由主代理签收，缺省行为与CH34 pinned不变。**当前只与岳共同规划MCU整页边界名/布局和
+  强制topology，不重开LED/KEY，不进入548E**。最终证据 `evidence/548D/service-seat/semantic-islands-final.md`。
+
 - **548A 语义窄门：完整 N≥3 面板支路出口通过（2026-11-08，限已测电路族；A-R 补齐灯/蜂鸣器）**：上一轮坐标窄门已回退；本批按证书 §7 补
   G9「同宿主同回流支路组」——同一宿主、同一 other 网、两脚件、组 ≥3 才改行向体位，只读
   网表拓扑与符号脚数，不调坐标阈值/权重。547A 命中 8/9，`--runxfail` 2 passed、出现

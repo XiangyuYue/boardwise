@@ -639,6 +639,42 @@ ambiguous host, several hosts or several equivalent host pins are left to the
 ordinary ladder — the key is not a licence to guess. The normal readability and
 lint gates still run unchanged.
 
+### Local service seats and rails (548D3C1)
+
+When `serviceLayout.localSeats` is `true` **and `panelGroups` is absent**, the compiler also
+materialises ordinary two-terminal shunts as local service cells. This is separate
+from the uniquely-served interval rule above: `pinGap` keeps that meaning, while
+`localSeats: true` is the switch that opens the local service path — `pinGap`
+alone (and `serviceLayout` without the sub-key) keeps the old drawing. The
+sub-key is the **only** schema addition this batch makes (`SERVICE_LAYOUT_KEYS`
+is now `pinGap` + `localSeats`); no coordinate, lock or page geometry is carried.
+`localSeats: true` together with `panelGroups` is refused by name: one page states
+one construction, and accepting both would silently drop one.
+
+The host reader considers every same-net host pin and, using the host's actual
+pose, chooses the outermost pin in the terminal flag's direction. Service cells
+are seated jointly: a branch whose terminal flag hangs towards another branch's
+row yields outwards instead of forcing that row's signal into a detour. The
+resulting host pin → branch-pin paths are fixed channels consumed by text,
+signal pre-flight, rail grouping and the final plan. A channel's own endpoints
+may carry a flag; its other spans and foreign nets remain hard obstacles. The
+seat allocator can try later legal flag grades, not only the first one that fits.
+
+A service cell's fixed text rows are re-seated through the ordinary four-side
+ladder only when they meet **another** service channel. The final path-first plan
+removes duplicate conductors and redundant collinear vertices. All connectivity,
+readability and geometry gates still run; no gate or reach is relaxed.
+
+All these additions are disabled for legacy `panelGroups` pages and for documents
+without `serviceLayout`. The internal `PlacementInput.service_joint_order` flag
+is set from the same predicate by both base and topology consumers. The frozen
+MCU fixture and tests are in `tests/test_548d_mcu_local_power.py` and
+`tests/test_548d_mcu_service_placement.py`; evidence is
+`evidence/548D/service-seat/mcu-local/final-c1.md`. The shared switch test does
+not close forced topology: without placed poses the topology request still uses
+the legacy first-host-token reader, so host-seat unification remains a separate
+batch.
+
 ### Two-part series declarations (548B1–B3)
 
 `seriesBranches` is an optional top-level PresentationSpec array. It is absent when unstated;

@@ -71,7 +71,10 @@ def test_the_base_seats_all_four_with_the_from_foot_on_the_host_axis():
             assert cell.from_seat[0] < cell.to_seat[0]
         else:
             assert cell.from_seat[0] > cell.to_seat[0]
-        assert plan.host_paths == ()
+        # 548D3C1: every service plan records the direct host lead.
+        assert plan.host_paths, plan.group_id
+        assert tuple(plan.host_paths[0][0]) == tuple(host_tip), plan.host_paths[0]
+        assert tuple(plan.host_paths[0][-1]) == tuple(cell.from_seat)
 
 
 def test_service_plans_never_join_panel_plans():

@@ -209,11 +209,42 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 
   **548D3S7/B3（2026-11-10）**：ServiceSeat与path-first生产已接，`dc.compile` ok=True / hard0，
   3V3六枚、GND五枚，LED2真实fallback；缺seat与跨seat变异先红恢复、CH34 MATCH。主代理亲看
-  `service-seat/path-first-final.svg`：LED1长1220、全页4交叉，视觉拒收。下一缺口是LED信号走廊与
-  标签/布局共同约束，不是继续调座位。真实MCU/整页未验收；提交前全量pytest
-  **10628 passed / 25 skipped / 1 xfailed / 16 failed**（均既有），connector 608、DSH 137/1、
-  Rust 111/4通过，不称全绿；548E/547G暂停，提交前未做git写。
-  当前权威交接 `evidence/548D/HANDOFF.md` 与 `service-seat/visual-review.md`。
+  `service-seat/path-first-final.svg`：LED1长1220、全页4交叉，视觉拒收。真实MCU/整页未验收；
+  提交前全量pytest **10628 passed / 25 skipped / 1 xfailed / 16 failed**（均既有），connector 608、
+  DSH 137/1、Rust 111/4通过，不称全绿；548E/547G暂停。
+
+  **548D3B4反证（2026-11-10）**：显式命名候选虽机器/逐脚通过，主代理放大后仍因裸名脱离自己的
+  引脚而拒收。两版载体WIP均失败回滚，第三版只读证明冻结KEY通道下MCU侧name row/name box没有
+  共同可读合法档；不再做第四轮标签调参，转panel/service联合走廊布局。生产仍为
+  `drawcompiler=08c1d17e…`、`placement=e2eb191a…`，两轮聚焦各 **99 passed**，`src/tests`无改动。
+  当前权威交接 `evidence/548D/HANDOFF.md`、`service-seat/visual-review.md` 与
+  `service-seat/led-corridor-verdict.md`；未做git写。
+
+  **548D3B7（2026-11-11，KEY/LED独立岛离线三关通过）**：岳明确KEY/LED可独立成岛，旧同岛走廊与
+  13交叉局部多腿版本停止并回滚。现共同power coreless bank、return侧向驱动的纵向支路及全组旗桩联合
+  选档已接生产；缺省GND/横排与CH34 pinned不变。三岛automatic page compile、页闸、逐脚通过，跨岛仅名字；
+  主代理亲看LED/KEY独立岛PNG通过。生产 `drawcompiler=95b52424…`、`ic_periphery=7346edba…`、placement
+  不变；主代理两项变异先红恢复。**MCU整页边界名拥挤，整页视觉不签，留与岳共同规划**；真实SmartMedicineBox、
+  强制topology、548E未做，未做git写。最终证据 `evidence/548D/service-seat/semantic-islands-final.md`。
+
+  **548D3C1（2026-11-11，MCU本地结构离线三关通过）**：岳明确右侧标签后置，先修C1/R1座位与绕旗。
+  `serviceLayout.localSeats=true`（配 `pinGap=30`）启用本地服务支路，R1近端、C1在VBAT行外侧，BOOT0直连；3V3两枚、GND三枚
+  本地旗，原外框消失。主代理亲看最终MCU/三岛SVG通过本地结构，KEY/LED不退化。新能力仅在serviceLayout
+  且无panelGroups时开启，base/topology同源设置内部联合开关；旧panelGroups逐候选恢复，CH34 pinned不变。
+  C1六文件 **126 passed**，两项变异先红后cp/hash恢复；第一轮全量158 failed/22 errors暴露误用旧
+  serviceLayout，C2以默认False的localSeats子键恢复，旧失败族81 passed、本批六文件129 passed。
+  生产 `drawcompiler=48c2c89d…`、`presentationspec=9f72836f…`、`placement=a8aa1d35…`。
+  **岳复验绘制线全量2 failed**；本 agent混合工作区全量 **10702 passed / 25 skipped / 1 xfailed /
+  16 failed / 1 warning**，含其他线未提交改动与既有环境项，不能全归绘制线，不称全绿；Connector 660+typecheck、DSH 137/1+build、Rust 150/4+fmt/clippy。右侧标签、真实整页、
+  强制topology与548E仍未做；未做git写。证据 `evidence/548D/service-seat/mcu-local/final-c1.md`。另注意：topology request无placed姿态时
+  C1仍读VDD，与base VBAT不同；联合开关同源不表示宿主座位/强制topology统一，该项后续另批。
+
+  **547S 098 scene08基线修复（2026-11-11）**：岳指出绘制线全量仅115/116两条failed。旧提交可逐字节
+  复现旧基线，HEAD与当前工作树一致，证明是547S统一支路网尺的合法拒因演进，场景不产图且localSeats
+  零影响。保留pre_547s旧版后依法重钉114基线与116 hash，生产未改。主代理相关四文件 **93 passed**，
+  变异先红并恢复。证据 `evidence/548D/scene08-baseline-repair.md`。最终全量
+  **10775 passed / 26 skipped / 1 xfailed / 0 failed / 0 errors**，两条目标测试均消失，绘制线全绿
+  （另有1条既有编码警告）。
 
 > 以下 3.1–3.4 保留 2026-10-23/24 的业务与发布历史；当前派单和平台状态以 §3.0 为准。
 

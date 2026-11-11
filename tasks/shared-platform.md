@@ -451,3 +451,99 @@ flag_lead接入 `_panel_text_map`、`_panel_terminal_seats` 和SeatFirst来源�
 `_seat_first_terminal_seats` 合并并附source，禁止把service net纳入panel_nets。旧seat-first整册以autouse
 隔离ServiceSeat以保留原算法场景，新service测试另册覆盖，禁止逐个改期望或xfail。首次接入已由主代理
 用S2 cp备份恢复并复验70 passed；后续ordered原型和生产回放仍须各自验收。
+
+## 14. 548D3B5：panel/service联合走廊集成锁（设计批，尚未实施）
+
+`service-seat/led-corridor-verdict.md` 已证明：冻结KEY host channels时，LED普通走线只能长回环，
+显式裸名无可见归属，MCU侧短载体的name row/name box也没有共同合法且可读的档。下一缺口不再是
+draw-only标签梯子，而是panel/service共享几何。任何 `placement.py` 改动只能在本节边界内串行实施。
+
+文件域限定 `engines/placement.py`、必要的 `engines/drawcompiler.py` 接点与新增B5专测；不改公共
+PresentationSpec/CircuitSpec/ChangePlan/CLI/DSH/Rust，不改旧fixtures，不进入548E。先给只读设计：
+四键host channel与成对LED支路的有限候选、base/topology同一binder、path-first实际回放和审计。
+保持功能岛与automatic，禁止参考坐标、userLocks、功能拆岛、页框/字体/near/reach/排名/穿越价调整。
+
+验收至少包括：空模板无cost/move/cache/轨迹变化；宿主平移/换姿重投影；服务件不被普通move/yield
+单独搬走；两条LED各自逐脚连通、无共点/T接/跨座接线；真实compile与逐脚分区、grammar/readability、
+CH34 MATCH、默认与派生SVG主代理视觉。base不消费、topology候选不重投影、错误跨seat/跨网接线至少
+三类独立变异先红并cp/hash恢复。placement/binder绿不冒称整图或整页通过；未出可读候选就不关闭B4。
+
+## 15. 548D3B7：coreless bank共享drawcompiler集成锁（离线范围已关闭）
+
+岳已裁决KEY、LED可各自独立成岛，§14的同岛联合走廊不再作为当前实施路线；局部多腿版本虽111 passed
+但有13交叉，已cp回滚且证据留档，不恢复。当前只修 `grammar/ic_periphery.py` 的共同power回路及
+`drawcompiler.py` 的coreless结构识别/free shelf阅读方向，合同见
+`evidence/548D/service-seat/coreless-bank-charter.md`。
+
+这不是公共输入schema、placement、CLI/DSH/Rust变更。共同power只绑rail/out/shunt；共同return在
+sidePreferences显式left/right时才纵向排，旧GND与缺省top/bottom逐字节不变。文件域限上述两生产文件、
+`tests/test_548d_semantic_islands.py` 与对应evidence/spec；禁坐标、userLocks、电路改动、页框/字体/
+near/reach/排名/穿越价调参。验收需keys/led独立与三岛page真实候选、逐脚/页闸、CH34 MATCH、两项
+独立变异及主代理视觉，不能用module binder绿冒称交付。
+
+**关闭复验（2026-11-11）**：生产 `drawcompiler=95b52424…`、`ic_periphery=7346edba…`、placement未改。
+keys/led独立与三岛page真实候选、页闸和逐脚通过；主代理亲看两独立岛PNG通过。邻域514/3、独立复审350/3、
+主代理恢复态25 passed；禁用共同power与联合旗桩两项主代理变异分别4红/1红并cp/hash恢复。CH34 pinned不变。
+真实MCU整页、强制topology与548E不在本锁范围，未做git写。全量与工具链读数归
+`evidence/548D/service-seat/semantic-islands-final.md`，后续整页另开任务，不沿用本锁扩项。
+
+## 16. 548D3C0：MCU 本地供电 / BOOT0 / GND 集成锁（诊断先行）
+
+岳指出当前外框来自 C1/R1 随意落座以及绕既有 GND 旗接线；本批按功能就近落座和局部短支路加旗修复，
+不再用长线包三张网。合同见 `evidence/548D/service-seat/mcu-local-readability-charter.md`。C1去耦与
+R1下拉继续留在MCU岛，KEY/LED独立岛与右侧标签不在本批。先分别定位座位、导线/旗标的真实生产者，
+不得未核实就归咎某个函数。
+
+首选只改 `engines/drawcompiler.py`、新 `tests/test_548d_mcu_local_power.py` 及语义规格的服务构造声明，
+`placement.py` 与 `grammar/ic_periphery.py` 先只读；确需扩大文件域须先补数据流、缺省兼容、base/topology
+消费者和回退边界。诊断后采用既有 `serviceLayout.pinGap=30` 显式启用服务座位，复用path-first本地终端旗；
+不伪造panelGroups，不新增schema。原语义断言不得删改，KEY/LED独立岛须继续过原三关。禁公共schema/CLI/DSH/connector/Rust、参考坐标、userLocks、功能拆岛及页框/字体/near/reach/
+排名/穿越价/硬闸调参。现有语法角色与局部旗应直接表达支路，不要求全网一枚旗或旗间连线。
+
+验收须含当前生产MCU及三岛页、逐脚分区、外框消失的结构断言、主代理视觉、CH34与缺省回归、
+至少两项独立变异cp/hash恢复。完整四线及既有16红对照后如实交卷，不进入548E、不git写。
+
+**C0第一次实施回滚**：serviceLayout同源开通与path-first虽出候选且GND本地化，但C1的向下终端旗穿BOOT0
+宿主行，3V3同件两脚夹VSS仍强制共旗；主代理亲看 `mcu-local/candidate-serviceLayout-mcu.svg` 后拒收，
+drawcompiler已cp/hash恢复到95b52424。详见 `mcu-local/route-attempt-3c0.md`，不得把该候选当交付。
+
+## 17. 548D3C1：服务支路联合排序与rails结构分组（串行两个文件域）
+
+第一域只许 `engines/placement.py` 与新 `tests/test_548d_mcu_service_placement.py`：服务座位记录宿主到
+from脚的真实直线路径，后续支路的器件体/终端旗预留不得穿它，已座支路预留也不得被后续宿主路径穿过。
+印刷文字仍由draw的文字排布、terminal检查及readability硬闸逐页测量，不能因placement不预留文字就删除或放宽；
+实测四支路文字可重排，若把暂定文字盒当座位硬墙会无解，这不等于允许最终文字压线。
+仅当原绑定顺序发生这些实测冲突时才尝试由终端旗方向决定的联合顺序（向下旗先低行、向上旗先高行），
+让靠下支路占近端、上方去耦向外让位；原顺序无冲突则逐字节保持。无合法顺序具名拒绝，不调权重、
+坐标、near/reach或锁。空模板与旧service正例保持，base/topology继续共用同一binder。
+
+第二域只许 `engines/drawcompiler.py` 与 `tests/test_548d_mcu_local_power.py`：重接C0的serviceLayout消费者，
+并在path-first语义分组中把直线跨度被异网引脚阻断的同件同轨脚拆成各自本地旗；不靠扩大绕行距离共旗，
+不改普通页reach。两域都完成后才跑真实MCU/三岛页和邻域，不能把单域测试绿当整图通过。
+
+**C1关闭复验（2026-11-11）**：新增内部 `PlacementInput.service_joint_order=False`，由base/topology的
+`_service_layout_page` 同源设置；仅serviceLayout且无panelGroups开启联合座位、host通道、备用旗档、冲突文字
+重排与共线压缩。默认False恢复旧panelGroups逐候选轨迹（被拒plan仍占预留），只新增真实host_paths；
+CH34 pinned不变。生产 `drawcompiler=fd5eff52…`、`placement=a8aa1d35…`。主代理六文件 **126 passed**、
+恢复态25 passed；总开关与联合碰撞两项变异分别9红/3红后cp/hash恢复。主代理亲看最终MCU/三岛SVG，
+本地结构通过，右侧标签/真实整页/强制topology/548E不在本锁关闭范围。证据 `mcu-local/final-c1.md`。
+
+## 18. 548D3C2：localSeats显式子开关兼容修复（离线范围已关闭）
+
+C1第一轮全量 **158 failed / 10534 passed / 25 skipped / 22 errors**，远超既有16红，主代理不签收。
+根因是把新能力挂在已有serviceLayout对象上，改变旧543/547/548页面；不得以其他agent或环境为由放行。
+现新增 `serviceLayout.localSeats: bool=False`：缺省False只保留543B pinGap旧语义，仅True序列化且开启C1
+本地服务支路，非布尔/未知键具名拒绝。`_service_seats_stated` 与 `_service_layout_page` 都必须要求该子键，
+旧panelGroups逻辑不变。文件域允许 `core/presentationspec.py`、drawcompiler、对应schema/semantic/MCU测试与
+文档；冻结语义规格改为 `{"pinGap":30,"localSeats":true}`。先证明旧543/547/548族和CH34 pinned恢复，
+再跑六文件与第二轮全量；不许改旧期望消红，不进入548E、不git写。
+
+**关闭复验**：独立schema/geometry审查后的路径、并存校验、弱断言与文档问题已修。主代理19文件
+**210 passed**、审查修复8文件 **178 passed**；**岳复验绘制线全量2 failed**；本 agent混合工作区
+全量 **10702 passed / 25 skipped / 1 xfailed / 16 failed / 1 warning**，含其他线未提交改动与既有环境项，
+不能全归绘制线，不称全绿。Connector 660+typecheck、DSH 137/1+
+build、Rust 150/4+fmt/clippy。最终总开关变异6红后cp恢复15 passed，生产
+`drawcompiler=48c2c89d…`、`presentationspec=9f72836f…`、`placement=a8aa1d35…`。
+证据 `mcu-local/final-c1.md`、`compat-local-seats.md`、`full-final-compare.md`。后续115/116两条
+按547S合法拒因演进重钉（`evidence/548D/scene08-baseline-repair.md`），最终全量
+**10775 passed / 26 skipped / 1 xfailed / 0 failed / 0 errors**，两条均消失。

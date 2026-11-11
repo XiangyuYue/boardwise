@@ -626,6 +626,14 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     **D1 重钉**：`4a78e930…` → `1e7a8583…`，仍是 `topology-search:` 一行文本：
     折返 seed 让拓扑轮在这张 300x200 的小页上过了关系闸，拒绝退回「区域装不下」。
     旧字节留 `098_scene08_narrow_refused.pre_d1.txt`。
+
+    **547S 重钉**：`1e7a8583…` → `68340ef2…`，理由与 `test_115_flyback_page.py`
+    的同名钉逐字相同——547S 把「一对共用哪条网」统一成 signal 优先、`gnd` 最后，
+    落座、`near` 的尺子、修复趟与 lane 边沿四读共用一把尺
+    （`tests/test_547_shared_branch_nets.py` 钉该契约），本场景 `C1..C4` 与 `U1`
+    各共用一条信号网加 `GND`，量尺与落座因此换到信号脚；场景仍无图
+    （`ok=False`、`candidates=0`），差异只有拒因文本 5 行。旧字节留
+    `098_scene08_narrow_refused.pre_547s.txt`。
     """
     import hashlib
     out = ROOT / "outputs" / "116" / "previews" / "098"
@@ -638,7 +646,7 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     assert result.returncode == 0, result.stdout + result.stderr
     target = out / "098_scene08_narrow_refused.txt"
     digest = hashlib.sha256(target.read_bytes()).hexdigest()
-    assert digest == "1e7a858392b7f3c43590c1ad3a9e2606ff660ff963a0e2473643980d83ae43c6", (
+    assert digest == "68340ef293d0ce35a40606eda7e2f948e9a4b4057d14a0b9b9da07450efaa5b4", (
         f"098 scene 08 moved: {digest}"
     )
 

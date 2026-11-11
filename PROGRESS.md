@@ -4,6 +4,27 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-11-11] 547S 098 scene08两条拒因基线红已修复
+
+- 岳指出绘制线全量仅115/116两条failed。逐commit取证定位为47713c2的547S统一支路网顺序（signal优先、GND最后）改变拒因；旧提交1965d84逐字节复现旧基线，HEAD与当前工作树均为68340ef2，场景不产SVG，localSeats零影响。
+- 未回退547S、未动生产。保留旧版 `098_scene08_narrow_refused.pre_547s.txt`，将114基线与116 hash依法重钉为68340ef2，两个docstring记录理由。主代理四文件复验 **93 passed**；变异把 `shared_net_order` 改回旧读法两条先红，cp/hash恢复后两条通过。证据 `evidence/548D/scene08-baseline-repair.md`。
+- 最终全量 **10775 passed / 26 skipped / 1 xfailed / 0 failed / 0 errors**，1558.90s；两条目标测试均消失，绘制线全绿（另有1条既有编码警告）。文档/卫生46 passed；未做git写、未真机。
+
+## [2026-11-11] 548D3B7 KEY/LED独立岛离线三关通过；MCU整页另议
+
+- 岳明确KEY、LED可独立成岛并给参考。旧同岛panel/service走廊与13交叉局部多腿方案均不采用，后者已cp回滚留证。
+- 无核心二端并联组新增共同power→rail/out/shunt；显式return left/right时纵向等节距并对齐公共端；纵列同类旗桩全组联合选档。缺省GND/横排与CH34 pinned不变。
+- 三岛automatic page compile ok，页闸/grammar/逐脚分区0差，跨岛只有名字。KEY四支路同向等距、3V3旗桩全10；LED两支路上下等距、名字同向同距、GND本地汇聚。主代理亲看LED/KEY PNG通过；MCU整页边界名拥挤仍未签，留与岳共同规划。
+- 生产 `drawcompiler=95b52424…`、`ic_periphery=7346edba…`、`placement=e2eb191a…`。邻域514/3、独立复审350/3、主代理恢复态25 passed；两项主代理变异分别4红/1红后cp/hash恢复。最终全量 **10649 passed / 25 skipped / 1 xfailed / 16 failed / 1 warning / 0 errors**，16条与47713c2既有名单逐项相同、无本批新红，不称全绿；Connector 634+typecheck、DSH 137/1+build、Rust 111/4通过。最终证据 `evidence/548D/service-seat/semantic-islands-final.md`；未真机、未git写、548E暂停。
+
+## [2026-11-11] 548D3C1 MCU本地供电/BOOT0/GND结构通过
+
+- 岳裁定先修MCU、右侧标签后置。C1去耦与R1下拉留在MCU岛，`serviceLayout.localSeats=true`（配 `pinGap=30`）显式启用本地服务支路；不伪造panelGroups、坐标或userLocks。C1选择同网在终端旗方向最外侧的宿主脚，联合顺序让R1占BOOT0近端、C1向外让；固定host通道、通道端点旗位、备用旗档与冲突文字重排使用同一几何。
+- 定稿C1横放VBAT行、R1横放BOOT0行；3V3为短通道加两枚本地旗，GND三枚各贴本支路，BOOT0单段0弯，原三网外框消失。主代理亲看最终MCU及三岛SVG通过本地结构；KEY/LED独立岛不退化，右侧标签密度、真实SmartMedicineBox整页与强制topology仍未关闭。
+- 新能力仅 `serviceLayout.localSeats=true` 且无 `panelGroups` 时开启；`PlacementInput.service_joint_order` 由base/topology同源设置。旧panelGroups逐候选恢复，只新增真实host_paths；CH34 pinned不变。C1主代理六文件 **126 passed**、恢复态25 passed，两项变异分别9红/3红后cp+SHA-256恢复。
+- **C1第一轮全量158 failed/22 errors不签收**：误用已有serviceLayout导致旧页回归。C2新增默认False的 `localSeats` 子键，旧pinGap字节/digest/图恢复；旧失败族81 passed、本批六文件129 passed，主代理19文件复验 **210 passed**。当前生产 `drawcompiler=48c2c89d…`、`presentationspec=9f72836f…`、`placement=a8aa1d35…`、`ic_periphery=7346edba…`。
+- 证据 `evidence/548D/service-seat/mcu-local/final-c1.md` 与 `compat-local-seats.md`。**岳复验绘制线全量2 failed**；本 agent混合工作区全量 **10702 passed / 25 skipped / 1 xfailed / 16 failed / 1 warning**，其中含其他线未提交改动与既有环境项，不能全归绘制线，不称全绿；Connector 660+typecheck、DSH 137/1+build、Rust 150/4+fmt/clippy。最终源码变异6红后cp恢复15 passed、hash一致。未真机、未做548E或git写。
+
 ## [2026-11-10] 548D3S7/B3 path-first生产候选已出；LED视觉未过
 
 - ServiceSeatTemplate与base/topology两消费者已落地，service/panel分离、panel host_path墙、模板文字和

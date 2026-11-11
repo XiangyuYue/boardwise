@@ -1464,6 +1464,33 @@ def _coreless_bank(
 ) -> tuple[GrammarResult | None, GrammarFailure | None]:
     """``(bound group, specific refusal)`` for a drawing that has no core at all.
 
+    534 read one shape here: a bank of branches returning to one **ground**.
+    548D3B7 adds the second shape the same reading covers — a bank returning to
+    one **supply** (a key row: every key from its own signal to 3V3). The two
+    readings are tried in that order and the ground one is asked **first and
+    unchanged**, so every drawing 534 already bound or refused keeps its exact
+    answer: the supply reading only speaks when the ground reading has nothing
+    (it does not accept any node as a ground) and it invents nothing — the
+    common node is bound as the `rail` it is stated to be, never as a ground.
+    """
+    bound, problem = _coreless_ground_bank(circuit, scope_id, scope_parts)
+    if bound is not None:
+        return bound, None
+    supply, supply_problem = _coreless_supply_bank(circuit, scope_id, scope_parts)
+    if supply is not None:
+        return supply, None
+    if supply_problem is not None:
+        return None, supply_problem
+    return None, problem
+
+
+def _coreless_ground_bank(
+    circuit: CircuitSpec,
+    scope_id: str,
+    scope_parts: tuple[str, ...],
+) -> tuple[GrammarResult | None, GrammarFailure | None]:
+    """``(bound group, specific refusal)`` for a drawing that has no core at all.
+
     A **parallel-branch bank** is the one drawing this grammar can read without a
     core, and it is read from the partition alone (534):
 
@@ -1742,5 +1769,190 @@ def _carrier_class_failure(
         action=(
             f"declare net {net_id} in CircuitSpec.nets[] with its class "
             "('power' or 'signal')"
+        ),
+    )
+
+# --------------------------------- 548D3B7: the bank returning to one supply
+
+
+def _coreless_supply_bank(
+    circuit: CircuitSpec,
+    scope_id: str,
+    scope_parts: tuple[str, ...],
+) -> tuple[GrammarResult | None, GrammarFailure | None]:
+    """``(bound group, specific refusal)`` for a bank returning to **one supply**.
+
+    A key row is the drawing 534 could not read: every part is a two-terminal
+    branch, but the node they all return to is 3V3 — a supply, not a ground.
+    The shape is the same one the ground reading accepts, with the return node
+    read for what the partition says it is:
+
+    * the group is one **declared** group and is every part of the drawing,
+      exactly as :func:`_coreless_ground_bank` requires;
+    * every part is a two-terminal part with **exactly one** pin on a net of
+      class ``power``, and all of them land on **one** such net — the return
+      path is one node, so the branches are parallel;
+    * every other end is a net of class ``signal`` — the node the branch holds,
+      bound as ``out`` because that is what it is (the key reads it);
+    * the common node is bound as ``rail``: the class the partition states, and
+      never relabelled as a ground.
+
+    A group that mixes a supply with a ground is never read as one bank: the
+    reading declines ``(None, None)`` and the ground reading's own named refusal
+    stands. That is deliberate — 534's refusals ("no pin on a net of class
+    'gnd'", "more than one net of class 'gnd'", "series path") are the frozen
+    contract for every shape the compiler already refused, and this reading is
+    additive: it turns a refusal into a drawing, and only a supply bank with no
+    ground anywhere and **two** supplies — the shape that has no ground reading
+    to name it — gets a refusal of its own (:func:`_many_supplies_failure`).
+    """
+    if not scope_id or not scope_parts:
+        return None, None
+    declared = {part.id for part in circuit.parts}
+    if declared != set(scope_parts):
+        return None, None
+    pins = {part_id: pins_of_part(circuit, part_id) for part_id in scope_parts}
+    if any(len(here) != 2 for here in pins.values()):
+        return None, None
+    edges = two_terminal_parts(circuit)
+    for part_id in scope_parts:
+        if part_id not in edges:
+            return None, _short_failure(circuit, part_id)
+
+    supply_of: dict[str, str] = {}
+    has_ground = False
+    for part_id in scope_parts:
+        first, second = edges[part_id]
+        has_ground = has_ground or any(
+            _net_class(circuit, net) == "gnd" for net in (first, second)
+        )
+        here = [
+            net for net in (first, second) if _net_class(circuit, net) == "power"
+        ]
+        if len(here) == 1:
+            supply_of[part_id] = here[0]
+    if not supply_of:
+        # No part returns to a supply: not this shape, and the ground reading
+        # has already said whatever there is to say about it.
+        return None, None
+    supplies: dict[str, list[str]] = {}
+    for part_id, net in supply_of.items():
+        supplies.setdefault(net, []).append(part_id)
+    if len(supplies) != 1:
+        if has_ground:
+            # A group that also has ground ends keeps 534's own refusal (a
+            # group returning to two grounds is named as that, unchanged).
+            return None, None
+        # No ground anywhere and two supplies: a supply bank whose return was
+        # split in two. That group is close enough to this shape to be refused
+        # in its own terms, and the two nets are the repair.
+        return None, _many_supplies_failure(circuit, supplies)
+    supply = next(iter(supplies))
+    if len(supply_of) != len(scope_parts):
+        # A part with no supply end (or with both ends on supplies) is not a
+        # branch of a bank returning to one supply, and 534's refusal for every
+        # shape 534 knew is a frozen contract: it stands.
+        return None, None
+
+    carriers: dict[str, list[str]] = {}
+    for part_id in scope_parts:
+        first, second = edges[part_id]
+        carrier = second if first == supply else first
+        carriers.setdefault(carrier, []).append(part_id)
+    if any(_net_class(circuit, net) != "signal" for net in carriers):
+        # The held node is not a stated signal: there is nothing to read it as,
+        # and the group keeps the refusal the ground reading gave it.
+        return None, None
+
+    provenance = weakest_provenance(
+        net_provenance(circuit, supply),
+        *(net_provenance(circuit, net) for net in sorted(carriers)),
+        *(part_provenance(circuit.part(part_id)) for part_id in sorted(scope_parts)),
+    )
+    bindings: list[RoleBinding] = [
+        RoleBinding(
+            role="rail",
+            part_id=supply,
+            evidence=evidence(
+                "role=rail: the one net of class 'power' this group's branches "
+                "return to — every part of the group has exactly one pin on it, "
+                "so the branches are parallel and the group has one return path. "
+                "It is bound as the rail the partition states and never as a "
+                "ground: a supply is not a return to earth",
+                _spec_net_clause(circuit, supply),
+                "parts returning here: "
+                + ", ".join(f"{part_id}" for part_id in sorted(supplies[supply])),
+                f"members: {', '.join(_members(circuit, supply))}",
+                f"provenance={net_provenance(circuit, supply)}",
+            ),
+        )
+    ]
+    for net_id in sorted(carriers):
+        bindings.append(
+            RoleBinding(
+                role="out",
+                part_id=net_id,
+                evidence=evidence(
+                    "role=out: the net of class 'signal' a branch of this group "
+                    "holds — each branch returns to the one supply and leaves "
+                    "the node it reads to the rest of the drawing",
+                    _spec_net_clause(circuit, net_id),
+                    "branches on this node: "
+                    + ", ".join(sorted(carriers[net_id])),
+                    f"members: {', '.join(_members(circuit, net_id))}",
+                    f"provenance={net_provenance(circuit, net_id)}",
+                ),
+            )
+        )
+    for part_id in sorted(scope_parts):
+        first, second = edges[part_id]
+        carrier = second if first == supply else first
+        bindings.append(
+            RoleBinding(
+                role="shunt",
+                part_id=part_id,
+                evidence=evidence(
+                    "role=shunt: a two-terminal part from its own signal "
+                    f"{carrier} to the group's supply {supply} — the group is a "
+                    "bank of parallel branches, so every part hangs off its own "
+                    "node and none of them is the part the others are arranged "
+                    "around",
+                    part_clause(circuit, part_id),
+                    "read from the partition, not from a designator prefix, a "
+                    "value or a package name: two stated pins on two different "
+                    f"nets ({carrier}, {supply})",
+                    f"class of the held node: {_net_class(circuit, carrier)}",
+                    _scope_note(scope_id, scope_parts),
+                    "the core reading was tried and has nothing to read: "
+                    "modules[].core states none, no contract block names one, and "
+                    f"the pin counts tie or stay at two ({_counts_text({pid: 2 for pid in scope_parts})}) — "
+                    "so this group is bound as the parallel bank it is, not around "
+                    "an invented core",
+                    f"provenance={provenance}",
+                ),
+            )
+        )
+    return bound_result(bindings, (), ()), None
+
+
+def _many_supplies_failure(
+    circuit: CircuitSpec, supplies: Mapping[str, list[str]]
+) -> GrammarFailure:
+    """A supply bank whose branches return to more than one supply."""
+    spelled = "; ".join(
+        f"{net} ({', '.join(sorted(supplies[net]))})" for net in sorted(supplies)
+    )
+    return GrammarFailure(
+        category=FAILURE_CIRCUIT_INVALID,
+        subject=sorted(supplies)[0],
+        detail=(
+            "the parts of this group return to more than one net of class "
+            "'power': " + spelled + " — one parallel bank has one return node, "
+            "so these are two banks, and binding them as one would join two "
+            "supplies the partition keeps apart"
+        ),
+        action=(
+            "state the group's parts on one supply net, or split the group so "
+            "each drawing returns to a single supply"
         ),
     )

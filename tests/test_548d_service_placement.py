@@ -105,7 +105,16 @@ def test_a_right_cell_seats_outside_the_host_body():
     assert cell.origin[0] > host_body[2], (cell.origin, host_body)
     assert cell.from_seat[0] < cell.to_seat[0]
     assert plan.reserved_boxes and cell.reserved
-    assert plan.host_paths == (), "a service seat routes no panel channel"
+    # 548D3C1: the seat records its **direct** host lead — host pin tip to the
+    # cell's from foot — as the channel the drawing must replay.
+    assert plan.host_paths, "a service seat records its direct host lead"
+    lead = tuple(plan.host_paths[0])
+    assert lead[0] == (
+        placement.posed_tip(
+            placement._pin_for_token(BOOK["MCU32"], "PA3").tip,
+            BOOK["MCU32"].poses[0], (0.0, 0.0))
+    ), lead
+    assert lead[-1] == tuple(cell.from_seat), lead
     # The from foot stands on the host pin's own axis — measured against the
     # real posed pin, not against a second copy of the same expression.
     host_pin = placement._pin_for_token(BOOK["MCU32"], "PA3")

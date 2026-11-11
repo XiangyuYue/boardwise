@@ -228,9 +228,11 @@ LABEL_ROW_MODELS: tuple[str, ...] = (
 #: other schema here is — a key nobody reads is an intent nobody honours.
 GND_CLUSTERING_KEYS: tuple[str, ...] = ("radius",)
 
-#: The one key `serviceLayout` carries (543B): the distance a uniquely served
-#: shunt keeps from the host pin it serves. Closed like every other object here.
-SERVICE_LAYOUT_KEYS: tuple[str, ...] = ("pinGap",)
+#: The keys `serviceLayout` carries: 543B's interval (the distance a uniquely
+#: served shunt keeps from the host pin it serves) and 548D3C2's explicit
+#: `localSeats` switch. Closed like every other object here — an unknown key is
+#: refused, and `localSeats` is written only when it is `true`.
+SERVICE_LAYOUT_KEYS: tuple[str, ...] = ("pinGap", "localSeats")
 
 #: The one key `pageArrangement` carries (548D), and the only strategy this
 #: build knows. Closed like every other object here, and for the same reason: a
@@ -592,6 +594,12 @@ class ServiceLayout:
 
     #: The service pin's distance from the host pin, in canvas units (> 0).
     pin_gap: float
+    #: 548D3C2: does this page ask for the local service **seats** (the new
+    #: branch seats, their host channels and their terminal flags)? Absent or
+    #: `false` keeps exactly 543B's interval semantics, so every document that
+    #: writes only `pinGap` keeps its bytes, digest and drawing. Only an explicit
+    #: `true` opens the new construction; it is written only when true.
+    local_seats: bool = False
 
 
 @dataclass(frozen=True)
@@ -969,7 +977,16 @@ class PresentationSpec:
             # 543B: written only when stated, like every opt-in switch above —
             # an old document keeps its bytes, digest and drawing.
             **(
-                {"serviceLayout": {"pinGap": self.service_layout.pin_gap}}
+                {
+                    "serviceLayout": {
+                        "pinGap": self.service_layout.pin_gap,
+                        **(
+                            {"localSeats": True}
+                            if self.service_layout.local_seats
+                            else {}
+                        ),
+                    }
+                }
                 if self.service_layout is not None
                 else {}
             ),
@@ -1725,6 +1742,11 @@ def _service_layout(root: dict[str, Any]) -> ServiceLayout | None:
     object is closed and ``pinGap`` has to be a positive finite number of canvas
     units — a zero or negative gap would place the shunt on or through the host
     pin it serves, and a `NaN` would make the branch-distance comparison false.
+
+    548D3C2: ``localSeats`` is a **boolean** or it is refused — ``0``/``1`` are
+    integers that happen to be truthy, and a document that means "off" has to say
+    so without relying on coercion. Omitting it means off, and off is not
+    written back, so `{"pinGap": 30}` keeps its digest.
     """
     value = root.get("serviceLayout")
     if value is None:
@@ -1742,7 +1764,25 @@ def _service_layout(root: dict[str, Any]) -> ServiceLayout | None:
             "$.serviceLayout.pinGap must be a positive, finite number of canvas "
             f"units, got {gap!r}"
         )
-    return ServiceLayout(pin_gap=float(gap))
+    seats = body.get("localSeats", False)
+    if not isinstance(seats, bool):
+        raise PresentationSpecError(
+            "$.serviceLayout.localSeats must be a boolean, got "
+            f"{body.get('localSeats')!r}"
+        )
+    if seats and root.get("panelGroups"):
+        # Both constructions ask for the same seats in two different ways, and
+        # this build honours neither combination: a page that states both would
+        # silently take the panel path and drop `localSeats` on the floor. It is
+        # refused by name instead — the reader is told which two keys disagree,
+        # not left to guess which one won.
+        raise PresentationSpecError(
+            "$.serviceLayout.localSeats: a page states either `panelGroups` or "
+            "`serviceLayout.localSeats: true`, never both — the panel's own "
+            "cells and the local service seats are two constructions, and this "
+            "build does not merge them. Drop one of the two keys."
+        )
+    return ServiceLayout(pin_gap=float(gap), local_seats=seats)
 
 
 def _page_arrangement(root: dict[str, Any]) -> PageArrangement | None:

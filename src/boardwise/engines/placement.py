@@ -64,6 +64,7 @@ module, and its own copy is what retires).
 
 from __future__ import annotations
 
+import itertools
 import math
 import random
 from dataclasses import dataclass, field, replace
@@ -1437,6 +1438,16 @@ class PlacementInput:
     #: one cell, its real pins/net/pose/text/flag boxes and the side it reads
     #: on — no absolute coordinate and no user lock.
     service_templates: tuple[ServiceSeatTemplate, ...] = ()
+    #: Whether the service seats may be **re-ordered** against each other and
+    #: whether one seat's room may treat another seat's branch as its own
+    #: (§548D3C1's joint seat). Off — the default, and every page that does not
+    #: state it — is the legacy binder byte for byte: the declared
+    #: ``service_templates`` order, the legacy rung, and a foreign part judged
+    #: only against the host and the cell itself. On is the draw layer's own
+    #: statement (``serviceLayout`` page settings); it is a placement-internal
+    #: contract like the templates themselves, never read from a presentation
+    #: here and never serialised: this request carries no ``to_jsonable``.
+    service_joint_order: bool = False
 
     def __post_init__(self) -> None:
         if not self.parts:
@@ -6499,11 +6510,25 @@ def _service_foreign_refusal(
     that is not the host and not the cell, against every reserved box, positive
     area only. No weight, no tolerance and no "it is only a sliver" exemption.
 
+    A part a **service seat of this same request** places is not foreign: its
+    entry in the answer is provisional (the seat may come later in the order, or
+    may move with it), and the seats measure each other through their rooms and
+    their recorded leads, not through whichever origin the answer happened to
+    hold when the order was tried (§548D3C1 — measured: the reversed order was
+    refused for a not-yet-seated cell still standing at its old origin).
+
     ``walls`` is the panel's promise — its reserves and host-lead legs (§35C): a
     cell whose own room still stands on one of them has no seat this page can
     state, and the refusal names the wall rather than shipping an overlap.
     """
     owned = {template.host_part, template.cell.part_id}
+    if request.service_joint_order:
+        # §548D3C1: a part this same request's service seats place is not
+        # foreign — its answer entry is provisional, and the seats measure each
+        # other through their rooms and recorded leads instead. Legacy pages
+        # (the default) keep the historical reading: only the host and the
+        # branch itself are exempt.
+        owned |= {item.cell.part_id for item in request.service_templates}
     for other in request.parts:
         if other.part_id in owned:
             continue
@@ -6539,6 +6564,146 @@ def _service_foreign_refusal(
     return plan
 
 
+def _service_direct_path(
+    host_tip: tuple[float, float], from_seat: tuple[float, float],
+) -> tuple[tuple[float, float], ...]:
+    """The direct orthogonal run from the host pin's tip to the branch's foot.
+
+    The binder puts the from foot on the host pin's own axis (§548D3S1), so on
+    every answer it seats the run is **one** segment. The bend is kept for the
+    answer that ever arrives off axis: a recorded lead must still be a path this
+    module can measure, and a diagonal would be neither an orthogonal run nor a
+    leg a drawing could draw. A foot that stands on the pin's own tip has no run
+    to record and states the point alone. This is a record of the span the branch
+    will claim, not a route — nothing here chooses a way around an obstacle.
+    """
+    if (abs(host_tip[0] - from_seat[0]) <= SERIES_EPS
+            and abs(host_tip[1] - from_seat[1]) <= SERIES_EPS):
+        return (host_tip,)
+    if abs(host_tip[1] - from_seat[1]) <= SERIES_EPS:
+        return (host_tip, (from_seat[0], host_tip[1]))
+    return (host_tip, (from_seat[0], host_tip[1]), from_seat)
+
+
+def _service_lead_legs(
+    path: Sequence[tuple[float, float]],
+) -> tuple[Box, ...]:
+    """Every drawn leg of a recorded lead, widened by the Service wall pad."""
+    return tuple(
+        _span_box(start, stop, SERVICE_WALL_PAD)
+        for start, stop in zip(path, path[1:])
+    )
+
+
+def _service_host_path(
+    plan: BoundPanelSeatPlan, host_tip: tuple[float, float],
+) -> BoundPanelSeatPlan:
+    """Attach the recorded host lead to a seated plan, in the answer's frame.
+
+    The path is the host pin's **real** posed tip to the cell's from foot, so it
+    is re-attached after the outward ladder has moved the cell: the first point is
+    the host's, never the seat's. A plan that already carries exactly this span
+    is returned as it stands — the relative solve states it in its own frame, and
+    an untouched seat must stay the same object (`_SERVICE_SOLVE_CACHE` identity).
+    """
+    if not plan.seated or not plan.cells:
+        return plan
+    cell = plan.cells[0]
+    assert cell.from_seat is not None
+    path = _service_direct_path(host_tip, cell.from_seat)
+    if plan.host_paths == (path,) and cell.host_path == path:
+        return plan
+    return replace(
+        plan, cells=(replace(cell, host_path=path),), host_paths=(path,))
+
+
+def _service_lead_rooms(
+    request: PlacementInput,
+    template: ServiceSeatTemplate,
+    plan: BoundPanelSeatPlan,
+) -> tuple[Box, ...]:
+    """The seat's own drawn geometry: its body and its terminal flag's room.
+
+    The printed rows are deliberately **not** here. Where a part's text is
+    printed is the drawing's own decision — §35D's text pass places it against
+    the very leads this binder records — while a lead through a component's body
+    or through a flag's glyph is geometry no text pass can undo. Measured on the
+    real four-service page: with the rows counted, D1's and D2's two-row blocks
+    are 23 units tall on rows ten apart, so neither order can seat the pair and
+    the whole page refuses; with the rows left to the drawing, the low-row-first
+    order seats both and only the flag room (C1/R1) is the seat's business.
+    """
+    if not plan.seated or not plan.cells:
+        return ()
+    cell = plan.cells[0]
+    rooms: list[Box] = []
+    if cell.origin is not None and cell.pose is not None:
+        body = part_box(
+            request.part(cell.part_id).profile, cell.pose, cell.origin)
+        rooms.append(_grow_box(body, template.clearance))
+    if template.cell.flag_box is not None and cell.to_seat is not None:
+        rooms.append(_grow_box(
+            _flag_box_at(cell.to_seat, template.cell.flag_box),
+            template.clearance))
+    return tuple(rooms)
+
+
+def _service_joint_refusal(
+    request: PlacementInput,
+    template: ServiceSeatTemplate,
+    plan: BoundPanelSeatPlan,
+    siblings: Sequence[tuple[BoundPanelSeatPlan, ServiceSeatTemplate]],
+) -> BoundPanelSeatPlan | None:
+    """Does this seat and an earlier one stand on each other's drawn lead?
+
+    Both facts are geometric and both are positive area: every leg of an earlier
+    seat's recorded host lead against this cell's body and terminal flag room,
+    and every leg of this cell's own lead against an earlier cell's body and flag
+    room (:func:`_service_lead_rooms` — the printed rows are the text pass's).
+    A leg is widened by :data:`SERVICE_WALL_PAD` — the same ruler the panel walls
+    use — because a drawn run has thickness even though its centre line does not.
+
+    The netlist is not consulted. Two seats on the **same** net are still two
+    runs: one branch's lead through another branch's body or flag is unreadable
+    whether or not it is electrically legal, so connectivity is not an exemption
+    here.
+    """
+    if not plan.seated or not plan.cells:
+        return None
+    rooms = _service_lead_rooms(request, template, plan)
+    for prior, prior_template in siblings:
+        if not prior.seated:
+            continue
+        for path in prior.host_paths:
+            for leg in _service_lead_legs(path):
+                for box in rooms:
+                    if _boxes_overlap(leg, box) > 0.0:
+                        return replace(plan, refusal=PanelSeatRefusal(
+                            template.group_id,
+                            f"{template.cell.part_id}'s body/terminal flag room "
+                            f"{box} stands on the host lead of "
+                            f"{prior.group_id} ({path}) — a lead runs inside its "
+                            "own branch's room and nowhere else",
+                            "seat the branch whose terminal flag hangs towards "
+                            "that row first, or move the two branches apart",
+                        ))
+        for path in plan.host_paths:
+            for leg in _service_lead_legs(path):
+                for box in _service_lead_rooms(
+                        request, prior_template, prior):
+                    if _boxes_overlap(leg, box) > 0.0:
+                        return replace(plan, refusal=PanelSeatRefusal(
+                            template.group_id,
+                            f"the host lead of {template.cell.part_id} ({path}) "
+                            f"runs through {prior.group_id}'s body/terminal flag "
+                            f"room {box} — a lead must not cross another seated "
+                            "branch's room",
+                            "seat the branch on the lower row first, or move the "
+                            "two branches apart",
+                        ))
+    return None
+
+
 def _solve_service_relative(
     request: PlacementInput,
     template: ServiceSeatTemplate,
@@ -6551,8 +6716,11 @@ def _solve_service_relative(
     ``_series_snap`` lattice and the host's body box is the reference. What
     changes with the side is only which body edge the reserve is placed against
     and which axis the from→to reading runs along — a frame change, not a second
-    seat equation. No host lead is routed: the connection is the net's ordinary
-    wire, which is S3's business, so ``host_paths`` is empty by construction.
+    seat equation. No host lead is routed here — routing an obstacle stays the
+    drawing's work — but the **direct span** from the host pin's real tip to the
+    from foot is recorded in this same relative frame (:func:`_service_direct_path`),
+    so the rigid translation that places the host places the recorded lead with
+    it. A ladder rung then re-attaches it in the answer's frame.
     """
     cell = template.cell
     host_profile = request.part(template.host_part).profile
@@ -6683,16 +6851,23 @@ def _solve_service_relative(
                   template.clearance)
         for box in boxes
     ]
+    # §548D3C1: the span this seat will have drawn, in the **same relative
+    # frame** as everything else here — the host's own posed tip is ``(0, 0)``'s
+    # pin tip, so the rigid translation that places the host places this too.
+    # Recorded on every answer, joint or not: the span is the seat's own
+    # geometry, and the two consumers that read it (the spread pass and the text
+    # walls) need it whatever ordering decided the seat.
+    host_path = _service_direct_path(host_tip, from_seat)
     seat = BoundPanelSeat(
         part_id=cell.part_id, host_token=cell.host_token, origin=origin,
         pose=cell.pose, from_seat=from_seat, to_seat=to_seat,
-        reserved=tuple(moved), host_path=(),
+        reserved=tuple(moved), host_path=host_path,
     )
     return BoundPanelSeatPlan(
         group_id=template.group_id, host_part=template.host_part,
         side=template.side, columns=1, cells=(seat,),
-        reserved_boxes=tuple(moved), grid=template.grid,
-        lattice=template.lattice,
+        reserved_boxes=tuple(moved), host_paths=(host_path,),
+        grid=template.grid, lattice=template.lattice,
     )
 
 
@@ -6708,15 +6883,35 @@ def _bind_one_service(
     template: ServiceSeatTemplate,
     origins: Mapping[str, tuple[float, float]],
     poses: Mapping[str, SymbolPose],
-    siblings: Sequence[BoundPanelSeatPlan] = (),
+    siblings: Sequence[tuple[BoundPanelSeatPlan, ServiceSeatTemplate]] = (),
     panel_walls: Sequence[Box] = (),
 ) -> BoundPanelSeatPlan:
     """One service template -> one bound plan, or a named refusal."""
+    return _bind_one_service_joint(
+        request, template, origins, poses, siblings, panel_walls)[0]
+
+
+def _bind_one_service_joint(
+    request: PlacementInput,
+    template: ServiceSeatTemplate,
+    origins: Mapping[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+    siblings: Sequence[tuple[BoundPanelSeatPlan, ServiceSeatTemplate]] = (),
+    panel_walls: Sequence[Box] = (),
+) -> tuple[BoundPanelSeatPlan, bool]:
+    """One service template -> one bound plan, or a named refusal.
+
+    The second value says whether the **joint** seat test of §548D3C1 changed this
+    answer — a rung the crossing refused, or a crossing that refused the seat.
+    That is the only fact the caller's order search is about; a ladder rung taken
+    for an earlier branch's *printed/part room* (or for a panel channel) is the
+    old behaviour and is not reported as joint.
+    """
     if template.host_part not in origins or template.host_part not in poses:
         return _service_refusal(
             template,
             f"the host {template.host_part!r} is not part of this request's answer",
-            "name a host that is in the request, or drop the seat")
+            "name a host that is in the request, or drop the seat"), False
     locked = request.locked_origins()
     for name in (template.host_part, template.cell.part_id):
         if name in locked:
@@ -6725,7 +6920,7 @@ def _bind_one_service(
                 f"{name!r} is pinned by a user lock, and a service seat is a "
                 "computed origin — the two cannot both hold",
                 "drop the lock on this part, or drop the service seat and place "
-                "it by hand")
+                "it by hand"), False
     host_profile = request.part(template.host_part).profile
     host_pose = poses[template.host_part]
     host_origin = origins[template.host_part]
@@ -6733,6 +6928,9 @@ def _bind_one_service(
         _service_template_key(template),
         _panel_host_geometry_key(host_profile),
         _panel_pose_key(host_pose),
+        # §548D3C1: the relative solve records the host span only under the joint
+        # contract, so the two answers must not share a cache entry.
+        request.service_joint_order,
     )
     relative = _SERVICE_SOLVE_CACHE.get(key)
     if relative is None:
@@ -6741,8 +6939,15 @@ def _bind_one_service(
             _SERVICE_SOLVE_CACHE.clear()
         _SERVICE_SOLVE_CACHE[key] = relative
     if relative.refusal is not None:
-        return relative
+        return relative, False
     plan = relative.translated(host_origin)
+    host_pin = _pin_for_token(host_profile, template.cell.host_token)
+    host_tip = (
+        None if host_pin is None else
+        posed_tip(host_pin.tip, host_pose, host_origin))
+    if host_tip is not None:
+        # §548D3C1: the span this seat will have drawn, from the host's own tip.
+        plan = _service_host_path(plan, host_tip)
     # A second cell on the same side (two LEDs off adjacent host pins) cannot
     # take the same column: it is stepped **outwards** along the reading axis,
     # which keeps its from foot on its own host pin's axis. A bounded ladder, and
@@ -6752,38 +6957,221 @@ def _bind_one_service(
     # and every host-lead leg (as boxes). A panel channel was promised that lane
     # first, so a service cell steps outwards until it is clear of it, and the
     # ladder never clears a part while leaving the channel it shares unmeasured.
+    #
+    # §548D3C1: a rung must clear an earlier branch's **drawn lead** as well, in
+    # both directions — this cell's room off that lead, and this cell's lead out
+    # of that room. Stepping outwards is the whole answer to a lead that lies
+    # between the host and this seat, because the lead only gets longer with the
+    # step, never shorter.
+    #
+    # The rung itself still clears the earlier branch's whole reserved room,
+    # printed rows included. A lead through a **flag's own lead** is not a box
+    # overlap this layer can see, and measured on the real MCU page, dropping the
+    # rows from the ladder let the declared order "succeed" with the BOOT0 lead
+    # drawn straight through the decoupling's flag lead at x=-150 — a seat that
+    # is legal by area and wrong on the page. The rows stay an obstacle here; the
+    # drawing is the layer that may move them.
     taken = [
-        box for other in siblings for box in other.reserved_boxes
+        box for other, _ in siblings for box in other.reserved_boxes
     ] + list(panel_walls)
+    joint = False
     if taken and plan.seated and plan.cells:
         step = max(template.pitch, template.grid, DEFAULT_GRID)
         sign = 1.0 if template.side == PANEL_SIDE_RIGHT else -1.0
         base = plan
+        crossed: str | None = None
         # The ladder's length is the page's own size, not a constant: a page
         # with N parts cannot need more than N distinct columns on one side.
         for rung in range(0, max(1, len(request.parts))):
             moved = base if rung == 0 else base.translated(
                 (sign * step * rung, 0.0))
+            if host_tip is not None:
+                moved = _service_host_path(moved, host_tip)
             padded = [
                 _grow_box(box, template.clearance)
                 for box in moved.reserved_boxes
             ]
-            if not any(
+            if any(
                 _boxes_overlap(box, other) > 0.0
                 for box in padded for other in taken
             ):
-                plan = moved
-                break
+                continue
+            clash = (
+                _service_joint_refusal(request, template, moved, siblings)
+                if request.service_joint_order else None)
+            if clash is not None:
+                joint = True
+                crossed = (
+                    clash.refusal.render() if clash.refusal is not None else None)
+                continue
+            plan = moved
+            break
         else:
             return _service_refusal(
                 template,
                 f"{template.cell.part_id}: every rung outwards on the "
                 f"{template.side!r} side still stands on another service cell's "
-                "reserved room or on the panel's own room/host lead",
+                "reserved room or host lead, or on the panel's own room/host "
+                "lead"
+                + (f"; the widest rung was refused by: {crossed}"
+                   if crossed else ""),
                 "give the two branches more room, move the panel host, or drop "
-                "one of them")
+                "one of them"), joint
+    clash = (
+        _service_joint_refusal(request, template, plan, siblings)
+        if request.service_joint_order else None)
+    if clash is not None:
+        return clash, True
     return _service_foreign_refusal(
-        request, template, plan, origins, poses, panel_walls)
+        request, template, plan, origins, poses, panel_walls), joint
+
+
+#: The page's own service count bounds the joint-order search. Three seats are
+#: six orders and the two flag-stated orders already answer the two-ended cases,
+#: so that is where permuting stops; a larger page uses the declared order and
+#: the two reading orders only. The cost is measured, not assumed: the real
+#: four-service page's *refusing* candidate search re-binds 3 sequences per
+#: candidate rather than 27 (the 24-permutation page took ~70 s per compile,
+#: 3 sequences take ~5 s), and a page that cannot seat is searched on every
+#: candidate, so the bound is a runtime fact and not only a tidiness one.
+SERVICE_ORDER_PERMUTATION_LIMIT = 3
+
+
+def _service_flag_axis(template: ServiceSeatTemplate) -> int:
+    """``-1`` for a terminal flag that hangs down, ``1`` for one that rises.
+
+    Read off the cell's own ``flag_lead`` — the compiler's stated lead, in page
+    axes — so the order is the page's fact and not a second reading of the flag
+    box. ``0`` is a branch with no stated lead: it states no preference.
+    """
+    lead = template.cell.flag_lead
+    if len(lead) < 2:
+        return 0
+    drop = lead[-1][1] - lead[0][1]
+    if drop < -SERIES_EPS:
+        return -1
+    return 1 if drop > SERIES_EPS else 0
+
+
+def _service_host_row(
+    request: PlacementInput,
+    template: ServiceSeatTemplate,
+    origins: Mapping[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+) -> float:
+    """The host pin's own row in this answer (``0`` when it is not in hand)."""
+    if template.host_part not in origins or template.host_part not in poses:
+        return 0.0
+    pin = _pin_for_token(
+        request.part(template.host_part).profile, template.cell.host_token)
+    if pin is None:
+        return 0.0
+    return posed_tip(
+        pin.tip, poses[template.host_part], origins[template.host_part])[1]
+
+
+def _service_seat_orders(
+    request: PlacementInput,
+    origins: Mapping[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+) -> tuple[tuple[ServiceSeatTemplate, ...], ...]:
+    """The orders a joint seat conflict may be asked to settle (§548D3C1).
+
+    The declared order comes first and is the answer unless the joint test had
+    to move or refuse a cell (:func:`_bind_one_service`'s second value). Behind
+    it stand the orders the branches' **terminal flags** state: a flag that hangs
+    down claims the rows below it, so the branch on the **low** host row takes
+    its near seat first and the branch above it yields outwards; a flag that
+    rises states the mirror, and the high row goes first. Which of the two comes
+    first is decided by the flags present (a downward flag present = low row
+    first), ties break on the template key, so two branches on the same row or
+    with the same flag are still one deterministic order.
+
+    On a page with at most :data:`SERVICE_ORDER_PERMUTATION_LIMIT` seats every
+    remaining permutation follows, in the templates' own order — the search is
+    bounded by the page's own count, never open-ended.
+    """
+    templates = request.service_templates
+    if len(templates) < 2:
+        return (templates,)
+
+    def row(template: ServiceSeatTemplate) -> tuple[float, tuple]:
+        return (
+            _service_host_row(request, template, origins, poses),
+            _service_template_key(template),
+        )
+
+    low_first = tuple(sorted(templates, key=row))
+    high_first = tuple(sorted(
+        templates, key=lambda template: (-row(template)[0], row(template)[1])))
+    reading = (
+        (low_first, high_first)
+        if any(_service_flag_axis(template) < 0 for template in templates)
+        else (high_first, low_first)
+    )
+    orders: list[tuple[ServiceSeatTemplate, ...]] = []
+    seen: set[tuple] = set()
+
+    def keep(order: tuple[ServiceSeatTemplate, ...]) -> None:
+        key = tuple(_service_template_key(template) for template in order)
+        if key not in seen:
+            seen.add(key)
+            orders.append(order)
+
+    keep(templates)
+    for order in reading:
+        keep(order)
+    if len(templates) <= SERVICE_ORDER_PERMUTATION_LIMIT:
+        for order in itertools.permutations(templates):
+            keep(order)
+    return tuple(orders)
+
+
+def _bind_service_sequence(
+    request: PlacementInput,
+    templates: Sequence[ServiceSeatTemplate],
+    origins: Mapping[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+    walls: Sequence[Box],
+    *,
+    stop_at_refusal: bool = False,
+) -> tuple[tuple[BoundPanelSeatPlan, ...], bool]:
+    """One order of the page's service seats, and whether the joint test bit.
+
+    The cells are seated one after another against the seats already taken; the
+    caller's mappings are copied, not mutated. ``True`` means at least one cell
+    had a rung refused by, or was refused by, the joint lead test — the fact
+    :func:`bind_service_plans` re-orders for.
+
+    ``stop_at_refusal`` is the trial's shape: an order that already has a refused
+    cell cannot be the answer, so the remaining (and most expensive) cells are
+    not bound for it. The declared order is always bound in full, because its
+    plans are what the caller receives when no order seats the page.
+    """
+    out: list[BoundPanelSeatPlan] = []
+    pairs: list[tuple[BoundPanelSeatPlan, ServiceSeatTemplate]] = []
+    joint = False
+    local_origins = dict(origins)
+    local_poses = dict(poses)
+    for template in templates:
+        # Every plan so far is a sibling, refused ones included: a refusal that
+        # still carries its seats (a foreign part in the room) keeps its reserved
+        # boxes, and the ladder below must see them — that is the legacy answer,
+        # measured (one rung per refused-but-placed cell).
+        plan, moved = _bind_one_service_joint(
+            request, template, local_origins, local_poses, tuple(pairs), walls)
+        out.append(plan)
+        pairs.append((plan, template))
+        joint = joint or moved
+        if not plan.seated:
+            if stop_at_refusal:
+                break
+            continue
+        cell = plan.cells[0]
+        if cell.origin is not None and cell.pose is not None:
+            local_origins[cell.part_id] = cell.origin
+            local_poses[cell.part_id] = cell.pose
+    return tuple(out), joint
 
 
 def bind_service_plans(
@@ -6803,26 +7191,56 @@ def bind_service_plans(
     in the outward ladder and in the final foreign re-check. Empty — the default
     — is every pre-S4 call shape, byte for byte: no wall, no extra rung, no new
     refusal.
+
+    §548D3C1: the declared order is answered unchanged unless a cell's **drawn
+    lead** and another cell's room forced a rung or a refusal. Only then is the
+    order searched — the two flag-stated reading orders and, on a page with at
+    most :data:`SERVICE_ORDER_PERMUTATION_LIMIT` seats, the remaining
+    permutations — and the seats are the winning order's. The plans still come
+    back **one per declared seat, in the declared order**: the order is a fact
+    about which seat was taken first, not about which template owns which plan.
+    Every cell of that order is seated, and no plan leans on the joint test; when
+    no order manages that, the declared order's own named refusals are returned
+    rather than a silent free seat. This whole paragraph is gated on
+    :attr:`PlacementInput.service_joint_order`: on a page that does not state it
+    (the default, and every legacy ``panelGroups`` page) the declared order is
+    returned as it stands.
     """
-    out: list[BoundPanelSeatPlan] = []
     if not request.service_templates:
         return ()
     walls = _panel_service_walls(panel_plans)
     # Sequential on purpose: one service cell's seat is another's foreign part
     # until it is placed, so every later cell is measured against the seats the
     # earlier ones already took. The caller's mappings are not mutated here.
-    local_origins = dict(origins)
-    local_poses = dict(poses)
-    for template in request.service_templates:
-        plan = _bind_one_service(
-            request, template, local_origins, local_poses, tuple(out), walls)
-        out.append(plan)
-        if plan.seated and plan.cells:
-            cell = plan.cells[0]
-            if cell.origin is not None and cell.pose is not None:
-                local_origins[cell.part_id] = cell.origin
-                local_poses[cell.part_id] = cell.pose
-    return tuple(out)
+    plans, joint = _bind_service_sequence(
+        request, request.service_templates, origins, poses, walls)
+    if not request.service_joint_order:
+        # Legacy page (the default): the declared order is the answer, however
+        # many cells it seats. No re-ordering, no joint rung, no extra refusal —
+        # every page that does not state the joint contract keeps the seats it
+        # always had, and its ``host_paths`` only gains the recorded span.
+        return plans
+    if not joint and all(plan.seated for plan in plans):
+        # The declared order is the page's own statement and the answer stands:
+        # no crossing forced a rung, no cell was refused, so nothing is
+        # re-ordered and the seats are the ones this binder always produced.
+        return plans
+    # §548D3C1: the declared order needed the joint test to move a cell, or could
+    # not seat one at all, so the branches' own terminal flags are asked for an
+    # order. A refusal alone is the trigger on purpose: the measured MCU page's
+    # declared order dies on an earlier branch's *printed rows* in the outward
+    # lane (a rung-exhaustion, not a lead crossing), and the reversed order seats
+    # both cells with every lead one straight run.
+    for order in _service_seat_orders(request, origins, poses)[1:]:
+        attempt, moved = _bind_service_sequence(
+            request, order, origins, poses, walls, stop_at_refusal=True)
+        if (not moved and len(attempt) == len(order)
+                and all(plan.seated for plan in attempt)):
+            by_group = {plan.group_id: plan for plan in attempt}
+            return tuple(
+                by_group[template.group_id]
+                for template in request.service_templates)
+    return plans
 
 
 def seat_service_plans(
