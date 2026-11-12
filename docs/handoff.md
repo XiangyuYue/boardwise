@@ -138,8 +138,29 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   connector、DSH、Rust 均通过。541 R3 与公开接口 allowlist 仍未实施，不写成 R3/R4 全部完成。
 - **038Q 的 Q1–Q4 支撑批已完成各自范围（2026-11-11）**：库只读 `lib.cbb.search/get`、
   上游候选归一化、符号文件只读通路与单符号 elibz2 profile；AMS1117 单符号身份/几何已核对。
-  四模块仍 candidate/unverified/notForDrawCompile，其余器件身份未齐。原生 `block_symbol`
-  样件、端口规则与个人库放置未做，type 17 仍待真实样本证实；库搜索成功不等于原生块兼容。
+  四模块仍 candidate/unverified/notForDrawCompile。Q5 已补齐 AMS1117 三个电容的真实身份与
+  elibz2 profile（`tasks/038q5_ams_passive_profiles.md`）。Q6 已读出 PAD 1/2/3/4，PAD 4 存在；
+  但 datasheet 的 TAB 注记属于 TO-252，SOT-223 内部同网未证实，`U.VOUT*` 保持未展开
+  （`tasks/038q6_footprint_file_read.md`）。Q7 已完成 SY8089 双身份与双 profile，5 脚映射均吻合，
+  但几何和电气变体不同，不合并（`tasks/038q7_sy8089_identity_profiles.md`）。Q8 已把六份真实
+  profile 收进 `blocklib/symbols/`，`tools/check_symbol_book.py` 可在无 outputs 的 clean checkout
+  全量校验（`tasks/038q8_symbol_book.md`）。Q9 已按集中窗口方式补齐剩余13个身份，book 现有
+  19份、覆盖四个候选全部19个唯一 device UUID（`tasks/038q9_remaining_identity_sweep.md`）。
+  Q10 已让 SY8089 block 绑定七个真实 symbolRef（identityStatus=bound）；Q11 编译3候选且
+  6/6逐脚一致，但输出侧四件未绑定、旗标缺失，主代理亲看首候选后**视觉拒收**
+  （`tasks/038q11_sy8089_offline_pilot.md`），缺口交绘制线 `tasks/038q11a_buck_grammar_gap.md`。
+  Q12 已把 CH340 五组通配显式落成12个物理脚并绑定七 part；复合脚号不拆，U.7 是唯一 NC，
+  其余未声明脚进 unstatedPins，Rust core 56、主代理 Python 125
+  （`tasks/038q12_ch340c_electrical_contract.md`）。Q13 两岛4候选11/11网及NC一致，但长自动
+  网名压字、缺旗标且 D_ESD 未绑定，主代理亲看后视觉拒收（`tasks/038q13_ch340c_offline_pilot.md`）。
+  **Q11/Q13 及 Q11A/Q13A 的 CBB 绘制相关工作已由岳裁定搁置（2026-11-12）**：保留现有离线
+  证据，不再推进内部网语义命名、多脚ESD/短载体或旗标，不 plan/apply
+  （`tasks/038q13a_ch340_presentation_gaps.md`）。book/模块仍是 candidate、不接 compile；
+  CH340 的 EP 与 GND 关系缺厂家图纸，原生 `block_symbol` 样件、端口规则与个人库放置未做，
+  type 17 仍待真实样本证实；库搜索成功不等于原生块兼容。
+  提交前挖洞的 portPins key、跨组重复脚、LF 与 catalog symbolRef 四项已修；最终完整 Python
+  **10873 passed / 26 skipped / 1 xfailed / 1 warning**，Connector 691、DSH 137/1、Rust 177/4
+  均通过（`.tmp_038q14_final/`、`.tmp_038q14_accept/`）。
   `core/blocks.py` 的 `BlockSymbol` 是绘图模板域，不是宿主原生块。
 - **独立派单**：审查读 `tasks/review-line.md`，绘制读 `tasks/draw-line.md`，shared/CLI/bridge/
   parser/model 的集成改动读 `tasks/shared-platform.md`。两线可独立派小批，shared、全量、真机串行；

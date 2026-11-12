@@ -1,0 +1,813 @@
+{
+  "schema": "boardwise.symbol-book/1",
+  "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+  "notForDrawCompile": true,
+  "profileBookSha256": "b6d5e9f1376255291228f15eb6ac265715c7ab88a113d6138afdb69c49c23241",
+  "profiles": [
+    {
+      "symbolRef": "059e3f9d3b884a399517577d11f54751",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "NLCV32T-2R2M-PF",
+      "maturity": "candidate",
+      "source": "elibz2:059e3f9d3b884a399517577d11f54751:sha256:7da21e26150cf8b167444313df798ec3b472db714ca5720c50056955a17f84d9",
+      "archiveSha256": "7da21e26150cf8b167444313df798ec3b472db714ca5720c50056955a17f84d9",
+      "geometryHash": "d37337cb1c7b446c63915d7804073478ff1b628363544e9643b2863fc6efa3ce",
+      "profileSha256": "71a51352eca8e24011d7e0aa7a1d8eb3a9216b4e37d5fff42c0f6d815b419c03",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C250183.symbol-profile.json",
+          "sha256": "71a51352eca8e24011d7e0aa7a1d8eb3a9216b4e37d5fff42c0f6d815b419c03"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C250183.elibz2",
+          "sha256": "7da21e26150cf8b167444313df798ec3b472db714ca5720c50056955a17f84d9"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C250183.device.get.json",
+          "sha256": "1b40befef0c51727019186d5af0593dc49c794cd9d4196d98f253a54dbe5f1e9"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "7bd4ff00682f4a949fb4f4c7273ae493",
+          "lcsc": "C250183",
+          "mpn": "NLCV32T-2R2M-PF",
+          "footprintUuid": "c59cfbe0a0df4786b9ecc244d673f850",
+          "supplierFootprint": "1210"
+        }
+      ]
+    },
+    {
+      "symbolRef": "061a2c804ac94030b09af596bddca03c",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "CC0603KRX7R9BB104",
+      "maturity": "candidate",
+      "source": "elibz2:061a2c804ac94030b09af596bddca03c:sha256:e07d6cce976f1b0aa56c2f34091cce3b6cbaa38f70bfbedc84f2db82b02f2893",
+      "archiveSha256": "e07d6cce976f1b0aa56c2f34091cce3b6cbaa38f70bfbedc84f2db82b02f2893",
+      "geometryHash": "020022d8b5cdf3ceca7b47ed2aa6bb0111abaaddc0a5d3778b2c88fdefebe50f",
+      "profileSha256": "6b50ea0eacb02d889e999ecd8fe6b2a566a33d90a35488be5de43e01f758f4b0",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C14663.symbol-profile.json",
+          "sha256": "6b50ea0eacb02d889e999ecd8fe6b2a566a33d90a35488be5de43e01f758f4b0"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C14663.elibz2",
+          "sha256": "e07d6cce976f1b0aa56c2f34091cce3b6cbaa38f70bfbedc84f2db82b02f2893"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C14663.device.get.json",
+          "sha256": "bbe542c769a2fbec5b2adda8ba22f2beb72eac115a104b8d524d62de32e6f363"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "96b39256cc3f4d80bd3b503deb4f3328",
+          "lcsc": "C14663",
+          "mpn": "CC0603KRX7R9BB104",
+          "footprintUuid": "76d6c29a47804db487f8a92b2621751b",
+          "supplierFootprint": "0603",
+          "catalogFootprint": "C0603"
+        }
+      ]
+    },
+    {
+      "symbolRef": "06f50e10ab7d460599b3fe3ee8717a78",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "AMS1117-3.3",
+      "maturity": "candidate",
+      "source": "elibz2:06f50e10ab7d460599b3fe3ee8717a78:sha256:53f58e3706a078178c6883264130330db4be5d84d35ff1f150a595d0d752d4cb",
+      "archiveSha256": "53f58e3706a078178c6883264130330db4be5d84d35ff1f150a595d0d752d4cb",
+      "geometryHash": "36162e0377a1a4becac77a5d73726d548ca34013645a11b177e750e8dddd78a3",
+      "profileSha256": "6b6cf8fcaf4847568206de8de8bd24efd4851e1756208617db6e48a38d9b6d8c",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-11",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q4/ams1117.symbol-profile.json",
+          "sha256": "e85c8b64921f248e078cd6a4f4a89e02abbd029ea753d11a9b10e8de91ee5652"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q3/ams1117.elibz2",
+          "sha256": "53f58e3706a078178c6883264130330db4be5d84d35ff1f150a595d0d752d4cb"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q3/ams1117.device.get.json",
+          "sha256": "f3874394723bdfd8bbb489c9d714da687d9351b57ec35a6851d2407ca8b34012"
+        },
+        {
+          "kind": "acceptance",
+          "path": "outputs/review/038q4/ACCEPTANCE.md",
+          "sha256": "627e73c92e70d52d55f55befda0195b8f25d583e4372bd1cd66ee174b594bb9c"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "9f9c6cb41c7449fd8acf96aceed2661a",
+          "lcsc": "C6186",
+          "mpn": "AMS1117-3.3",
+          "footprintUuid": "20c29e37a9b84b4197418483096f9c05",
+          "supplierFootprint": "SOT-223",
+          "catalogFootprint": "SOT-223-3"
+        }
+      ]
+    },
+    {
+      "symbolRef": "2e54d9f6ef024fd6a073cb020500c9e8",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "GRM21BR61H106KE43L",
+      "maturity": "candidate",
+      "source": "elibz2:2e54d9f6ef024fd6a073cb020500c9e8:sha256:83d18ee62326704840c0a7e2354948d662480727c59bd21039b523098673a4ec",
+      "archiveSha256": "83d18ee62326704840c0a7e2354948d662480727c59bd21039b523098673a4ec",
+      "geometryHash": "b0f29952d01dfb134fe2190fbaddf6fc4f0351f0d3665c092d195cd166da30c1",
+      "profileSha256": "99725839d4fb3472bcf41351f50555cfe3235458a76e7185ab801d6f36ca27e9",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q5/C440198.symbol-profile.json",
+          "sha256": "99725839d4fb3472bcf41351f50555cfe3235458a76e7185ab801d6f36ca27e9"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q5/C440198.elibz2",
+          "sha256": "83d18ee62326704840c0a7e2354948d662480727c59bd21039b523098673a4ec"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q5/device-C440198.json",
+          "sha256": "790242f7663d15f9e13e6139ef84d7d925d96686279e92060fc1351cfc9fc141"
+        },
+        {
+          "kind": "acceptance",
+          "path": "outputs/review/038q5/ACCEPTANCE.md",
+          "sha256": "93018640d766f812de5f98522fe1068214f3a541116a891b0e79315a92c2636b"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "6e5726223dd84f70bc3b626fc7d1f72c",
+          "lcsc": "C440198",
+          "mpn": "GRM21BR61H106KE43L",
+          "footprintUuid": "ccb32feceadc4298b406326a506ce8e7",
+          "supplierFootprint": "0805",
+          "catalogFootprint": "C0805"
+        }
+      ]
+    },
+    {
+      "symbolRef": "2f97b34f1fa641a1843a6926dc1e817c",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "0402WGF4532TCE",
+      "maturity": "candidate",
+      "source": "elibz2:2f97b34f1fa641a1843a6926dc1e817c:sha256:021b11ac196088b85d0a5965d946be948edb3eada14b5c376204a4012e8acae8",
+      "archiveSha256": "021b11ac196088b85d0a5965d946be948edb3eada14b5c376204a4012e8acae8",
+      "geometryHash": "4f17d2ddae87e0547e8aa23636592c864b014bfd8c1f0cb8a117d5882d4024ca",
+      "profileSha256": "976cc09e3d5629a4a482e75fe3f13f7c4c2b0b4977a487336a4af3ccf450f983",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C26980.symbol-profile.json",
+          "sha256": "976cc09e3d5629a4a482e75fe3f13f7c4c2b0b4977a487336a4af3ccf450f983"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C26980.elibz2",
+          "sha256": "021b11ac196088b85d0a5965d946be948edb3eada14b5c376204a4012e8acae8"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C26980.device.get.json",
+          "sha256": "02169e618d5d1c5824d09b3c5b7c0cb0a81296c1f39322b0cac9f5b60772ae89"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "0e6f5e403c1640769543df189249ab4d",
+          "lcsc": "C26980",
+          "mpn": "0402WGF4532TCE",
+          "footprintUuid": "df9dfd54cabd403f88cae9927dcd418d",
+          "supplierFootprint": "0402"
+        }
+      ]
+    },
+    {
+      "symbolRef": "57ad86cbeb22465ab7194a01944810c5",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "FRC0603F2212TS",
+      "maturity": "candidate",
+      "source": "elibz2:57ad86cbeb22465ab7194a01944810c5:sha256:c2d4d5e870bde85c0742a09f38c15c358fcab9a51bc460311e118fa69380afe2",
+      "archiveSha256": "c2d4d5e870bde85c0742a09f38c15c358fcab9a51bc460311e118fa69380afe2",
+      "geometryHash": "5094cbf8d5f2dbaf35dcae7696ed7a3096cac36516b254d4a6d00e64eb958d31",
+      "profileSha256": "3a0bb29fa38fa5e9e2a40afc7c390e24ccd878482aaafc6bf3933df4e760f5f9",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C2960862.symbol-profile.json",
+          "sha256": "3a0bb29fa38fa5e9e2a40afc7c390e24ccd878482aaafc6bf3933df4e760f5f9"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C2960862.elibz2",
+          "sha256": "c2d4d5e870bde85c0742a09f38c15c358fcab9a51bc460311e118fa69380afe2"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C2960862.device.get.json",
+          "sha256": "a8ad3e3e8583dcbdef1ed68860369044243c632e4713e322890a16df6a87fb08"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "b5144eb014ce41d7a72a460b56c18b84",
+          "lcsc": "C2960862",
+          "mpn": "FRC0603F2212TS",
+          "footprintUuid": "50b4943912284dab97752312e589e9e2",
+          "supplierFootprint": "0603",
+          "catalogFootprint": "R0603"
+        }
+      ]
+    },
+    {
+      "symbolRef": "5d54ad1e3ff64cdb9e7c9f449679d79f",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "CL05B104KO5NNNC",
+      "maturity": "candidate",
+      "source": "elibz2:5d54ad1e3ff64cdb9e7c9f449679d79f:sha256:396c40ceaa9fd16f84bb2324e0aea3aee0ce43c7794ee0a113188932f263efd2",
+      "archiveSha256": "396c40ceaa9fd16f84bb2324e0aea3aee0ce43c7794ee0a113188932f263efd2",
+      "geometryHash": "a06c2c33f9f5dec67f96458463ea36bc63214066718360e059cc77296969e08e",
+      "profileSha256": "0a143a8843f2b0aa4b5021f75b627007952743e68e60c46a1183566f86f11496",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q5/C1525.symbol-profile.json",
+          "sha256": "0a143a8843f2b0aa4b5021f75b627007952743e68e60c46a1183566f86f11496"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q5/C1525.elibz2",
+          "sha256": "396c40ceaa9fd16f84bb2324e0aea3aee0ce43c7794ee0a113188932f263efd2"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q5/device-C1525.json",
+          "sha256": "ce89400516e323c67d4dcd9cb43269bee48a354a1396de48b459f833d7eba09b"
+        },
+        {
+          "kind": "acceptance",
+          "path": "outputs/review/038q5/ACCEPTANCE.md",
+          "sha256": "93018640d766f812de5f98522fe1068214f3a541116a891b0e79315a92c2636b"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "87bb635d0b2f489a9f60e7cd225beb3c",
+          "lcsc": "C1525",
+          "mpn": "CL05B104KO5NNNC",
+          "footprintUuid": "14a08379d3874582bdd84020bde81eba",
+          "supplierFootprint": "0402",
+          "catalogFootprint": "C0402"
+        }
+      ]
+    },
+    {
+      "symbolRef": "6d3562bdc96243ae97feaf073d2c8f4e",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "0603WAF1003T5E",
+      "maturity": "candidate",
+      "source": "elibz2:6d3562bdc96243ae97feaf073d2c8f4e:sha256:3ff7aa3aa8d5588925d9130cfa9d9de411b14c4a3e7d9abfda510b6389602821",
+      "archiveSha256": "3ff7aa3aa8d5588925d9130cfa9d9de411b14c4a3e7d9abfda510b6389602821",
+      "geometryHash": "5cfeda4e5010ddc6bcde72042df2f7c1605c232427918aced88643299fa9af7d",
+      "profileSha256": "2956f0369985d3950c28dbab54d2e9248be78df1cf3ca50ae332116df65a1da9",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C25803.symbol-profile.json",
+          "sha256": "2956f0369985d3950c28dbab54d2e9248be78df1cf3ca50ae332116df65a1da9"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C25803.elibz2",
+          "sha256": "3ff7aa3aa8d5588925d9130cfa9d9de411b14c4a3e7d9abfda510b6389602821"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C25803.device.get.json",
+          "sha256": "a1a967fa82991f2bab97cc0f4b11a313df59583c6e2e9f3976c7ee3a8c7b2c88"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "40ff282b3d594c33b798d1707d8406cb",
+          "lcsc": "C25803",
+          "mpn": "0603WAF1003T5E",
+          "footprintUuid": "50b4943912284dab97752312e589e9e2",
+          "supplierFootprint": "0603",
+          "catalogFootprint": "R0603"
+        }
+      ]
+    },
+    {
+      "symbolRef": "7ee12203ce22419bb02b8b8f01c8a92c",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "CH340C",
+      "maturity": "candidate",
+      "source": "elibz2:7ee12203ce22419bb02b8b8f01c8a92c:sha256:d24a596bf6e8e0254c9bd9153292bab0c78119c6c6d2705289d36e745c6f1d04",
+      "archiveSha256": "d24a596bf6e8e0254c9bd9153292bab0c78119c6c6d2705289d36e745c6f1d04",
+      "geometryHash": "06307048121b2e9da846e2f5e959271351595f4473c11eb5967745d9ef2a5535",
+      "profileSha256": "06aa247cabfa984cd94e8ca53572409a683e1783132e4f5e3135f1a9647e57a9",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C84681.symbol-profile.json",
+          "sha256": "06aa247cabfa984cd94e8ca53572409a683e1783132e4f5e3135f1a9647e57a9"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C84681.elibz2",
+          "sha256": "d24a596bf6e8e0254c9bd9153292bab0c78119c6c6d2705289d36e745c6f1d04"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C84681.device.get.json",
+          "sha256": "3d8b7879366cdf1b730267ff7ed3ecf1fc3210f2a10ab5a4fe650bc39d4034fe"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "4951b3094e3e48a7b4c8c708b64932e4",
+          "lcsc": "C84681",
+          "mpn": "CH340C",
+          "footprintUuid": "43dddffb1252499eb7259dfbd128f487",
+          "supplierFootprint": "SOP-16",
+          "catalogFootprint": "SOP-16_L10.0-W3.9-P1.27-LS6.0-BL"
+        }
+      ]
+    },
+    {
+      "symbolRef": "9807320b9dfe4ddb9f43a24d13de0ff6",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "0402WGF5101TCE",
+      "maturity": "candidate",
+      "source": "elibz2:9807320b9dfe4ddb9f43a24d13de0ff6:sha256:f6114b0e4381978d996a75b43b2d64f5155b5399600657e5dfe0ad612c07e7db",
+      "archiveSha256": "f6114b0e4381978d996a75b43b2d64f5155b5399600657e5dfe0ad612c07e7db",
+      "geometryHash": "030798fe33527971d6e7947ca8d02ad40d14120d9d46bb0077655f9d211330a4",
+      "profileSha256": "e56f35907d8c1b49a1bf60c3059b65df978f482bcd412138e9924e29f4c719f4",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C25905.symbol-profile.json",
+          "sha256": "e56f35907d8c1b49a1bf60c3059b65df978f482bcd412138e9924e29f4c719f4"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C25905.elibz2",
+          "sha256": "f6114b0e4381978d996a75b43b2d64f5155b5399600657e5dfe0ad612c07e7db"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C25905.device.get.json",
+          "sha256": "2f8ea212a05c228ef4085ee5b3aba83b9897bf09fc22243794eacfe803bc9cf7"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "ef1f93374e0c4079b48a2d1a3cec8f6b",
+          "lcsc": "C25905",
+          "mpn": "0402WGF5101TCE",
+          "footprintUuid": "df9dfd54cabd403f88cae9927dcd418d",
+          "supplierFootprint": "0402",
+          "catalogFootprint": "R0402"
+        }
+      ]
+    },
+    {
+      "symbolRef": "a945ad0780e84529829fad9eef7941b6",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "CL21A226MAQNNNE",
+      "maturity": "candidate",
+      "source": "elibz2:a945ad0780e84529829fad9eef7941b6:sha256:4a371cc61d8da136294a3d7594e2266bb4e760dc644f59249456dad7ff857a43",
+      "archiveSha256": "4a371cc61d8da136294a3d7594e2266bb4e760dc644f59249456dad7ff857a43",
+      "geometryHash": "f92b600cb8b816b9469edcc2fad46bcd4bbf5687c35a9779d065e39600b48592",
+      "profileSha256": "34d6f70d048409dcd654a61ae01430336b90e8dbd73610a45e764664c2756a0b",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q5/C45783.symbol-profile.json",
+          "sha256": "34d6f70d048409dcd654a61ae01430336b90e8dbd73610a45e764664c2756a0b"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q5/C45783.elibz2",
+          "sha256": "4a371cc61d8da136294a3d7594e2266bb4e760dc644f59249456dad7ff857a43"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q5/device-C45783.json",
+          "sha256": "e7af09ffab4b9145aa6a356123deabebb44f81e0f6cdb28974ad8c80f4b3f201"
+        },
+        {
+          "kind": "acceptance",
+          "path": "outputs/review/038q5/ACCEPTANCE.md",
+          "sha256": "93018640d766f812de5f98522fe1068214f3a541116a891b0e79315a92c2636b"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "159c3da60be9490abf4e97599788a0d5",
+          "lcsc": "C45783",
+          "mpn": "CL21A226MAQNNNE",
+          "footprintUuid": "ccb32feceadc4298b406326a506ce8e7",
+          "supplierFootprint": "0805",
+          "catalogFootprint": "C0805"
+        }
+      ]
+    },
+    {
+      "symbolRef": "b4bb0b94f5d04a92a4e5542845335d53",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "0402WGF1002TCE",
+      "maturity": "candidate",
+      "source": "elibz2:b4bb0b94f5d04a92a4e5542845335d53:sha256:19070af7f4ecf8e730bd4766c1b8b32d938aac32579bed578d66257e1734e44e",
+      "archiveSha256": "19070af7f4ecf8e730bd4766c1b8b32d938aac32579bed578d66257e1734e44e",
+      "geometryHash": "752f5c4bf84fbd240e07fd29d075e0986c816d31958c02709c50477587d5c71c",
+      "profileSha256": "be88554adf3a496dce0ae5a528d3577f2c4952159449cb95092229df137371b4",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C25744.symbol-profile.json",
+          "sha256": "be88554adf3a496dce0ae5a528d3577f2c4952159449cb95092229df137371b4"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C25744.elibz2",
+          "sha256": "19070af7f4ecf8e730bd4766c1b8b32d938aac32579bed578d66257e1734e44e"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C25744.device.get.json",
+          "sha256": "75083532cb91f2f5885b5ae482365a1d8c40f45a83b602ffaf6c591306c960fc"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "c3b9baa5ef2e4070a4c0f9e9cd04fe6e",
+          "lcsc": "C25744",
+          "mpn": "0402WGF1002TCE",
+          "footprintUuid": "df9dfd54cabd403f88cae9927dcd418d",
+          "supplierFootprint": "0402",
+          "catalogFootprint": "R0402"
+        }
+      ]
+    },
+    {
+      "symbolRef": "c097c689214f4468a4ffe59d5170bf50",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "FXL0420-2R2-M",
+      "maturity": "candidate",
+      "source": "elibz2:c097c689214f4468a4ffe59d5170bf50:sha256:929107480f4e08a0a6b12a14a2dfd92a5d89f9f9d7c8e808df0d41edcb976ac5",
+      "archiveSha256": "929107480f4e08a0a6b12a14a2dfd92a5d89f9f9d7c8e808df0d41edcb976ac5",
+      "geometryHash": "adb147057ac6f2ac357b1b931602a56feb96b507b40f7a391a011b0248f961f6",
+      "profileSha256": "835333f84c838ad9c4c3133fd99f910233dfe2de33710ed123ffaa22c9b6faea",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C167206.symbol-profile.json",
+          "sha256": "835333f84c838ad9c4c3133fd99f910233dfe2de33710ed123ffaa22c9b6faea"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C167206.elibz2",
+          "sha256": "929107480f4e08a0a6b12a14a2dfd92a5d89f9f9d7c8e808df0d41edcb976ac5"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C167206.device.get.json",
+          "sha256": "a305830af07423f092ffc05d99f77824883ab1a4a6f846f08268eb1a719f290f"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "235fe1411dd644e688b4fc00afdc5c09",
+          "lcsc": "C167206",
+          "mpn": "FXL0420-2R2-M",
+          "footprintUuid": "51831c2b6f5243959894cc17f7d2eab8",
+          "supplierFootprint": "SMD,4.4x4.2mm",
+          "catalogFootprint": "IND-SMD_L4.4-W4.2"
+        }
+      ]
+    },
+    {
+      "symbolRef": "d49b09d836ac44e783bde982fab4579b",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "CL10C220JB8NNNC",
+      "maturity": "candidate",
+      "source": "elibz2:d49b09d836ac44e783bde982fab4579b:sha256:bfd879f663cb4d42155b2777241201eb9e178f1ff4af343c72962cc30336b6de",
+      "archiveSha256": "bfd879f663cb4d42155b2777241201eb9e178f1ff4af343c72962cc30336b6de",
+      "geometryHash": "da91cb1f48542b603e96f7d22a5056dd3a0001fd3ee679c88e47fd429758e491",
+      "profileSha256": "d66fc3a1869673424589c06d085c1120d76db6ab37bbecd0f994080f24f6992f",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C1653.symbol-profile.json",
+          "sha256": "d66fc3a1869673424589c06d085c1120d76db6ab37bbecd0f994080f24f6992f"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C1653.elibz2",
+          "sha256": "bfd879f663cb4d42155b2777241201eb9e178f1ff4af343c72962cc30336b6de"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C1653.device.get.json",
+          "sha256": "25bc520df69d8cf984a3dda434476f6457f3ea05ddf208ccbba80cd4d5044eaa"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "ad1b2fdc99ef4ce998dd40fce460c2d4",
+          "lcsc": "C1653",
+          "mpn": "CL10C220JB8NNNC",
+          "footprintUuid": "76d6c29a47804db487f8a92b2621751b",
+          "supplierFootprint": "0603",
+          "catalogFootprint": "C0603"
+        }
+      ]
+    },
+    {
+      "symbolRef": "ddf6b4a961904b0e8967696126378ed5",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "USB3.1TYPE-C16P",
+      "maturity": "candidate",
+      "source": "elibz2:ddf6b4a961904b0e8967696126378ed5:sha256:2e39597764a881a0c3ad40f1ecee5134a657f1d47a4d20f23c0f6f15132cf6df",
+      "archiveSha256": "2e39597764a881a0c3ad40f1ecee5134a657f1d47a4d20f23c0f6f15132cf6df",
+      "geometryHash": "2f82c0377d9635ab6bdc701b10041d0679984be03e124d288acdf064cd96ad07",
+      "profileSha256": "371e2b95fbb9fbc3a1d49d77a93d41378783fb7170c0c851e30f76e4284e10c8",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C9900012665.symbol-profile.json",
+          "sha256": "371e2b95fbb9fbc3a1d49d77a93d41378783fb7170c0c851e30f76e4284e10c8"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C9900012665.elibz2",
+          "sha256": "2e39597764a881a0c3ad40f1ecee5134a657f1d47a4d20f23c0f6f15132cf6df"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C9900012665.device.get.json",
+          "sha256": "699640427d6f984adf5a0ef4cd8ce648edc85dd43eebd77068e637cdbe2edbda"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "fafc5d2de09d4595b0cc7abedc0530e6",
+          "lcsc": "C9900012665",
+          "mpn": "USB3.1TYPE-C16P",
+          "footprintUuid": "fed7492987814608a00d6e46c70456ec",
+          "supplierFootprint": "USB3.1_TYPE-C_16P",
+          "catalogFootprint": "USB-C-SMD_TYPE-C-16PIN"
+        }
+      ]
+    },
+    {
+      "symbolRef": "e23085a8f904493eb2ce369cbc1b267c",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "0603WAF1002T5E",
+      "maturity": "candidate",
+      "source": "elibz2:e23085a8f904493eb2ce369cbc1b267c:sha256:77b69b41bb6baaf26446cc13aa896c02440d487db58aa1b0a84d6e19c1a906c0",
+      "archiveSha256": "77b69b41bb6baaf26446cc13aa896c02440d487db58aa1b0a84d6e19c1a906c0",
+      "geometryHash": "0f901d5e1bfff034cbb2bfeb350b90c934661404972df65a9b250df79646b726",
+      "profileSha256": "cbfeec0c306f97069e2dcfa45a020c4f134d95062a4780ee0b8728dd73c24450",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C25804.symbol-profile.json",
+          "sha256": "cbfeec0c306f97069e2dcfa45a020c4f134d95062a4780ee0b8728dd73c24450"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C25804.elibz2",
+          "sha256": "77b69b41bb6baaf26446cc13aa896c02440d487db58aa1b0a84d6e19c1a906c0"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C25804.device.get.json",
+          "sha256": "cef161be27b56bb5c284743fb29bf63fb9285851c76c5f2363f3b1907621afba"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "b948db94476e4027ac8953235755ec96",
+          "lcsc": "C25804",
+          "mpn": "0603WAF1002T5E",
+          "footprintUuid": "50b4943912284dab97752312e589e9e2",
+          "supplierFootprint": "0603",
+          "catalogFootprint": "R0603"
+        }
+      ]
+    },
+    {
+      "symbolRef": "e5c8198e70f04987968abe2e8a11202b",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "USBLC6-2SC6_C2687116",
+      "maturity": "candidate",
+      "source": "elibz2:e5c8198e70f04987968abe2e8a11202b:sha256:49eff8b9a0fea73ec4633ddfe94eda1ac750969bbd266e630bec28ec3e72960e",
+      "archiveSha256": "49eff8b9a0fea73ec4633ddfe94eda1ac750969bbd266e630bec28ec3e72960e",
+      "geometryHash": "2529e3efae61b18556e964f37f783799ff28361ff7ab3b8b3ef6d6c4753aebd3",
+      "profileSha256": "0f80c7359bd02e2a5fa6aa976f08228dd588cf6bfcc92079e41901169eaee158",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q9/C2687116.symbol-profile.json",
+          "sha256": "0f80c7359bd02e2a5fa6aa976f08228dd588cf6bfcc92079e41901169eaee158"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q9/C2687116.elibz2",
+          "sha256": "49eff8b9a0fea73ec4633ddfe94eda1ac750969bbd266e630bec28ec3e72960e"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q9/C2687116.device.get.json",
+          "sha256": "6edc37a58d86834137e53320d208b4f5d86947bf54219a87171af8ff8dd2f6fc"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "1e5e214711544da8ba71fb2137ae703f",
+          "lcsc": "C2687116",
+          "mpn": "USBLC6-2SC6",
+          "footprintUuid": "3c60dc918974420eb4105dc403eb98d3",
+          "supplierFootprint": "SOT-23-6"
+        }
+      ]
+    },
+    {
+      "symbolRef": "ef98186cdedd4b58bd8e66a11ff8b5be",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "SY8089AAAC",
+      "maturity": "candidate",
+      "source": "elibz2:ef98186cdedd4b58bd8e66a11ff8b5be:sha256:8b4b61760502ae4284303401fc9b0402c9c55971266a0e8f4af5be30f1e5925e",
+      "archiveSha256": "8b4b61760502ae4284303401fc9b0402c9c55971266a0e8f4af5be30f1e5925e",
+      "geometryHash": "4851909350218d7598dc09e3ac9dfd3abccb8288e270c05a6c916f2a8fadc83e",
+      "profileSha256": "e7909022a37f978f5678388cf3b61167df783c356101035d1d99ca737e58be26",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q7/C78988.symbol-profile.json",
+          "sha256": "e7909022a37f978f5678388cf3b61167df783c356101035d1d99ca737e58be26"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q7/C78988.elibz2",
+          "sha256": "8b4b61760502ae4284303401fc9b0402c9c55971266a0e8f4af5be30f1e5925e"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q7/device-C78988.json",
+          "sha256": "3c432240cb723cbf78bace1b4288bea6c70ee941ded902d02ba00bf36c48fb0b"
+        },
+        {
+          "kind": "acceptance",
+          "path": "outputs/review/038q7/ACCEPTANCE.md",
+          "sha256": "148ef1e5e5552628f7fb198e612e2e67ed68c2717e2a5da55cc6de96575488a6"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "8cfd65b3cdf844cdadfefd57318dcba1",
+          "lcsc": "C78988",
+          "mpn": "SY8089AAAC",
+          "footprintUuid": "124f07aad233471aaaadd3ad027839dc",
+          "supplierFootprint": "SOT-23-5",
+          "catalogFootprint": "SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BR"
+        }
+      ]
+    },
+    {
+      "symbolRef": "f88e34d680e646e38a7b77e29201ff30",
+      "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+      "title": "SY8089A1AAC",
+      "maturity": "candidate",
+      "source": "elibz2:f88e34d680e646e38a7b77e29201ff30:sha256:36f627dfa671d0e2adc512c8576afda78b864eee24477a1d109ca92efdadab1a",
+      "archiveSha256": "36f627dfa671d0e2adc512c8576afda78b864eee24477a1d109ca92efdadab1a",
+      "geometryHash": "3c07aad715b2055243760b9636ec0ce070459a721c4219b1371a4cf87ca8ba65",
+      "profileSha256": "2e7a80352261817a05ffa10fa501df4be00e323245c4f6030a6f70bfc01e4cc1",
+      "reader": "boardwise.parsers.elibz.load_elibz2_symbol",
+      "editorVersion": "4.1.93",
+      "sourceTier": "measured-live",
+      "acquiredOn": "2026-11-12",
+      "evidence": [
+        {
+          "kind": "profile",
+          "path": "outputs/review/038q7/C479074.symbol-profile.json",
+          "sha256": "2e7a80352261817a05ffa10fa501df4be00e323245c4f6030a6f70bfc01e4cc1"
+        },
+        {
+          "kind": "archive",
+          "path": "outputs/review/038q7/C479074.elibz2",
+          "sha256": "36f627dfa671d0e2adc512c8576afda78b864eee24477a1d109ca92efdadab1a"
+        },
+        {
+          "kind": "device",
+          "path": "outputs/review/038q7/device-C479074.json",
+          "sha256": "aaf8b616088d870a7e1e19878dfd398778db106dddeabece3cbd4baf42d758aa"
+        },
+        {
+          "kind": "acceptance",
+          "path": "outputs/review/038q7/ACCEPTANCE.md",
+          "sha256": "148ef1e5e5552628f7fb198e612e2e67ed68c2717e2a5da55cc6de96575488a6"
+        }
+      ],
+      "bindings": [
+        {
+          "deviceUuid": "00111ae499794742b81a699a4ff88fc8",
+          "lcsc": "C479074",
+          "mpn": "SY8089A1AAC",
+          "footprintUuid": "50772b8efd884647ad64a05add7fa273",
+          "supplierFootprint": "SOT-23-5"
+        }
+      ]
+    }
+  ]
+}

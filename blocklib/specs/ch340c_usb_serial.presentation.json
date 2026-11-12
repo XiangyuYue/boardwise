@@ -1,0 +1,64 @@
+{
+  "kind": "boardwise-presentation-spec",
+  "specVersion": 1,
+  "grammarRef": "ic-periphery",
+  "textPlacement": "native-attr",
+  "sidePreferences": {
+    "input": "left",
+    "output": "right",
+    "load": "right",
+    "source": "left",
+    "power": "top",
+    "gnd": "bottom"
+  },
+  "portRoles": {
+    "port.TXD": "output",
+    "port.RXD": "input",
+    "port.DTR": "output",
+    "port.RTS": "output",
+    "port.VBUS_5V": "load"
+  },
+  "flow": [
+    [
+      "usb",
+      "serial"
+    ]
+  ],
+  "modules": [
+    {
+      "id": "usb",
+      "parts": [
+        "J_USB",
+        "R_CC1",
+        "R_CC2",
+        "D_ESD"
+      ],
+      "role": "USB-C receptacle: both CC pull-downs sit on their own receptacle pins, the ESD array guards the data pair it is wired across, and VBUS is the connector's own power pin net",
+      "core": "J_USB"
+    },
+    {
+      "id": "serial",
+      "parts": [
+        "U",
+        "C_VCC",
+        "C_V3"
+      ],
+      "role": "CH340C bridge: one decoupling capacitor on the VCC pin it is fed from and one on the internally regulated V3 pin; no crystal, because this part clocks itself",
+      "core": "U"
+    }
+  ],
+  "moduleOrder": [
+    "usb",
+    "serial"
+  ],
+  "moduleColumns": 1,
+  "labelPolicy": {
+    "local": "wire",
+    "crossModule": "label",
+    "highFanout": "label",
+    "stub": "straight",
+    "stubMin": 40,
+    "rowModel": "centered"
+  },
+  "flagLeadLimit": 120
+}

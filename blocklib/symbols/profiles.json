@@ -1,0 +1,2312 @@
+{
+  "profiles": [
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "059e3f9d3b884a399517577d11f54751",
+      "title": "NLCV32T-2R2M-PF",
+      "body": [
+        -16.88211,
+        0.05468,
+        16.66408,
+        4.3329
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:059e3f9d3b884a399517577d11f54751:sha256:7da21e26150cf8b167444313df798ec3b472db714ca5720c50056955a17f84d9",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:7da21e26150cf8b167444313df798ec3b472db714ca5720c50056955a17f84d9, stream sha256:c23ceb5fd195c926e8686dc1d54d1904c90d352045880a1615605d4a1d7e192c, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "061a2c804ac94030b09af596bddca03c",
+      "title": "CC0603KRX7R9BB104",
+      "body": [
+        -10.0,
+        -8.0,
+        10.0,
+        8.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:061a2c804ac94030b09af596bddca03c:sha256:e07d6cce976f1b0aa56c2f34091cce3b6cbaa38f70bfbedc84f2db82b02f2893",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:e07d6cce976f1b0aa56c2f34091cce3b6cbaa38f70bfbedc84f2db82b02f2893, stream sha256:d3f942636c876dd50f33fcf197eb6bf2857b1e4b4524e044dd95e2758b7c606d, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "06f50e10ab7d460599b3fe3ee8717a78",
+      "title": "AMS1117-3.3",
+      "body": [
+        -35.0,
+        -20.0,
+        35.0,
+        20.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "GND",
+          "tip": [
+            -45.0,
+            10.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "GND",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "VOUT",
+          "tip": [
+            -45.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "VOUT",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "3",
+          "name": "VIN",
+          "tip": [
+            -45.0,
+            -10.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "VIN",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "4",
+          "name": "VOUT",
+          "tip": [
+            45.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "VOUT",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:06f50e10ab7d460599b3fe3ee8717a78:sha256:53f58e3706a078178c6883264130330db4be5d84d35ff1f150a595d0d752d4cb",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:53f58e3706a078178c6883264130330db4be5d84d35ff1f150a595d0d752d4cb, stream sha256:30f837ff7a74b82b82657ca5ac5dd05847f22cd9c8b1f44cacc9c80771391c1f, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "2e54d9f6ef024fd6a073cb020500c9e8",
+      "title": "GRM21BR61H106KE43L",
+      "body": [
+        -10.0,
+        -8.0,
+        10.0,
+        8.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:2e54d9f6ef024fd6a073cb020500c9e8:sha256:83d18ee62326704840c0a7e2354948d662480727c59bd21039b523098673a4ec",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:83d18ee62326704840c0a7e2354948d662480727c59bd21039b523098673a4ec, stream sha256:089577d5a8218ec3b4fc20cea074a2b267afae69945daf050a300cfd0968f4b6, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "2f97b34f1fa641a1843a6926dc1e817c",
+      "title": "0402WGF4532TCE",
+      "body": [
+        -10.0,
+        -4.0,
+        10.0,
+        4.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "IN",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "IN",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:2f97b34f1fa641a1843a6926dc1e817c:sha256:021b11ac196088b85d0a5965d946be948edb3eada14b5c376204a4012e8acae8",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:021b11ac196088b85d0a5965d946be948edb3eada14b5c376204a4012e8acae8, stream sha256:b9dc4eeba0ee81aa52d0138f9f0c3f2a225e3ccc89545d28eaad8fa743b19883, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "57ad86cbeb22465ab7194a01944810c5",
+      "title": "FRC0603F2212TS",
+      "body": [
+        -10.0,
+        -5.0,
+        10.0,
+        5.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:57ad86cbeb22465ab7194a01944810c5:sha256:c2d4d5e870bde85c0742a09f38c15c358fcab9a51bc460311e118fa69380afe2",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:c2d4d5e870bde85c0742a09f38c15c358fcab9a51bc460311e118fa69380afe2, stream sha256:edd1b2c52f6cbc35f9a802339b600325464f41ffa67a73e4a09f5b421fd249e7, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "5d54ad1e3ff64cdb9e7c9f449679d79f",
+      "title": "CL05B104KO5NNNC",
+      "body": [
+        -10.0,
+        -8.0,
+        10.0,
+        8.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:5d54ad1e3ff64cdb9e7c9f449679d79f:sha256:396c40ceaa9fd16f84bb2324e0aea3aee0ce43c7794ee0a113188932f263efd2",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:396c40ceaa9fd16f84bb2324e0aea3aee0ce43c7794ee0a113188932f263efd2, stream sha256:83e6e596696703f8506cbecbc365d361b42e4a37deec398639dd633d74d78e8d, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "6d3562bdc96243ae97feaf073d2c8f4e",
+      "title": "0603WAF1003T5E",
+      "body": [
+        -10.0,
+        -4.0,
+        10.0,
+        4.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "IN",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "IN",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:6d3562bdc96243ae97feaf073d2c8f4e:sha256:3ff7aa3aa8d5588925d9130cfa9d9de411b14c4a3e7d9abfda510b6389602821",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:3ff7aa3aa8d5588925d9130cfa9d9de411b14c4a3e7d9abfda510b6389602821, stream sha256:b65d5ae479dfeae319c7c0837ea1df1371b3f896add1a4f9b0c3043d14f64abd, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "7ee12203ce22419bb02b8b8f01c8a92c",
+      "title": "CH340C",
+      "body": [
+        -35.0,
+        -45.0,
+        35.0,
+        45.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "GND",
+          "tip": [
+            -45.0,
+            35.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "GND",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "TXD",
+          "tip": [
+            -45.0,
+            25.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "3",
+          "name": "RXD",
+          "tip": [
+            -45.0,
+            15.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "4",
+          "name": "V3",
+          "tip": [
+            -45.0,
+            5.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "5",
+          "name": "D+",
+          "tip": [
+            -45.0,
+            -5.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "6",
+          "name": "D-",
+          "tip": [
+            -45.0,
+            -15.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "7",
+          "name": "NC.",
+          "tip": [
+            -45.0,
+            -25.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "8",
+          "name": "OUT#",
+          "tip": [
+            -45.0,
+            -35.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "9",
+          "name": "CTS#",
+          "tip": [
+            45.0,
+            -35.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "10",
+          "name": "DSR#",
+          "tip": [
+            45.0,
+            -25.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "11",
+          "name": "RI#",
+          "tip": [
+            45.0,
+            -15.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "12",
+          "name": "DCD#",
+          "tip": [
+            45.0,
+            -5.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "13",
+          "name": "DTR#",
+          "tip": [
+            45.0,
+            5.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "14",
+          "name": "RTS#",
+          "tip": [
+            45.0,
+            15.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "15",
+          "name": "R232",
+          "tip": [
+            45.0,
+            25.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "16",
+          "name": "VCC",
+          "tip": [
+            45.0,
+            35.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "VIN",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:7ee12203ce22419bb02b8b8f01c8a92c:sha256:d24a596bf6e8e0254c9bd9153292bab0c78119c6c6d2705289d36e745c6f1d04",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:d24a596bf6e8e0254c9bd9153292bab0c78119c6c6d2705289d36e745c6f1d04, stream sha256:39fa1cc01678ea8d526ea1428161a709dcd131824e85fa32bcf58f55a1b79c09, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "9807320b9dfe4ddb9f43a24d13de0ff6",
+      "title": "0402WGF5101TCE",
+      "body": [
+        -10.0,
+        -4.0,
+        10.0,
+        4.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "IN",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "IN",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:9807320b9dfe4ddb9f43a24d13de0ff6:sha256:f6114b0e4381978d996a75b43b2d64f5155b5399600657e5dfe0ad612c07e7db",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:f6114b0e4381978d996a75b43b2d64f5155b5399600657e5dfe0ad612c07e7db, stream sha256:1c4513e66b14d481df1e1c3b0149e4199739b8586c3b07e223d19c4931f93f6e, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "a945ad0780e84529829fad9eef7941b6",
+      "title": "CL21A226MAQNNNE",
+      "body": [
+        -10.0,
+        -8.0,
+        10.0,
+        8.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:a945ad0780e84529829fad9eef7941b6:sha256:4a371cc61d8da136294a3d7594e2266bb4e760dc644f59249456dad7ff857a43",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:4a371cc61d8da136294a3d7594e2266bb4e760dc644f59249456dad7ff857a43, stream sha256:d62a74158242f949aa9bc26c65cc6d5ff1e4b8b3284bf10f3811a6230f826e45, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "b4bb0b94f5d04a92a4e5542845335d53",
+      "title": "0402WGF1002TCE",
+      "body": [
+        -10.0,
+        -4.0,
+        10.0,
+        4.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "IN",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "IN",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:b4bb0b94f5d04a92a4e5542845335d53:sha256:19070af7f4ecf8e730bd4766c1b8b32d938aac32579bed578d66257e1734e44e",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:19070af7f4ecf8e730bd4766c1b8b32d938aac32579bed578d66257e1734e44e, stream sha256:7492bd504d8aafb34fa0da41c1c84ec2346c0b34a0ceba6c9f7aade13c824c67, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "c097c689214f4468a4ffe59d5170bf50",
+      "title": "FXL0420-2R2-M",
+      "body": [
+        -16.88211,
+        0.05468,
+        16.66408,
+        4.3329
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:c097c689214f4468a4ffe59d5170bf50:sha256:929107480f4e08a0a6b12a14a2dfd92a5d89f9f9d7c8e808df0d41edcb976ac5",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:929107480f4e08a0a6b12a14a2dfd92a5d89f9f9d7c8e808df0d41edcb976ac5, stream sha256:88358171a9079d6149dba380a5c8614bfeef467d6daba0a6af75327ba64619e5, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "d49b09d836ac44e783bde982fab4579b",
+      "title": "CL10C220JB8NNNC",
+      "body": [
+        -10.0,
+        -8.0,
+        10.0,
+        8.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:d49b09d836ac44e783bde982fab4579b:sha256:bfd879f663cb4d42155b2777241201eb9e178f1ff4af343c72962cc30336b6de",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:bfd879f663cb4d42155b2777241201eb9e178f1ff4af343c72962cc30336b6de, stream sha256:8b7b805972f1ffcd5dbc089499dc5f9f057a119289f9b708e405c1c1b4e2dd0a, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "ddf6b4a961904b0e8967696126378ed5",
+      "title": "USB3.1TYPE-C16P",
+      "body": [
+        -30.0,
+        -40.0,
+        40.0,
+        30.0
+      ],
+      "pins": [
+        {
+          "number": "8",
+          "name": "EP",
+          "tip": [
+            -5.0,
+            40.0
+          ],
+          "direction": "up",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "9",
+          "name": "EP",
+          "tip": [
+            15.0,
+            40.0
+          ],
+          "direction": "up",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "10",
+          "name": "EP",
+          "tip": [
+            -5.0,
+            -50.0
+          ],
+          "direction": "down",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "11",
+          "name": "EP",
+          "tip": [
+            15.0,
+            -50.0
+          ],
+          "direction": "down",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "A1B12",
+          "name": "GND",
+          "tip": [
+            50.0,
+            -20.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "GND",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "A4B9",
+          "name": "VBUS",
+          "tip": [
+            50.0,
+            -30.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "VIN",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "A5",
+          "name": "CC1",
+          "tip": [
+            -40.0,
+            -30.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "A6",
+          "name": "DP1",
+          "tip": [
+            -40.0,
+            -20.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "A7",
+          "name": "DN1",
+          "tip": [
+            -40.0,
+            -10.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "A8",
+          "name": "SBU1",
+          "tip": [
+            -40.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "B1A12",
+          "name": "GND",
+          "tip": [
+            -40.0,
+            20.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "GND",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "B4A9",
+          "name": "VBUS",
+          "tip": [
+            -40.0,
+            10.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "VIN",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "B5",
+          "name": "CC2",
+          "tip": [
+            50.0,
+            20.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "B6",
+          "name": "DP2",
+          "tip": [
+            50.0,
+            10.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "B7",
+          "name": "DN2",
+          "tip": [
+            50.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "B8",
+          "name": "SBU2",
+          "tip": [
+            50.0,
+            -10.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:ddf6b4a961904b0e8967696126378ed5:sha256:2e39597764a881a0c3ad40f1ecee5134a657f1d47a4d20f23c0f6f15132cf6df",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:2e39597764a881a0c3ad40f1ecee5134a657f1d47a4d20f23c0f6f15132cf6df, stream sha256:ea5eab29546eae64e0e74259269618ea7f4bec9ae046989fdb82802c12aa735b, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "e23085a8f904493eb2ce369cbc1b267c",
+      "title": "0603WAF1002T5E",
+      "body": [
+        -10.0,
+        -4.0,
+        10.0,
+        4.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "IN",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "IN",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:e23085a8f904493eb2ce369cbc1b267c:sha256:77b69b41bb6baaf26446cc13aa896c02440d487db58aa1b0a84d6e19c1a906c0",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:77b69b41bb6baaf26446cc13aa896c02440d487db58aa1b0a84d6e19c1a906c0, stream sha256:7bee2ecc0362eec4bb416553bda54f1e8ef1cd11c93153bd0edf7d7a30bdd0f2, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "e5c8198e70f04987968abe2e8a11202b",
+      "title": "USBLC6-2SC6_C2687116",
+      "body": [
+        -35.0,
+        -20.0,
+        35.0,
+        20.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "I/O1",
+          "tip": [
+            -45.0,
+            10.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "GND",
+          "tip": [
+            -45.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "GND",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "3",
+          "name": "I/O2",
+          "tip": [
+            -45.0,
+            -10.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "4",
+          "name": "I/O2",
+          "tip": [
+            45.0,
+            -10.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "5",
+          "name": "VBUS",
+          "tip": [
+            45.0,
+            -0.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "VIN",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "6",
+          "name": "I/O1",
+          "tip": [
+            45.0,
+            10.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:e5c8198e70f04987968abe2e8a11202b:sha256:49eff8b9a0fea73ec4633ddfe94eda1ac750969bbd266e630bec28ec3e72960e",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:49eff8b9a0fea73ec4633ddfe94eda1ac750969bbd266e630bec28ec3e72960e, stream sha256:80c2c3081324c1e850d64bcb319b69aff05b312872dacc65cfc310331043cfb2, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "ef98186cdedd4b58bd8e66a11ff8b5be",
+      "title": "SY8089AAAC",
+      "body": [
+        -30.0,
+        -22.0,
+        30.0,
+        22.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "EN",
+          "tip": [
+            -40.0,
+            10.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "EN",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "GND",
+          "tip": [
+            -40.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "GND",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "3",
+          "name": "LX",
+          "tip": [
+            -40.0,
+            -10.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "4",
+          "name": "IN",
+          "tip": [
+            40.0,
+            -10.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "IN",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "5",
+          "name": "FB",
+          "tip": [
+            40.0,
+            10.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:ef98186cdedd4b58bd8e66a11ff8b5be:sha256:8b4b61760502ae4284303401fc9b0402c9c55971266a0e8f4af5be30f1e5925e",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:8b4b61760502ae4284303401fc9b0402c9c55971266a0e8f4af5be30f1e5925e, stream sha256:946d32e4739f4e543efb48c07c077352bf94be8409670f96123964b2d6714d5a, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "f88e34d680e646e38a7b77e29201ff30",
+      "title": "SY8089A1AAC",
+      "body": [
+        -25.0,
+        -20.0,
+        25.0,
+        20.0
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "EN",
+          "tip": [
+            -35.0,
+            10.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "EN",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "2",
+          "name": "GND",
+          "tip": [
+            -35.0,
+            -0.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "GND",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "3",
+          "name": "LX",
+          "tip": [
+            -35.0,
+            -10.0
+          ],
+          "direction": "left",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "4",
+          "name": "IN",
+          "tip": [
+            35.0,
+            -10.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "IN",
+          "roleSource": "pin-name",
+          "pinType": "Undefined",
+          "length": null
+        },
+        {
+          "number": "5",
+          "name": "FB",
+          "tip": [
+            35.0,
+            10.0
+          ],
+          "direction": "right",
+          "directionSource": "body-box",
+          "electricalRole": "",
+          "roleSource": "",
+          "pinType": "Undefined",
+          "length": null
+        }
+      ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 0,
+          "mirror": true
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": true
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": true
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": true
+        }
+      ],
+      "poseSource": "unrestricted-default",
+      "valueRow": "",
+      "texts": [],
+      "pinTexts": {
+        "offsets": {},
+        "pins": {}
+      },
+      "source": "elibz2:f88e34d680e646e38a7b77e29201ff30:sha256:36f627dfa671d0e2adc512c8576afda78b864eee24477a1d109ca92efdadab1a",
+      "notes": [
+        "poses: the symbol file states no pose restriction, so every rotation and both mirror states are assumed allowed (unrestricted-default); a polarised symbol must narrow this explicitly",
+        "texts: the parser exposes no symbol text records (collect_symbol_details reads RECT/POLY/CIRCLE only), so no reference/value position or text box is claimed here",
+        "pin length: not available (SymbolDetail exposes tips only, though the file's PIN rows carry `length`)",
+        "container: .elibz2 archive sha256:36f627dfa671d0e2adc512c8576afda78b864eee24477a1d109ca92efdadab1a, stream sha256:1d5eb194a446ceafef1870dc07d8e0d03da472953447685a0761b37000d914e7, 2 SYMBOL DOCHEAD(s) merged as continuation segments because their head bodies are identical; a differing repeat is refused, never merged",
+        "pin numbers: read from the Pin Number attribute filed by the PIN row's own id (pin_id) — this container's own key, not a claim that the stream is an eprj3 project",
+        "pin rotation/length: a PIN row may carry its own rotation and length, and neither reaches SymbolDetail (it exposes tips only), so a pin's direction below is a body-box reading and not that row's rotation — the values themselves stay in the container"
+      ]
+    }
+  ]
+}

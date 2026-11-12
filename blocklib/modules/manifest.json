@@ -1,6 +1,14 @@
 {
   "inputs": [
     {
+      "path": "blocklib/symbols/index.json",
+      "sha256": "cc86aa226de58f5404339d1b8b3a890e99e4ea981e29c0afaee7627228d76873"
+    },
+    {
+      "path": "blocklib/symbols/profiles.json",
+      "sha256": "b6d5e9f1376255291228f15eb6ac265715c7ab88a113d6138afdb69c49c23241"
+    },
+    {
       "path": "contracts/module-import/LICENSE",
       "sha256": "56e2b73f041848e87de1c6a805f462f064bfcb4b31a69b135d9f2376281611ad"
     },
@@ -18,7 +26,7 @@
     },
     {
       "path": "contracts/module-import/curation.json",
-      "sha256": "c8b0ccbafa36f1764a1ced89d9f5c59127f3f325682290de1467ef80e8189650"
+      "sha256": "75dcb48356b50b469c2eff262d622d1aea8ff8ee0dd42edab02a99673f48f9fc"
     },
     {
       "path": "contracts/module-import/source-manifest.json",
@@ -36,7 +44,7 @@
   "outputs": [
     {
       "path": "catalog.json",
-      "sha256": "367d0f1d8c541685d19398afebeb80c0314af70b3903996f9f46f461e997a192"
+      "sha256": "eb833369016941cdeef07a85e4e4a08d4caefafae2743ff889323b76e534253b"
     },
     {
       "path": "circuits/ams1117_ldo_3v3.circuit.json",
@@ -44,11 +52,11 @@
     },
     {
       "path": "circuits/ch340c_usb_serial.circuit.json",
-      "sha256": "3b7700233796db33b8f221a678a78f6aa423c3cabea256affd3051c1cb16d38a"
+      "sha256": "7483fbf864b7b62b220eca72a8b80a0ab5ddc6830312e5e6a8801301fe6d2de4"
     },
     {
       "path": "circuits/sy8089_buck_3v3.circuit.json",
-      "sha256": "b2742be1120fad999f79aff019c80f67e9cf643fd9c0ee545836993e8e006894"
+      "sha256": "4af4ea268dd2d77914e59c81fb5475b90acafc2748f4dff7919e2a43639b7975"
     },
     {
       "path": "circuits/sy8089_buck_3v3_live.circuit.json",

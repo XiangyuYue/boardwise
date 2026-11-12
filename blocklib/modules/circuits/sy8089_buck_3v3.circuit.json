@@ -95,7 +95,7 @@
       "mpn": "CL05B104KO5NNNC",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-C_HF",
+      "symbolRef": "5d54ad1e3ff64cdb9e7c9f449679d79f",
       "value": "100nF"
     },
     {
@@ -104,7 +104,7 @@
       "mpn": "GRM21BR61H106KE43L",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-C_IN",
+      "symbolRef": "2e54d9f6ef024fd6a073cb020500c9e8",
       "value": "10µF"
     },
     {
@@ -113,7 +113,7 @@
       "mpn": "CL21A226MAQNNNE",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-C_OUT",
+      "symbolRef": "a945ad0780e84529829fad9eef7941b6",
       "value": "22µF"
     },
     {
@@ -122,7 +122,7 @@
       "mpn": "NLCV32T-2R2M-PF",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-L",
+      "symbolRef": "059e3f9d3b884a399517577d11f54751",
       "value": "2.2µH"
     },
     {
@@ -131,7 +131,7 @@
       "mpn": "0402WGF1002TCE",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-R_FBB",
+      "symbolRef": "b4bb0b94f5d04a92a4e5542845335d53",
       "value": "10kΩ"
     },
     {
@@ -140,7 +140,7 @@
       "mpn": "0402WGF4532TCE",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-R_FBT",
+      "symbolRef": "2f97b34f1fa641a1843a6926dc1e817c",
       "value": "45.3k"
     },
     {
@@ -149,7 +149,7 @@
       "mpn": "SY8089A1AAC",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-U",
+      "symbolRef": "f88e34d680e646e38a7b77e29201ff30",
       "value": "SY8089A1AAC"
     }
   ],

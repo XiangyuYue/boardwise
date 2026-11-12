@@ -918,6 +918,36 @@ ACTIONS: tuple[Action, ...] = (
         risk="read",
     ),
     Action(
+        name="lib.footprint_file.get",
+        summary=(
+            "Read-only (038Q6): ONE library footprint's own file, by explicit uuid "
+            "(sys_FileManager.getFootprintFileByFootprintUuid, @beta, gated 团队库 > 下载库). "
+            "lib.footprint.get is measured to answer the package name and nothing about "
+            "PAD geometry, so the container file is the next honest place to look. Measured "
+            "present as a function with arity 3 on EDA 4.1.93, which is not the same as "
+            "working: whether the host exports the file is unmeasured. The bytes come back "
+            "whole as base64 and are NOT unpacked — isZip reports the file header alone, "
+            "no manifest name, docType, member suffix or PAD number is guessed, and neither "
+            "the request uuid nor the file name is proof of what the container holds. A "
+            "throw is reported with the host's own words plus the documented gate, never as "
+            "a diagnosed grant; no pad geometry, PAD 4, or electrical inference is claimed."
+        ),
+        params=("uuid", "libraryUuid", "fileType"),
+        returns=(
+            "{uuid, libraryUuid, fileType, source, apiStatus, encoding, name, mime, "
+            "bytes, data, isZip}"
+        ),
+        params_schema=(
+            "uuid: ONE library footprint uuid, a single non-empty string (an array is "
+            "refused, not fanned out); libraryUuid: optional non-empty uuid — omitted "
+            "is forwarded as undefined so the host's system library applies, and an "
+            "empty string is refused rather than defaulted; fileType: REQUIRED, "
+            "'elibz2' or 'elibz' (the declaration's optional default is not measured, "
+            "so the caller states the container)"
+        ),
+        risk="read",
+    ),
+    Action(
         name="sch.netlist",
         summary=(
             "The editor's own netlist export (sch_ManufactureData.getNetlistFile) "

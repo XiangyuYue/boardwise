@@ -104,15 +104,15 @@
       },
       "circuit": "circuits/ch340c_usb_serial.circuit.json",
       "id": "block.ch340c_usb_serial",
-      "identityStatus": "unverified",
+      "identityStatus": "bound",
       "kind": "block_template",
       "limitations": [
-        "candidate: the electrical facts come from the pinned upstream sample; this repository has verified neither the symbol nor the device identity (see identityStatus)",
-        "not for draw compile: no SymbolProfile has been read, so pin numbers and bodies are unverified, and every part's circuit symbolRef is the GENERIC-<role> placeholder rather than a resolved symbol",
+        "candidate: the electrical facts come from the pinned upstream sample; each part's device identity is bound in the managed symbol book, which checks hashes, LCSC/MPN and pin names and proves nothing about the circuit",
+        "identity bound: every part resolves through blocklib/symbols/index.json to a profile in blocklib/symbols/profiles.json (profileBookSha256 b6d5e9f1376255291228f15eb6ac265715c7ab88a113d6138afdb69c49c23241); offline compile, editor readback and hardware acceptance are all unfinished",
         "no compose, native CBB, PCB or hardware claim is made here",
         "each port's default_net is a suggestion for a future composition and is not wiring: ports that suggest the same net (VIN and EN) stay separate nets here",
-        "wildcard pin groups are kept as written (D_ESD.I/O1*, D_ESD.I/O2*, J_USB.EP*, J_USB.GND*, J_USB.VBUS*) and were not expanded to physical pads — no pin number was guessed",
-        "ports DTR, RTS, RXD, TXD have no upstream internal net; their net is the port pin alone (curated netSource=port_pin_only), not an inferred connection"
+        "ports DTR, RTS, RXD, TXD have no upstream internal net; their net is the port pin alone (curated netSource=port_pin_only), not an inferred connection",
+        "explicit pin groups (D_ESD.I/O1*, D_ESD.I/O2*, J_USB.EP*, J_USB.GND*, J_USB.VBUS*) name the physical pins the upstream wildcard members stood for, decided one group at a time in contracts/module-import/curation.json; naming several pins of one symbol is not a claim that the symbol shorts them internally, and it is not a datasheet reading, an offline compile, an editor readback or a hardware acceptance"
       ],
       "maturity": "candidate",
       "notForDrawCompile": true,
@@ -124,7 +124,7 @@
           "mpn": "CL05B104KO5NNNC",
           "role": "C_V3",
           "standardPart": "cap.100nf_0402",
-          "symbolRef": "",
+          "symbolRef": "5d54ad1e3ff64cdb9e7c9f449679d79f",
           "value": "100nF"
         },
         {
@@ -134,7 +134,7 @@
           "mpn": "CL05B104KO5NNNC",
           "role": "C_VCC",
           "standardPart": "cap.100nf_0402",
-          "symbolRef": "",
+          "symbolRef": "5d54ad1e3ff64cdb9e7c9f449679d79f",
           "value": "100nF"
         },
         {
@@ -143,7 +143,7 @@
           "mpn": "USBLC6-2SC6",
           "role": "D_ESD",
           "standardPart": "esd.usblc6_2sc6",
-          "symbolRef": "",
+          "symbolRef": "e5c8198e70f04987968abe2e8a11202b",
           "value": "USBLC6-2SC6"
         },
         {
@@ -153,7 +153,7 @@
           "mpn": "USB3.1TYPE-C16P",
           "role": "J_USB",
           "standardPart": "conn.usb_c_16p",
-          "symbolRef": "",
+          "symbolRef": "ddf6b4a961904b0e8967696126378ed5",
           "value": "TYPE-C-16P"
         },
         {
@@ -163,7 +163,7 @@
           "mpn": "0402WGF5101TCE",
           "role": "R_CC1",
           "standardPart": "res.5k1_0402",
-          "symbolRef": "",
+          "symbolRef": "9807320b9dfe4ddb9f43a24d13de0ff6",
           "value": "5.1kΩ"
         },
         {
@@ -173,7 +173,7 @@
           "mpn": "0402WGF5101TCE",
           "role": "R_CC2",
           "standardPart": "res.5k1_0402",
-          "symbolRef": "",
+          "symbolRef": "9807320b9dfe4ddb9f43a24d13de0ff6",
           "value": "5.1kΩ"
         },
         {
@@ -183,7 +183,7 @@
           "mpn": "CH340C",
           "role": "U",
           "standardPart": "ic.ch340c",
-          "symbolRef": "",
+          "symbolRef": "7ee12203ce22419bb02b8b8f01c8a92c",
           "value": "CH340C"
         }
       ],
@@ -238,14 +238,17 @@
         "sha256": "09296d21b70b1edd79d97dea6f2946aca5b53c5d6a9c1f480efa6790c1d89019"
       },
       "title": "block.ch340c_usb_serial",
-      "unresolvedWildcards": [
-        "D_ESD.I/O1*",
-        "D_ESD.I/O2*",
-        "J_USB.EP*",
-        "J_USB.GND*",
-        "J_USB.VBUS*"
+      "unresolvedWildcards": [],
+      "unstatedPins": [
+        "J_USB.A8",
+        "J_USB.B8",
+        "U.10",
+        "U.11",
+        "U.12",
+        "U.15",
+        "U.8",
+        "U.9"
       ],
-      "unstatedPins": [],
       "upstreamMaturity": "unstated"
     },
     {
@@ -255,11 +258,11 @@
       },
       "circuit": "circuits/sy8089_buck_3v3.circuit.json",
       "id": "block.sy8089_buck_3v3",
-      "identityStatus": "unverified",
+      "identityStatus": "bound",
       "kind": "block_template",
       "limitations": [
-        "candidate: the electrical facts come from the pinned upstream sample; this repository has verified neither the symbol nor the device identity (see identityStatus)",
-        "not for draw compile: no SymbolProfile has been read, so pin numbers and bodies are unverified, and every part's circuit symbolRef is the GENERIC-<role> placeholder rather than a resolved symbol",
+        "candidate: the electrical facts come from the pinned upstream sample; each part's device identity is bound in the managed symbol book, which checks hashes, LCSC/MPN and pin names and proves nothing about the circuit",
+        "identity bound: every part resolves through blocklib/symbols/index.json to a profile in blocklib/symbols/profiles.json (profileBookSha256 b6d5e9f1376255291228f15eb6ac265715c7ab88a113d6138afdb69c49c23241); offline compile, editor readback and hardware acceptance are all unfinished",
         "no compose, native CBB, PCB or hardware claim is made here",
         "each port's default_net is a suggestion for a future composition and is not wiring: ports that suggest the same net (VIN and EN) stay separate nets here"
       ],
@@ -273,7 +276,7 @@
           "mpn": "CL05B104KO5NNNC",
           "role": "C_HF",
           "standardPart": "cap.100nf_0402",
-          "symbolRef": "",
+          "symbolRef": "5d54ad1e3ff64cdb9e7c9f449679d79f",
           "value": "100nF"
         },
         {
@@ -283,7 +286,7 @@
           "mpn": "GRM21BR61H106KE43L",
           "role": "C_IN",
           "standardPart": "cap.10uf_0805",
-          "symbolRef": "",
+          "symbolRef": "2e54d9f6ef024fd6a073cb020500c9e8",
           "value": "10µF"
         },
         {
@@ -293,7 +296,7 @@
           "mpn": "CL21A226MAQNNNE",
           "role": "C_OUT",
           "standardPart": "cap.22uf_0805",
-          "symbolRef": "",
+          "symbolRef": "a945ad0780e84529829fad9eef7941b6",
           "value": "22µF"
         },
         {
@@ -302,7 +305,7 @@
           "mpn": "NLCV32T-2R2M-PF",
           "role": "L",
           "standardPart": "ind.22uh_1210",
-          "symbolRef": "",
+          "symbolRef": "059e3f9d3b884a399517577d11f54751",
           "value": "2.2µH"
         },
         {
@@ -312,7 +315,7 @@
           "mpn": "0402WGF1002TCE",
           "role": "R_FBB",
           "standardPart": "res.10k_0402",
-          "symbolRef": "",
+          "symbolRef": "b4bb0b94f5d04a92a4e5542845335d53",
           "value": "10kΩ"
         },
         {
@@ -321,7 +324,7 @@
           "mpn": "0402WGF4532TCE",
           "role": "R_FBT",
           "standardPart": "res.453k_0402__2",
-          "symbolRef": "",
+          "symbolRef": "2f97b34f1fa641a1843a6926dc1e817c",
           "value": "45.3k"
         },
         {
@@ -330,7 +333,7 @@
           "mpn": "SY8089A1AAC",
           "role": "U",
           "standardPart": "buck.sy8089_tsot23",
-          "symbolRef": "",
+          "symbolRef": "f88e34d680e646e38a7b77e29201ff30",
           "value": "SY8089A1AAC"
         }
       ],

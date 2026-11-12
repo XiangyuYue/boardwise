@@ -7895,34 +7895,71 @@ export const sysGetProjectFile: ActionHandler = (params, eda) =>
   readArchive('sys.get_project_file', PROJECT_FILE_READ, params, eda);
 
 // --------------------------------------------------------------------------
-// 038Q3: one library symbol's file, read-only
+// 038Q3 / 038Q6: one library file, by explicit uuid, read-only
 // --------------------------------------------------------------------------
 
-/** The `eda.*` path, spelled so every refusal names the exact method. */
-const LIBRARY_SYMBOL_FILE_PATH = 'sys_FileManager.getSymbolFileBySymbolUuid';
-/** The two container types the declaration allows — and nothing else. */
-const LIBRARY_SYMBOL_FILE_TYPES: readonly string[] = ['elibz2', 'elibz'];
-/** Parameters this action accepts; anything else is refused by name. */
-const LIBRARY_SYMBOL_FILE_KEYS: readonly string[] = ['uuid', 'libraryUuid', 'fileType'];
 /**
- * The gate the declaration attaches to *this* call, quoted on its own.
+ * The whole configuration of a library-file read (038Q6).
  *
- * Kept separate from `FILE_READ_GATES` on purpose: that array is the 025
- * archive reads' refusal detail, it is a contract old consumers read, and this
- * batch does not get to grow it. A refusal here names this call's gate and
- * carries it in `detail.permissions` as a one-element list.
+ * `lib.symbol_file.get` (038Q3) and `lib.footprint_file.get` (038Q6) are the
+ * same read with a different method: same closed key set, same two container
+ * types, same deadline, same argument order, same failure ladder. Everything
+ * that differs between them is in this record — a second copy of that ladder is
+ * exactly how the two would drift into answering differently about the same
+ * host behaviour, so the difference is data and the behaviour is written once.
  */
-const LIBRARY_DOWNLOAD_GATE =
-  '团队库 > 下载库 — getSymbolFileBySymbolUuid';
+type LibraryFileRead = {
+  /** The `eda.*` path, spelled so every refusal names the exact method. */
+  path: string;
+  /**
+   * The gate the declaration attaches to *this* call, quoted on its own.
+   *
+   * Kept out of the 025 archive reads' `FILE_READ_GATES` on purpose: that array
+   * is those actions' refusal detail and a contract old consumers read, and
+   * neither library batch gets to grow it. A refusal here names this call's gate
+   * and carries it in `detail.permissions` as a one-element list.
+   */
+  gate: string;
+  /** What the file is a file *of*, used in prose only (`symbol`, `footprint`). */
+  noun: string;
+};
+
+/** The two container types the declaration allows — and nothing else. */
+const LIBRARY_FILE_TYPES: readonly string[] = ['elibz2', 'elibz'];
+/** Parameters both actions accept; anything else is refused by name. */
+const LIBRARY_FILE_KEYS: readonly string[] = ['uuid', 'libraryUuid', 'fileType'];
 /**
  * The connector's deadline for the one call.
  *
  * Equal to the daemon's default `ACTION_TIMEOUT` (30 s) for the reason the
  * archive reads document: a connector deadline longer than the daemon's can
  * never be observed, because the caller has already been told TIMEOUT. Not a
- * parameter — this batch does not widen the contract.
+ * parameter — neither batch widens the contract.
  */
-const LIBRARY_SYMBOL_FILE_TIMEOUT_MS = 30_000;
+const LIBRARY_FILE_TIMEOUT_MS = 30_000;
+
+/** 038Q3's read: one symbol's own container file. */
+const SYMBOL_FILE_READ: LibraryFileRead = {
+  path: 'sys_FileManager.getSymbolFileBySymbolUuid',
+  gate: '团队库 > 下载库 — getSymbolFileBySymbolUuid',
+  noun: 'symbol',
+};
+
+/**
+ * 038Q6's read: one footprint's own container file.
+ *
+ * The method exists on the running editor — EDA 4.1.93's official connector
+ * answered `eda.sys_FileManager.getFootprintFileByFootprintUuid` as a `function`
+ * with arity 3 (`outputs/review/038q6/footprint-file-api-probe-v2.json`) — but
+ * present is not *working*: whether the host exports this file, what the
+ * container holds and where its PAD records are, are all unmeasured. That is why
+ * this read hands the bytes back and claims nothing about them.
+ */
+const FOOTPRINT_FILE_READ: LibraryFileRead = {
+  path: 'sys_FileManager.getFootprintFileByFootprintUuid',
+  gate: '团队库 > 下载库 — getFootprintFileByFootprintUuid',
+  noun: 'footprint',
+};
 
 /** A value as a short JSON-safe phrase, for refusal messages only. */
 function describeParam(value: unknown): string {
@@ -7935,30 +7972,34 @@ function describeParam(value: unknown): string {
 }
 
 /**
- * The refusal of the symbol-file read.
+ * The refusal of a library-file read.
  *
  * Same belief as `fileReadFailure` — the connector observes a `throw` and
  * cannot read the extension's grants, so "you lack a permission" is a claim it
  * has no way to check — with this call's own gate and its own one-element
  * permission list. A `NOT_IMPLEMENTED` from `requireFn` is *not* a refusal and
  * travels first, so a missing method is never dressed as a permission problem.
+ *
+ * Takes the spec rather than the action name because the action name is already
+ * in the caller's own `BAD_REQUEST` texts: the throw is the host's answer, and
+ * Q3's message for it names the path, not the action.
  */
-function symbolFileFailure(error: unknown): ActionError {
+function libraryFileFailure(spec: LibraryFileRead, error: unknown): ActionError {
   if (isActionError(error)) return error;
   const host = hostErrorText(error);
   return new ActionError(
     'CONNECTOR_ERROR',
-    `${LIBRARY_SYMBOL_FILE_PATH} threw ${host.text}. The connector cannot read this `
+    `${spec.path} threw ${host.text}. The connector cannot read this `
       + "extension's grants, so whether a permission is missing is not knowable from "
-      + `here; the type package documents this call's gate as "${LIBRARY_DOWNLOAD_GATE}" `
+      + `here; the type package documents this call's gate as "${spec.gate}" `
       + '(team library > download library)',
     {
-      path: LIBRARY_SYMBOL_FILE_PATH,
+      path: spec.path,
       thrown: true,
       errorName: host.name,
       errorMessage: host.message,
-      gate: LIBRARY_DOWNLOAD_GATE,
-      permissions: [LIBRARY_DOWNLOAD_GATE],
+      gate: spec.gate,
+      permissions: [spec.gate],
     },
   );
 }
@@ -8000,10 +8041,62 @@ function symbolFileFailure(error: unknown): ActionError {
  * permission to open it in the editor or to place anything on a canvas — neither
  * `importProject*`, nor `setDocumentSource`, nor any create/modify/delete is
  * reached from here.
+ *
+ * The body is `readLibraryFile` below since 038Q6, shared with the footprint
+ * read: this line fixes the action name, the path, the gate and the noun, and
+ * nothing else about it moved.
  */
-export const libSymbolFileGet: ActionHandler = async (params, eda) => {
-  const action = 'lib.symbol_file.get';
+export const libSymbolFileGet: ActionHandler = (params, eda) =>
+  readLibraryFile('lib.symbol_file.get', SYMBOL_FILE_READ, params, eda);
 
+/**
+ * `lib.footprint_file.get` — one library footprint's **file**, by explicit uuid (038Q6).
+ *
+ * Why it exists: `lib.footprint.get` answers metadata — the package name and the
+ * `item` the host holds — and nothing about PAD geometry, so a pad number, a
+ * layer and a shape have no source today. The file the host can hand over is the
+ * one honest next place to look, and this action only *fetches* it.
+ *
+ * What it deliberately does not say:
+ *
+ * - **Not that a file comes back.** The method is present with arity 3 on EDA
+ *   4.1.93 (`outputs/review/038q6/footprint-file-api-probe-v2.json`); presence is
+ *   not a working call under this editor's grants, and this action reports
+ *   whatever the host produced without claiming success.
+ * - **Not what is inside.** Nothing is unpacked: `isZip` is the first two bytes,
+ *   the host's file name is cleaned and never read as an identity, and the
+ *   request uuid is not echoed back as proof of what the container holds. A
+ *   manifest name, a docType, a member suffix or a PAD number are all guesses
+ *   this batch refuses to make.
+ * - **Not that PAD 4 exists.** `U.VOUT*`, the pad numbering and their electrical
+ *   relationship are the *next* batch's questions, answered from a real file.
+ *
+ * The read reaches no writing member of `sys_FileManager`: no import, no
+ * `setDocumentSource`, no delete, and no canvas behaviour at all.
+ */
+export const libFootprintFileGet: ActionHandler = (params, eda) =>
+  readLibraryFile('lib.footprint_file.get', FOOTPRINT_FILE_READ, params, eda);
+
+/**
+ * The one library-file read both actions run (038Q6).
+ *
+ * Everything that is behaviour rather than configuration lives here exactly
+ * once: the closed key set, the single-non-empty-uuid rule, the omitted-library
+ * rule, the required `fileType`, the positional three-argument call with the
+ * optional forwarded as `undefined`, the `NOT_IMPLEMENTED`-before-permission
+ * ordering, and "complete bytes or a failure". The caller supplies only
+ * `action` (for `BAD_REQUEST` texts) and a `LibraryFileRead` spec.
+ *
+ * `file` is `unknown` rather than `any` on purpose: `hostFilePayload` is the one
+ * place that inspects the host object, and it does so through `readMember`, so
+ * nothing here needs a widened type to compile.
+ */
+async function readLibraryFile(
+  action: string,
+  spec: LibraryFileRead,
+  params: Record<string, unknown>,
+  eda: Eda,
+): Promise<unknown> {
   if (params !== undefined && params !== null
       && (typeof params !== 'object' || Array.isArray(params))) {
     throw new ActionError(
@@ -8012,13 +8105,13 @@ export const libSymbolFileGet: ActionHandler = async (params, eda) => {
     );
   }
   const input = (params ?? {}) as Record<string, unknown>;
-  const unknown = Object.keys(input).filter((key) => !LIBRARY_SYMBOL_FILE_KEYS.includes(key));
+  const unknown = Object.keys(input).filter((key) => !LIBRARY_FILE_KEYS.includes(key));
   if (unknown.length) {
     throw new ActionError(
       'BAD_REQUEST',
       `${action} does not take ${unknown.join(', ')}; it accepts `
-        + `${LIBRARY_SYMBOL_FILE_KEYS.join(', ')}`,
-      { unknown, allowed: [...LIBRARY_SYMBOL_FILE_KEYS] },
+        + `${LIBRARY_FILE_KEYS.join(', ')}`,
+      { unknown, allowed: [...LIBRARY_FILE_KEYS] },
     );
   }
 
@@ -8027,7 +8120,7 @@ export const libSymbolFileGet: ActionHandler = async (params, eda) => {
     throw new ActionError(
       'BAD_REQUEST',
       `${action} needs uuid to be a single non-empty string, got `
-        + `${describeParam(rawUuid)} — one symbol per call, never a batch`,
+        + `${describeParam(rawUuid)} — one ${spec.noun} per call, never a batch`,
       { param: 'uuid' },
     );
   }
@@ -8056,82 +8149,82 @@ export const libSymbolFileGet: ActionHandler = async (params, eda) => {
     libraryUuid = input.libraryUuid;
   }
 
-  if (typeof input.fileType !== 'string' || !LIBRARY_SYMBOL_FILE_TYPES.includes(input.fileType)) {
+  if (typeof input.fileType !== 'string' || !LIBRARY_FILE_TYPES.includes(input.fileType)) {
     throw new ActionError(
       'BAD_REQUEST',
-      `${action} needs fileType to be one of ${LIBRARY_SYMBOL_FILE_TYPES.join(', ')}, `
+      `${action} needs fileType to be one of ${LIBRARY_FILE_TYPES.join(', ')}, `
         + `got ${describeParam(input.fileType)}${
           input.fileType === undefined
             ? ' — the declaration makes it optional, which leaves the container '
               + 'format to the host, and that is not measured yet'
             : ''
         }`,
-      { param: 'fileType', allowed: [...LIBRARY_SYMBOL_FILE_TYPES] },
+      { param: 'fileType', allowed: [...LIBRARY_FILE_TYPES] },
     );
   }
   const fileType = input.fileType;
 
   // Outside the try on purpose: a missing method is `NOT_IMPLEMENTED` naming the
   // path, never a permission story. The wrapper is not decoration — `requireFn`
-  // walks `eda.sys_FileManager.getSymbolFileBySymbolUuid` with bare member reads,
-  // and the host hands out objects whose reads can throw (the hazard measured on
-  // 2026-09-14, see `getState`). An unreadable path is "this editor cannot be
-  // asked", which is what NOT_IMPLEMENTED says; letting the raw throw out would
-  // answer INTERNAL and hide the method name.
+  // walks `eda.sys_FileManager.<method>` with bare member reads, and the host
+  // hands out objects whose reads can throw (the hazard measured on 2026-09-14,
+  // see `getState`). An unreadable path is "this editor cannot be asked", which
+  // is what NOT_IMPLEMENTED says; letting the raw throw out would answer
+  // INTERNAL and hide the method name.
   let call: (...args: any[]) => any;
   try {
-    call = requireFn(eda, LIBRARY_SYMBOL_FILE_PATH);
+    call = requireFn(eda, spec.path);
   } catch (error) {
     if (isActionError(error)) throw error;
     throw new ActionError(
       'NOT_IMPLEMENTED',
-      `${LIBRARY_SYMBOL_FILE_PATH} is not readable in this editor version `
+      `${spec.path} is not readable in this editor version `
         + `(${String((error as Error)?.message ?? error)})`,
-      { path: LIBRARY_SYMBOL_FILE_PATH, readError: true },
+      { path: spec.path, readError: true },
     );
   }
 
-  let file: any;
+  let file: unknown;
   try {
-    // Declaration order, positionally: (symbolUuid, libraryUuid?, fileType?).
-    // An omitted library travels as `undefined` rather than as `''` — the host
+    // Declaration order, positionally: (uuid, libraryUuid?, fileType). An
+    // omitted library travels as `undefined` rather than as `''` — the host
     // drops an argument it dislikes without rejecting, so the *shape* of the
     // call is part of the measurement.
     file = await raceHostCall(
       settle(call(uuid, libraryUuid, fileType)),
-      LIBRARY_SYMBOL_FILE_PATH,
-      LIBRARY_SYMBOL_FILE_TIMEOUT_MS,
+      spec.path,
+      LIBRARY_FILE_TIMEOUT_MS,
       'the three arguments are positional (uuid, libraryUuid, fileType) and an '
         + 'omitted library must be forwarded as undefined',
     );
   } catch (error) {
-    throw symbolFileFailure(error);
+    throw libraryFileFailure(spec, error);
   }
 
   if (file === undefined || file === null) {
     throw new ActionError(
       'CONNECTOR_ERROR',
-      `${LIBRARY_SYMBOL_FILE_PATH} returned ${file === null ? 'null' : 'undefined'} — `
+      `${spec.path} returned ${file === null ? 'null' : 'undefined'} — `
         + 'the declaration says that means no file was produced for this uuid '
         + '(not found, not downloadable, or a grant the connector cannot see); '
-        + 'an absent file is not an empty symbol and nothing was read',
-      { path: LIBRARY_SYMBOL_FILE_PATH, uuid, libraryUuid: libraryUuid ?? null, fileType, empty: true },
+        + `an absent file is not an empty ${spec.noun} and nothing was read`,
+      { path: spec.path, uuid, libraryUuid: libraryUuid ?? null, fileType, empty: true },
     );
   }
 
   // Complete bytes or a failure: `hostFilePayload` refuses a missing
   // `arrayBuffer` and a zero-byte answer rather than reporting a truncated file.
-  const payload = await hostFilePayload(file, LIBRARY_SYMBOL_FILE_PATH);
+  const payload = await hostFilePayload(file, spec.path);
   return {
     uuid,
     libraryUuid: libraryUuid ?? null,
     fileType,
-    source: LIBRARY_SYMBOL_FILE_PATH,
+    source: spec.path,
     apiStatus: 'beta',
     encoding: 'base64',
     ...payload,
   };
-};
+}
 
 /** Default and ceiling for `sys.get_document_source`'s `maxChars`. */
 const SOURCE_DEFAULT_MAX_CHARS = 65_536;
@@ -9711,6 +9804,11 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     // metadata action is measured to carry none. Read-only; the bytes are
     // handed back base64 and nothing here opens or unpacks them.
     'lib.symbol_file.get': bind(libSymbolFileGet),
+    // 038Q6: the footprint's own *file*, by explicit uuid — the read that can
+    // answer "what does this package's PAD record actually hold?" now that
+    // `lib.footprint.get` is measured to stop at the name. Same shared reader as
+    // the symbol file above; nothing opens, unpacks or places anything.
+    'lib.footprint_file.get': bind(libFootprintFileGet),
     'lib.device.get': bind(libDeviceGet),
     'sch.component_pins': bind(schComponentPins),
     'lib.footprint.get': bind(libFootprintGet),

@@ -12,3 +12,20 @@
 # manifest per platform. Every contract JSON is generated through
 # `tools.differential_compare.write_text_lf`, which writes '\n' explicitly.
 /contracts/**/*.json text eol=lf
+
+# The symbol book and the module catalog/manifest record SHA-256 of file *bytes*:
+# `index.profileBookSha256` hashes profiles.json whole, and manifest.json pins the
+# digest of every generated module file. With `core.autocrlf=true` (this repo's
+# Windows setting) a fresh clone would write those files back as CRLF, so every
+# recorded digest would stop describing the file on disk and the book checker
+# would go red on a machine that changed nothing. Pinning LF is what makes a
+# clone byte-identical to the checkout the digests were taken in. The module
+# files are generated through the Rust writer, which emits LF explicitly.
+#
+# `**` spans zero directories as well as one or more (`/contracts/**/*.json`
+# already relies on that for `contracts/differential/manifest.json`), so the two
+# rules below also cover the module root files catalog.json and manifest.json —
+# verified with `git check-attr`, not assumed. Deliberately not `*.json`: every
+# other JSON in this repository is none of this contract's business.
+/blocklib/symbols/*.json text eol=lf
+/blocklib/modules/**/*.json text eol=lf

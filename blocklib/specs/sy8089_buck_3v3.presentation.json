@@ -1,0 +1,39 @@
+{
+  "kind": "boardwise-presentation-spec",
+  "specVersion": 1,
+  "grammarRef": "ic-periphery",
+  "sidePreferences": {
+    "input": "left",
+    "output": "right",
+    "load": "right",
+    "source": "left",
+    "power": "top",
+    "gnd": "bottom"
+  },
+  "portRoles": {
+    "port.VIN": "source",
+    "port.3V3": "load",
+    "port.EN": "input"
+  },
+  "modules": [
+    {
+      "id": "buck",
+      "parts": [
+        "U",
+        "L",
+        "C_IN",
+        "C_OUT",
+        "C_HF",
+        "R_FBT",
+        "R_FBB"
+      ],
+      "role": "SY8089 buck: the IC is the core; the inductor is the switch-node series element from LX to the 3V3 rail, the two feedback resistors hang off FB as the divider between 3V3 and GND, and the input/output/high-frequency capacitors return from their own rail pins to GND",
+      "core": "U"
+    }
+  ],
+  "labelPolicy": {
+    "local": "wire",
+    "crossModule": "label",
+    "highFanout": "label"
+  }
+}

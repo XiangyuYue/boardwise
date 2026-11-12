@@ -25,6 +25,7 @@
     },
     {
       "id": "block.sy8089_buck_3v3",
+      "identityBinding": "book",
       "kind": "block_template",
       "output": "circuits/sy8089_buck_3v3.circuit.json",
       "ports": {
@@ -75,8 +76,36 @@
     },
     {
       "id": "block.ch340c_usb_serial",
+      "identityBinding": "book",
       "kind": "block_template",
+      "nc": [
+        "U.7"
+      ],
       "output": "circuits/ch340c_usb_serial.circuit.json",
+      "pinGroups": {
+        "D_ESD.I/O1*": [
+          "D_ESD.1",
+          "D_ESD.6"
+        ],
+        "D_ESD.I/O2*": [
+          "D_ESD.3",
+          "D_ESD.4"
+        ],
+        "J_USB.EP*": [
+          "J_USB.8",
+          "J_USB.9",
+          "J_USB.10",
+          "J_USB.11"
+        ],
+        "J_USB.GND*": [
+          "J_USB.A1B12",
+          "J_USB.B1A12"
+        ],
+        "J_USB.VBUS*": [
+          "J_USB.A4B9",
+          "J_USB.B4A9"
+        ]
+      },
       "ports": {
         "DTR": {
           "class": "signal",
@@ -108,6 +137,12 @@
           "part": "J_USB"
         }
       },
+      "portPins": {
+        "VBUS_5V": [
+          "J_USB.A4B9",
+          "J_USB.B4A9"
+        ]
+      },
       "source": "contracts/module-import/blocks/ch340c_usb_serial.json",
       "sourcePath": "internal/blocks/data/ch340c_usb_serial.json",
       "sourceSha256": "09296d21b70b1edd79d97dea6f2946aca5b53c5d6a9c1f480efa6790c1d89019",
@@ -118,6 +153,11 @@
   "license": "contracts/module-import/LICENSE",
   "sourceManifest": "contracts/module-import/source-manifest.json",
   "standardParts": "contracts/module-import/standard-parts.json",
+  "symbolBook": {
+    "defaultIdentity": "generic",
+    "index": "blocklib/symbols/index.json",
+    "profiles": "blocklib/symbols/profiles.json"
+  },
   "upstream": {
     "commit": "69af00c0db3960757bff36a68edb286adcd64458",
     "repo": "https://github.com/zhoushoujianwork/easyeda-agent"

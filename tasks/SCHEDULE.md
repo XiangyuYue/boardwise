@@ -250,6 +250,48 @@
   符号文件只读通路、单符号 elibz2 profile；AMS1117 单符号身份/几何已核对。任务书分别为
   `tasks/038q1_cbb_readonly_inventory.md` 至 `tasks/038q4_elibz2_symbol_profile.md`。
   四模块仍 candidate/unverified/notForDrawCompile，其余器件身份未齐。
+- **11-12：Q5 已完成 AMS1117 三个电容的真实身份与 elibz2 profile**（C1525/C440198/C45783）。
+  三份容器独立解析、确定性复跑和 Q4 邻域 37 passed；两颗 0805 的 footprint UUID 相同但 symbol
+  UUID 不同，未共用 profile。C45783 与旧 C0805 实测逐脚 number/tip 相同，body/length 差异保留。
+  AMS 的 U.VOUT*、焊盘和其他模块身份仍未关闭，任务书 `tasks/038q5_ams_passive_profiles.md`。
+- **11-12：Q6 已接通封装文件只读通路并取得真实 PAD 证据**。离线 Connector 691、Python 192；
+  AMS1117 封装 PAD 1/2/3/4 全部读出，PAD 4=e11、顶层 RECT、无孔。现有 datasheet 的
+  `TAB IS OUTPUT` 经坐标与主代理看图均属于 TO-252，不是 SOT-223；因此内部同网**未证实**，
+  `U.VOUT*` 保持未展开，不用经验补证据。任务书 `tasks/038q6_footprint_file_read.md`。
+- **11-12：Q7 已完成 SY8089 双身份与双 SymbolProfile**。C479074/C78988 的 device/symbol/
+  footprint 均不同，输入范围、频率、温度、静态电流和 datasheet 也不同；可互换性未证实。
+  两份真实 5 脚映射均为 1=EN、2=GND、3=LX、4=IN、5=FB，但 body/tip/geometry hash 不同，
+  不共用 profile。身份 204/204、Q4 reader 37 passed，任务书 `tasks/038q7_sy8089_identity_profiles.md`。
+- **11-12：Q8 受管 symbol book 已落地**。`blocklib/symbols/{profiles.json,index.json}` 收编六份
+  真实 profile 与身份来源；`tools/check_symbol_book.py` 在 clean checkout 重算 loader、来源、
+  身份绑定及全部哈希，不依赖 outputs。Q8 38 passed、主代理组合 105 passed，畸形 ref/重复/
+  路径/哈希/合并负例均覆盖。仍是 candidate book，不接 compile；任务书 `tasks/038q8_symbol_book.md`。
+- **11-12：Q9 剩余身份集中采集完成**。改为按窗口/交付层分批：39 次元数据只读约56秒，
+  一次候选部署读取13份符号/profile约9.4秒、一次回滚；不再逐颗部署。book 现有19份 profile、
+  覆盖四个候选全部19个唯一 device UUID；主代理97 passed、Q8自身39 passed，validator exit0。
+  CH340 的 DTR#/RTS#、Type-C EP与复合编号只作事实保留，通配脚未裁。任务书
+  `tasks/038q9_remaining_identity_sweep.md`。
+- **11-12：Q10 真实 symbolRef 已落地，Q11 首个离线试点视觉拒收**。SY8089 block 按 opt-in
+  绑定七个真实符号，identityStatus=bound；Rust core 41、主代理 Python 105。Q11 编译3候选、
+  6/6逐脚一致，但 ic-periphery 未绑定 C_HF/C_OUT/L/R_FBT，且电源/地缺旗标；主代理亲看
+  `cand1.svg` 判一眼不像 Buck，**机器过、视觉拒**，不 apply、不晋升。绘制线缺口见
+  `tasks/038q11a_buck_grammar_gap.md`，CBB 不改 grammar。
+- **11-12：Q12 CH340C 显式电气脚位合同完成**。五组通配由 curation 显式映射成12个物理脚，
+  Type-C 复合脚号保持原子，CH340 七 part 绑定真实 symbolRef；U.7 是唯一 NC，其余未声明脚
+  与 SBU 进 unstatedPins，connected/NC/unstated 全脚互斥覆盖。Rust core 56、主代理 Python 125、
+  子代理邻域189全绿；生成幂等、两处变异通过。CH340 仍 candidate/notForDrawCompile/draft；
+  EP 与 GND 的厂家依据未关闭，不做绘制或原生块声明。任务书
+  `tasks/038q12_ch340c_electrical_contract.md`。
+- **11-12：Q13 CH340 离线试点机器过、视觉拒**。两岛4候选 hard=0、11/11网及NC一致、四负例
+  均被抓，主代理 Python 24；但首候选长自动网名重复压字、无电源/地旗、D_ESD未绑定，主代理
+  亲看后拒收。**Q11/Q13 及 Q11A/Q13A 的 CBB 绘制相关工作已由岳裁定搁置**：保留现有证据，
+  不再推进内部网语义命名、多脚ESD/短载体或旗标，不 plan/apply、不晋升。
+  任务书 `tasks/038q13_ch340c_offline_pilot.md`，缺口 `tasks/038q13a_ch340_presentation_gaps.md`。
+- **11-12：提交前挖洞四项修复与四线验收完成**。补齐 portPins 未知 key、跨组重复物理脚、
+  book/module LF fresh-clone 合同、catalog symbolRef 对拍；Rust core 58、Q8 46。最终完整 Python
+  **10873 passed / 26 skipped / 1 xfailed / 1 warning**（534 的 GBK 子进程线程读警告，
+  failures/errors=0），Connector **691** + typecheck，DSH **137/1** + build，Rust **177/4 ignored**
+  + fmt/clippy。证据 `.tmp_038q14_final/`、`.tmp_038q14_accept/`；绘制项仍搁置。
 - **原生 `block_symbol` 仍是样本驱动**：没有真实 CBB 样件就不开阶段 A，库搜索成功不等于
   原生块解析、放置或端口规则完成；**未承诺版本、未承诺发布日期**。
 - shared / connector / 规则 / 真机各自单独成批，先读后写；`core/blocks.py` 的

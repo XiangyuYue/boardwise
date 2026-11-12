@@ -270,6 +270,47 @@ specification cannot mutate a project. `boardwise lint --spec …` and
 (its task-005 contract is a raw file-against-file comparison); `draw` keeps
 defaulting to the sidecar beside the fixture, as it always has.
 
+## A candidate symbol book stays behind explicit gates
+
+`blocklib/symbols/` holds the managed, checked-in symbol library that 038Q4/Q5/Q7
+measured and 038Q9 completed: **nineteen profiles, one per unique `deviceUuid`
+the module catalog declares** (Q4/Q5/Q7 admitted six, Q9 the remaining thirteen;
+the two SY8089 identities stay two entries because the catalog declares two
+device uuids behind the shared part number). `profiles.json` is a plain
+`{"profiles": [...]}` document that `engines.drawapply.load_library` reads like
+any other library, and `index.json` is the identity, binding and hash ledger
+beside it (`symbolRef`, catalog `deviceUuid`/`lcsc`/`mpn`, archive and geometry
+hashes, where each one came from). `tools/check_symbol_book.py` verifies both
+against `blocklib/modules/catalog.json`, including every bound part's `symbolRef`
+against the book's device binding, with no `outputs/` and no editor. The book and
+module JSON are pinned to LF in `.gitattributes`, so their byte hashes survive a
+Windows fresh clone. **Every profile remains a candidate**
+(`notForDrawCompile=true`): Q10/Q12 let a module opt into identity binding through
+module-import, so its catalog and CircuitSpec carry the book's real `symbolRef`;
+that does not promote the module or the book for drawing. Q11/Q13 used the profiles
+only in explicitly offline compile pilots and preserved their machine-versus-visual
+evidence; all CBB drawing follow-up is paused, with no plan/apply or production
+promotion. `tests/test_038q8_symbol_book.py` is the book's receipt, and 038Q9's
+`outputs/review/038q9/book-admission.json` records what the thirteen brought:
+feet, repeated pin numbers, shared tips, and the body facts the reader does not
+expose (shape, text, pin length — recorded as absent, never guessed).
+
+`evidence[]` is provenance, not a fixed shape. The six older admissions carry an
+`acceptance` record; the thirteen Q9 admissions carry three (profile, archive,
+device response) because Q9 wrote no ACCEPTANCE document, and a record that was
+never written is left out rather than pointed at a path that does not exist.
+
+Two readings of the ledger that look like discrepancies and are not. A binding's
+optional `catalogFootprint` copies the catalog's **own** footprint label
+(`C0402`, `SOT-223-3`) so drift is compared exactly; it is never mixed with the
+device response's `supplierFootprint` family name (`0402`, `SOT-223`), a
+different vocabulary. And `profileSha256` is the profile object's hash after
+LF-normalisation (`json.dumps(..., indent=2) + "\n"` on the object as stored),
+so a profile file that was written with CRLF has a different *file* sha256 than
+its normalised object hash — AMS1117 is exactly that case
+(`e85c8b64…` file vs `6b6cf8fc…` object); the content is identical, the line
+endings are not.
+
 ## The acceptance image is a document render
 
 `export.render` calls `sch_ManufactureData.getExportDocumentFile(fileName,

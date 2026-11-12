@@ -117,10 +117,11 @@ ALLOWED_INPUT_KEYS = {
     },
     "curation": {
         "schema", "upstream", "assets", "standardParts", "sourceManifest", "license",
+        "symbolBook",
     },
     "curation.asset": {
         "id", "kind", "output", "ports", "source", "sourcePath", "sourceSha256",
-        "upstreamMaturity",
+        "upstreamMaturity", "identityBinding", "pinGroups", "portPins", "nc",
     },
     "curation.ruling": {"direction", "class", "part", "netSource"},
     "source-manifest": {"schema", "upstream", "files", "filters"},
@@ -281,7 +282,11 @@ def test_every_circuit_loads_with_the_existing_loader(circuits) -> None:
             nets,
             interfaces,
         ), stem
-        assert spec.nc == [], f"{stem}: a Block leaves unmentioned pins unmentioned"
+        # 038Q12: the bound CH340C states one explicit NC (`U.7`, the pin its own
+        # symbol marks `NC.`); every other Block leaves unmentioned pins
+        # unmentioned, and no circuit fabricates an NC from silence.
+        expected_nc = 1 if stem == "ch340c_usb_serial" else 0
+        assert len(spec.nc) == expected_nc, f"{stem}: NC is stated, never inferred"
         assert spec.draft is True, f"{stem}: imported facts are unconfirmed"
         assert spec.operating_conditions == {}
         for part in spec.parts:
@@ -337,21 +342,19 @@ def test_a_shared_default_net_does_not_short_vin_and_en(circuits, catalog) -> No
 
 
 def test_wildcard_pins_are_kept_as_written_and_flag_the_module(circuits, catalog) -> None:
+    """038Q12: only an unbound module keeps a wildcard, and it stays flagged."""
     by_id = {module["id"]: module for module in catalog["modules"]}
     ams = circuits["ams1117_ldo_3v3"]
     assert "U.VOUT*" in ams.net("port.3V3").members
     assert by_id["block.ams1117_ldo_3v3"]["unresolvedWildcards"] == ["U.VOUT*"]
 
+    # The CH340C block is bound and its groups are explicit; the unbound shape is
+    # pinned in Rust (`wildcard_pins_survive_unexpanded_and_mark_the_module`).
     ch340 = circuits["ch340c_usb_serial"]
+    assert by_id["block.ch340c_usb_serial"]["unresolvedWildcards"] == []
     for member in ("J_USB.GND*", "J_USB.EP*", "J_USB.VBUS*"):
-        assert member in ch340.net("port.GND").members + ch340.net("port.VBUS_5V").members
-    assert by_id["block.ch340c_usb_serial"]["unresolvedWildcards"] == [
-        "D_ESD.I/O1*",
-        "D_ESD.I/O2*",
-        "J_USB.EP*",
-        "J_USB.GND*",
-        "J_USB.VBUS*",
-    ]
+        assert member not in ch340.net("port.GND").members
+        assert member not in ch340.net("port.VBUS_5V").members
     for module_id, module in by_id.items():
         text = json.dumps(module)
         if module["unresolvedWildcards"]:
@@ -389,7 +392,11 @@ def test_every_module_is_a_candidate_not_for_draw_compile(catalog) -> None:
     assert [module["id"] for module in catalog["modules"]] == sorted(ASSETS)
     for module in catalog["modules"]:
         assert module["maturity"] == "candidate"
-        assert module["identityStatus"] == "unverified"
+        # 038Q10 binds the SY8089 block to the managed symbol book and 038Q12
+        # binds the CH340C block; the other two keep the identity status the
+        # first batch of this line wrote.
+        bound = module["id"] in {"block.sy8089_buck_3v3", "block.ch340c_usb_serial"}
+        assert module["identityStatus"] == ("bound" if bound else "unverified"), module["id"]
         assert module["notForDrawCompile"] is True
         assert module["circuit"].startswith("circuits/")
         assert module["source"].keys() == {"commit", "path", "sha256"}
@@ -397,9 +404,19 @@ def test_every_module_is_a_candidate_not_for_draw_compile(catalog) -> None:
         assert len(module["source"]["sha256"]) == 64
         assert module["source"]["path"]
         assert module["limitations"], "a candidate states why it is not ready"
-        assert any("GENERIC-" in line for line in module["limitations"])
-        for part in module["parts"]:
-            assert part["symbolRef"] == "", "no symbol was identified"
+        if bound:
+            assert not any("GENERIC-" in line for line in module["limitations"]), (
+                "the bound module may not keep the 'no SymbolProfile was read' sentence"
+            )
+            assert any(
+                "blocklib/symbols/profiles.json" in line for line in module["limitations"]
+            ), module["limitations"]
+            for part in module["parts"]:
+                assert len(part["symbolRef"]) == 32, part["role"]
+        else:
+            assert any("GENERIC-" in line for line in module["limitations"])
+            for part in module["parts"]:
+                assert part["symbolRef"] == "", "no symbol was identified"
 
 
 def test_attribution_is_structured_and_only_where_upstream_states_it(catalog) -> None:

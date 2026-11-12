@@ -215,13 +215,12 @@ rust/target/debug/boardwise-cli.exe module-import --output blocklib/modules
 - **路径边界**：curation 内的一切输入相对路径（`standardParts`/`sourceManifest`/
   `license`/`source`）必须是相对 root 的普通组件，绝对路径与 `..` 一律拒绝；`output`
   必须是非绝对的、仅 Normal 组件的相对路径。`write_outputs` 自己再查一遍，不依赖上层。
-- 全部事实 `provenance: ai_asserted`、`draft: true`；catalog 一律
+- 全部事实 `provenance: ai_asserted`、`draft: true`；catalog 默认
   `maturity: candidate`、`identityStatus: unverified`、`notForDrawCompile: true`。
-  **catalog 的器件 `symbolRef` 为空**（没有识别出任何符号）；**CircuitSpec 的
-  `symbolRef` 用 `GENERIC-<role>` 占位**——它的 loader 对 `symbolRef` 是
-  `required=True`，空串直接拒绝。占位不是已解析身份，device UUID 绝不进该字段；
-  本批不接入 draw compile，catalog 同时标记 `notForDrawCompile`。接口 `role` 同理不可空，
-  写上游端口名。
+  未绑定的模块**catalog 的器件 `symbolRef` 为空**、**CircuitSpec 用 `GENERIC-<role>`
+  占位**（`symbolRef` 在 loader 里 `required=True`，空串直接拒绝）；占位不是已解析身份，
+  device UUID 绝不进该字段。唯一例外是 038Q10 的 opt-in 绑定，见下一节。
+  接口 `role` 同理不可空，写上游端口名。
 - Block 的 `author`/`contributors` 作为结构化 `attribution` 写进 catalog；没有该字段的
   Role Topology 不编造。
 - 通配脚（`U.VOUT*`、`J_USB.VBUS*`…）原样留在 members 并列入
@@ -234,6 +233,89 @@ rust/target/debug/boardwise-cli.exe module-import --output blocklib/modules
   （进程面、LICENSE 字节一致）、`tests/test_038q2_upstream_module_seed.py`（用既有
   CircuitSpec loader 读回四个输出，核对端口映射、来源 allowlist、catalog/manifest
   哈希，并在原始样本存在时用运行期收集的 free text 反查泄漏——具体标识不写进仓库）。
+
+### 3.x 038Q10：按模块 opt-in 的符号身份绑定
+
+`contracts/module-import/curation.json` 顶层可声明：
+
+```json
+"symbolBook": {
+  "index": "blocklib/symbols/index.json",
+  "profiles": "blocklib/symbols/profiles.json",
+  "defaultIdentity": "generic"
+}
+```
+
+只有声明了 `"identityBinding": "book"` 的 asset 走绑定；缺省仍走 `GENERIC-<role>`
+老路，逐字节不变。`defaultIdentity` 只接受 `generic`（全局默认永远是占位，绑定必须
+逐个资产点名），`role_topology` 资产声明该值一律拒绝，其它取值也拒绝。
+
+绑定开启后的硬约束（任一不满足整批 Err，输出目录不留半套文件）：
+
+- 两个 book 文件都进 `manifest.inputs`，**永不进 outputs**（不复制到
+  `blocklib/modules/`）；`index.profileBookSha256` 必须等于 `profiles.json` 的实算
+  SHA-256，每条 `profileSha256` 按 Q8 的同一算法重算（插入键序、`indent=2`、尾换行；
+  serde_json 默认 map 会排序键，所以**不重新渲染**，而是从 book 原文取该 profile 对象
+  的字节、去掉作为数组元素的额外缩进再哈希）；
+- `entry.maturity` 必须 `candidate`；每条 binding 的 `deviceUuid` 在该 entry 内唯一；
+  绑定到的 device 必须**唯一命中一条 entry**（0 条 = 未绑定、≥2 条 = 重复绑定，都拒绝）；
+- binding 的 `lcsc`/`mpn` 必须与模块声明的完全一致；
+- 每个非通配 `role.pin` 必须以**脚号或脚名全等**命中该 role 对应 profile 的 pin——
+  禁止前缀/模糊匹配；
+- 启用的模块含任何 `*` 成员即拒绝（通配组无法对到具体脚），未启用模块保持原通配记录，
+  不借机展开；
+- 通过后：catalog 与 CircuitSpec 的每个 part 得到**同一个**真实 `symbolRef`，
+  catalog `identityStatus` 变 `bound`（`maturity` 仍 `candidate`、
+  `notForDrawCompile` 仍 `true`），limitations 改为真实 book 来源 + 「离线编译/
+  编辑器/硬件验收未完成」，不再保留「没读 SymbolProfile」的旧句，也不写可投板/可互换。
+
+本批只证明**身份绑定**：PresentationSpec、离线编译与几何校验不在其内，book 的完整
+contract 仍是 `tools/check_symbol_book.py`（不另写一套几何算法），
+测试见 `tests/test_038q10_symbol_binding.py` 与 `tests/test_038q8_symbol_book.py`。
+
+
+### 3.y 038Q12：显式电气脚位合同（`pinGroups` / `portPins` / `nc`）
+
+上游 block 的 `internal_nets` 里有一类成员写成 `<role>.<pin>*`（`J_USB.GND*`、
+`D_ESD.I/O1*`、`U.VOUT*`）：它指的是**一组**物理脚，展开方式上游没写。038Q12 把这件事
+变成受管、可审计的显式裁定，放在 `curation.json` 的 asset 上：
+
+```json
+"identityBinding": "book",
+"pinGroups": { "J_USB.GND*": ["J_USB.A1B12", "J_USB.B1A12"] },
+"portPins":  { "VBUS_5V": ["J_USB.A4B9", "J_USB.B4A9"] },
+"nc":        ["U.7"]
+```
+
+- **只对绑定的 `block_template` 有效**。未绑定资产或 `role_topology` 上出现这三个字段
+  一律拒绝：字段写了却没有任何 profile 可对，就是一条本批根本不生效的决定。
+- `pinGroups` 是**逐组人工裁定，不是前缀展开**：key 必须逐字等于上游某个通配成员
+  （缺映射、多映射都拒绝），value 非空、每项同 role、`*` 不得残留、每项精确解析到唯一
+  物理脚。映射进来的成员替换原通配成员落到原网，其它成员原样保留。
+- 解析规则（`resolve_pin`）：`role.pin` 以**脚号或脚名全等**命中 profile，必须**恰好一个**；
+  0 个 = 不是该 profile 的脚（前缀/模糊一律不算），≥2 个 = 脚名被多脚复用（`USBLC6` 的
+  `I/O1`、Type-C 的 `VBUS`），**必须改写脚号**，不许挑第一个。profile 内脚号必须唯一，
+  复合脚号 `A1B12` 是**原子**，不许拆成 `A1`/`B12`。
+- `portPins` 只对**非** `port_pin_only` 端口有效：上游 `ports.VBUS_5V.at = J_USB.VBUS`
+  指向两个同名物理脚，`at` 本身无法唯一定位，所以由 `portPins` 点名；每个显式脚必须是
+  该端口网（`port.<name>`）的成员，且必须被 `at` 的脚名/脚号覆盖（`J_USB.VBUS` 不能
+  变成第三个脚）。`port_pin_only` 端口声明该字段拒绝——它的网就是那一根脚，没有第二
+  个成员可点。
+- `nc` 只收**显式 no-connect**（符号自己标 `NC.` 的脚）。NC 必须解析到唯一脚、不得重复，
+  且不得落在任何网上（含 `port_pin_only` 网）。**没声明连接的脚不叫 NC**：它们进 catalog
+  `unstatedPins`（用 `role.脚号`），既不能伪造成 NC，也不能塞进 net。
+- 绑定模块按 profile **逐脚对账**：connected（写进 circuit 的成员，按解析后的
+  `(role, 脚号)` 统计，脚号/脚名两种写法跨网即冲突）、nc、unstated 三类**互斥且覆盖**
+  全部物理脚。未绑定模块读数不变（`unstatedPins: []`、`unresolvedWildcards` 原样）。
+- 生成的 limitations 必须写明：显式脚位映射**不代表内部短接**，也不是 datasheet 读数、
+  离线编译、编辑器回读或硬件验收。
+
+这一批只把**身份与电气脚位**变成可机检的：CH340C 的七个 part 绑定书里的真实
+`symbolRef`、五组通配消失、`U.7` 是唯一 NC；`maturity` 仍 `candidate`、
+`notForDrawCompile` 仍 `true`、CircuitSpec `draft` 仍 `true`。测试见
+`rust/crates/boardwise-core/tests/module_import.rs`（负例为主）与
+`tests/test_038q12_ch340c_electrical_contract.py`（发布物为主）。
+
 
 ## 4. 迁移与派单纪律
 

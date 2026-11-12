@@ -1,7 +1,12 @@
 {
   "draft": true,
   "kind": "boardwise-circuit-spec",
-  "nc": [],
+  "nc": [
+    {
+      "pin": "U.7",
+      "provenance": "ai_asserted"
+    }
+  ],
   "nets": [
     {
       "id": "auto:C_V3.1|U.V3",
@@ -12,9 +17,10 @@
       "provenance": "ai_asserted"
     },
     {
-      "id": "auto:D_ESD.I/O1*|J_USB.DN1|J_USB.DN2|U.D-",
+      "id": "auto:D_ESD.1|D_ESD.6|J_USB.DN1|J_USB.DN2|U.D-",
       "members": [
-        "D_ESD.I/O1*",
+        "D_ESD.1",
+        "D_ESD.6",
         "J_USB.DN1",
         "J_USB.DN2",
         "U.D-"
@@ -22,9 +28,10 @@
       "provenance": "ai_asserted"
     },
     {
-      "id": "auto:D_ESD.I/O2*|J_USB.DP1|J_USB.DP2|U.D+",
+      "id": "auto:D_ESD.3|D_ESD.4|J_USB.DP1|J_USB.DP2|U.D+",
       "members": [
-        "D_ESD.I/O2*",
+        "D_ESD.3",
+        "D_ESD.4",
         "J_USB.DP1",
         "J_USB.DP2",
         "U.D+"
@@ -62,8 +69,12 @@
         "C_V3.2",
         "C_VCC.2",
         "D_ESD.GND",
-        "J_USB.EP*",
-        "J_USB.GND*",
+        "J_USB.10",
+        "J_USB.11",
+        "J_USB.8",
+        "J_USB.9",
+        "J_USB.A1B12",
+        "J_USB.B1A12",
         "R_CC1.2",
         "R_CC2.2",
         "U.GND"
@@ -100,7 +111,8 @@
       "members": [
         "C_VCC.1",
         "D_ESD.VBUS",
-        "J_USB.VBUS*",
+        "J_USB.A4B9",
+        "J_USB.B4A9",
         "U.VCC"
       ],
       "provenance": "ai_asserted"
@@ -153,7 +165,7 @@
       "mpn": "CL05B104KO5NNNC",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-C_V3",
+      "symbolRef": "5d54ad1e3ff64cdb9e7c9f449679d79f",
       "value": "100nF"
     },
     {
@@ -162,7 +174,7 @@
       "mpn": "CL05B104KO5NNNC",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-C_VCC",
+      "symbolRef": "5d54ad1e3ff64cdb9e7c9f449679d79f",
       "value": "100nF"
     },
     {
@@ -171,7 +183,7 @@
       "mpn": "USBLC6-2SC6",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-D_ESD",
+      "symbolRef": "e5c8198e70f04987968abe2e8a11202b",
       "value": "USBLC6-2SC6"
     },
     {
@@ -180,7 +192,7 @@
       "mpn": "USB3.1TYPE-C16P",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-J_USB",
+      "symbolRef": "ddf6b4a961904b0e8967696126378ed5",
       "value": "TYPE-C-16P"
     },
     {
@@ -189,7 +201,7 @@
       "mpn": "0402WGF5101TCE",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-R_CC1",
+      "symbolRef": "9807320b9dfe4ddb9f43a24d13de0ff6",
       "value": "5.1kΩ"
     },
     {
@@ -198,7 +210,7 @@
       "mpn": "0402WGF5101TCE",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-R_CC2",
+      "symbolRef": "9807320b9dfe4ddb9f43a24d13de0ff6",
       "value": "5.1kΩ"
     },
     {
@@ -207,7 +219,7 @@
       "mpn": "CH340C",
       "params": {},
       "provenance": "ai_asserted",
-      "symbolRef": "GENERIC-U",
+      "symbolRef": "7ee12203ce22419bb02b8b8f01c8a92c",
       "value": "CH340C"
     }
   ],
