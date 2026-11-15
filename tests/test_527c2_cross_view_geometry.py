@@ -478,15 +478,24 @@ def test_the_clause_is_observation_only():
 # --------------------------------------------------------------------------
 
 
-def test_the_real_v100_board_carries_its_landed_aliases_through_the_reader():
-    """``ProPrj_毕设FOC驱动板_v1.0.0``: 6 real 落线别名 rows, read verbatim.
+def test_the_real_v100_board_has_no_cross_view_difference_left():
+    """``ProPrj_毕设FOC驱动板_v1.0.0``: PCB1 has nothing left to report.
 
     This is the consumer evidence 527C2 §4 asks for, on the fixture the task book
-    names: U10's six gate/sense feet are **on** the drawing (distance 0) and the
-    two archives call each of those nets two different things — so the section
-    gains a ``differentNet`` list and nothing else. The reader copies the whole
-    section verbatim (``geometry`` included), the board is still ``suspected``,
-    and the report object is not mutated.
+    names — re-read after 038g2. Before it, the schematic called U10's six
+    gate/sense feet ``SHA/SLA/SLB/SHB/SHC/SLC`` while PCB1's own PAD_NET put them
+    on ``MOTA/IA+/IB+/MOTB/MOTC/IC+``, so this section carried six
+    ``differentNet`` rows and a ``suspected`` status on PCB1. Those six names were
+    the jumper labels 038g had dropped; with the alias closure in place the
+    schematic reads all six feet on the PCB's nets (6/6, board identity and the
+    per-foot table in `.tmp_038g2/v100-u10-adjudication.out.txt`), and the
+    *reading* goes away rather than the capability: a board with no lonely row
+    states ``{checked, minPins, lonely, autoNetAliases}`` and nothing else — no
+    ``status``, no ``geometry``. That is the same shape
+    ``test_an_empty_lonely_list_never_grows_a_geometry`` pins synthetically; what
+    is new here is that real bytes now take that path. What may not change:
+    PCB2 keeps its one real row, the reader copies the section verbatim, and
+    finalize still suspects exactly that one board.
     """
     from boardwise.engines.pcbreview import run_pcb_review
     from boardwise.engines.reviewfinalize import _suspected_boards
@@ -500,24 +509,27 @@ def test_the_real_v100_board_carries_its_landed_aliases_through_the_reader():
     assert [entry["title"] for entry in boards] == ["PCB1", "PCB2"]
 
     first = boards[0]["crossView"]
-    assert first["checked"] is True and first["status"] == "suspected"
-    assert len(first["lonely"]) == 6
-    geometry = first["geometry"]
-    assert geometry["binding"] == "endpoint"
-    assert geometry["counts"] == {
-        "noWire": 0, "differentNet": 6, "allOffWire": 0, "unresolved": 0,
-    }
-    assert [(row["designator"], row["pin"]) for row in geometry["differentNet"]] == [
-        ("U10", "6"), ("U10", "8"), ("U10", "9"),
-        ("U10", "11"), ("U10", "14"), ("U10", "16"),
-    ]
-    assert geometry["differentNet"][0]["schematicNet"] == "SHA"
-    assert geometry["differentNet"][0]["pcbNet"] == "MOTA"
+    assert first["checked"] is True
+    assert first["lonely"] == [], "038g2: the six alias rows are gone"
+    assert "status" not in first, (
+        "an empty lonely list has no verdict to carry (pcbreview's own shape)"
+    )
+    assert "geometry" not in first, "no lonely row, so no class to state"
+    assert "minPins" in first
+    # The six stub labels may not survive anywhere in this section either — not
+    # as a schematic-side name, not on the PCB side.
+    stale = {"SHA", "SLA", "SLB", "SHB", "SHC", "SLC"}
+    for row in first["autoNetAliases"]:
+        assert row["schematicNet"] not in stale and row["pcbNet"] not in stale, row
 
     # PCB2's one row is on a line and the two views agree on the name: a real
     # 同名落线 foot, so its geometry states the zero counts rather than a class.
     second = boards[1]["crossView"]
+    assert second["status"] == "suspected"
     assert len(second["lonely"]) == 1
+    (lonely,) = second["lonely"]
+    assert (lonely["designator"], lonely["pin"]) == ("CN2", "5")
+    assert lonely["schematicNet"] == lonely["pcbNet"]
     assert second["geometry"]["counts"] == {
         "noWire": 0, "differentNet": 0, "allOffWire": 0, "unresolved": 0,
     }
@@ -527,18 +539,24 @@ def test_the_real_v100_board_carries_its_landed_aliases_through_the_reader():
     payload = review_read_section(report, "crossView")
     assert repr(report) == before, "the reader may not mutate the report"
     copied = payload["boards"][0]["crossView"]
-    assert copied == first, "verbatim: geometry travels whole, nothing filtered"
+    assert copied == first, "verbatim: section travels whole, nothing filtered"
     assert copied is not first
-    assert copied["status"] == "suspected"
-    assert copied["geometry"] == geometry
+    assert "status" not in copied and copied["lonely"] == []
+    assert payload["boards"][1]["crossView"] == second
 
-    # finalize's own reading of the same report: still suspected, nothing derived
-    # from the geometry may upgrade it.
-    assert _suspected_boards(report) == [0, 1]
+    # finalize's own reading of the same report: only PCB2 is suspected, and
+    # nothing derived from a geometry may upgrade it.
+    assert _suspected_boards(report) == [1]
 
 
-def test_the_note_clause_on_the_real_board_names_all_six_aliases():
-    """The note half, on real bytes: six feet, six names, no truncation."""
+def test_the_note_clause_on_the_real_board_names_only_the_live_row():
+    """The note half, on real bytes: one board, one foot, no alias list.
+
+    038g2 re-read: PCB1's six aliases went away with the parser gap that produced
+    them (the reader test above), so the note names PCB2's one same-name foot,
+    states that count, and — because no foot is a cross-view difference any more —
+    carries no ``落线但两视图网名不同`` clause and no ``U10``/``SHA``-style pair.
+    """
     from boardwise.cli import _note_cross_view_lonely
     from boardwise.engines.pcbreview import run_pcb_review
     from boardwise.parsers.schematic import build_project_model
@@ -549,7 +567,14 @@ def test_the_note_clause_on_the_real_board_names_all_six_aliases():
     _note_cross_view_lonely(notes, section)
     assert len(notes) == 1
     note = notes[0]
-    assert "落线但两视图网名不同 6 个：U10.6（SHA→MOTA）" in note
-    assert "U10.16（SLC→IC+）" in note
+    assert "PCB2：1 个引脚（CN2.5）" in note
+    assert "落在线上且两视图网名相同 1 个" in note
+    assert "落线但两视图网名不同" not in note, "nothing differs across the views now"
+    assert "PCB1" not in note, "a clean board states no row"
+    for gone in ("U10.", "SHA", "SLA", "SLB", "SHB", "SHC", "SLC", "MOTA", "IC+"):
+        assert gone not in note, gone
     assert "几何读数（binding=endpoint" in note
     assert "…" not in note
+    assert "都不是天然权威" in note
+    for claim in ("已证明", "确定是陈旧", "旧板", "确认"):
+        assert claim not in note

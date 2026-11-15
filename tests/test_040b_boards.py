@@ -221,11 +221,21 @@ def test_the_project_totals_count_parts_not_names(foc):
     a net-naming flag, so Board3's jumper titles no longer produce a fake
     ``Symbol`` net; that net's five pins joined the ``IC+`` net the jumper
     physically bridges, and no other net on the board moved.
+
+    038g2 re-measured it as 137. 038g chose one main name per jumped cluster and
+    dropped the other side's ``NET`` label, so nine stub-only nets stayed on
+    Board3 with one member each (the driver's six ``SH*``/``SL*`` feet and the
+    three sense-negative feet). Those labels are the aliases the closure now
+    keeps: the nine islands join the phase/sense nets their jumpers already
+    bridge — all nine feet agree with PCB3's PAD_NET — and the board goes 34 ->
+    25 nets without a net being invented (the union of members is unchanged).
+    The two numbers this test is *about* — 155 placements over 121 names — are
+    still untouched, which is why the pair is asserted together.
     """
     assert foc.component_count() == 155
     assert len(foc.designators()) == 121
     assert sum(len(b.components) for b in foc.boards) == 155
-    assert foc.net_count() == 146
+    assert foc.net_count() == 137
 
 
 # --------------------------------------------------------------------------

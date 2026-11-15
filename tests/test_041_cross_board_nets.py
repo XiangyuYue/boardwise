@@ -467,15 +467,23 @@ def motor() -> ProjectModel:
 def test_the_real_three_board_project_yields_instances_groups_and_pairs(foc):
     assert foc.board_titles() == ["Board1", "Board2", "Board3"]
     assert all(board.board.uuid for board in foc.boards)
-    assert len(foc.net_instances()) == foc.net_count() == 146, (
+    assert len(foc.net_instances()) == foc.net_count() == 137, (
         "one instance per (addressable board, net name)"
     )
     groups = foc.cross_board_net_instances()
-    assert len(groups) == 39, "measured on this fixture: 34 two-board + 5 three-board"
+    # 038g2 re-measured this pair: 39 -> 30 groups and 49 -> 40 edges, because
+    # nine net names left Board3 when 038g's dropped jumper labels came back as
+    # aliases (see test_040_page_scope's page test). All nine were two-board
+    # names whose only other board was the one that still has the stub, so the
+    # 34 pairs became 25 while the 5 three-board names did not move:
+    # 25 pairs + 5 triples = 30 groups, 25 + 5x3 = 40 edges. What this test is
+    # about — a group is a *name* seen on more than one board, still disclosed as
+    # unproven — is untouched: `unproven_nets` below is the same empty dict.
+    assert len(groups) == 30, "measured on this fixture: 25 two-board + 5 three-board"
     assert "GND" in groups and "VCC" in groups
     assert all(len({instance.board_uuid for instance in members}) > 1
                for members in groups.values())
-    assert len(foc.unproven_edges) == 49, "34 pairs + 5 triples = 34 + 15"
+    assert len(foc.unproven_edges) == 40, "25 pairs + 5 triples = 25 + 15"
     assert foc.unproven_nets == {}
     assert foc.non_addressable_pages() == ()
 
@@ -483,9 +491,13 @@ def test_the_real_three_board_project_yields_instances_groups_and_pairs(foc):
 def test_the_real_two_board_project_yields_instances_groups_and_pairs(motor):
     assert len(motor.boards) == 2
     assert all(board.board.uuid for board in motor.boards)
-    assert len(motor.net_instances()) == motor.net_count() == 156
-    assert len(motor.cross_board_net_instances()) == 38
-    assert len(motor.unproven_edges) == 38, "one pair per shared name, two boards"
+    assert len(motor.net_instances()) == motor.net_count() == 147
+    # 038g2: 38 -> 35, the three sense-negative stub names that stopped being a
+    # net of their own on the driver board (its nine moved feet are adjudicated
+    # against PCB2's PAD_NET in `.tmp_038g2/motor-adjudication.out.txt`). One
+    # edge per shared name on a two-board project, so both numbers fall together.
+    assert len(motor.cross_board_net_instances()) == 35
+    assert len(motor.unproven_edges) == 35, "one pair per shared name, two boards"
     assert motor.unproven_nets == {}
     assert motor.non_addressable_pages() == ()
 
@@ -671,10 +683,13 @@ def test_the_markdown_spells_short_uuids_with_titles_and_claims_nothing():
 def test_the_checkup_report_json_and_markdown_carry_the_section(tmp_path, foc):
     """End to end on the real three-board archive: `report.json` gets
     `source.crossBoardNets`, `report.md` gets its own section, and the findings
-    count is **239** — S1 measured 241, and 529's mid-distance decoupling band
+    count is **242** — S1 measured 241, and 529's mid-distance decoupling band
     (2.2 µF / 4.7 µF now count as mid-range caps) took one `pcb-decap-distance`
-    WARN and the INFO beside it out of the run since. This channel adds neither,
-    and the 2 that moved are 529's, not 041's."""
+    WARN and the INFO beside it out of the run since, leaving 239; 038Y's
+    `pcb-silk-on-foreign-pad` then added one approximation-disclosure INFO per
+    board (three boards, so three INFOs), which is the only reason this reads
+    242 rather than 239. This channel adds neither, and every row that moved
+    belongs to those rules' readings, not 041's."""
     from boardwise import cli
 
     out = tmp_path / "checkup"
@@ -685,16 +700,24 @@ def test_the_checkup_report_json_and_markdown_carry_the_section(tmp_path, foc):
 
     report = json.loads((out / "report.json").read_text(encoding="utf-8"))
     section = report["source"]["crossBoardNets"]
-    assert section["count"] == 39, "the model's 39 shared names reach the JSON"
+    assert section["count"] == 30, (
+        "the model's 30 shared names reach the JSON (038g2: was 39 before the "
+        "nine dropped jumper labels came back as aliases on Board3)"
+    )
     assert [(board["uuid"], board["title"]) for board in section["boards"]] == [
         (board.board.uuid, board.board.title) for board in foc.boards
     ]
     assert section["nonAddressablePages"] == []
-    assert len(report["findings"]) == 239, "041-S1 adds a channel, not findings"
+    assert len(report["findings"]) == 242, "041-S1 adds a channel, not findings"
     summary = report["summary"]
     assert (summary["errorCount"], summary["warnCount"], summary["infoCount"]) == (
-        50, 20, 169,
-    ), "frozen from the 529 checkup run on this fixture (S1 read 50-21-170)"
+        50, 20, 172,
+    ), (
+        "frozen from the 038Y checkup run on this fixture: 529 left 50-20-169 "
+        "(S1 read 50-21-170) and 038Y's `pcb-silk-on-foreign-pad` added one "
+        "approximation-disclosure INFO per board — three boards, three INFOs, "
+        "no ERROR and no WARN moved"
+    )
     assert report["completion"]["verdict"] == "incomplete", (
         "measured on this fixture: parts missing datasheets plus 20 untriaged "
         "WARNs, so the gate cannot claim complete — 041 must not move that word"
@@ -724,7 +747,7 @@ def test_the_checkup_report_json_and_markdown_carry_the_section(tmp_path, foc):
 
     markdown = (out / "report.md").read_text(encoding="utf-8")
     assert "## 跨板网络（未证明）" in markdown
-    assert "39 个网名" in markdown
+    assert "30 个网名" in markdown, "038g2: the same 30 names the JSON carries"
     assert "provenCount" not in markdown
     assert "已证明相连" not in markdown
 
@@ -770,7 +793,7 @@ def test_both_reports_say_the_same_thing_and_neither_draws_a_conclusion(foc):
     assert "## 跨板网络（未证明）" in review_text
     assert review_text.index("## 跨板网络") < review_text.index("No findings.")
     shared = [name for name in section["nets"]]
-    assert len(shared) == 39
+    assert len(shared) == 30, "038g2: the nine Board3 alias stubs are no longer names"
     for name in ("GND", "VCC", "PGND"):
         assert name in checkup_text and name in review_text
     for claim in ("已证明相连", "已连接", "已断开"):

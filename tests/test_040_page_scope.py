@@ -107,29 +107,53 @@ def test_u5_is_the_ch340n_of_the_other_three_boards(foc):
 
 def test_the_header_brackets_no_longer_short_u2s_columns(foc):
     """U2 on page 40daf is a 2x6 header whose symbol draws a bracket over each
-    column's three pins. The bracket is decoration: the file gives each of those
-    pins its own stub wire with its own NET label (IC-, IC+, SLC / GLC, SHC,
-    GHC), and PCB3 confirms six *different* nets. F3 keeps them apart.
+    column's three pins. The bracket is decoration, not copper: every one of
+    those pins has its own stub wire, and the 038g jumpers on the page bridge
+    those stubs onto the copper that carries the real parts.
 
     040b makes this a direct assertion: the board carrying that header is its own
     model now, so `Board3.components["U2"]` **is** the 2x6 header. (Before 040b a
     project-wide dict let the *other* U2 — the 28-pin part on Board1 — overwrite
     it, and the assertion had to go through net membership.)
+
+    038g2 re-measured all twelve feet against **PCB3's own PAD_NET** (12/12
+    agree; `.tmp_038g2/host_adjudication.py`). The reading this test used to pin
+    — "PCB3 confirms six *different* nets" — was wrong in one direction: `IC-`,
+    `SLC` and `SHC` are the *stub labels* our parser had dropped, and PCB3's
+    whole net list (14 names) has none of them. What the board really says is
+    `PGND` for the header's ground feet, one `IC+` net for U2.4 **and** U2.6,
+    `MOTC` for U2.10, and `GLC` / `GHC` as their own two-pin nets. The bracket
+    still short-circuits nothing: the gate/phase feet stay on the distinct nets
+    PCB3 assigns, but "six nets" was a reading of our own gap.
     """
     board3 = _board(foc, "Board3")
     u2 = board3.components["U2"]
     assert len(u2.pins) == 12, "the 2x6 header, complete"
     by_net = {pin.number: pin.net for pin in u2.pins}
     assert by_net == {
-        "1": "PGND", "2": "IC-", "3": "PGND", "4": "IC+", "5": "PGND", "6": "SLC",
-        "7": "+24V", "8": "GLC", "9": "+24V", "10": "SHC", "11": "+24V", "12": "GHC",
-    }
-    # No net holds two of the three bracket-mates any more.
-    for triple in (("2", "4", "6"), ("8", "10", "12")):
-        members = {("U2", number) for number in triple}
-        for name, net in board3.nets.items():
-            shared = members & set(net.pins)
-            assert len(shared) <= 1, (name, sorted(shared))
+        "1": "PGND", "2": "PGND", "3": "PGND", "4": "IC+", "5": "PGND", "6": "IC+",
+        "7": "+24V", "8": "GLC", "9": "+24V", "10": "MOTC", "11": "+24V", "12": "GHC",
+    }, "PCB3's PAD_NET, foot by foot"
+    # The bracket still shorts nothing: each pair stays its own net, with the
+    # members PCB3 gives it (a bracket that became copper would show up here as
+    # one net holding two of the three).
+    assert sorted(board3.nets["GLC"].pins) == [("Q4", "4"), ("U2", "8")]
+    assert sorted(board3.nets["GHC"].pins) == [("Q3", "4"), ("U2", "12")]
+    header_on = {number for designator, number in board3.nets["MOTC"].pins
+                 if designator == "U2"}
+    assert header_on == {"10"}, (
+        f"MOTC is U2.10's own phase node; it must not swallow the other column's "
+        f"feet (got {sorted(header_on)})"
+    )
+    # IC+ holds exactly the header's two sense feet — not one of them, and not a
+    # third: the 038g2 alias closure joined the dropped `SLC` stub to the copper
+    # U2.6 actually sits on, so the pair is one net and no other header foot.
+    ic_header = {number for designator, number in board3.nets["IC+"].pins
+                 if designator == "U2"}
+    assert ic_header == {"4", "6"}, sorted(ic_header)
+    # ... and the stub-only names are gone rather than moved onto the header.
+    for dropped in ("IC-", "SLC", "SHC", "SHA", "SHB", "SLA", "SLB"):
+        assert dropped not in board3.nets, dropped
 
 
 def test_both_u2s_survive_as_complete_parts(foc):
@@ -224,9 +248,17 @@ def test_pages_are_not_welded(foc, motor):
     one net (those four pins now read ``IC+``). One island fewer is the whole
     delta; the page/board isolation this test asserts — no net spanning two
     pages — is unchanged, and every other net keeps its name and members.
+
+    038g2 re-measured Board3 as 34 -> 25. 038g's naming kept only the part-side
+    name of a jumped cluster, so nine one-member stub nets survived on that board
+    (six driver ``SH*``/``SL*`` feet and three sense-negative feet). The alias
+    closure now lands all nine on the phase/sense net their jumper already
+    bridges — 9/9 agree with PCB3's PAD_NET, and PCB3's net list has none of the
+    nine old names. Nine islands fewer, again with no net spanning two pages;
+    the 高速电机控制器 board loses nine of the same kind (52 -> 43).
     """
     board3 = _board(foc, "Board3")
-    assert [len(b.nets) for b in foc.boards] == [99, 13, 34]
+    assert [len(b.nets) for b in foc.boards] == [99, 13, 25]
     # The 高速电机控制器 project: two boards with the designer's own titles
     # (板名自定义 — the board *is* the unit, not a board numbered by us).
     # 042 §WI-1 re-measured this pair: the board's displaced attribute blocks
@@ -240,9 +272,12 @@ def test_pages_are_not_welded(foc, motor):
     # ten ``Short-Symbol`` jumpers on one page, and the same hand-off applies —
     # the fabricated ``Symbol`` net (its members were ``C8.1``, ``Q3.1/2/3``
     # and ``R43.2``) is gone and the halves those jumpers bridge are one net.
-    # Again one island fewer on a board whose pages stay apart: the isolation
-    # this test asserts is what is being measured, not what changed.
-    assert [len(b.nets) for b in motor.boards] == [104, 52]
+    # 038g2 took its nine remainder stubs in as aliases (52 -> 43): the driver's
+    # ``SL*``/``SH*`` feet and the sense-negative feet land on the nets PCB2's
+    # PAD_NET puts them on (9/9 agree, 0 split over the board's shared nets).
+    # Again islands fewer on boards whose pages stay apart: the isolation this
+    # test asserts is what is being measured, not what changed.
+    assert [len(b.nets) for b in motor.boards] == [104, 43]
     assert motor.board_titles() != ["Board1", "Board2"]
     # The old weld's signature: one net with 100+ members. None is left.
     for board_model in (*foc.boards, *motor.boards):

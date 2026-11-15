@@ -2599,6 +2599,11 @@ def _fill_board_model(
     labels: dict[Any, str] = {}
     clusters = uf.clusters()
     explicit: dict[Any, str] = {}
+    # 038g2: net cluster (after the join) -> every explicit NET label the
+    # jumper's cluster carries, both sides. ``short_pin_labels`` above keeps
+    # only the part-bearing side's, because that is what *names* the net; the
+    # other side's label is not a name, it is evidence — see the closure below.
+    short_alias_labels: dict[Any, set[str]] = {}
     for root, nodes in clusters.items():
         # explicit NET label on any wire group of the cluster (the wire node is
         # ("w", page, group, index, end), so the group id is node[2])
@@ -2608,6 +2613,7 @@ def _fill_board_model(
         )
         pin_labels = short_pin_labels.get(root)
         if pin_labels is not None:
+            short_alias_labels[root] = set(group_labels)
             # 038g: a net a jumper holds together is named by the side that
             # carries the parts — the power flag first (it is the rail name the
             # drawing itself gave the net), then that side's explicit label,
@@ -2647,6 +2653,60 @@ def _fill_board_model(
         explicit[root] = f"NET{next_index}"
         taken.add(explicit[root])
     labels = explicit
+
+    # --- 038g2: a jumper's straddled NET names are still evidence of one net
+    #
+    # 038g names a jumped cluster by the side that carries the parts and keeps
+    # only that name, so the other side's explicit ``NET`` label stops being a
+    # name. It is not decoration: a stub elsewhere on the sheet carrying the
+    # same name is the drawing's own statement that it is the same net, and the
+    # name was the only edge that ever joined it. Measured on the V4 sample
+    # (PCB-A): six driver pins sat alone on their own single-member nets
+    # because the jumper's stub had been renamed to the phase/sense name the
+    # part side won, while the pin's own stub island still carried the old one.
+    #
+    # So keep every accepted jumper's own labels, build the equivalence closure
+    # "these labels mean one net", and move each cluster named by one of them
+    # onto a single main name. That name stays 038g's choice unless the closure
+    # holds several jumper mains: then a ``forced`` (power-flag) main wins, else
+    # the string order decides — never the order the records happen to arrive
+    # in, which would make the reading depend on the file's layout.
+    #
+    # This is a rename, not a second netlist: only ``labels[root]`` moves, so
+    # ``Pin.net`` and ``Net.pins`` are still filled exactly once below and no
+    # alias survives as a net of its own. Clusters the closure does not name are
+    # untouched, and it runs after the ``NETn`` pass so the auto-name sequence
+    # is unchanged. What it must not do is reach beyond 038g's own gate: only a
+    # jumper that joined two clusters contributes labels, so a redundant short,
+    # a dangling one and a plain multi-label cluster keep the old behaviour, and
+    # the pages/boards are already separate graphs above.
+    if short_alias_labels:
+        alias_uf = _UnionFind()
+        # main name -> did a power flag force it (the closure's priority)
+        short_mains: dict[str, bool] = {}
+        for root, cluster_labels in short_alias_labels.items():
+            main = labels[root]
+            alias_uf.find(main)
+            short_mains[main] = short_mains.get(main, False) or root in forced
+            for cluster_label in cluster_labels:
+                alias_uf.find(cluster_label)
+                alias_uf.union(main, cluster_label)
+        closure: dict[Any, set[str]] = {}
+        for root, cluster_labels in short_alias_labels.items():
+            for cluster_label in (*cluster_labels, labels[root]):
+                closure.setdefault(alias_uf.find(cluster_label), set()).add(cluster_label)
+        redirect: dict[str, str] = {}
+        for names in closure.values():
+            mains = [name for name in names if name in short_mains]
+            if not mains:
+                continue
+            flagged = sorted(name for name in mains if short_mains[name])
+            main = (flagged or sorted(mains))[0]
+            for name in names:
+                if name != main:
+                    redirect[name] = main
+        for root, name in labels.items():
+            labels[root] = redirect.get(name, name)
 
     # --- fill Pin.net and reverse-build nets
     nets: dict[str, Net] = {}

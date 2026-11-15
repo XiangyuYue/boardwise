@@ -437,10 +437,17 @@ UNTOUCHED_BOARDS = {
     },
     "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2": {
         "Board2": "ed500df68cc3da383ebfb019076ac0484c1b00b3b7a154f51e01471240a25639",
-        "Board3": "6916d714066ec5ddc301b4420e6995398acfc836ee5f22caa9501c9fbdcf1547",
+        # 038g2 re-pinned: nine one-member stub nets (the driver's six
+        # ``SH*``/``SL*`` feet and three sense-negative feet) are aliases of the
+        # nets their jumpers bridge, and all nine feet agree with PCB3's own
+        # PAD_NET. Member-only semantics unchanged; see the nail's docstring.
+        "Board3": "0d755edb431e04a2d1fc21d2c7e6723eac8ae73bfd267d8e17c9be46f9b2ad96",
     },
     "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2": {
-        "驱动板": "5ce9cfdc9775cdb9fadcfa624b8c4ce771cef54d997206af8e81407820e643db",
+        # 038g2 re-pinned, same shape and same evidence: nine feet (six driver
+        # ``SH*``/``SL*`` + three sense-negative) now read the nets the jumper
+        # aliases name, 9/9 agree with PCB2's PAD_NET.
+        "驱动板": "58755ba3ca2f314e541b40654401ee86623b170744fc37c04f76810f6844a5ad",
     },
     "tests/fixtures/board24v.enet": {
         "<no board>": "99dfd33f15832d729295e0986f9816ca759dc6307c0148b12648642f65e6c392",
@@ -482,8 +489,27 @@ REPEATED_NET_KEYS = {
 # --- END generated nail table ----------------------------------------------
 
 
-def test_the_boards_without_a_repeated_designator_did_not_move_one_byte():
-    """The zero-movement nail, board by board."""
+def test_the_boards_without_a_repeated_designator_match_their_pinned_reading():
+    """The zero-movement nail, board by board — re-pinned once, with evidence.
+
+    This is 105's own nail: on a board with no repeated designator the guard
+    this file adds never fires, so its member reading (net -> sorted members,
+    nothing else) is what it was. That is still true of 17 of the 19 boards
+    below — they have not moved since the digests were recorded on the pre-fix
+    tree.
+
+    Two have been re-pinned by 038g2, and the difference is *not* this guard:
+    the 毕设 Board3 and the 高速电机控制器 驱动板 each lose the same nine
+    one-member stub nets because 038g named a jumped cluster by its part side
+    and dropped the other side's ``NET`` label. The closure that keeps those
+    labels as aliases lands every foot on the net its jumper already bridges,
+    and each board's nine feet were adjudicated against that board's **own PCB
+    PAD_NET** (9/9 agree, `.tmp_038g2/host_adjudication.out.txt`,
+    `.tmp_038g2/motor-adjudication.out.txt`). Re-pinning is therefore an
+    explicit, evidenced move — not a loosened nail: the set is still 19 boards,
+    the digest still covers net keys and member sets only, and a board moving
+    without that evidence still fails here.
+    """
     recorded = {
         (key, title) for key, titles in UNTOUCHED_BOARDS.items() for title in titles
     }

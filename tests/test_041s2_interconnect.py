@@ -912,18 +912,25 @@ FOC = FIXTURES / "ProPrj_毕设FOC驱动板_2026-09-17.epro2"
 MOTOR = FIXTURES / "ProPrj_高速电机控制器_2026-09-16.epro2"
 GOLDEN = FIXTURES / "ch340_golden.epro2"
 
-#: The two numbers this fixture measured before S2 (S1 froze them): the review's
-#: 45 rows / 30-1-14 and checkup's **239** rows / 50-20-169 with `incomplete`. A
-#: declaration is disclosure only, so not one of them may move.
+#: The two numbers this fixture measures today: the review's 45 rows / 30-1-14
+#: and checkup's **242** rows / 50-20-172 with `incomplete`. A declaration is
+#: disclosure only, so not one of them may move.
 #:
 #: 241 / 50-21-170 was S1's reading and is **no longer** the fixture's: 529 put
 #: the mid-distance decoupling band in (2.2 µF / 4.7 µF count as mid-range caps
 #: now), so one `decap-required-caps` WARN and the INFO that carried it left the
-#: run — 239 = 50 E + 20 W + 169 I. That move belongs to 529's rule change, and
-#: S2's own claim is narrower: the declaration neither adds a row nor moves one,
-#: which is why the review reading (30/1/14) is untouched.
+#: run — **239 = 50 E + 20 W + 169 I**. That move belongs to 529's rule change,
+#: and S2's own claim is narrower: the declaration neither adds a row nor moves
+#: one, which is why the review reading (30/1/14) is untouched.
+#:
+#: 242 = 50 E + 20 W + 172 I is 038Y's reading, not 038G2's: 038Y landed
+#: `pcb-silk-on-foreign-pad`, whose approximation disclosure emits **at most one
+#: INFO per board** (the silk ink that had to be read as chords / corner points
+#: instead of arcs). Three boards, three INFOs, so 169 -> 172 — ERROR and WARN
+#: do not move at all. 038G2's jumper aliases only moved the *shared-name* count
+#: (39 -> 30, see the cross-board test); they never added a finding.
 REVIEW_SUMMARY = {"ERROR": 30, "WARN": 1, "INFO": 14}
-CHECKUP_COUNTS = (50, 20, 169)
+CHECKUP_COUNTS = (50, 20, 172)
 
 #: The two-board fixture's review reading, frozen by S1 in
 #: `test_041_cross_board_nets.py` (22 ERROR / 1 WARN / 48 INFO = 71 rows). Its
@@ -991,7 +998,7 @@ def _section_text(markdown: str) -> str:
 def test_a_declared_tie_reaches_both_reports_and_moves_no_number(tmp_path, foc_model):
     """Requirement 1: one declaration, two products, the same reading.
 
-    ``checkup --file`` keeps its exit 1, its 239 findings and its 50/20/169 with
+    ``checkup --file`` keeps its exit 1, its 242 findings and its 50/20/172 with
     ``completion.verdict == incomplete``; ``review`` keeps its exit 1 and its 45
     findings with 30/1/14. What is *added* is ``provenCount: 1`` and one row
     naming both real ends — in `report.json`, in `report.md` and in
@@ -1019,7 +1026,7 @@ def test_a_declared_tie_reaches_both_reports_and_moves_no_number(tmp_path, foc_m
     ) == 1, "exit 1 = ERROR findings present, measured on this fixture before S2"
 
     report = json.loads((out / "report.json").read_text(encoding="utf-8"))
-    assert len(report["findings"]) == 239, "041 adds a channel, not findings"
+    assert len(report["findings"]) == 242, "041 adds a channel, not findings"
     summary = report["summary"]
     assert (summary["errorCount"], summary["warnCount"], summary["infoCount"]) == (
         CHECKUP_COUNTS
@@ -1030,7 +1037,10 @@ def test_a_declared_tie_reaches_both_reports_and_moves_no_number(tmp_path, foc_m
     )
 
     section = report["source"]["crossBoardNets"]
-    assert section["count"] == 39, "the model's own 39 shared names are unchanged"
+    # 038g2: 39 -> 30 (test_041_cross_board_nets explains the nine Board3 names
+    # that stopped being nets once the jumper aliases came back). The declaration
+    # is added beside that reading, so the count it sees is the model's own.
+    assert section["count"] == 30, "the model's own 30 shared names are unchanged"
     assert section["provenCount"] == 1
     (row,) = section["proven"]
     assert row["from"] == {
@@ -1074,8 +1084,9 @@ def test_a_declared_tie_reaches_both_reports_and_moves_no_number(tmp_path, foc_m
 def test_real_two_board_declaration_preserves_both_report_baselines(tmp_path, motor_model):
     """The same contract on the real two-board fixture, where every group is a pair.
 
-    The FOC project is three boards, so its section mixes 34 pairs with 5 triples.
-    This one is the pure pair case (2 boards, 156 instances, 38 shared names, 38
+    The FOC project is three boards, so its section mixes 25 pairs with 5 triples
+    (038g2: 34 pairs before nine Board3 alias names left the shared set).
+    This one is the pure pair case (2 boards, 147 instances, 35 shared names, 35
     unproven edges), and the declared pair is read out of the model — never a
     literal uuid or net name — so a changed fixture cannot pass by coincidence.
 
@@ -1083,7 +1094,7 @@ def test_real_two_board_declaration_preserves_both_report_baselines(tmp_path, mo
     declaration (it is still the findings array, no field, no row), both commands
     keep their exit code, checkup's `findings`/`summary`/`completion`/
     `warning_triage` are equal run-to-run, and the declared reading adds one
-    `proven` row *beside* the 38 E0 groups without moving, merging or deleting
+    `proven` row *beside* the 35 E0 groups without moving, merging or deleting
     one of them. The two Markdown reports print that section verbatim.
     """
     from boardwise import cli
@@ -1152,10 +1163,10 @@ def test_real_two_board_declaration_preserves_both_report_baselines(tmp_path, mo
     assert "proven" not in plain_section and "provenCount" not in plain_section, (
         "the no-argument path keeps S1's key set exactly"
     )
-    assert plain_section["count"] == 38, "two boards: one group per shared name"
+    assert plain_section["count"] == 35, "two boards: one group per shared name"
 
     section = declared["source"]["crossBoardNets"]
-    assert section["count"] == 38
+    assert section["count"] == 35
     assert section["nets"] == plain_section["nets"], (
         "not one E0 group moved, merged or disappeared"
     )
@@ -1189,7 +1200,7 @@ def test_real_two_board_declaration_preserves_both_report_baselines(tmp_path, mo
 def test_a_declared_same_name_group_upgrades_only_the_named_endpoints(tmp_path, foc_model):
     """Requirement 2: declaring ``GND@A <-> GND@B`` proves that pair and nothing else.
 
-    The other 38 same-named groups keep their E0 / welded-by-name / merged=false
+    The other 29 same-named groups keep their E0 / welded-by-name / merged=false
     reading, and the group the declaration names stays in that list too: the
     declaration is added beside it, not written over or deleted from it.
     """
@@ -1214,7 +1225,7 @@ def test_a_declared_same_name_group_upgrades_only_the_named_endpoints(tmp_path, 
     section = json.loads((out / "report.json").read_text(encoding="utf-8"))[
         "source"
     ]["crossBoardNets"]
-    assert section["count"] == 39, "no group was merged away or added"
+    assert section["count"] == 30, "no group was merged away or added"
     assert section["provenCount"] == 1
     (row,) = section["proven"]
     assert row["from"]["netName"] == shared and row["to"]["netName"] == shared
@@ -1232,7 +1243,7 @@ def test_a_declared_same_name_group_upgrades_only_the_named_endpoints(tmp_path, 
     for net in section["nets"]:
         assert net["evidenceLevel"] == "E0", net["name"]
         assert net["merged"] is False, net["name"]
-    assert section["provenCount"] == 1, "39 groups do not each become a proven tie"
+    assert section["provenCount"] == 1, "30 groups do not each become a proven tie"
 
 
 def test_a_bad_declaration_is_refused_before_any_report_is_written(tmp_path, foc_model, capsys):

@@ -443,3 +443,178 @@ def test_two_pages_at_one_coordinate_are_two_nets(tmp_path):
     assert "P1_STUB" not in board.nets and "P2_STUB" not in board.nets
     assert _members(board, "P1_LIVE") == [("RP1", "1"), ("RP1", "2")]
     assert _members(board, "P2_LIVE") == [("RP2", "1"), ("RP2", "2")]
+
+
+# --------------------------------------------------------------------------
+# 4. 038g2: the label the chosen main name hides is still a join
+#
+# 038g names a jumped cluster by the side that carries the parts. The other
+# side's explicit ``NET`` label is then dropped from ``model.nets`` — but it is
+# not decoration: a stub elsewhere on the sheet carrying the same name is the
+# drawing's own statement that it is the same net, and it was only ever joined
+# by that name. On the real sample six driver pins sat alone on single-member
+# nets exactly this way. These fixtures pin the closure and its bounds.
+# --------------------------------------------------------------------------
+
+
+def test_an_alias_label_still_joins_what_the_main_name_hid(tmp_path):
+    """``SENSE`` on the partless stub, ``PHASE`` on the resistor's side.
+
+    The jumper's net is ``PHASE`` (038g), and ``R2`` sits on a separate island
+    that the drawing labels ``SENSE`` — the very label the jumper's left stub
+    carries. That label is the only thing saying the two are one net, so ``R2``
+    must land on ``PHASE`` too and no ``SENSE`` net may survive.
+    """
+    lines = [_page("page-1")]
+    lines += _placed(part_id="s1", symbol="sym-short", device="dev-short", x=100.0, y=Y)
+    lines += _placed(part_id="r1", symbol="sym-r", device="dev-r", designator="R1",
+                     x=170.0, y=Y, z_index=2)
+    lines += _placed(part_id="r2", symbol="sym-r", device="dev-r", designator="R2",
+                     x=300.0, y=Y, z_index=3)
+    lines += _wire("g-stub", [(90.0, Y), (60.0, Y)], net="SENSE")
+    lines += _lead("g-live", 110.0, 170.0, net="PHASE")
+    lines += _lead("g-sense", 320.0, 300.0, net="SENSE")
+    board = _board(tmp_path, lines)
+
+    assert _pin_net(board, "R1", "1") == "PHASE"
+    assert _pin_net(board, "R2", "1") == _pin_net(board, "R2", "2") == "PHASE", (
+        "the jumper's own SENSE stub names R2's island; got "
+        f"R2.1={_pin_net(board, 'R2', '1')!r}"
+    )
+    assert "SENSE" not in board.nets, f"got {sorted(board.nets)}"
+    assert _members(board, "PHASE") == [("R1", "1"), ("R1", "2"), ("R2", "1"), ("R2", "2")]
+
+
+def test_without_the_short_the_same_labels_stay_two_nets(tmp_path):
+    """The control for the closure: same layout, no jumper, nothing joins.
+
+    ``SENSE`` must not become evidence on its own — the alias only reaches the
+    clusters a jumper actually left a label on.
+    """
+    lines = [_page("page-1")]
+    lines += _placed(part_id="r1", symbol="sym-r", device="dev-r", designator="R1",
+                     x=170.0, y=Y)
+    lines += _placed(part_id="r2", symbol="sym-r", device="dev-r", designator="R2",
+                     x=300.0, y=Y, z_index=2)
+    lines += _wire("g-stub", [(90.0, Y), (60.0, Y)], net="SENSE")
+    lines += _lead("g-live", 110.0, 170.0, net="PHASE")
+    lines += _lead("g-sense", 320.0, 300.0, net="SENSE")
+    board = _board(tmp_path, lines)
+
+    assert _pin_net(board, "R1", "1") == "PHASE"
+    assert _pin_net(board, "R2", "1") == "SENSE"
+    assert _members(board, "PHASE") == [("R1", "1"), ("R1", "2")]
+    assert _members(board, "SENSE") == [("R2", "1"), ("R2", "2")]
+
+
+def test_the_alias_is_an_exact_match_not_a_casefold(tmp_path):
+    """``SENSE`` and ``sense`` are two names the designer typed, not one."""
+    lines = [_page("page-1")]
+    lines += _placed(part_id="s1", symbol="sym-short", device="dev-short", x=100.0, y=Y)
+    lines += _placed(part_id="r1", symbol="sym-r", device="dev-r", designator="R1",
+                     x=170.0, y=Y, z_index=2)
+    lines += _placed(part_id="r2", symbol="sym-r", device="dev-r", designator="R2",
+                     x=300.0, y=Y, z_index=3)
+    lines += _wire("g-stub", [(90.0, Y), (60.0, Y)], net="SENSE")
+    lines += _lead("g-live", 110.0, 170.0, net="PHASE")
+    lines += _lead("g-sense", 320.0, 300.0, net="sense")
+    board = _board(tmp_path, lines)
+
+    assert _pin_net(board, "R1", "1") == "PHASE"
+    assert _pin_net(board, "R2", "1") == "sense"
+    assert _members(board, "sense") == [("R2", "1"), ("R2", "2")]
+
+
+def test_an_alias_chain_converges_on_one_deterministic_name(tmp_path):
+    """Two jumped clusters sharing the label ``SENSE`` form one closure.
+
+    ``S1`` bridges ``SENSE``|``PHASE``, ``S2`` bridges ``SENSE``|``SENSE2``, so
+    the closure holds two main names. Neither the record order nor the walk
+    order may decide: the string order does, and both resistors end up on
+    ``PHASE`` with neither alias left behind.
+    """
+    lines = [_page("page-1")]
+    lines += _placed(part_id="s1", symbol="sym-short", device="dev-short", x=100.0, y=Y)
+    lines += _placed(part_id="r1", symbol="sym-r", device="dev-r", designator="R1",
+                     x=170.0, y=Y, z_index=2)
+    lines += _placed(part_id="s2", symbol="sym-short", device="dev-short", x=100.0, y=180.0,
+                     z_index=3)
+    lines += _placed(part_id="r2", symbol="sym-r", device="dev-r", designator="R2",
+                     x=170.0, y=180.0, z_index=4)
+    lines += _wire("g-stub", [(90.0, Y), (60.0, Y)], net="SENSE")
+    lines += _lead("g-live", 110.0, 170.0, net="PHASE")
+    lines += _wire("g-mid-stub", [(90.0, 180.0), (60.0, 180.0)], net="SENSE")
+    lines += _wire("g-sense2", [(110.0, 180.0), (170.0, 180.0), (170.0, 160.0)],
+                   net="SENSE2")
+    board = _board(tmp_path, lines)
+
+    for designator in ("R1", "R2"):
+        assert _pin_net(board, designator, "1") == _pin_net(board, designator, "2") == "PHASE", (
+            f"{designator} must sit on the closure's one name; got "
+            f"{_pin_net(board, designator, '1')!r}"
+        )
+    assert "SENSE" not in board.nets and "SENSE2" not in board.nets, (
+        f"got {sorted(board.nets)}"
+    )
+    assert _members(board, "PHASE") == [("R1", "1"), ("R1", "2"), ("R2", "1"), ("R2", "2")]
+
+
+def test_a_forced_main_name_wins_over_the_string_order(tmp_path):
+    """Two jumped mains in one closure, one of them a power flag.
+
+    ``S1``'s main is ``PGND`` (the flag outranks its ``ZZZ`` label), ``S2``'s is
+    ``MMM``; the closure also holds them together through ``AAA``. The string
+    order would say ``MMM`` — the flag wins instead, because a rail name the
+    drawing itself placed is not something an ordering rule may overrule.
+    """
+    lines = [_page("page-1")]
+    lines += _placed(part_id="f1", symbol="sym-flag", device="dev-flag", x=150.0, y=Y)
+    lines += _placed(part_id="s1", symbol="sym-short", device="dev-short", x=100.0, y=Y,
+                     z_index=2)
+    lines += _placed(part_id="r1", symbol="sym-r", device="dev-r", designator="R1",
+                     x=170.0, y=Y, z_index=3)
+    lines += _placed(part_id="s2", symbol="sym-short", device="dev-short", x=100.0, y=180.0,
+                     z_index=4)
+    lines += _placed(part_id="r2", symbol="sym-r", device="dev-r", designator="R2",
+                     x=170.0, y=180.0, z_index=5)
+    lines += _wire("g-aaa", [(90.0, Y), (60.0, Y)], net="AAA")
+    lines += _wire("g-live", [(110.0, Y), (150.0, Y), (170.0, Y), (170.0, Y - 20.0)],
+                   net="ZZZ")
+    lines += _wire("g-aaa2", [(90.0, 180.0), (60.0, 180.0)], net="AAA")
+    lines += _wire("g-mmm", [(110.0, 180.0), (170.0, 180.0), (170.0, 160.0)], net="MMM")
+    board = _board(tmp_path, lines)
+
+    for designator in ("R1", "R2"):
+        assert _pin_net(board, designator, "1") == _pin_net(board, designator, "2") == "PGND", (
+            f"{designator} must follow the flag name; got "
+            f"{_pin_net(board, designator, '1')!r}"
+        )
+    assert sorted(board.nets) == ["PGND"], f"got {sorted(board.nets)}"
+
+
+def test_a_redundant_short_does_not_pull_a_same_named_island_in(tmp_path):
+    """The bound of the closure: only an *accepted* short keeps its aliases.
+
+    This jumper sits across a net that was already one cluster, so 038g joins
+    nothing and the naming stays label-first (``SIG``). Its cluster also
+    carries ``ZZZ``, and a separate island is labelled ``ZZZ`` — that must stay
+    its own net, or a jumper that bridges nothing would start welding nets
+    together by name.
+    """
+    lines = [_page("page-1")]
+    lines += _placed(part_id="f1", symbol="sym-flag", device="dev-flag", x=125.0, y=Y)
+    lines += _placed(part_id="s1", symbol="sym-short", device="dev-short", x=150.0, y=Y,
+                     z_index=2)
+    lines += _placed(part_id="r1", symbol="sym-r", device="dev-r", designator="R1",
+                     x=170.0, y=Y, z_index=3)
+    lines += _placed(part_id="r2", symbol="sym-r", device="dev-r", designator="R2",
+                     x=300.0, y=Y, z_index=4)
+    lines += _wire("g-sig", [(110.0, Y), (125.0, Y), (140.0, Y), (160.0, Y),
+                             (170.0, Y), (170.0, Y - 20.0)], net="SIG")
+    lines += _wire("g-z", [(170.0, Y - 20.0), (240.0, Y - 20.0)], net="ZZZ")
+    lines += _lead("g-z2", 320.0, 300.0, net="ZZZ")
+    board = _board(tmp_path, lines)
+
+    assert _pin_net(board, "R1", "1") == "SIG", "038g's naming is unchanged here"
+    assert _pin_net(board, "R2", "1") == "ZZZ"
+    assert _members(board, "ZZZ") == [("R2", "1"), ("R2", "2")]
