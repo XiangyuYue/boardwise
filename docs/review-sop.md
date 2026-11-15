@@ -450,6 +450,28 @@ verdict 至少是 `complete-with-open-items`；别的缺口还在时它仍是 `i
 `modules` 段、规则 findings 在 `findings` 段；模型只补四件事——**填警告分诊、查不熟
 的器件、看画布、写总结**。
 
+### 3.1a 改板后的只读收尾＝`boardwise pcb gate`（038Y5，无 autofix）
+
+改完板子要回答「现在能不能投」，用只读闸，而不是自己再拼一遍 checkup 读数：
+
+```bash
+boardwise pcb gate --out <新目录>                                  # 焦点 PCB
+boardwise pcb gate --out <新目录> --project <工程名|uuid> --instance <窗口>
+```
+
+- **活动 PCB 与身份要求**：先 `doc.list` 证明当前活动文档就是这块 PCB。焦点不是 PCB、
+  想退回 `boards[0]`、`--project` / `--instance` 与宿主回报不一致，一律拒绝，闸不自动换板；
+  工程身份读不出来时，只有显式 `--instance` 才算身份。
+- **fresh checkup**：每次都在 `<新目录>/checkup` 里现跑一遍（含既有间距/丝印规则），不读
+  旧报告。`--out` **必须是新目录**，已存在即拒——那里面是上一轮的 report。
+- **incomplete 不绿**：checkup `incomplete`、退出码 3、coverage 缺口（模型空/空板、解析不全、
+  规则报错或拒绝、页/记录丢失、PCB 审查缺失）都算 INCOMPLETE，且 `incomplete` 优先于 ERROR——那时
+  不能声称已看全。退出码 **0 GREEN / 2 RED / 3 INCOMPLETE 或输入、身份、输出不可用**。
+- **无 skip、无 autofix**：没有 `--skip-checkup`，没有自动修复、没有 `doc.open`、没有保存；
+  写入路径不经过这道闸。要改就回 §3.1 或 `edit` 链，改完另开新目录重闸。
+- **兼容边界**：目前只有 fake bridge 与离线 checkup 适配的自动化证据，在线宿主与 V3/V4
+  真机门禁未验证；一次 GREEN 不等于「所有宿主已兼容」。
+
 ### 3.1b 架构走查（044 起的强制环节，不是可选阅读）
 
 checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起：

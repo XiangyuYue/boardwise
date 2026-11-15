@@ -1,4 +1,8 @@
-"""540B6: shared/assembly CLI extraction completes the 24-command surface."""
+"""540B6: shared/assembly CLI extraction completes the 24-command surface.
+
+038Y5 added the 25th (`pcb gate`), which is assembly-owned (`pcb_gate.py`): the same
+route the 24 take, one more parser registration and one more `main` branch.
+"""
 
 from __future__ import annotations
 
@@ -24,12 +28,12 @@ SHARED_DIRECT = {
 }
 
 
-def test_entry_is_only_parser_assembly_and_24_routes():
+def test_entry_is_only_parser_assembly_and_25_routes():
     parser_body = inspect.getsource(cli.build_parser)
-    assert parser_body.count("register_") == 24
+    assert parser_body.count("register_") == 25
     assert ".add_parser(" not in parser_body
     main_body = inspect.getsource(cli.main)
-    assert main_body.count("if args.command ==") == 24
+    assert main_body.count("if args.command ==") == 25
     assert "return _cmd" not in main_body
     assert main_body.count("shared_commands.dispatch_shared(") == len(SHARED_DIRECT)
     for command, handler in SHARED_DIRECT.items():
@@ -64,8 +68,10 @@ def test_bridge_config_and_intent_subcommand_order_is_frozen():
 
 def test_shared_and_assembly_modules_have_their_declared_dependencies():
     assert _in_package_imports(PACKAGE / "commands" / "shared.py") == set()
+    # 038Y5: assembly also reaches the assembly-owned `pcb_gate.py` — one module,
+    # for `pcb gate`; neither command module gains a `cli.py` edge.
     assert _in_package_imports(PACKAGE / "commands" / "assembly.py") == {
-        "skill_install.py"
+        "pcb_gate.py", "skill_install.py",
     }
 
 
@@ -76,11 +82,12 @@ def test_owner_manifest_covers_the_final_command_modules():
     assert data["batch"] == "540B6"
     assert data["modules"]["commands/shared.py"] == "shared"
     assert data["modules"]["commands/assembly.py"] == "assembly"
-    #: 038Q4 added the elibz2 reader as a shared parser, so the manifest is 148
-    #: rows with exactly one new one. Pinned here, on the shared side, because
-    #: that is the layer the module was added to; draw/review only carry the count.
+    #: 038Q4 added the elibz2 reader as a shared parser, so the manifest grew by
+    #: exactly one. Pinned here, on the shared side, because that is the layer the
+    #: module was added to; draw/review only carry the count.
+    #: 038Y5: 152 rows — 038Y1–Y4 added three PCB rule modules, 038Y5 `pcb_gate.py`.
     assert data["modules"]["parsers/elibz.py"] == "shared"
-    assert len(data["modules"]) == 148
+    assert len(data["modules"]) == 152
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

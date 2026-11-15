@@ -178,9 +178,12 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-footprint-consistency",
         "pcb-polarity-orientation",
         "pcb-silk-designator",
+        "pcb-silk-under-body",  # 038Y4, 封装可见丝印文字被同面真实本体多边形压住
+        "pcb-silk-on-foreign-pad",  # 038Y3B, 丝印墨迹压在别的器件的焊盘上
         "pcb-derating-package",
         "pcb-component-spacing",
         "pcb-component-off-board",  # bug98-A, the split-out board-frame rule
+        "pcb-pad-overlap",  # 038Y2, 不同器件的焊盘铜面重叠
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, appended last
@@ -386,9 +389,12 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
             "pcb-footprint-consistency",
             "pcb-polarity-orientation",
             "pcb-silk-designator",
+            "pcb-silk-under-body",  # 038Y4, 封装可见丝印文字被同面真实本体多边形压住
+        "pcb-silk-on-foreign-pad",  # 038Y3B, 丝印墨迹压在别的器件的焊盘上
             "pcb-derating-package",
             "pcb-component-spacing",
             "pcb-component-off-board",  # bug98-A, the split-out board-frame rule
+            "pcb-pad-overlap",  # 038Y2, 不同器件的焊盘铜面重叠
             "pcb-track-ampacity", "pcb-voltage-spacing",
             "pcb-keepout-violation",  # R2-1, the sweep's last
             "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
@@ -546,6 +552,13 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
         "pcb-footprint-consistency",
         "pcb-polarity-orientation",
         "pcb-silk-designator",
+        # 038Y3B: 三块板上都只有那条「弦化 / 角点近似」INFO，没有一条 WARN——
+        # 异器件丝印压真实铜面在毕设FOC 1.1.0 上确实不发生（预研那次 25 处是
+        # 外接框当铜面读出来的），所以这里加的是覆盖披露，不是缺陷命中。
+        # 038Y4 的 `pcb-silk-under-body` **不在这张表里**：毕设FOC 三块板上它一条
+        # 都不出（既没有封装印字落进同面 >= 80000 mil² 本体，也没有带圆弧/圆角的
+        # 本体图元可披露），所以这张「fired ids」表如实保持原样。
+        "pcb-silk-on-foreign-pad",
         "pcb-derating-package",
         "pcb-component-spacing", "pcb-voltage-spacing",
         "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
@@ -1657,8 +1670,29 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     #      前的 0.6.0 恢复，两处成对，不给一份自相矛盾的期望值。
     # 于是净 diff 只有 `rulebody` 两处、`unknown_types` 两行与本表 inputs 里该输入的
     # 哈希（随字节重算）。
+    # **038Y2**：recursive 2b62613f -> **7818d3a8**。新文件 `rules/pcb/overlap.py`
+    # （`pcb-pad-overlap`）只在 `rules/pcb/` 里，所以递归口径看得见、直接口径
+    # （d345bfc0）不动——这正是本测试「递归盖 pcb 子包」的主张，不是漂移。
+    # 中间值属于主代理复核过程，最终钉包含 target 语义、同网/异网理由与 doc/title 修正。
+    # **038Y3B**：recursive 7818d3a8 -> **3f90b257**（中途 69e04947 / 3473e8f0 是本批
+    # doc 与 title 的收尾修订，同一份新文件的同一项因果，无既有规则体改动）。
+    # 新文件 `rules/pcb/silkpad.py`
+    # （`pcb-silk-on-foreign-pad`）同样只在 `rules/pcb/` 里：递归口径看得见、直接
+    # 口径（d345bfc0）不动。本批没有改动任何既有规则体，recursive 的移动只有
+    # 「新增一个规则文件」这一项因果（`engines/pcbreview.py` 的 import/注册不在
+    # 这份配方的射程内——配方只读 `src/boardwise/rules/`）。
+    # 值在**当前这棵工作树**上按上方同一配方量得；`contracts/differential` 的
+    # `manifest.json` 与 `inputs/review-report.json` 两处 rulebody 由官方
+    # `tools.build_differential_fixtures` 重生成同步。本批不动任何既有规则体：
+    # 三个值都只有新增一个文件这一项因果。
     assert old_digest == "d345bfc0"
-    assert recursive == "2b62613f", (
+    # **038Y4**：recursive 3f90b257 -> **1cc2bff3**。新文件 `rules/pcb/silkbody.py`
+    # （`pcb-silk-under-body`）同样只在 `rules/pcb/` 里：递归口径看得见、直接
+    # 口径（d345bfc0）不动。本批没有改动任何既有规则体——recursive 的移动只有
+    # 「新增一个规则文件」这一项因果（`engines/pcbreview.py` 的 import/注册、
+    # `contracts/module-owners.json` 与该文件所在目录都不在这份配方的射程内或不在
+    # `src/boardwise/rules/` 下）。
+    assert recursive == "1cc2bff3", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

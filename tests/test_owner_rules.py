@@ -192,8 +192,12 @@ def _package_edges() -> set[tuple[str, str]]:
 
 
 def test_the_scan_sees_the_package():
-    assert len(PATHS) == 148, (
-        f"found {len(PATHS)} modules, expected the 148 this batch owns — "
+    # 152 since 038Y5 added `pcb_gate.py`（``boardwise pcb gate``）and its
+    # ``assembly`` owner line; 151 was 038Y4's count (``rules/pcb/silkbody.py``),
+    # 150 was 038Y3B's (``rules/pcb/silkpad.py``), 149 was 038Y2's
+    # (``rules/pcb/overlap.py``), 148 was 540B6's.
+    assert len(PATHS) == 152, (
+        f"found {len(PATHS)} modules, expected the 152 this batch owns — "
         "a new module needs an owner line in contracts/module-owners.json"
     )
     assert {"core", "parsers", "rules", "engines", "bridge"} <= {

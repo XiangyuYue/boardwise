@@ -18,6 +18,7 @@ TOP_COMMANDS = [
     "review", "checkup", "need-datasheet", "triage", "triage-batch",
     "review-evidence", "review-read", "review-eval", "bridge", "review-mark",
     "edit", "doctor", "install-skill", "compare", "draw", "persistence",
+    "pcb",
     "lint", "parts", "bom", "pintable", "validate", "arch", "intent", "config",
 ]
 DRAW_PARSER_COMMANDS = ["compile", "plan", "apply", "discard", "lint", "propose", "islands"]
@@ -62,7 +63,10 @@ def test_owner_manifest_covers_the_two_command_modules():
     assert data["batch"] == "540B6"
     assert data["modules"]["commands/__init__.py"] == "assembly"
     assert data["modules"]["commands/draw.py"] == "draw"
-    assert len(data["modules"]) == 148
+    # 038Y5: the manifest is 152 rows — 148 was 540B6's, 038Y1–Y4 added the
+    # three PCB rule modules and 038Y5 added `pcb_gate.py` (assembly). The
+    # count is pinned in all three command-module anchors on purpose.
+    assert len(data["modules"]) == 152
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

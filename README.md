@@ -77,6 +77,19 @@ Newer pieces worth knowing:
   longer all measured as bounding rectangles. The checkout's default parts shelf
   resolves independently of the caller's working directory, and a missing shelf is
   not silently described as an empty one.
+- **PCB geometry rules and a read-only gate** — three board-level rules measure
+  pads as their real copper/ink shape instead of a bounding box:
+  `pcb-pad-overlap` (pads of two different parts with a positive intersection on a
+  shared copper layer, same net or not), `pcb-silk-on-foreign-pad` (silk ink over
+  another part's pad) and `pcb-silk-under-body` (silk under a part body).
+  `boardwise pcb gate --out <new-dir>` is the read-only last step after a board
+  change: `doc.list` must prove the active document is the PCB you named (no
+  fallback to the first board), then one strict host DRC plus a fresh `checkup`
+  inside `<new-dir>/checkup`. Exit **0** GREEN / **2** RED / **3** INCOMPLETE or
+  unusable input; an `incomplete` checkup never turns GREEN, the out directory must
+  not already exist, and there is no `--skip-checkup`, no autofix and no save.
+  Only fake-bridge and offline runs back this so far — the live editor path is not
+  verified yet.
 - **Staged, interruptible review** — after **one** `checkup` the first checkpoint
   (`initial`/`partial`: environment and versions, `report.conclusion`, ERROR / host
   DRC, open items, artifact paths) is delivered **before** any deeper digging; deeper

@@ -20,7 +20,8 @@ import review。Finding、severity、mode 与报告措辞仍归 review；B1–B3
 ## 2. 公开入口
 
 - CLI：`review`、`checkup`、`need-datasheet`、`triage`、`triage-batch`、
-  `review-evidence`、`review-read`、`review-eval`、`review-mark`、`parts`、`bom`。
+  `review-evidence`、`review-read`、`review-eval`、`review-mark`、`pcb`（子命令 `gate`，038Y5
+  只读闸）、`parts`、`bom`。
 - DSH：现有 review 工具名保持；`review finalize` 的 Session receipt 与 delivery gate 不变。
 - 共享输入：公开导出 / DesignModel / CircuitSpec / DesignIntent / 部件货架；输出是报告与
   审查证据，不是 LayoutPlan 的内部对象。
@@ -77,6 +78,18 @@ owner=审查线；绘制线独立开发、互不改文件，主仓及绘制线�
 - **038X 默认货架绝对路径与缺失披露（已随 `cdff88b` 提交）**：合同见
   `tasks/038x_shelf_resolution.md`。非 frozen 的默认读写统一改用 `resources.parts_library()`
   绝对路径，只读入口显式披露货架缺失，`load_parts` 的「缺文件可建空架」底层合同不变。
+- **038Y PCB 几何三规则 + 只读 `pcb gate`（Y1–Y5 实现与联合验收完成，工作树未提交）**：
+  任务书 `tasks/038y1_pad_copper_overlap.md`、`tasks/038y2_pad_overlap_rule.md`、
+  `tasks/038y3a_pad_ink_overlap.md`、`tasks/038y3b_silk_on_foreign_pad.md`、
+  `tasks/038y4_silk_under_body.md`、`tasks/038y5_pcb_gate.md`（autofix 另见
+  `tasks/038y6_silk_autofix.md`，**暂缓**）。`pcb-pad-overlap` 用 038Y1 的铜面正面积原语，
+  `pcb-silk-on-foreign-pad` 用 038Y3A 的墨迹×铜面原语，`pcb-silk-under-body` 复用现有文字盒与
+  真实本体多边形；都不再拿外接框当最终判定。`boardwise pcb gate --out <新目录>` 只做只读编排（活动 PCB 身份 →
+  一次严格宿主 DRC → 新鲜 checkup → verdict），退出码 0/2/3，incomplete 不绿，无
+  `--skip-checkup`、无 autofix、无保存。联合读数 **1505 passed / 2 skipped**（联合交卷口径，
+  不当作全量）；两条既有归档 4 板实跑 WARN=0、近似披露 INFO 4，**不能写成所有板干净**；
+  **真机未跑**。Y6 autofix 因 PCB 属性枚举/移动/保存/回读前提未齐暂缓，不得写成已提供。
+  本批在主仓限定文件域内开发，旧的 `review-v4` worktree 未使用（其缺 038V 内容）。
 - **529 去耦 mid 容值带（已随 `cdff88b` 提交）**：合同见 `tasks/529_decap_mid_band.md`。
   2.2/4.7µF 落入 mid 档，191D 的临时收窄按原判据回退，全 bulk 输入档保留 INFO 特例；
   四个距离阈值 `200/300/800/200` 不动。

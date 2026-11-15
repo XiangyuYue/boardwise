@@ -402,9 +402,12 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
         "pcb-footprint-consistency",
         "pcb-polarity-orientation",
         "pcb-silk-designator",
+        "pcb-silk-under-body",  # 038Y4, 封装丝印文字被同面真实本体多边形压住
+        "pcb-silk-on-foreign-pad",  # 038Y3B, 丝印压异器件焊盘（注册在位号规则后）
         "pcb-derating-package",
         "pcb-component-spacing",
         "pcb-component-off-board",  # bug98-A, the split-out board-frame rule
+        "pcb-pad-overlap",  # 038Y2, 不同器件的焊盘铜面重叠
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, the board-frame sweep's last

@@ -59,8 +59,11 @@ from ..rules.pcb.distance import (
 from ..rules.pcb.footprint import FootprintConsistency
 from ..rules.pcb.polarity import PolarityOrientation
 from ..rules.pcb.silk import SilkDesignator
+from ..rules.pcb.silkbody import SilkUnderBody
+from ..rules.pcb.silkpad import SilkOnForeignPad
 from ..rules.pcb.ipc import TrackAmpacity, VoltageSpacing
 from ..rules.pcb.keepout import KeepoutViolation
+from ..rules.pcb.overlap import PadOverlap
 from ..rules.pcb.crystal import McuCrystalPlacement
 from ..rules.pcb.crystalkeepout import McuCrystalKeepout
 from ..rules.pcb.foc import (
@@ -233,9 +236,12 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     FootprintConsistency(),
     PolarityOrientation(),
     SilkDesignator(),
+    SilkUnderBody(),  # 038Y4, footprint 可见丝印文字被同面足够大的真实本体多边形压住
+    SilkOnForeignPad(),  # 038Y3B, 丝印墨迹压在别的器件的焊盘铜面上
     DeratingPackage(),
     ComponentSpacing(),
     BoardOffEdge(),
+    PadOverlap(),  # 038Y2, 不同器件的焊盘铜面正面积重叠
     TrackAmpacity(),
     VoltageSpacing(),
     KeepoutViolation(),

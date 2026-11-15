@@ -1279,6 +1279,12 @@ def test_llc_is_clean_under_both_distance_rules():
             "pcb-footprint-consistency",
             "pcb-polarity-orientation",
             "pcb-silk-designator",
+            # 038Y3B: ``pcb-silk-on-foreign-pad`` reads llc and files **one INFO**
+            # (the chord/corner disclosure) — no WARN, no silk lands on a foreign
+            # pad on this board. That row is expected coverage disclosure, not a
+            # distance measurement moving; its own pin is
+            # `tests/test_038y3b_silk_on_foreign_pad.py`.
+            "pcb-silk-on-foreign-pad",
             "pcb-derating-package",
             "pcb-hs-diffpair-inventory",
             "pcb-hs-via-ground-companion",
@@ -1355,9 +1361,12 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-footprint-consistency",
         "pcb-polarity-orientation",
         "pcb-silk-designator",
+        "pcb-silk-under-body",  # 038Y4, 封装丝印文字被同面真实本体多边形压住
+        "pcb-silk-on-foreign-pad",  # 038Y3B, 丝印压异器件焊盘
         "pcb-derating-package",
         "pcb-component-spacing",
         "pcb-component-off-board",
+        "pcb-pad-overlap",  # 038Y2, 不同器件的焊盘铜面重叠
         "pcb-track-ampacity", "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, the sweep's last
         "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory

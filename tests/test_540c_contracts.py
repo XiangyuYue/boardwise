@@ -24,6 +24,7 @@ EXPECTED_COMMANDS = [
     "review", "checkup", "need-datasheet", "triage", "triage-batch",
     "review-evidence", "review-read", "review-eval", "bridge", "review-mark",
     "edit", "doctor", "install-skill", "compare", "draw", "persistence",
+    "pcb",
     "lint", "parts", "bom", "pintable", "validate", "arch", "intent", "config",
 ]
 

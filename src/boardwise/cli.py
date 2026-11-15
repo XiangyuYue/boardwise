@@ -481,6 +481,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     shared_commands.register_persistence_parser(sub)
 
+    assembly_commands.register_pcb_parser(sub)
+
     register_layout_lint_parser(sub)
 
     review_commands.register_parts_parser(sub)
@@ -31777,6 +31779,8 @@ def main(argv: list[str] | None = None) -> int:
         return dispatch_draw_utility(args, _cmd_lint)
     if args.command == "persistence":
         return shared_commands.dispatch_shared(args, _cmd_persistence)
+    if args.command == "pcb":
+        return assembly_commands.dispatch_pcb_gate(args, _cmd_checkup, _open_cli)
     if args.command == "parts":
         return review_commands.dispatch_parts(args, PARTS_COMMANDS)
     if args.command == "config":

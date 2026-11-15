@@ -11,7 +11,7 @@
     "description": "AI harness for EasyEDA Pro: offline design review (stage 1).",
     "epilog": null,
     "helpWidth": 80,
-    "help": "usage: boardwise [-h] [--version]\n                 {review,checkup,need-datasheet,triage,triage-batch,review-evidence,review-read,review-eval,bridge,review-mark,edit,doctor,install-skill,compare,draw,persistence,lint,parts,bom,pintable,validate,arch,intent,config} ...\n\nAI harness for EasyEDA Pro: offline design review (stage 1).\n\npositional arguments:\n  {review,checkup,need-datasheet,triage,triage-batch,review-evidence,review-read,review-eval,bridge,review-mark,edit,doctor,install-skill,compare,draw,persistence,lint,parts,bom,pintable,validate,arch,intent,config}\n    review              Review an EasyEDA .enet netlist or .epro2 backup\n                        offline.\n    checkup             One-command review: read the live project, report what\n                        tier it used.\n    need-datasheet      Mark a device/pin the review cannot explain yet, so the\n                        report stops short of a pass (058 ⓪: ask for the\n                        datasheet before judging it).\n    triage              Record the verdict for one warning of an existing\n                        `checkup` report (有益/有害/无害 + reason, or needs-manual\n                        where the source gave no per-item text), so a re-run\n                        cannot drop it (issue #12).\n    triage-batch        Apply a whole batch of warning verdicts to an existing\n                        `checkup` report in one atomic step (537D1b1): every row\n                        is checked and applied in memory first, so one bad row\n                        writes nothing at all.\n    review-evidence     Collect the live schematic/PCB evidence for an existing\n                        `checkup` report and merge it into that report's\n                        evidence ledger (537C3b2).\n    review-read         Read one existing `checkup` report as structured JSON —\n                        one of the questions a review asks (537D1a).\n    review-eval         Measure review rules against oracle annotation sets\n                        (task 011a).\n    bridge              Live channel to a running EasyEDA (daemon + editor\n                        extension).\n    review-mark         Draw a `boardwise review` pass on the live schematic\n                        canvas (012v2 §八: markers + jump list).\n    edit                Review-to-local-edit (task 016): turn one review finding\n                        into an authorised, verified change of a single\n                        component's value.\n    doctor              Check that this installation can do anything (daemon ·\n                        extension · versions · project).\n    install-skill       Copy the bundled SKILL.md into the user-level skill\n                        directory of each agent harness (Kimi Code, Claude\n                        Code), or — with --agent — print the prompt that has any\n                        other harness's AI install it itself.\n    compare             Compare a candidate .epro2 against the golden board, per\n                        pin (task 005). With --spec the candidate side is the\n                        **spec netlist** assembled from block templates instead\n                        of a file (task 008a). Exit 0 equal / 1 differences / 2\n                        bad input.\n    draw                Redraw a golden board on a blank schematic page through\n                        the bridge and diff the result per pin (task 006). With\n                        --spec the plan is assembled from block templates\n                        instead of replayed from the golden page (task 008a),\n                        and the spec first passes the product validation gates —\n                        a refused spec draws nothing (009-M0). Exit 0 equal / 1\n                        differences or failures / 2 bad input / 3 a write's\n                        outcome is unknown (a timeout or a dropped connection),\n                        which outranks 0 and 1 — the page's state cannot be\n                        stated.\n    persistence         Snapshot the live page and compare it across a real\n                        close-and-reopen (read-only). Exit 0 the snapshot's\n                        content survived / 1 it is missing or changed / 2 bad\n                        input / 3 undecidable.\n    lint                Offline layout lint of the plan (overlap / out-of-frame\n                        / through-part / floating or stacked names). No bridge,\n                        no editor. Exit 0 clean / 1 violations.\n    parts               The curated part library (task 008b): offline selection\n                        from blocklib/parts.json, with an explicit --online\n                        catalog compare.\n    bom                 The bill of materials a board spec implies (task 008c):\n                        a BOM is an output of the design, so it is derived from\n                        the spec and the shelf.\n    pintable            The firmware pin table (task 008c): what the MCU is\n                        wired to, read from firmware and cross-checked against\n                        the CubeMX .ioc baseline.\n    validate            Run a board spec through the validation gates of task\n                        008c item 4 (sources, pin budget, levels, power tree;\n                        --benchmark adds the closed book). Exit 0 clean / 1\n                        blocked / 2 bad input. An undecidable result blocks like\n                        a violation does; a skipped gate says so instead of\n                        passing.\n    arch                Offline: the architecture skeleton for an export (task\n                        044 M1) — power tree / analog chains / control chains /\n                        buses / intent slots, every judgement a tool cannot make\n                        left as a TODO slot.\n    intent              The DesignIntent contract's rails: `intent audit` lists\n                        the power nets whose voltage only the engineer knows\n                        (issue #65), `intent set-rail` writes one answer into\n                        the contract with provenance user_stated.\n    config              User-level settings in ~/.boardwise/config.json (039\n                        批②). `config get <key>` / `config set <key> <value>` /\n                        `config show`. Exit 0 ok / 2 bad key, bad value or\n                        unreadable file.\n\noptions:\n  -h, --help            show this help message and exit\n  --version             Print the CLI version and the embedded connector bundle\n                        version.\n",
+    "help": "usage: boardwise [-h] [--version]\n                 {review,checkup,need-datasheet,triage,triage-batch,review-evidence,review-read,review-eval,bridge,review-mark,edit,doctor,install-skill,compare,draw,persistence,pcb,lint,parts,bom,pintable,validate,arch,intent,config} ...\n\nAI harness for EasyEDA Pro: offline design review (stage 1).\n\npositional arguments:\n  {review,checkup,need-datasheet,triage,triage-batch,review-evidence,review-read,review-eval,bridge,review-mark,edit,doctor,install-skill,compare,draw,persistence,pcb,lint,parts,bom,pintable,validate,arch,intent,config}\n    review              Review an EasyEDA .enet netlist or .epro2 backup\n                        offline.\n    checkup             One-command review: read the live project, report what\n                        tier it used.\n    need-datasheet      Mark a device/pin the review cannot explain yet, so the\n                        report stops short of a pass (058 ⓪: ask for the\n                        datasheet before judging it).\n    triage              Record the verdict for one warning of an existing\n                        `checkup` report (有益/有害/无害 + reason, or needs-manual\n                        where the source gave no per-item text), so a re-run\n                        cannot drop it (issue #12).\n    triage-batch        Apply a whole batch of warning verdicts to an existing\n                        `checkup` report in one atomic step (537D1b1): every row\n                        is checked and applied in memory first, so one bad row\n                        writes nothing at all.\n    review-evidence     Collect the live schematic/PCB evidence for an existing\n                        `checkup` report and merge it into that report's\n                        evidence ledger (537C3b2).\n    review-read         Read one existing `checkup` report as structured JSON —\n                        one of the questions a review asks (537D1a).\n    review-eval         Measure review rules against oracle annotation sets\n                        (task 011a).\n    bridge              Live channel to a running EasyEDA (daemon + editor\n                        extension).\n    review-mark         Draw a `boardwise review` pass on the live schematic\n                        canvas (012v2 §八: markers + jump list).\n    edit                Review-to-local-edit (task 016): turn one review finding\n                        into an authorised, verified change of a single\n                        component's value.\n    doctor              Check that this installation can do anything (daemon ·\n                        extension · versions · project).\n    install-skill       Copy the bundled SKILL.md into the user-level skill\n                        directory of each agent harness (Kimi Code, Claude\n                        Code), or — with --agent — print the prompt that has any\n                        other harness's AI install it itself.\n    compare             Compare a candidate .epro2 against the golden board, per\n                        pin (task 005). With --spec the candidate side is the\n                        **spec netlist** assembled from block templates instead\n                        of a file (task 008a). Exit 0 equal / 1 differences / 2\n                        bad input.\n    draw                Redraw a golden board on a blank schematic page through\n                        the bridge and diff the result per pin (task 006). With\n                        --spec the plan is assembled from block templates\n                        instead of replayed from the golden page (task 008a),\n                        and the spec first passes the product validation gates —\n                        a refused spec draws nothing (009-M0). Exit 0 equal / 1\n                        differences or failures / 2 bad input / 3 a write's\n                        outcome is unknown (a timeout or a dropped connection),\n                        which outranks 0 and 1 — the page's state cannot be\n                        stated.\n    persistence         Snapshot the live page and compare it across a real\n                        close-and-reopen (read-only). Exit 0 the snapshot's\n                        content survived / 1 it is missing or changed / 2 bad\n                        input / 3 undecidable.\n    pcb                 Read-only PCB gate: the editor's own DRC, then a fresh\n                        checkup.\n    lint                Offline layout lint of the plan (overlap / out-of-frame\n                        / through-part / floating or stacked names). No bridge,\n                        no editor. Exit 0 clean / 1 violations.\n    parts               The curated part library (task 008b): offline selection\n                        from blocklib/parts.json, with an explicit --online\n                        catalog compare.\n    bom                 The bill of materials a board spec implies (task 008c):\n                        a BOM is an output of the design, so it is derived from\n                        the spec and the shelf.\n    pintable            The firmware pin table (task 008c): what the MCU is\n                        wired to, read from firmware and cross-checked against\n                        the CubeMX .ioc baseline.\n    validate            Run a board spec through the validation gates of task\n                        008c item 4 (sources, pin budget, levels, power tree;\n                        --benchmark adds the closed book). Exit 0 clean / 1\n                        blocked / 2 bad input. An undecidable result blocks like\n                        a violation does; a skipped gate says so instead of\n                        passing.\n    arch                Offline: the architecture skeleton for an export (task\n                        044 M1) — power tree / analog chains / control chains /\n                        buses / intent slots, every judgement a tool cannot make\n                        left as a TODO slot.\n    intent              The DesignIntent contract's rails: `intent audit` lists\n                        the power nets whose voltage only the engineer knows\n                        (issue #65), `intent set-rail` writes one answer into\n                        the contract with provenance user_stated.\n    config              User-level settings in ~/.boardwise/config.json (039\n                        批②). `config get <key>` / `config set <key> <value>` /\n                        `config show`. Exit 0 ok / 2 bad key, bad value or\n                        unreadable file.\n\noptions:\n  -h, --help            show this help message and exit\n  --version             Print the CLI version and the embedded connector bundle\n                        version.\n",
     "actions": [
       {
         "optionStrings": [
@@ -4143,6 +4143,123 @@
               }
             ]
           },
+          "pcb": {
+            "prog": "boardwise pcb",
+            "description": null,
+            "epilog": null,
+            "helpWidth": 80,
+            "help": "usage: boardwise pcb [-h] {gate} ...\n\npositional arguments:\n  {gate}\n    gate      Run the host PCB DRC and a fresh checkup against the active board\n              and report one verdict (0 GREEN / 2 RED / 3 cannot be stated).\n\noptions:\n  -h, --help  show this help message and exit\n",
+            "actions": [
+              {
+                "optionStrings": [
+                  "-h",
+                  "--help"
+                ],
+                "dest": "help",
+                "nargs": "0",
+                "const": "None",
+                "default": "'==SUPPRESS=='",
+                "type": null,
+                "required": false,
+                "help": "show this help message and exit",
+                "metavar": "None",
+                "choices": "None"
+              },
+              {
+                "optionStrings": [],
+                "dest": "pcb_command",
+                "nargs": "'A...'",
+                "const": "None",
+                "default": "None",
+                "type": null,
+                "required": true,
+                "help": null,
+                "metavar": "None",
+                "choices": {
+                  "gate": {
+                    "prog": "boardwise pcb gate",
+                    "description": "The read-only last step after a board change. `doc.list` must show the active document to be a PCB in the project the caller named — the gate never switches documents and never falls back to the first board listed — then `pcb.drc_check` (strict, no editor UI, verbose leaves) and a fresh `boardwise checkup` run on the same project/instance/port with a report directory of its own at DIR/checkup. Nothing is written to the design: there is no doc.open, no save, no autofix and no --skip-checkup, so the DRC is asked exactly once. `DIR` must be a new directory (parents may be created); an existing one is refused before anything is read, because a report already in there is some earlier run's. GREEN requires all of: DRC checked, available, untruncated, errors=0; checkup actually ran; its completion.verdict complete or complete-with-open-items; no ERROR; no declared coverage gap (modelEmpty/parseIncomplete/rulesErrored/recordsDropped/rulesRefused/pagesDropped/boardsEmpty/pcbReviewMissing); and the report's own exitCode equal to the run's. Exit 2 = RED (errors found), exit 3 = INCOMPLETE or an input, identity or output that cannot be used — an `incomplete` checkup outranks an ERROR, because a review that did not see the whole board cannot be quoted as having found them all.",
+                    "epilog": null,
+                    "helpWidth": 80,
+                    "help": "usage: boardwise pcb gate [-h] --out DIR [--project PROJECT]\n                          [--instance INSTANCE] [--port PORT]\n\nThe read-only last step after a board change. `doc.list` must show the active\ndocument to be a PCB in the project the caller named — the gate never switches\ndocuments and never falls back to the first board listed — then `pcb.drc_check`\n(strict, no editor UI, verbose leaves) and a fresh `boardwise checkup` run on\nthe same project/instance/port with a report directory of its own at\nDIR/checkup. Nothing is written to the design: there is no doc.open, no save, no\nautofix and no --skip-checkup, so the DRC is asked exactly once. `DIR` must be a\nnew directory (parents may be created); an existing one is refused before\nanything is read, because a report already in there is some earlier run's. GREEN\nrequires all of: DRC checked, available, untruncated, errors=0; checkup actually\nran; its completion.verdict complete or complete-with-open-items; no ERROR; no\ndeclared coverage gap (modelEmpty/parseIncomplete/rulesErrored/recordsDropped/ru\nlesRefused/pagesDropped/boardsEmpty/pcbReviewMissing); and the report's own\nexitCode equal to the run's. Exit 2 = RED (errors found), exit 3 = INCOMPLETE or\nan input, identity or output that cannot be used — an `incomplete` checkup\noutranks an ERROR, because a review that did not see the whole board cannot be\nquoted as having found them all.\n\noptions:\n  -h, --help           show this help message and exit\n  --out DIR            New directory for this run's gate-report.json and the\n                       checkup inside it (DIR/checkup). Must not exist yet — the\n                       gate never reuses a directory.\n  --project PROJECT    Which editor project to gate, by name or uuid (023).\n                       Checked verbatim against what doc.list reports; a\n                       mismatch is refused, never re-routed.\n  --instance INSTANCE  The same choice spelled as the window key `bridge status`\n                       prints — and the only identity the gate accepts when\n                       doc.list cannot prove the project.\n  --port PORT          Daemon port (default 61190).\n",
+                    "actions": [
+                      {
+                        "optionStrings": [
+                          "-h",
+                          "--help"
+                        ],
+                        "dest": "help",
+                        "nargs": "0",
+                        "const": "None",
+                        "default": "'==SUPPRESS=='",
+                        "type": null,
+                        "required": false,
+                        "help": "show this help message and exit",
+                        "metavar": "None",
+                        "choices": "None"
+                      },
+                      {
+                        "optionStrings": [
+                          "--out"
+                        ],
+                        "dest": "out",
+                        "nargs": "None",
+                        "const": "None",
+                        "default": "None",
+                        "type": null,
+                        "required": true,
+                        "help": "New directory for this run's gate-report.json and the checkup inside it (DIR/checkup). Must not exist yet — the gate never reuses a directory.",
+                        "metavar": "'DIR'",
+                        "choices": "None"
+                      },
+                      {
+                        "optionStrings": [
+                          "--project"
+                        ],
+                        "dest": "project",
+                        "nargs": "None",
+                        "const": "None",
+                        "default": "''",
+                        "type": null,
+                        "required": false,
+                        "help": "Which editor project to gate, by name or uuid (023). Checked verbatim against what doc.list reports; a mismatch is refused, never re-routed.",
+                        "metavar": "None",
+                        "choices": "None"
+                      },
+                      {
+                        "optionStrings": [
+                          "--instance"
+                        ],
+                        "dest": "instance",
+                        "nargs": "None",
+                        "const": "None",
+                        "default": "''",
+                        "type": null,
+                        "required": false,
+                        "help": "The same choice spelled as the window key `bridge status` prints — and the only identity the gate accepts when doc.list cannot prove the project.",
+                        "metavar": "None",
+                        "choices": "None"
+                      },
+                      {
+                        "optionStrings": [
+                          "--port"
+                        ],
+                        "dest": "port",
+                        "nargs": "None",
+                        "const": "None",
+                        "default": "None",
+                        "type": "int",
+                        "required": false,
+                        "help": "Daemon port (default 61190).",
+                        "metavar": "None",
+                        "choices": "None"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
           "lint": {
             "prog": "boardwise lint",
             "description": null,
@@ -6334,6 +6451,11 @@
         2,
         3
       ],
+      "pcb": [
+        0,
+        2,
+        3
+      ],
       "lint": [
         0,
         1,
@@ -6424,6 +6546,11 @@
         0,
         2,
         5
+      ],
+      "pcb.gate": [
+        0,
+        2,
+        3
       ]
     },
     "unlistedSubcommands": "Not listed separately: read the enclosing top-level command family. An argparse usage error always exits 2 for every command and every listed subcommand, so 2 is present in every set above."

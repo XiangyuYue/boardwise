@@ -604,9 +604,12 @@ def test_rule_is_declared_house_rule_with_no_threshold_and_is_in_the_list():
         "pcb-footprint-consistency",
         "pcb-polarity-orientation",
         "pcb-silk-designator",
+        "pcb-silk-under-body",  # 038Y4, 封装丝印文字被同面真实本体多边形压住
+        "pcb-silk-on-foreign-pad",  # 038Y3B, 丝印墨迹压在别的器件的焊盘上
         "pcb-derating-package",
         "pcb-component-spacing",
         "pcb-component-off-board",
+        "pcb-pad-overlap",  # 038Y2, 不同器件的焊盘铜面重叠
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, the sweep's last

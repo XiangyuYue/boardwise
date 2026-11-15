@@ -839,7 +839,28 @@ def test_the_llc_fixture_stays_clean_under_the_fixed_rules():
         # spacing/decap pins above stay, and only these four ids join the set.
         "pcb-hs-cross-split", "pcb-hs-via-ground-companion",
         "pcb-hs-diffpair-skew", "pcb-hs-diffpair-via-parity",
+        # 038Y3B's foreign-pad rule, subtracted **and bounded in the same test**:
+        # llc carries no silk ink on another part's copper, so it files no WARN at
+        # all — only the one chord / corner approximation disclosure (INFO). The
+        # three assertions below are what keeps this from being a licence to hide
+        # real copper coverage behind an exclusion set.
+        "pcb-silk-on-foreign-pad",
     }
+    # 038Y3B: the id above is subtracted, so pin what it actually said on llc —
+    # **zero WARN** (no ink sits on another part's real copper) and **exactly one
+    # INFO** (the approximation disclosure). 038Y4's `pcb-silk-under-body` is
+    # deliberately **not** in the set: llc carries no footprint silk text at all,
+    # so its silence stays covered by the assertion above.
+    foreign_pad = [f for f in findings if f.rule_id == "pcb-silk-on-foreign-pad"]
+    assert [f for f in foreign_pad if f.severity == "WARN"] == [], [
+        (f.rule_id, f.message) for f in foreign_pad if f.severity == "WARN"
+    ]
+    assert len(foreign_pad) == 1 and foreign_pad[0].severity == "INFO", [
+        (f.rule_id, f.severity, f.message) for f in foreign_pad
+    ]
+    assert [f for f in findings if f.rule_id == "pcb-silk-under-body"] == [], [
+        (f.rule_id, f.message) for f in findings if f.rule_id == "pcb-silk-under-body"
+    ]
     assert [f for f in findings if f.rule_id not in foc_ids] == [], [
         (f.rule_id, f.message) for f in findings if f.rule_id not in foc_ids
     ]

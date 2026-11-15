@@ -1447,3 +1447,17 @@ def test_the_sop_pcb_drc_claim_matches_the_verdict_the_code_writes():
     assert "可以投板" not in flagged["oneLiner"], flagged["oneLiner"]
     clean = verdict_of(_clean_coverage())
     assert clean["verdict"] == "complete" and clean["mayQuotePassed"] is True, clean
+
+
+def test_cli_tree_sees_pcb_gate_as_a_subcommand():
+    """038Y5: `pcb gate` is a subcommand, and the guard has to be able to see it.
+
+    `_cli_commands` reads the registration text, so a subparser variable that does
+    not end in `_sub` (`gate_commands = pcb.add_subparsers(...)`) makes the whole
+    `pcb` branch invisible here — the tree would show `pcb` with no subcommands and
+    every mention check below would pass without ever looking at `gate`. Asserted
+    on the extraction itself, not through any document's readability.
+    """
+    tops, tree = _cli_commands()
+    assert "pcb" in tops, sorted(tops)
+    assert tree["pcb"] == {"gate"}, tree["pcb"]

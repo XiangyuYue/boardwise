@@ -500,12 +500,21 @@ def test_both_rules_are_registered_at_the_declared_position():
     ``pcb-derating-package`` after them** (③降额的物理层) — so the device block
     is four deep and its last member is no longer ``pcb-silk-designator``: the
     geometry sweep starts two positions further along than it did in 152.
+
+    **038Y3B widened the silk family by one**（``pcb-silk-on-foreign-pad``，丝印压
+    异器件焊盘）: it sits right after ``pcb-silk-designator`` by its own task book,
+    and **038Y4 inserts ``pcb-silk-under-body`` between the two** (封装印字被同面真实
+    本体多边形压住), so ③降额 and the geometry sweep each move one more position. The
+    claim this pin makes — 器件块是 ①封装一致 → ②极性 → 丝印族 → ③降额 → 几何 — is
+    unchanged; only the offsets are.
     """
     ids = [rule.id for rule in BUILTIN_PCB_RULES]
     assert ids.index(POLARITY_ID) == ids.index("pcb-footprint-consistency") + 1
     assert ids.index(SILK_ID) == ids.index(POLARITY_ID) + 1
-    assert ids.index("pcb-derating-package") == ids.index(SILK_ID) + 1
-    assert ids.index("pcb-component-spacing") == ids.index(SILK_ID) + 2
+    assert ids.index("pcb-silk-under-body") == ids.index(SILK_ID) + 1
+    assert ids.index("pcb-silk-on-foreign-pad") == ids.index(SILK_ID) + 2
+    assert ids.index("pcb-derating-package") == ids.index(SILK_ID) + 3
+    assert ids.index("pcb-component-spacing") == ids.index(SILK_ID) + 4
 
     rules = {rule.id: rule for rule in BUILTIN_PCB_RULES}
     for rule_id in (POLARITY_ID, SILK_ID):

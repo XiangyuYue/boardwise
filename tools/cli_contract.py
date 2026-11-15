@@ -44,6 +44,7 @@ TOP_EXIT_CODES = {
     "compare": [0, 1, 2],
     "draw": [0, 1, 2, 3, 4, 5],
     "persistence": [0, 1, 2, 3],
+    "pcb": [0, 2, 3],
     "lint": [0, 1, 2],
     "parts": [0, 1, 2],
     "bom": [0, 1, 2],
@@ -63,6 +64,7 @@ SUBCOMMAND_EXIT_CODES = {
     "draw.propose": [0, 2, 5],
     "draw.islands.propose": [0, 2, 5],
     "draw.islands.apply": [0, 2, 5],
+    "pcb.gate": [0, 2, 3],
 }
 EXIT_MEANINGS = {
     "0": "Success or a completed result; checkup still requires completion.verdict != incomplete.",

@@ -67,6 +67,8 @@ __all__ = [
     "component_distance",
     "pad_corners",
     "pad_edge_distance",
+    "pad_copper_overlap",
+    "pad_ink_overlap",
     "point_in_polygon",
     "LoopArea",
     "loop_area",
@@ -895,6 +897,493 @@ def component_distance(
         pad_a=pa.pin_number or pa.id,
         pad_b=pb.pin_number or pb.id,
     )
+
+
+# ---------------------------------------------------------------------------
+# pad copper overlap (038Y1)
+# ---------------------------------------------------------------------------
+
+#: 038Y1: how deep two copper bodies must interpenetrate, in **mils**, before
+#: this module calls it an overlap. It absorbs float noise in the tangent cases
+#: (``r_a + r_b == d`` reached through ``hypot`` and trig) and nothing else: it
+#: is not a fabrication allowance, so it is the smallest length the rest of this
+#: module is willing to distinguish (the same ``1e-9`` mil point-on-segment
+#: tests use), not a design margin.
+_OVERLAP_EPS = 1e-9
+
+
+def _pad_copper_layers(board: BoardGeometry, pad: PadGeometry) -> set[int]:
+    """The copper layers an overlap question compares one pad on.
+
+    :func:`_comparable_layers` is the reader, so ``None`` (nobody read this pad)
+    falls back to the pre-127b derivation and ``[]`` (the parser's
+    「no copper layer」 reading) stays empty. The one addition is that ``[]``
+    stays empty **even on a board that names no copper layer**, where
+    :func:`_comparable_layers`'s widening would hand back
+    ``{footprint_layer_id}``: that widening exists so two hand-built SMD pads
+    can meet, and reusing it for a bare mechanical hole's ``[]`` is exactly the
+    R2-2 regression (an NPTH's copper put back on a face it does not have).
+
+    An empty set on either side means 「no copper to overlap」, which
+    :func:`pad_copper_overlap` answers ``False`` for. That includes the
+    degenerate hand-built pad that carries neither a reading nor a
+    ``footprint_layer_id``: the overlap question cannot name a face to compare
+    on, and it refuses rather than guessing one. (Distance readers keep such a
+    pair measurable — :func:`_comparable_pair` says why — but 「no shared copper
+    layer」 and 「copper known to be on no layer」 are the same ``False`` here.)
+    """
+    if pad.effective_layer_ids is not None and not pad.effective_layer_ids:
+        return set()
+    return _comparable_layers(board, pad)
+
+
+def _projection(points: list[Point], nx: float, ny: float) -> tuple[float, float]:
+    """Extent of ``points`` projected on the unit axis ``(nx, ny)``, in mils."""
+    values = [point.x * nx + point.y * ny for point in points]
+    return min(values), max(values)
+
+
+def _edge_normal(p1: Point, p2: Point) -> tuple[float, float] | None:
+    """Unit normal of edge ``p1p2``, or ``None`` for an edge too short to have one.
+
+    The ``1e-9`` mil cutoff is the same one :func:`point_segment_distance` uses
+    for 「this edge is a point」; an edge that short has no direction to test.
+    """
+    dx, dy = p2.x - p1.x, p2.y - p1.y
+    length = math.hypot(dx, dy)
+    if length <= 1e-9:
+        return None
+    return -dy / length, dx / length
+
+
+def _polygon_has_area(polygon: list[Point]) -> bool:
+    """True when a convex polygon encloses a positive area.
+
+    The polygon's **narrowest width** is the answer: a convex polygon's minimum
+    width is attained with a supporting line parallel to one of its edges, so
+    sweeping its own edge normals is exact. A collapsed pad — a ``0 x 0``
+    rectangle, a zero-extent ellipse read as a line — comes out ``False`` and
+    contributes no copper, which is the honest reading for a zero-area land
+    (:func:`_pad_copper` collapses such a pad on purpose).
+    """
+    tested = 0
+    for index in range(len(polygon)):
+        normal = _edge_normal(polygon[index], polygon[(index + 1) % len(polygon)])
+        if normal is None:
+            continue
+        tested += 1
+        low, high = _projection(polygon, *normal)
+        if high - low <= _OVERLAP_EPS:
+            return False
+    return tested > 0
+
+
+def _convex_overlap(a: list[Point], b: list[Point]) -> bool:
+    """True when two convex polygons share a **positive-area** region.
+
+    Separating-axis test over both polygons' edge normals, which is complete for
+    convex polygons — and the reason rotation, containment and edge contact need
+    no case of their own: a contained polygon has no separating axis at all, a
+    rotated one is separated by its own normal, and a touching one leaves
+    exactly zero projection overlap on the axis it touches on. Only the interior
+    counts, so ``<= _OVERLAP_EPS`` (mils) is **not** an overlap.
+
+    Both operands must be convex; :func:`_pad_copper` produces nothing else for
+    a zero-radius pad (``pad_corners``' rectangle and the circumscribing
+    ``ELLIPSE`` 32-gon are both convex).
+    """
+    if not _polygon_has_area(a) or not _polygon_has_area(b):
+        return False
+    for polygon in (a, b):
+        for index in range(len(polygon)):
+            normal = _edge_normal(polygon[index], polygon[(index + 1) % len(polygon)])
+            if normal is None:
+                continue
+            low_a, high_a = _projection(a, *normal)
+            low_b, high_b = _projection(b, *normal)
+            if min(high_a, high_b) - max(low_a, low_b) <= _OVERLAP_EPS:
+                return False
+    return True
+
+
+def _point_polyline_distance(point: Point, points: list[Point]) -> float:
+    """Distance from ``point`` to a polyline, in mils (one-point polyline: a point)."""
+    if len(points) == 1:
+        return math.hypot(point.x - points[0].x, point.y - points[0].y)
+    best = math.inf
+    for start, end in zip(points, points[1:]):
+        distance = point_segment_distance(point, start, end)
+        if distance < best:
+            best = distance
+    return best
+
+
+def _centreline_distance(a: list[Point], b: list[Point]) -> float:
+    """Minimum distance between two polylines, in mils (0 when they touch).
+
+    Two sweeps, because neither alone is exact:
+
+    * **segment x segment** (:func:`_segment_distance`) whenever both sides have
+      an edge. This is the one that decides a **crossing**: two centre lines
+      that intersect are 0 apart in their interiors, and no endpoint of either
+      is anywhere near the crossing point. 038Y1's first cut scanned vertices
+      only and read two crossing stadiums as far apart — their endpoints are 40
+      and 40 mil away from the crossing, so the vertex sweep answered 40 while
+      the copper plainly met.
+    * **vertex x polyline** for the sides that are a single point (a disc's
+      centre) and for the endpoint-to-segment contacts the vertex sweep reads
+      exactly. It carries the whole answer when either side is one point.
+    """
+    best = math.inf
+    for point in a:
+        distance = _point_polyline_distance(point, b)
+        if distance < best:
+            best = distance
+    for point in b:
+        distance = _point_polyline_distance(point, a)
+        if distance < best:
+            best = distance
+    if len(a) > 1 and len(b) > 1:
+        for a_start, a_end in zip(a, a[1:]):
+            for b_start, b_end in zip(b, b[1:]):
+                distance = _segment_distance(a_start, a_end, b_start, b_end)
+                if distance < best:
+                    best = distance
+                    if best <= 0.0:
+                        return 0.0
+    return best
+
+
+def _centreline_polygon_distance(points: list[Point], polygon: list[Point]) -> float:
+    """Distance from a capsule's centreline to a filled convex polygon, in mils.
+
+    ``0.0`` when the centreline is inside, on, or crossing the polygon — the
+    cases where the capsule's disc certainly reaches copper. Otherwise the
+    minimum over the two vertex sweeps, which is exact for the same reason
+    :func:`_centreline_distance` is: the closest pair between two disjoint
+    compact sets has an endpoint on one side.
+    """
+    for point in points:
+        if point_in_polygon(point, polygon):
+            return 0.0
+    for start, end in zip(points, points[1:]):
+        for corner, following in _edges(polygon):
+            if _segments_intersect(start, end, corner, following):
+                return 0.0
+    best = math.inf
+    for point in points:
+        for corner, following in _edges(polygon):
+            distance = point_segment_distance(point, corner, following)
+            if distance < best:
+                best = distance
+    for corner in polygon:
+        distance = _point_polyline_distance(corner, points)
+        if distance < best:
+            best = distance
+    return best
+
+
+def pad_copper_overlap(board: BoardGeometry, pad_a: PadGeometry, pad_b: PadGeometry) -> bool:
+    """True when two pads' **copper bodies** share a positive area on a shared layer.
+
+    038Y1. This is the layer-aware positive-area predicate the PCB review rules
+    were missing: 「do these two pieces of copper really interpenetrate」, as
+    opposed to :func:`pad_edge_distance`'s 「how far apart are they」, whose
+    ``0.0`` cannot tell a kiss from a collision, and as opposed to a bounding
+    box, which is not copper. The regression this exists to prevent: two Ø98.425
+    mil discs 70 / 70 mil apart diagonally are 0.569949 mil apart edge to edge,
+    yet their boxes interpenetrate by more than 28 mil on each axis — a box test
+    calls that an ERROR, the copper says they do not touch.
+
+    **Layers.** Read through :func:`_pad_copper_layers` (hence
+    :func:`_comparable_layers`): the pair overlaps only when the two copper
+    layer sets intersect, so a top pad and a bottom pad at the same ``(x, y)``
+    are not overlapping. ``None`` (never read) falls back to the pre-127b
+    derivation; ``[]`` (read as 「no copper layer」) answers ``False`` even
+    against a through-hole pad, as does a hand-built pad whose layers cannot be
+    named at all. No design rule is applied here — same-net pads
+    legitimately overlap, and that judgement belongs to the caller.
+
+    **Geometry.** Both pads are read from :func:`_pad_copper`, one shape model
+    for the whole module:
+
+    * **disc / stadium** (half-width ``r``) — positive-area intersection with
+      another capsule is ``d < r_a + r_b``, where ``d`` is the exact centreline
+      distance; with a polygon it is ``f < r``, where ``f`` is the distance from
+      the centreline to the polygon's **region** (0 inside, on or crossing it).
+      Both comparisons are **strict**: tangency leaves zero intersection area
+      and answers ``False``. Using the region rather than its boundary is what
+      makes containment — a small pad wholly inside a big one — come out
+      ``True`` in either argument order.
+    * **rectangle** — the four corners of :func:`pad_corners`, i.e. its real
+      copper, by :func:`_convex_overlap`.
+    * **non-circular ``ELLIPSE``** — the circumscribing 32-gon of
+      :func:`_ellipse_tangent_polygon`, inherited from 038V unchanged. It
+      **contains** the ellipse and touches it at 32 points, so its worst radial
+      excess is ``sec(pi/32) - 1`` = 0.483 % of the semi-axes (0.483 mil on a
+      100 mil semi-axis). The consequence, stated rather than hidden: inside
+      that bulge the predicate can report an overlap the true ellipse does not
+      have, and never the reverse — **this is a bounded conservative
+      over-report, not an exact ellipse**. Along the axes the 32-gon is exact.
+    * **zero-extent pad** — nothing: a ``0 x 0`` or zero-width pad has no copper
+      area, so ``_polygon_has_area`` refuses it and the answer is ``False``
+      whatever it sits on.
+
+    A polygon operand is assumed convex, which every shape above is.
+    """
+    layers_a = _pad_copper_layers(board, pad_a)
+    layers_b = _pad_copper_layers(board, pad_b)
+    if not (layers_a & layers_b):
+        return False
+
+    points_a, radius_a = _pad_copper(pad_a)
+    points_b, radius_b = _pad_copper(pad_b)
+    if radius_a > 0.0 and radius_b > 0.0:
+        depth = (radius_a + radius_b) - _centreline_distance(points_a, points_b)
+        return depth > _OVERLAP_EPS
+    if radius_a > 0.0:
+        if not _polygon_has_area(points_b):
+            return False
+        reach = _centreline_polygon_distance(points_a, points_b)
+        return reach < radius_a - _OVERLAP_EPS
+    if radius_b > 0.0:
+        if not _polygon_has_area(points_a):
+            return False
+        reach = _centreline_polygon_distance(points_b, points_a)
+        return reach < radius_b - _OVERLAP_EPS
+    return _convex_overlap(points_a, points_b)
+
+
+# ---------------------------------------------------------------------------
+# pad ink overlap (038Y3A)
+# ---------------------------------------------------------------------------
+
+#: 038Y3A: the smallest **area**, in mil², an ink/copper intersection may have
+#: and still be called ink on copper. It is :data:`_OVERLAP_EPS` read as the
+#: area counterpart of the module's 1e-9 mil length tolerance — a sliver 1 mil
+#: long and 1e-9 mil wide — which is several orders of magnitude above the
+#: float noise a tangent pair leaves behind (coordinates are tens of mils, so
+#: an intersection point carries ~1e-14 mil of error). Like the length
+#: tolerance it is a discrimination floor, not a fabrication allowance.
+_INK_AREA_EPS = _OVERLAP_EPS
+
+
+def _signed_area(polygon: Sequence[Point]) -> float:
+    """Shoelace area of a polygon outline, in mil² (positive counter-clockwise)."""
+    total = 0.0
+    count = len(polygon)
+    for index in range(count):
+        a = polygon[index]
+        b = polygon[(index + 1) % count]
+        total += a.x * b.y - b.x * a.y
+    return total / 2.0
+
+
+def _line_crossing(p1: Point, p2: Point, a: Point, b: Point) -> Point:
+    """Where segment ``p1p2`` crosses the **line** through ``ab``.
+
+    ``t = d1 / (d1 - d2)`` with ``d1 = cross(a, b, p1)``: the point is
+    ``p1 + t (p2 - p1)``, and ``t`` is clamped because the caller only offers
+    straddling segments (opposite signs, ``t`` in ``[0, 1]``) and float noise on
+    an edge that lies along the line must not extrapolate outside the segment.
+    A segment exactly parallel to the line returns its midpoint, which is the
+    on-line point it already is to within the tolerance that let it through.
+    """
+    d1 = _cross(a, b, p1)
+    d2 = _cross(a, b, p2)
+    span = d1 - d2
+    if span == 0.0:
+        return Point((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0)
+    t = max(0.0, min(1.0, d1 / span))
+    return Point(p1.x + t * (p2.x - p1.x), p1.y + t * (p2.y - p1.y))
+
+
+def _clip_halfplane(polygon: Sequence[Point], a: Point, b: Point) -> list[Point]:
+    """``polygon`` clipped to the closed left half-plane of the line ``a -> b``.
+
+    ``_cross(a, b, p) >= 0`` is 「on the left of the directed line」, i.e. inside
+    a counter-clockwise clip polygon. The tolerance is :data:`_INK_AREA_EPS`
+    **in mil²** — the units the cross product is computed in — so a point whose
+    perpendicular distance to the line is below ``1e-9 / |ab|`` mil counts as
+    *on* the line rather than inside it. That is the same 「touching is not
+    overlap」 reading the rest of this module uses: a vertex that merely kisses
+    the clip line survives as a boundary vertex and contributes no area.
+    """
+    result: list[Point] = []
+    if not polygon:
+        return result
+    previous = polygon[-1]
+    previous_inside = _cross(a, b, previous) >= -_INK_AREA_EPS
+    for current in polygon:
+        inside = _cross(a, b, current) >= -_INK_AREA_EPS
+        if inside:
+            if not previous_inside:
+                result.append(_line_crossing(previous, current, a, b))
+            result.append(current)
+        elif previous_inside:
+            result.append(_line_crossing(previous, current, a, b))
+        previous, previous_inside = current, inside
+    return result
+
+
+def _intersection_area(polygon: Sequence[Point], convex: Sequence[Point]) -> float:
+    """Area of ``polygon`` ∩ ``convex``, in mil², for a **convex** clip polygon.
+
+    Sutherland–Hodgman: the subject is clipped by each edge of the clip
+    polygon, one closed half-plane at a time. The clip side must be convex —
+    every pad polygon is (:func:`_pad_copper` returns :func:`pad_corners`'
+    rectangle or 038V's circumscribing ``ELLIPSE`` 32-gon) — while the **subject
+    may be concave**, which is what lets an arbitrarily shaped silk fill be
+    tested: clipping a concave subject against a convex window yields
+    zero-width bridges between the surviving pieces, and a shoelace sum reads
+    those bridges as no area, so the answer is still the true intersection
+    area. (The classic Sutherland–Hodgman failure is the reverse pairing, a
+    concave *clip* window.)
+
+    ``0.0`` whenever the result collapses below three vertices — edge contact
+    and point contact are not positive-area overlap. Winding of the subject does
+    not matter; the clip side is normalised to counter-clockwise first.
+    """
+    if len(polygon) < 3 or len(convex) < 3:
+        return 0.0
+    clip = list(convex)
+    if _signed_area(clip) < 0.0:
+        clip.reverse()
+    subject = list(polygon)
+    for index in range(len(clip)):
+        subject = _clip_halfplane(subject, clip[index], clip[(index + 1) % len(clip)])
+        if len(subject) < 3:
+            return 0.0
+    return abs(_signed_area(subject))
+
+
+def _ink_stroke_path(ring: Sequence[Point], *, closed: bool) -> list[Point]:
+    """The ink centreline with its closing edge spelled out as a vertex loop.
+
+    :func:`_centreline_distance` and :func:`_centreline_polygon_distance` read a
+    list as consecutive ``(start, end)`` pairs, so an implicit last edge is
+    written by repeating the first point. A single-point ring stays a point (its
+    stroke is the disc around it) and a two-point ring gains the same segment
+    reversed, which changes no distance.
+    """
+    path = list(ring)
+    if closed and len(path) >= 2:
+        path.append(path[0])
+    return path
+
+
+def pad_ink_overlap(
+    board: BoardGeometry,
+    pad: PadGeometry,
+    *,
+    points: Sequence[Point],
+    half_width: float,
+    layers: Sequence[int] | set[int] | frozenset[int],
+    filled: bool = False,
+    closed: bool = False,
+) -> bool:
+    """True when ink on ``layers`` shares a **positive area** with a pad's copper.
+
+    038Y3A, the shared primitive the silkscreen rules will sit on. It answers
+    one question — 「is this stroke / fill really lying on that piece of
+    copper」 — and returns a bool, not a depth: stroke width and fill depth are
+    different quantities and adding them would be a fabricated number.
+
+    **Ink.** ``points`` is one polyline in board coordinates, ``half_width`` its
+    stroke half-width in mils:
+
+    * ``half_width > 0`` — the stroke is the union of discs of radius
+      ``half_width`` around every centreline point, i.e. round-capped capsules
+      per segment. A single point is the disc around it; ``closed=True`` adds
+      the last-to-first edge.
+    * ``half_width == 0`` — a stroke of zero width has **no area**, so it is not
+      ink at all, whatever it is drawn over.
+    * ``filled=True`` — the interior of the ring is ink as well. A fill closes
+      its outline by definition, so the ring is closed for both the interior and
+      the stroke (the outline's closing edge is a real silk edge and carries the
+      same ``half_width``). A ring of fewer than three points, or a collinear
+      one, encloses nothing.
+
+    One ring only: **multi-ring / holed fills are not supported**, and no caller
+    may claim they are (a hole drawn as a second ring would be read as solid
+    ink). ARC input must already be the parser's chord polyline — the chords are
+    what gets tested, and no arc is reconstructed here.
+
+    **Copper.** The pad is read through :func:`_pad_copper`, the same shape
+    model every other measurement in this module uses: a circle as a disc, an
+    ``OVAL`` as a stadium, any other ``ELLIPSE`` as 038V's circumscribing 32-gon
+    and everything else as :func:`pad_corners`' rotated rectangle. **The
+    bounding box is never the answer** — a disc's corner sits ``r sqrt(2)`` from
+    its centre, so the pre-study's box test called ink in that ear an overlap
+    while 6.568 mil of air sat between it and the copper. For the 32-gon the
+    same bounded conservatism as 038Y1 applies: it contains the ellipse and
+    touches it at 32 points, so inside that ``sec(pi/32) - 1`` = 0.483 % bulge a
+    hit can be reported that the true ellipse does not have, and never the
+    reverse.
+
+    **Layers.** ``layers`` are the copper faces the ink physically sits on (top
+    silkscreen is face ``1``, bottom face ``2``). An empty set, or one sharing
+    no face with :func:`_pad_copper_layers`, answers ``False`` before any
+    geometry runs: ink on the bottom face is not on a top pad however perfectly
+    they coincide in plan view. No design rule is applied — clearance and
+    「silk on a foreign pad」 judgement belong to the caller.
+
+    **Positive area, strictly.** Every comparison is strict, so contact is not
+    overlap: a stroke tangent to copper (``distance == half_width``, or
+    ``== half_width + pad_radius`` for a disc/stadium pad) and a fill whose edge
+    merely touches the pad come out ``False``. Containment counts — a fill
+    wholly inside a pad, a pad wholly inside a fill, a stroke buried in either —
+    because the *region* is compared, not the outline.
+
+    **Tolerance.** :data:`_OVERLAP_EPS` (1e-9 mil) on lengths and
+    :data:`_INK_AREA_EPS` (1e-9 mil²) on the fill's polygon area, i.e. the
+    smallest distinction this module already makes elsewhere; neither is a
+    fabrication allowance.
+
+    ``ValueError`` when ``half_width`` is negative — a caller asking for a
+    negative stroke is a bug, not a measurement.
+    """
+    width = float(half_width)
+    if width < 0.0:
+        raise ValueError("pad_ink_overlap: half_width must not be negative")
+
+    pad_layers = _pad_copper_layers(board, pad)
+    if not pad_layers:
+        return False
+    if not (pad_layers & {int(layer) for layer in layers}):
+        return False
+
+    ring = [Point(float(point.x), float(point.y)) for point in points]
+    if not ring:
+        return False
+    stroke = _ink_stroke_path(ring, closed=closed or filled)
+    fill = ring if filled and len(ring) >= 3 else None
+
+    copper, radius = _pad_copper(pad)
+    if radius <= 0.0 and not _polygon_has_area(copper):
+        # A zero-extent pad is a line or a point: it has no copper area to lie on.
+        return False
+
+    if width > 0.0:
+        if radius > 0.0:
+            # Both sides are unions of discs, so the depth of the interpenetration
+            # is (half_width + radius) - centreline distance.
+            if width + radius - _centreline_distance(stroke, copper) > _OVERLAP_EPS:
+                return True
+        elif _centreline_polygon_distance(stroke, copper) < width - _OVERLAP_EPS:
+            return True
+
+    if fill is not None:
+        if radius > 0.0:
+            # Pad = the union of discs of ``radius`` around its own centreline;
+            # the fill's region reaching within ``radius`` of it is a positive
+            # area of ink on copper (0.0 means the centreline is inside the fill).
+            if radius - _centreline_polygon_distance(copper, fill) > _OVERLAP_EPS:
+                return True
+        elif _intersection_area(fill, copper) > _INK_AREA_EPS:
+            return True
+
+    return False
 
 
 # ---------------------------------------------------------------------------
