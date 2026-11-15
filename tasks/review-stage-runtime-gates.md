@@ -1,22 +1,24 @@
-# 审查分阶段交付的运行时闸（R1/R2/R4 strict 已实施，R3 待授权）
+# 审查分阶段交付的运行时闸（541R3/I 已实现，真实 DSH 加载待验）
 
-> 状态：**部分实施（2026-11-06）**。R1 版本化 RunManifest 与语义 diff、R2
-> `checkup --file --strict` / `--new-evidence` 重算 guard、R4 `review finalize --strict-partial`
-> 四档披露校验**已实现**（各自为显式 opt-in，工作树未提交；任务书与证据见
-> [`tasks/541_offline_runtime_gates.md`](541_offline_runtime_gates.md)）；
-> R3 的 harness pre-execute 闸需 DSH profile 重启与独立加载授权，**未实施**；
-> 公开接口 allowlist 也**未实施**。本文其余部分仍是缺口与验收口径，不因 R1/R2/R4 落地而变。
+> 状态：**运行时切片已实施（2026-11-15）**。R1 版本化 RunManifest、R2 重算 guard、R4
+> `--strict-partial` 已随 `cdff88b` 落地；R3 DSH pre-execute 与公开接口 tool-gap 已在工作树实现。
+> R3 需要显式 out、同目录/callId 的 initial/partial Session receipt，预算为 30 分钟/60 model steps；
+> 任何欠账批次都阻止换 out 绕过。公开接口复用唯一 protocol 目录的 `--read-only` 闸并增加 tool-gap，
+> 不复制第二份动作名单。两项均为 DSH **165 passed / 1 skipped** 与独立变异证据，**真实桌面/profile
+> 尚未重启加载**。任务书见 [`541r3_dsh_stage_gate.md`](541r3_dsh_stage_gate.md) 与
+> [`541i_public_interface_allowlist.md`](541i_public_interface_allowlist.md)。
 
 | 项 | 状态 | 落点 |
 |---|---|---|
 | R1 版本化 RunManifest 与语义 diff | 已实施（shared 切片，未接 CLI） | `src/boardwise/core/runmanifest.py`；`tests/test_541_run_manifest.py` |
 | R2 `--strict` 重算 guard | 已实施（opt-in，默认行为不变） | `src/boardwise/cli.py`；`commands/review.py`；`tests/test_541_strict_reuse.py` |
-| R3 DSH pre-execute 硬闸 | **未实施**（等 profile 重启授权） | 无 |
+| R3 DSH pre-execute 硬闸 | 工作树已实现；真实 DSH 加载未验 | `dsh-plugin/src/review-stage-gate.ts`；`tests/review-stage-gate.spec.ts` |
 | R4 `--strict-partial` 四档披露 | 已实施（opt-in 披露闸） | `engines/evidence.py`；`tests/test_541_partial_categories.py` |
-| 公开接口 allowlist | **未实施** | 无 |
+| 公开接口 allowlist / tool-gap | 工作树已实现；任意宿主文件解析不覆盖 | `dsh-plugin/src/shared-tools.ts`；`tests/tools.spec.ts`；Python `bridge/protocol.py` 唯一目录 |
 
-> SOP 的 [`docs/review-sop.md`](../docs/review-sop.md) §3.0a 仍是纪律，不是闸：只有显式 strict
-> 路径才有机器行为，默认 `checkup` / `finalize` 不变。本文的四件不得据此写成「全部已落地」。
+> SOP 的 [`docs/review-sop.md`](../docs/review-sop.md) §3.0a 仍是纪律：Python CLI 的默认
+> `checkup` / `finalize` 不变；R3 只改变受管 DSH Session 的下一项深挖，且不取消已派发命令。
+> 任意 Read/Grep/Bash 的私有文件解析仍不是受管入口，不能写成全部覆盖。
 
 ## 背景（现状，可核对）
 
@@ -123,5 +125,6 @@ pre-execute 检查：没有 `initial/partial` 检查点就发起的第二批深�
 R1 是 R2/R4 的数据基础（manifest 里才有 baseline 与次数）；R3 独立于 CLI，可与 R2 并行
 但不同批。任何 `shared`/CLI 改动走 [`tasks/shared-platform.md`](shared-platform.md)
 集成锁，串行落地。R1/R2/R4 的 strict 切片已实施（R1 未接 CLI，R2/R4 是显式 opt-in）——
-证据在 [`tasks/541_offline_runtime_gates.md`](541_offline_runtime_gates.md)；
-**R3 与公开接口 allowlist 仍未实施**，本文相应小节保持缺口口径。
+证据在 [`tasks/541_offline_runtime_gates.md`](541_offline_runtime_gates.md)；R3 与公开接口
+tool-gap 的实现/复核证据见本文件顶部两份任务书。真实 DSH 独立加载、宿主任意文件解析和
+每个 read 动作的高级等价物仍是开放边界，不因工作树测试通过而关闭。

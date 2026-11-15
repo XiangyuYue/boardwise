@@ -129,36 +129,36 @@ AI 该怎么做（「未形成硬约束」那节把话说死）。
 这一节是流程纪律，**不是**「固定分钟数完成整板审查」的承诺：板子大小、通道可用性、
 手册可得性都会改变耗时，分钟数只用来决定「什么时候先把已经有的交付出去」。
 
-#### 已有机器支撑（本批相关，窄）
+#### 已有机器支撑
 
-本批真正验证过的机器支撑只有三条，而且都不拦新工作：
+- **Python CLI 的 opt-in 闸**：R2 `checkup --file --strict` 对同基准重算拒绝，R4
+  `review finalize --strict-partial` 校验 partial 四档披露；默认 CLI 路径不变。`review-read`
+  仍只读报告，不产生新结论。
+- **541R3 DSH pre-execute（工作树实现）**：受管 Session 的 checkup 必须显式 out；一批完成
+  深挖后，下一项 checkup/review_evidence 需要同目录、同 callId 的 initial/partial Session
+  receipt。欠账批次不能靠换 out 绕过。预算是 30 分钟或 60 model steps，新阶段收据开新段；
+  review_read/finalize/doctor 可收尾。联合 DSH **165 passed / 1 skipped**，跨目录、预算等
+  独立变异均先红后恢复。
+- **公开接口**：受管工具固定 argv，review_read 只有六个公开 section；bridge 由 protocol
+  唯一目录在 daemon 前拒绝非 read/未知动作，并附 `tool-gap`。Python 目录闸 **36 passed**，
+  DSH 拒绝/普通结果回归已核。
 
-- **`review-read` 的结构化投影**：本批验证了四个 section（verdict / findings / coverage /
-  artifacts）在同一份 `report.json` 上反复读、输出字节稳定；它读报告，不产生新报告，
-  也不刷新任何结论；
-- **`review finalize`**：披露一致时能校验 `partial` 交付并签 CLI 收据（内存里 re-gate，
-  不采集、不连编辑器）；
-- **`tests/test_review_stage_delivery.py` 的匿名 after-first-checkup 动态钉**：证明中止后
-  `review-read` 四节与 `review finalize` 不必再调 checkup / 采集也能出结论。
+这些证据不等于真实 DSH 桌面/profile 已加载：本批未重启、未部署，独立加载仍是验收项。
 
-这三条都**不拦截另起一次 checkup**，也不构成全局去重；测试存在不等于运行时闸。
+#### 未形成硬约束 / 未覆盖
 
-#### 未形成硬约束
+- **非受管 harness 顺序**：R3 只覆盖上述 DSH 工具，其它调用方何时加载 skill、先走哪一步
+  仍由各自 harness 决定；
+- **已派发命令**：预算闸只在下一次 pre-execute 拒绝，不设计时器打断当前命令，也不把杀进程
+  写成阶段交付；
+- **全局重复计算**：Python CLI 默认路径没有全局去重，只有显式 R2 strict 和受管 DSH R3
+  按各自合同拒绝；`review-read` 再稳定也不会让下一次 checkup 自动变便宜；
+- **任意宿主工具**：普通 Read/Grep/Bash 手解析内部文件没有被 allowlist 拦截，仍是覆盖缺口；
+  bridge 的每个 read 动作也不都有高级工具等价物。
 
-下面这些都是**必须遵守**的流程纪律，但机器不会替你拦——它们只是文档约束，**不是
-运行时闸**：
-
-- **harness 顺序**：SOP 约束遵守它的调用方，但不能在调用前强制拦截；何时加载 skill、
-  先走哪一步仍由 harness 与调用方决定；
-- **墙钟 / 预算停止**：15 / 30 分钟与批次上限是给人看的停止线，没有计时器会打断你，
-  也没有进程会在超预算时把命令掐掉；
-- **全局重复 checkup / DRC 拒绝**：没有任何进程记着上一轮跑过什么，重复调用照样执行，
-  表里的 `reject-*` 是纪律，不是拒绝；
-- **私有 API 阻止**：没有一道闸阻止你调私有动作，只有「只用公开接口」这条约定。
-
-`review-read` 可以在同一份报告上反复读、输出稳定，但这**不等于全局去重**：读一百次
-不会让明天那次 checkup 变便宜，也不会替你判定「同基准」。这些缺口怎么补成真闸，
-见 [`../tasks/review-stage-runtime-gates.md`](../tasks/review-stage-runtime-gates.md)（规划，未实施）。
+实现与验收边界见 [`../tasks/review-stage-runtime-gates.md`](../tasks/review-stage-runtime-gates.md)、
+[`../tasks/541r3_dsh_stage_gate.md`](../tasks/541r3_dsh_stage_gate.md) 和
+[`../tasks/541i_public_interface_allowlist.md`](../tasks/541i_public_interface_allowlist.md)。
 
 ### 3.1 审板子＝`boardwise checkup`（首选，一条命令）
 

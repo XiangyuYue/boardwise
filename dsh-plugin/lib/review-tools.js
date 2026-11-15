@@ -30,8 +30,9 @@ export function registerReviewCheckup(ctx) {
             'Designs are named exactly once: file= runs fully offline on an exported .epro2/.enet backup ' +
             '(no editor, no daemon), while project= or instance= reads the project open in the editor ' +
             'through the local bridge daemon — the live path only reads, it never edits. ' +
-            'boardwise writes report.json, report.md, architecture.md and design-intent.md into `out` (a fresh temp ' +
-            'directory when omitted) and this tool returns those paths, the CLI stdout and its exit code: 0 = a model was read and ' +
+            'boardwise writes report.json, report.md, architecture.md and design-intent.md into an explicit `out` ' +
+            '(the managed R3 stage gate refuses an omitted out; a fresh temp directory is only a partial-mount fallback) ' +
+            'and this tool returns those paths, the CLI stdout and its exit code: 0 = a model was read and ' +
             'nothing is an ERROR, 1 = an ERROR was found, 2 = the input cannot be used, 3 = nothing may be stated ' +
             '(the online state cannot be read — usually several editor windows are connected, so name one with ' +
             'project=/instance= — or the report\'s completion.verdict is `incomplete`, i.e. the review did not see the ' +
@@ -56,7 +57,8 @@ export function registerReviewCheckup(ctx) {
             out: {
                 type: 'string',
                 description: `Directory for report.json / report.md / architecture.md / design-intent.md (created if missing). ` +
-                    `Default: a fresh temp directory with the prefix "${OUT_DIR_PREFIX}".`,
+                    `Required by the managed R3 stage gate so the review can be checkpointed. Only a partial mount without ` +
+                    `that gate falls back to a fresh temp directory with the prefix "${OUT_DIR_PREFIX}".`,
             },
         },
         output: TEXT_OUTPUT,

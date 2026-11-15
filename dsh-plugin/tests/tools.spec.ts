@@ -293,6 +293,93 @@ describe('boardwise_bridge: argument assembly', () => {
   })
 })
 
+describe('boardwise_bridge: public read-only interface (541I)', () => {
+  // The CLI's own refusal (537A), spelled as `_read_only_refusal` prints it:
+  // stdout empty, one stderr line, exit 2, nothing sent to the daemon.
+  const GAP =
+    'tool-gap: the requested bridge action is outside the public read-only interface; nothing was forwarded to the editor.'
+
+  /** Drive a refusal for `action` at catalogue `risk`, as the CLI does. */
+  function refuse(action: string, risk: 'write' | 'create' | 'unknown') {
+    return installSpawn(child => {
+      child.err(
+        risk === 'unknown'
+          ? `boardwise bridge call: ${action} refused [READ_ONLY_VIOLATION] risk=unknown; it is not in the action ` +
+              'catalogue, so --read-only cannot certify it as read. Nothing was forwarded.\n'
+          : `boardwise bridge call: ${action} refused [READ_ONLY_VIOLATION] risk=${risk}; --read-only permits ` +
+              'risk=read only. Nothing was forwarded.\n',
+      )
+      child.finish(2)
+    })
+  }
+
+  for (const [action, risk] of [
+    ['doc.focus', 'write'],
+    ['sch.doc.new', 'create'],
+    ['no.such.action', 'unknown'],
+  ] as const) {
+    it(`discloses the tool gap for ${action} (risk=${risk}) without rewriting the refusal`, async () => {
+      const mock = refuse(action, risk)
+
+      const text = await call('boardwise_bridge', { action, params: '{}' })
+
+      // The gap disclosure comes first, and it is the same sentence every time.
+      expect(text.startsWith(`${GAP}\n`)).toBe(true)
+      // The CLI's answer survives verbatim: its risk, its reason, its exit code.
+      expect(text).toContain('boardwise_bridge: exit 2')
+      expect(text).toContain(`boardwise bridge call: ${action} refused [READ_ONLY_VIOLATION]`)
+      expect(text).toContain(`risk=${risk}`)
+      expect(text).toContain('Nothing was forwarded.')
+      // And the gate is still an argv fact on this very call.
+      const argv = spawnedCommand(mock)
+      expect(argv.slice(0, 4)).toEqual([process.env['BOARDWISE_EXE'] as string, 'bridge', 'call', '--read-only'])
+      expect(flagValue(argv, '--action')).toBe(action)
+    })
+  }
+
+  it('leaves a successful read alone — no gap line, same body', async () => {
+    const mock = installSpawn(child => {
+      child.out('{"ok":true,"windows":["test"]}')
+      child.finish(0)
+    })
+
+    const text = await call('boardwise_bridge', { action: 'doc.list', params: '{}' })
+
+    expect(text).not.toContain('tool-gap')
+    expect(text.startsWith('boardwise_bridge: exit 0')).toBe(true)
+    expect(text).toContain('{"ok":true,"windows":["test"]}')
+    expect(spawnedCommand(mock)).toContain('--read-only')
+  })
+
+  it('does not call a plain CLI error a capability gap', async () => {
+    installSpawn(child => {
+      child.err('NO_CONNECTOR: no editor window is connected\n')
+      child.finish(1)
+    })
+
+    const text = await call('boardwise_bridge', { action: 'sys.probe', params: '{}' })
+
+    expect(text).not.toContain('tool-gap')
+    expect(text).toContain('boardwise_bridge: exit 1')
+    expect(text).toContain('NO_CONNECTOR: no editor window is connected')
+  })
+
+  it('does not tag a killed run with the gap', async () => {
+    installSpawn(child => {
+      child.out('waiting for the daemon\n')
+      // Never closes: the caller's cancellation ends it, as a deadline would.
+    })
+    const controller = new AbortController()
+    const tool = registered().get('boardwise_bridge') as Tool
+    const pending = tool.execute({ action: 'sys.probe', params: '{}' }, { signal: controller.signal })
+    await new Promise(resolve => setTimeout(resolve, 25))
+    controller.abort()
+
+    await expect(pending).rejects.toThrow(/was cancelled and was killed/)
+    await expect(pending).rejects.not.toThrow(/tool-gap/)
+  })
+})
+
 describe('failure surfaces', () => {
   it('refuses before spawning when no CLI can be found', async () => {
     delete process.env['BOARDWISE_EXE']

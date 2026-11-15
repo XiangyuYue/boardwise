@@ -198,10 +198,31 @@ interface Exec {
   token: symbol
 }
 
+/**
+ * Compose every listener of one cordis waterfall in registration order — the
+ * registry's own composition rule. 537D3b's `present` gate and 541R3's stage
+ * gate both live on `tools/pre-execute`, and a single-slot map would silently
+ * drop one of them.
+ */
+function chainOf(
+  listeners: Map<string, Listener[]>,
+  event: string,
+): Listener | undefined {
+  const chain = listeners.get(event)
+  if (chain === undefined || chain.length === 0) return undefined
+  const step = (index: number): Listener => async (exec, next) => {
+    const listener = chain[index]
+    if (listener === undefined) return next()
+    return listener(exec, () => step(index + 1)(exec, next))
+  }
+  return step(0)
+}
+
 interface Harness {
   projections: InstanceType<typeof SessionProjectionRegistry>
   fs: TempFs
-  listeners: Map<string, Listener>
+  /** Every listener per event, in registration order (a slot map hides one). */
+  listeners: Map<string, Listener[]>
   session: (id: string) => InstanceType<typeof Session>
   useSession: (session: InstanceType<typeof Session>, cwd: string) => void
   present: (
@@ -216,7 +237,7 @@ async function harness(): Promise<Harness> {
   const cordis = new Context()
   const projections = new SessionProjectionRegistry(cordis)
   const fs = new TempFs()
-  const listeners = new Map<string, Listener>()
+  const listeners = new Map<string, Listener[]>()
   const cwds = new WeakMap<object, string>()
   const fallback = tempDir('boardwise-workspace-')
 
@@ -228,13 +249,15 @@ async function harness(): Promise<Harness> {
       get: (session: object) => cwds.get(session) ?? fallback,
     },
     on: (event: string, listener: Listener) => {
-      listeners.set(event, listener)
+      const existing = listeners.get(event)
+      if (existing === undefined) listeners.set(event, [listener])
+      else existing.push(listener)
       return () => true
     },
   }
   await apply(pluginCtx as never)
 
-  const listener = listeners.get(REVIEW_DELIVERY_EVENT)
+  const listener = chainOf(listeners, REVIEW_DELIVERY_EVENT)
   if (listener === undefined) throw new Error(`apply did not register ${REVIEW_DELIVERY_EVENT}`)
 
   const useSession = (session: InstanceType<typeof Session>, cwd: string): void => {
@@ -363,8 +386,12 @@ describe('present delivery gate: ordinary files are untouched', () => {
   it('leaves every non-present tool alone, without touching the filesystem', async () => {
     const h = await harness()
     const session = h.session('session-delivery-other-tool')
+    // `boardwise_checkup` is exactly the tool 541R3's stage gate now manages
+    // (it refuses a checkup without an explicit `out`), so the "another tool"
+    // of *this* gate is an ordinary execution entry. The stage gate's own
+    // refusals are covered in review-stage-gate.spec.ts.
     const result = await h.present(session, [join(tempDir(), 'x.epro2')], {
-      name: 'boardwise_checkup',
+      name: 'boardwise_arch',
       args: { file: 'x.epro2' },
     })
     expectAllowed(result)

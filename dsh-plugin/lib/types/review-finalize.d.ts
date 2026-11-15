@@ -46,6 +46,17 @@ export declare const REVIEW_FINALIZED_RECORD = "plugin:boardwise-dsh/review-fina
 export declare const REVIEW_FINALIZED_KEY = "boardwiseReviewFinalized";
 /** Bumped only when the serialized projection state or its fold changes. */
 export declare const REVIEW_FINALIZED_STATE_VERSION = 1;
+/**
+ * 541R3: the optional stage a delivery is signed under. It is scheduling
+ * metadata for the stage gate (`initial` = the first checkpoint of a batch,
+ * `partial` = a checkpoint of an unfinished batch), never a board verdict and
+ * never a claim of completeness: `report.conclusion` stays the only answer to
+ * "is this board fine".
+ */
+export declare const REVIEW_FINALIZE_STAGES: readonly ['initial', 'partial'];
+export type ReviewFinalizeStage = (typeof REVIEW_FINALIZE_STAGES)[number];
+/** `--strict-partial`: the CLI's own opt-in gate for a staged delivery. */
+export declare const REVIEW_FINALIZE_STAGE_FLAG = "--strict-partial";
 /** One content-bound file row of the CLI receipt — always relative to `--out`. */
 export interface FinalizeReceiptFile {
     readonly path: string;
@@ -125,6 +136,8 @@ export interface ReviewFinalizeResult {
         readonly type: typeof REVIEW_FINALIZED_RECORD;
         readonly seq: number;
     };
+    /** 541R3: the stage this delivery was signed under, when one was given. */
+    readonly stage?: ReviewFinalizeStage;
 }
 /**
  * The slice of an awaited 0.2.2 registration this plugin uses: a retained handle
@@ -162,6 +175,12 @@ export type ReviewProjectionRegistration = ReviewProjectionReader | Promise<Revi
  * on the synchronous branch, untouched and never awaited.
  */
 export declare function isPendingRegistration(registration: ReviewProjectionRegistration): registration is Promise<ReviewProjectionReader | undefined>;
+/**
+ * `then`, `catch` and `finally` all present — a promise, not an awaitable
+ * disposer. 541R3's stage projection reuses this one judgement, so both
+ * registrations branch on exactly the same shape.
+ */
+export declare function hasPromiseFace(value: unknown): value is PromiseLike<unknown>;
 /**
  * Register the Session projection and the eighth tool.
  *

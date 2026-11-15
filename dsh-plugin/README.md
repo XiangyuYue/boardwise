@@ -30,24 +30,29 @@ API 面已对照 rc.3 核过：`defineTool`、`ctx.tools.register(ToolDefinition
 `appendPluginRecord` / `pluginRecordOf`、`SessionProjectionRegistry` 都在。
 
 **0.2.2-rc.1（DSH NEXT 2.0.22）适配**：上游 projection 注册改为异步并返回 ready handle。
-插件在完整 Promise 面出现时先等待并持有 handle，再注册 finalize 与 delivery gate；旧版只有
-`then` 的可调用 disposer 仍走原同步路径，不会被误 await 成注销。两套真实依赖均跑过
-typecheck 与 **137 passed / 1 skipped**。这是包级兼容验证，不等于 DSH NEXT 2.0.22 桌面
-安装/profile 已实测；peer 范围无需因该版本再改，`defineTool`、`tools/pre-execute`、
-`appendPluginRecord` / `pluginRecordOf` 与新包一致。
+插件在完整 Promise 面出现时先等待并持有 handle；541R3 起，finalize receipt 与 stage 两个
+projection 都 ready 后才一次发布 draw、delivery gate 与 stage gate。旧版只有 `then` 的可调用
+disposer 仍走原同步路径，不会被误 await 成注销。这是包级兼容验证，不等于桌面安装/profile
+已实测；peer 范围无需因该版本再改。
+
+**541R3 检查点与预算闸**：受管 Session 中，`boardwise_checkup` 必须显式给 `out`。一批完成
+首次深挖后，下一项 checkup/review_evidence 先要求同目录、同 callId 的
+`boardwise_review_finalize(stage=initial|partial)` Session receipt；其它未交付批次也不能靠换 out
+绕过。每段预算为 30 分钟或 60 个 model steps，到线拒绝下一项深挖，新的阶段收据开启下一段；
+review_read/finalize/doctor 始终可收尾，已派发命令不被取消。真实 DSH 桌面加载另需独立验收。
 
 ## 工具面
 
 | 工具 | 包装的命令 | 关键参数 | timeoutMs |
 |---|---|---|---|
-| `boardwise_checkup` | `checkup [--file F \| --project P \| --instance I] --out D` | `file` / `project` / `instance` 三选一，`out` 可选 | 600 000 |
+| `boardwise_checkup` | `checkup [--file F \| --project P \| --instance I] --out D` | 三选一指定设计；受管 Session 的 `out` 必填 | 600 000 |
 | `boardwise_arch` | `arch <file> [--out]` | `file` 必填 | 120 000 |
 | `boardwise_doctor` | `doctor [--project/--instance]` | 可选寻址 | 60 000 |
 | `boardwise_bridge` | `bridge call --read-only --action A --params J [--project/--instance]` | `action`/`params` 必填 | 120 000 |
 | `boardwise_review_read` | `review-read --out D --section S --json TMP` | `out` / `section` 必填，完整 JSON 返回 | 120 000 |
 | `boardwise_review_evidence` | `review-evidence --out D [--project P] [--page U ...] [--pcb U ...]` | `out` 必填，`page`/`pcb` 可重复 | 600 000 |
 | `boardwise_triage_batch` | `triage-batch --out D --input BATCH --json RESULT` | `out` / `entries` 必填，整批原子应用 | 120 000 |
-| `boardwise_review_finalize` | `review finalize --out D` | `out` 必填，签发当前 Session 的交付收据 | 120 000 |
+| `boardwise_review_finalize` | `review finalize --out D [--strict-partial]` | `out` 必填；可选 `stage=initial/partial` | 120 000 |
 | `boardwise_draw_compile` | `draw compile --circuit C --presentation P --profiles S --out D --json J` | 三个输入必填，`pageBox`/`intent`/`out` 可选；整份 JSON 返回：单模块 `candidates`，页级 `pages`（见下） | 600 000 |
 | `boardwise_draw_lint` | `draw lint --snapshot S --render R [--bodies B] --json J` | `snapshot`/`render` 必填，仅离线回放；完整 JSON 返回 | 120 000 |
 
@@ -56,8 +61,9 @@ typecheck 与 **137 passed / 1 skipped**。这是包级兼容验证，不等于 
 - **参数原样透传**，插件不解释。唯一的前置校验：`file` 路径必须存在（不存在 → 执行前拒绝，
   不 spawn）；`bridge` 的 `params` 必须是合法 JSON 对象字面量；`checkup` 必须恰好指定
   一个目标（`file` 或 `project`/`instance`），不替模型猜窗口。
-- **只读优先**：所有工具都不修改设计。`boardwise_bridge` 强制 `--read-only`；分诊与 finalize
-  只更新审查报告和交付收据，真实工程的设计写仍走 CLI 的身份与权限闸。
+- **只读优先**：所有工具都不修改设计。`boardwise_bridge` 强制 `--read-only`；CLI 目录闸拒绝
+  非 read/未知动作时，结果前附 `tool-gap`，原文与 exit 保留。分诊与 finalize 只更新审查报告和
+  交付收据，真实工程的设计写仍走 CLI 的身份与权限闸。
 - **返回值** = `exit code` + `cli`（怎么找到的）+ `command` + 产物路径（`report.json` /
   `report.md` / `architecture.md`，逐个标 `present` / `MISSING`）+ stdout（必要时 stderr）。
   非零 exit 是**结果**不是失败（doctor / checkup 就用 exit 报告状态）；
@@ -387,9 +393,9 @@ dsh SKILL 加载机制与本仓库 SKILL.md 的衔接是后续任务，本插件
 
 - **进程**：spawn 本机 `boardwise` CLI（子进程）；`file` 参数不存在时执行前拒绝，不 spawn。
 - **文件**：只写用户显式给的 `--out` 目录；读取工程文件/报告。不碰其它路径。
-  没给 `--out` 时（`boardwise_checkup`）自己建一个系统临时目录
-  （`os.tmpdir()` 下 `boardwise-dsh-*`，每次一份）——那是**系统临时目录**，不是当前目录，
-  也不会在结束时清理（报告要留给模型读）。
+  受管 Session 没给 `--out` 时由 R3 在执行前拒绝；只有未挂 R3 的部分挂载才由
+  `boardwise_checkup` 自己建系统临时目录（`os.tmpdir()` 下 `boardwise-dsh-*`，每次一份）。
+  临时目录不在当前目录，也不会在结束时清理（报告要留给模型读）。
 - **网络**：仅经本机 loopback 访问 boardwise daemon（127.0.0.1:61190，经 CLI）；**不访问任何外部服务**。
 - **失败边界**：CLI 非零 exit 原样作为结果返回（不伪装成功）；stdout 超 32KB 截断并标注；token 形状的值一律打码。
 - **依赖**：运行时零依赖（node 内置模块）；`@deepseek-ai/cordis`、`@deepseek-ai/dsh-tools` 为 peerDependencies，由 dsh profile 提供。

@@ -3,7 +3,7 @@
 > **这份文件是路由，不是规格。** 它只回答三件事：这是什么项目、三条线现在各在哪、
 > 干活要去读哪份权威文件。细节一律不在这里复制；两处说法冲突时以它指的文件为准。
 > 写它的场合：从 Kimi Code 迁到 DeepSeek Harness（dsh）这类**换 harness**、开新会话、
-> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-08**。
+> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-15**。
 
 ## 1. 一句话
 
@@ -135,7 +135,15 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   `tasks/527c2_cross_view_geometry.md`、`tasks/529_decap_mid_band.md`、
   `tasks/541_offline_runtime_gates.md`。最终全量 **9893 passed / 25 skipped / 14 failed /
   1 warning**（12 条工作树既有货架数据漂移 + 2 条既有 Windows 环境失败，不宣称全量全绿）；
-  connector、DSH、Rust 均通过。541 R3 与公开接口 allowlist 仍未实施，不写成 R3/R4 全部完成。
+  connector、DSH、Rust 均通过。后续 541R3/I 已在工作树实现（DSH 165 passed/1 skipped），
+  真实 DSH 桌面/profile 尚未加载，任意宿主文件解析仍不覆盖；见 `tasks/541r3_dsh_stage_gate.md`。
+- **038Y5L 在线验收（2026-11-15）**：test V4 活动页拒绝、PCB1 严格 DRC 1 错得 RED/exit 2、
+  旧目录拒绝和焦点恢复均完成；V3/GREEN/DRC 清洁后的 checkup 腿未在线覆盖。证据
+  `outputs/review/038y5l/`，任务书 `tasks/038y5l_pcb_gate_live.md`。
+- **038Z1 真实三板骨架对拍（2026-11-15）**：两次导出哈希不同，只做语义对拍；离线/在线
+  57 条自有 findings 一致，三板各 35 checks、findings 20/20/9。三板全 0 器件、铜层 2/0/0，
+  不是非空多板或真实多文件守卫证据；NC/缺省 yAxisDirection 待样本。证据
+  `outputs/review/038z1/differential.json`，任务书 `tasks/038z1_v4_live_archive_differential.md`。
 - **038Q 的 Q1–Q4 支撑批已完成各自范围（2026-11-11）**：库只读 `lib.cbb.search/get`、
   上游候选归一化、符号文件只读通路与单符号 elibz2 profile；AMS1117 单符号身份/几何已核对。
   四模块仍 candidate/unverified/notForDrawCompile。Q5 已补齐 AMS1117 三个电容的真实身份与

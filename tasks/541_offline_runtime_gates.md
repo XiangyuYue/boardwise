@@ -114,7 +114,7 @@ choices、`NEW_EVIDENCE_ARCHIVE_BYTES/CHOICES`）、`cli.py`（R2 helper 段 +
   最终 sha256：`cli.py 92c9d9b6…`、`review.py ceb05321…`、测试 `9a60c3b2…`。
 - 未做/已知：`--new-evidence` 无 `--strict` 时在 preflight 退 2（本片自定，非任务书原文）；
   在线 strict 拒绝发生在 preflight（不连 daemon、不建 out/锁）；`run.json` 写失败不重试；
-  R4 strict partial 已实施，R3 与公开接口 allowlist 未实施。
+  R4 strict partial 已实施；R3/I 后续已在工作树实现，真实 DSH 加载见 541R3/I 任务书。
 
 ### 2.1 R2 复核修复 B（2026-11-06，B5 复核复现的四个洞）
 
@@ -272,4 +272,4 @@ strict_partial=False)`）、`commands/review.py`（`--strict-partial`）、`cli.
 - 最终全量 Python：**9893 passed / 25 skipped / 14 failed / 1 warning，1293.73 s**。其中 12 条为工作树既有 `blocklib/parts.json` 数据漂移（110 条、候选条目及事实字段变化），2 条为既有 pytest 槽位 ACL 与 Git/MSYS `0xC0000022` 环境失败；不宣称全量全绿。
 - connector **576 passed** + typecheck；DSH **129 passed / 1 skipped** + typecheck/build；Rust **111 passed / 4 ignored**，fmt/clippy/test 通过。
 - 两路只读对抗复核及后续修复均完成：PAD_NET 编号不一致仅披露不改网、527C2 距离按 endpoint、R2 out 自我哈希/侧车/同字节换路径、R4 原始证据防 re-gate 洗白、生成器绝对路径脱敏与公开 `project_uuid` 跨层接口。
-- 未提交、未推送、未发布、未跑真机；R3 与公开 allowlist 未实施。
+- 本段是 2026-11-06 批次读数，当时未跑真机；R1/R2/R4 后随 `cdff88b` 提交。R3/I 另批已在工作树实现，真实 DSH 加载与任意宿主文件解析边界见 `tasks/541r3_dsh_stage_gate.md`、`tasks/541i_public_interface_allowlist.md`。

@@ -78,29 +78,33 @@ owner=审查线；绘制线独立开发、互不改文件，主仓及绘制线�
 - **038X 默认货架绝对路径与缺失披露（已随 `cdff88b` 提交）**：合同见
   `tasks/038x_shelf_resolution.md`。非 frozen 的默认读写统一改用 `resources.parts_library()`
   绝对路径，只读入口显式披露货架缺失，`load_parts` 的「缺文件可建空架」底层合同不变。
-- **038Y PCB 几何三规则 + 只读 `pcb gate`（Y1–Y5 实现与联合验收完成，工作树未提交）**：
+- **038Y PCB 几何三规则 + 只读 `pcb gate`（Y1–Y5 已随 `d422e7a` 提交）**：
   任务书 `tasks/038y1_pad_copper_overlap.md`、`tasks/038y2_pad_overlap_rule.md`、
   `tasks/038y3a_pad_ink_overlap.md`、`tasks/038y3b_silk_on_foreign_pad.md`、
   `tasks/038y4_silk_under_body.md`、`tasks/038y5_pcb_gate.md`（autofix 另见
-  `tasks/038y6_silk_autofix.md`，**暂缓**）。`pcb-pad-overlap` 用 038Y1 的铜面正面积原语，
-  `pcb-silk-on-foreign-pad` 用 038Y3A 的墨迹×铜面原语，`pcb-silk-under-body` 复用现有文字盒与
-  真实本体多边形；都不再拿外接框当最终判定。`boardwise pcb gate --out <新目录>` 只做只读编排（活动 PCB 身份 →
-  一次严格宿主 DRC → 新鲜 checkup → verdict），退出码 0/2/3，incomplete 不绿，无
-  `--skip-checkup`、无 autofix、无保存。联合读数 **1505 passed / 2 skipped**（联合交卷口径，
-  不当作全量）；两条既有归档 4 板实跑 WARN=0、近似披露 INFO 4，**不能写成所有板干净**；
-  **真机未跑**。Y6 autofix 因 PCB 属性枚举/移动/保存/回读前提未齐暂缓，不得写成已提供。
-  本批在主仓限定文件域内开发，旧的 `review-v4` worktree 未使用（其缺 038V 内容）。
+  `tasks/038y6_silk_autofix.md`，**暂缓**）。联合读数 **1505 passed / 2 skipped**（不是全量）；
+  两条既有归档 4 板实跑 WARN=0、近似披露 INFO 4，**不能写成所有板干净**。
+  038Y5L 已完成 test V4 在线验收：活动 P45 时 exit 3 且零 DRC/checkup；PCB1 严格 DRC
+  `checked=true / errors=1 / truncated=false`，gate exit **2 RED** 并按合同不继续 checkup；
+  旧目录复用 exit 3，焦点已恢复。V3、天然 GREEN 和 DRC 清洁后的在线 checkup 仍未覆盖。
+  证据 `outputs/review/038y5l/`，任务书 `tasks/038y5l_pcb_gate_live.md`。
+- **038Z1 test V4 真实三板骨架对拍（2026-11-15）**：两次 117295 B 导出哈希不同，
+  只报语义对拍；离线/在线均 exit 1，57 条自有 findings 一致，三板各 35 checks、findings
+  20/20/9，逐板字段与 crossView 一致。三板全 0 器件、铜层 2/0/0，不声称真实非空多板或
+  真实多文件守卫；真实 NC、缺省 yAxisDirection 继续等样本。任务书
+  `tasks/038z1_v4_live_archive_differential.md`，证据 `outputs/review/038z1/differential.json`。
 - **529 去耦 mid 容值带（已随 `cdff88b` 提交）**：合同见 `tasks/529_decap_mid_band.md`。
   2.2/4.7µF 落入 mid 档，191D 的临时收窄按原判据回退，全 bulk 输入档保留 INFO 特例；
   四个距离阈值 `200/300/800/200` 不动。
 - **527C2 跨视图几何分类与全部位号（已随 `cdff88b` 提交）**：合同见
   `tasks/527c2_cross_view_geometry.md`。lonely-pin 的 note 按几何分「没画线 / 网名不同 /
   落位嫌疑」并点名全部位号；`min_pins` 仍为 3，哪一侧电气结论更有权威不变。
-- **541 可离线运行时闸（R1/R2/R4 strict 已随 `cdff88b` 提交）**：合同见
-  `tasks/541_offline_runtime_gates.md`。R1 `core/runmanifest.py` 版本化 manifest 与语义 diff；
-  R2 `checkup --file --strict` / `--new-evidence`；R4 `review finalize --strict-partial`
-  四档披露校验。R3 的 DSH profile pre-execute 闸等重启授权，**未实施**；公开接口 allowlist
-  也**未实施**，不得写成 R3/R4 全部完成。
+- **541 运行时闸（R1/R2/R4 strict 已随 `cdff88b` 提交；R3/I 工作树实现）**：
+  R3 `dsh-plugin/src/review-stage-gate.ts` 已提供显式 out、receipt+callId 检查点、跨目录欠账拒绝和
+  30 分钟/60 model steps 预算；541I 复用 protocol 唯一目录的 `--read-only` 并补 tool-gap。
+  联合 DSH **165 passed / 1 skipped**，主代理四项独立变异均先红且哈希恢复；Python 目录闸
+  **36 passed**。真实 DSH 桌面/profile 未重启加载，任意宿主文件解析不覆盖。任务书
+  `tasks/541r3_dsh_stage_gate.md`、`tasks/541i_public_interface_allowlist.md`。
 - 以上批次的最终全量 **9893 passed / 25 skipped / 14 failed / 1 warning**。
   其中 12 条是工作树既有货架数据漂移，2 条是既有 Windows 环境失败，不宣称全量全绿；
   connector、DSH、Rust 均通过。

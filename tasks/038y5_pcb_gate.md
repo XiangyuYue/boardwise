@@ -66,6 +66,8 @@
   `python -m tools.cli_contract` 为 `CLI contract matches production`；`pcb --help` 只显示 gate。
 - 主代理复核补齐 rulesRefused/pagesDropped/boardsEmpty、双 verdict 对账、findings 列表与
   直接 ERROR/completion.errors 证据，避免完成段字段互相掩盖。
-- 未跑全量或真机；V3/V4 在线身份、宿主 DRC 与 checkup 联动仍未实测。gate 自己跑 DRC，
-  所以 hostPcbDrcUnchecked 不另列致命集；其他八类 coverage 缺口均拒绝 GREEN。
+- 上述是实现批的离线验收基线；后续 038Y5L 已在 test V4 完成活动页拒绝、PCB1 真实 DRC RED
+  与旧目录拒绝。V3、天然 GREEN 及 DRC 清洁后的 checkup 联动仍未在线覆盖，见
+  `tasks/038y5l_pcb_gate_live.md` 与 `outputs/review/038y5l/`。gate 自己跑 DRC，所以
+  hostPcbDrcUnchecked 不另列致命集；其他八类 coverage 缺口均拒绝 GREEN。
 - 不支持 autofix/skip-checkup/doc.open/save；autofix 前提另见 038Y6。

@@ -49,6 +49,16 @@ export const REVIEW_FINALIZED_RECORD = 'plugin:boardwise-dsh/review-finalized';
 export const REVIEW_FINALIZED_KEY = 'boardwiseReviewFinalized';
 /** Bumped only when the serialized projection state or its fold changes. */
 export const REVIEW_FINALIZED_STATE_VERSION = 1;
+/**
+ * 541R3: the optional stage a delivery is signed under. It is scheduling
+ * metadata for the stage gate (`initial` = the first checkpoint of a batch,
+ * `partial` = a checkpoint of an unfinished batch), never a board verdict and
+ * never a claim of completeness: `report.conclusion` stays the only answer to
+ * "is this board fine".
+ */
+export const REVIEW_FINALIZE_STAGES = ['initial', 'partial'];
+/** `--strict-partial`: the CLI's own opt-in gate for a staged delivery. */
+export const REVIEW_FINALIZE_STAGE_FLAG = '--strict-partial';
 /** A sha256 as Python writes it: exactly 64 lowercase hex digits. */
 const SHA256_LOWER = /^[0-9a-f]{64}$/;
 /**
@@ -129,6 +139,19 @@ const projectionStateSchema = z.object({
     })),
 });
 /**
+ * The optional `stage` argument: absent (the old behaviour, byte for byte) or
+ * one of {@link REVIEW_FINALIZE_STAGES}. Anything else is refused before a
+ * child process is spawned, so a typo can never be silently ignored.
+ */
+function stageOf(value) {
+    if (value === undefined || value === null || value === '')
+        return undefined;
+    if (value === 'initial' || value === 'partial')
+        return value;
+    throw new Error(`${REVIEW_FINALIZE_TOOL}: stage is ${describeValue(value)}, not one of ` +
+        `${REVIEW_FINALIZE_STAGES.map(stage => JSON.stringify(stage)).join(' / ')}.`);
+}
+/**
  * Is this registration result 0.2.2's awaitable registration, or 0.2.1's
  * awaitable *disposer*?
  *
@@ -142,8 +165,12 @@ const projectionStateSchema = z.object({
 export function isPendingRegistration(registration) {
     return hasPromiseFace(registration);
 }
-/** `then`, `catch` and `finally` all present — a promise, not an awaitable disposer. */
-function hasPromiseFace(value) {
+/**
+ * `then`, `catch` and `finally` all present — a promise, not an awaitable
+ * disposer. 541R3's stage projection reuses this one judgement, so both
+ * registrations branch on exactly the same shape.
+ */
+export function hasPromiseFace(value) {
     if (value === null || (typeof value !== 'object' && typeof value !== 'function'))
         return false;
     const candidate = value;
@@ -255,7 +282,10 @@ function registerFinalizeTool(ctx, reader) {
             'checked `receipt` and the record `seq`. ' +
             'A non-zero exit, a timeout or cancellation, a missing/invalid `finalize.json`, or a call with no current ' +
             'Session records nothing and is an error. Exit codes: 0 = delivery consistent; 1 = content disagreement; ' +
-            '2 = unusable input; 3 = no report.json to finalize.',
+            '2 = unusable input; 3 = no report.json to finalize. ' +
+            '`stage` is optional and only scheduling metadata: `initial` (first checkpoint of a batch) or `partial` ' +
+            '(a checkpoint of an unfinished batch) appends `--strict-partial` to the CLI argv, which is what the stage ' +
+            'gate accepts as a checkpoint for the next deep dive. It is never a board verdict and never claims complete.',
         parameters: {
             out: {
                 type: 'string',
@@ -263,11 +293,18 @@ function registerFinalizeTool(ctx, reader) {
                 description: 'The `checkup --out` review directory to finalize. The CLI writes `finalize.json` there; ' +
                     'this tool reads it in full and records it in the current Session.',
             },
+            stage: {
+                type: 'string',
+                enum: REVIEW_FINALIZE_STAGES,
+                description: 'Optional stage: `initial` (first checkpoint of this review batch) or `partial` (a checkpoint of an ' +
+                    'unfinished batch). Adds `--strict-partial` to the CLI. Scheduling metadata only — not a board verdict.',
+            },
         },
         output: STRUCTURED_OUTPUT,
         execute: async (args, exec) => {
             const tool = REVIEW_FINALIZE_TOOL;
             const out = requireOut(tool, text(args.out));
+            const stage = stageOf(args.stage);
             if (reader === undefined) {
                 throw new Error(`${tool}: no session-projection service is available (or its registration never became ready), so the ` +
                     'receipt could not be recorded in this Session. The plugin declares `sessionProjections` in its inject ' +
@@ -282,8 +319,11 @@ function registerFinalizeTool(ctx, reader) {
             const reviewDir = resolve(out);
             const directoryKey = directoryKeyOf(reviewDir);
             // argv is the one place this command is spelled; the CLI owns every
-            // judgement behind it. `--out` is passed as the caller gave it.
+            // judgement behind it. `--out` is passed as the caller gave it, and a
+            // staged call appends the CLI's own strict-partial opt-in after it.
             const argv = ['review', 'finalize', '--out', out];
+            if (stage !== undefined)
+                argv.push(REVIEW_FINALIZE_STAGE_FLAG);
             const receiptPath = join(reviewDir, FINALIZE_RECEIPT_FILE);
             const parsed = await runStructuredCli(tool, argv, REVIEW_FINALIZE_TIMEOUT_MS, exec, receiptPath);
             const problem = finalizeReceiptProblem(parsed);
@@ -318,6 +358,7 @@ function registerFinalizeTool(ctx, reader) {
                 directoryKey,
                 receipt,
                 sessionRecord: { type: REVIEW_FINALIZED_RECORD, seq },
+                ...(stage === undefined ? {} : { stage }),
             };
             // The shared object output schema infers as `Record<string, never>` (it
             // declares `additionalProperties` without properties), so the typed result

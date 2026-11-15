@@ -6,6 +6,27 @@ import { ensureDirectory, requireExistingFile, requireJsonObject } from './tool-
 const ARCH_TIMEOUT_MS = 120_000;
 const DOCTOR_TIMEOUT_MS = 60_000;
 const BRIDGE_TIMEOUT_MS = 120_000;
+/**
+ * 541I: the token `bridge call --read-only` refuses with, as the CLI spells it
+ * (537A). It is a **capability disclosure** — the action is outside the public
+ * read-only interface — not a board finding, so it rides in front of the CLI's
+ * own answer and changes neither that text nor its exit code.
+ */
+const READ_ONLY_VIOLATION = 'READ_ONLY_VIOLATION';
+const READ_ONLY_TOOL_GAP = 'tool-gap: the requested bridge action is outside the public read-only interface; nothing was forwarded to the editor.\n' +
+    'tool-gap: the managed reads are boardwise_checkup, boardwise_review_evidence and boardwise_review_read; ' +
+    'each answers only the read it names, and none is claimed to replace this action.';
+/**
+ * 541I: prefix the tool-gap disclosure when the CLI refused the action.
+ *
+ * The refusal reaches here already formatted, with its own exit code and the
+ * catalogue risk the CLI read from protocol — that text is passed through
+ * verbatim. Only an outcome carrying the token gets the disclosure, so a
+ * successful read and every other CLI error keep their exact spelling.
+ */
+function discloseReadOnlyGap(outcome) {
+    return outcome.includes(READ_ONLY_VIOLATION) ? `${READ_ONLY_TOOL_GAP}\n${outcome}` : outcome;
+}
 /** Register arch/doctor/bridge between the two review registration phases. */
 export function registerSharedTools(ctx) {
     ctx.tools.register(defineTool({
@@ -124,7 +145,7 @@ export function registerSharedTools(ctx) {
                 argv.push('--project', text(args.project));
             if (text(args.instance) !== '')
                 argv.push('--instance', text(args.instance));
-            return await executeCli(tool, argv, BRIDGE_TIMEOUT_MS, exec);
+            return discloseReadOnlyGap(await executeCli(tool, argv, BRIDGE_TIMEOUT_MS, exec));
         },
         timeoutMs: BRIDGE_TIMEOUT_MS,
     }));

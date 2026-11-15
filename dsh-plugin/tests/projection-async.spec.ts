@@ -33,6 +33,10 @@ import {
   type ReviewProjectionReader,
 } from '../src/review-finalize.ts'
 import { REVIEW_DELIVERY_EVENT, type DeliveryFileSystem, type DeliveryTarget } from '../src/review-delivery.ts'
+import {
+  REVIEW_STAGE_PROJECTION_KEY,
+  REVIEW_STAGE_STATE_VERSION,
+} from '../src/review-stage-gate.ts'
 import { installSpawn } from './fake-child.ts'
 
 /** One registered tool, as `defineTool` would pass it to the registry. */
@@ -124,17 +128,68 @@ function awaitableRegistry(handleStateOf: (session: unknown) => unknown = () => 
   }
 }
 
+/**
+ * A 0.2.2 registry whose registrations settle one at a time, in call order, so a
+ * test can hold one projection back while the other is already ready. The real
+ * registry has exactly this freedom (each `register` is its own async unit), and
+ * 541R3's gates read **both** projections.
+ */
+function sequencedRegistry(): {
+  readonly registry: { stateOf: unknown; register: (definition: unknown) => unknown }
+  readonly keys: string[]
+  readonly registryStateOf: ReturnType<typeof vi.fn>
+  readonly settle: (index: number) => void
+} {
+  const pending: { promise: Promise<{ stateOf: (session: unknown) => unknown }>; resolve: (value: { stateOf: (session: unknown) => unknown }) => void }[] = []
+  const keys: string[] = []
+  const registryStateOf = vi.fn((): never => {
+    throw new Error('the deprecated registry read must not be used on the 0.2.2 branch')
+  })
+  return {
+    registry: {
+      stateOf: registryStateOf,
+      register: (definition: unknown) => {
+        keys.push((definition as { key: string }).key)
+        const one = deferred<{ stateOf: (session: unknown) => unknown }>()
+        pending.push(one)
+        return one.promise
+      },
+    },
+    keys,
+    registryStateOf,
+    settle: (index: number) => pending[index]?.resolve({ stateOf: () => ({ receipts: {} }) }),
+  }
+}
+
 interface FakeContext {
   readonly tools: Tool[]
   readonly names: string[]
-  readonly listeners: Map<string, unknown>
+  /** Every listener per event, in registration order (a slot map hides one). */
+  readonly listeners: Map<string, Listener[]>
   readonly ctx: Record<string, unknown>
+}
+
+/**
+ * Compose every listener of one cordis waterfall in registration order, which is
+ * how the registry itself composes them: 537D3b's `present` gate and 541R3's
+ * stage gate are two listeners on `tools/pre-execute`, and a slot map would
+ * keep only the last.
+ */
+function chainOf(listeners: Map<string, Listener[]>, event: string): Listener | undefined {
+  const chain = listeners.get(event)
+  if (chain === undefined || chain.length === 0) return undefined
+  const step = (index: number): Listener => async (exec, next) => {
+    const listener = chain[index]
+    if (listener === undefined) return next()
+    return listener(exec, () => step(index + 1)(exec, next))
+  }
+  return step(0)
 }
 
 function fakeContext(sessionProjections?: unknown, services: { fs?: DeliveryFileSystem } = {}): FakeContext {
   const tools: Tool[] = []
   const names: string[] = []
-  const listeners = new Map<string, unknown>()
+  const listeners = new Map<string, Listener[]>()
   const ctx: Record<string, unknown> = {
     tools: {
       register: (definition: unknown) => {
@@ -147,8 +202,10 @@ function fakeContext(sessionProjections?: unknown, services: { fs?: DeliveryFile
     sessionProjections,
     fs: services.fs,
     workingDirectory: { get: () => ROOT },
-    on: (event: string, listener: unknown) => {
-      listeners.set(event, listener)
+    on: (event: string, listener: Listener) => {
+      const existing = listeners.get(event)
+      if (existing === undefined) listeners.set(event, [listener])
+      else existing.push(listener)
       return () => true
     },
   }
@@ -217,7 +274,7 @@ describe('session projections: the awaitable 0.2.2 registration', () => {
 
     // The synchronous part of the registration is already published …
     expect(fake.names).toEqual([...BEFORE_FINALIZE])
-    // … and neither the finalize-dependent tools nor the gate exist yet.
+    // … and neither the finalize-dependent tools nor either gate exist yet.
     expect(fake.listeners.has(REVIEW_DELIVERY_EVENT)).toBe(false)
 
     awaitable.ready()
@@ -227,9 +284,40 @@ describe('session projections: the awaitable 0.2.2 registration', () => {
     expect(fake.listeners.has(REVIEW_DELIVERY_EVENT)).toBe(true)
     expect(awaitable.registryStateOf).not.toHaveBeenCalled()
 
-    // The definition still went through with 537D3a's frozen version.
-    expect(awaitable.keys).toEqual([REVIEW_FINALIZED_KEY])
+    // The definitions still went through with their frozen versions: 537D3a's
+    // receipts and, from 541R3, the host-only stage fold on the same event bus.
+    expect(awaitable.keys).toEqual([REVIEW_FINALIZED_KEY, REVIEW_STAGE_PROJECTION_KEY])
     expect(REVIEW_FINALIZED_STATE_VERSION).toBe(1)
+    expect(REVIEW_STAGE_STATE_VERSION).toBe(1)
+    // Both gates read the ready handles, so `tools/pre-execute` carries two
+    // listeners — `present` delivery plus the managed deep-dive stage gate.
+    expect(fake.listeners.get(REVIEW_DELIVERY_EVENT)?.length).toBe(2)
+  })
+
+  it('publishes nothing while the second projection is still registering, then publishes once', async () => {
+    const sequenced = sequencedRegistry()
+    const fake = fakeContext(sequenced.registry, { fs: fakeFileSystem() })
+
+    const pending = apply(fake.ctx as never)
+    expect(pending).toBeInstanceOf(Promise)
+    expect(fake.names).toEqual([...BEFORE_FINALIZE])
+
+    // The finalize handle is ready and the stage projection is still in flight:
+    // every reader of *either* projection stays unpublished, so no draw tool and
+    // no gate appears half-wired.
+    sequenced.settle(0)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // The finalize tool itself is published by 537D3a's own ready branch; the
+    // draw tools and **both** gates still wait for the stage handle.
+    expect(fake.names).toEqual([...BEFORE_FINALIZE, REVIEW_FINALIZE_TOOL])
+    expect(fake.listeners.has(REVIEW_DELIVERY_EVENT)).toBe(false)
+
+    // The stage handle arrives: one publish, tools then both gates.
+    sequenced.settle(1)
+    await pending
+    expect(fake.names).toEqual([...TOOL_ORDER])
+    expect(fake.listeners.get(REVIEW_DELIVERY_EVENT)?.length).toBe(2)
+    expect(sequenced.registryStateOf).not.toHaveBeenCalled()
   })
 
   it('lets the delivery gate read the ready handle instead of the deprecated registry read', async () => {
@@ -244,7 +332,7 @@ describe('session projections: the awaitable 0.2.2 registration', () => {
     awaitable.ready()
     await pending
 
-    const listener = fake.listeners.get(REVIEW_DELIVERY_EVENT) as Listener
+    const listener = chainOf(fake.listeners, REVIEW_DELIVERY_EVENT)
     expect(listener).toBeDefined()
 
     const next = vi.fn(async (): Promise<Decision> => ({ kind: 'allow' }))

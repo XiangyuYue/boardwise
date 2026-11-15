@@ -186,11 +186,16 @@ describe('boardwise-dsh: plugin registration contract', () => {
     expect(registered().get('boardwise_bridge')?.description).toMatch(/read-only/)
   })
 
-  it('declares review_finalize with only out, a two-minute budget and a delivery-not-board promise', () => {
+  it('declares review_finalize with out plus the optional stage, and a delivery-not-board promise', () => {
     const tool = registered().get('boardwise_review_finalize') as CapturedTool
-    expect(Object.keys(tool.parameters)).toEqual(['out'])
+    // 541R3: `stage` is the only addition — a scheduling label, not a verdict.
+    expect(Object.keys(tool.parameters)).toEqual(['out', 'stage'])
     expect(tool.parameters['out']?.required).toBe(true)
     expect(tool.parameters['out']?.type).toBe('string')
+    // Optional: a call without it is the old call, argv included.
+    expect(tool.parameters['stage']?.required).toBeUndefined()
+    expect(tool.parameters['stage']?.type).toBe('string')
+    expect(tool.parameters['stage']?.enum).toEqual(['initial', 'partial'])
     expect(tool.timeoutMs).toBe(120_000)
     expect(tool.output.schema.type).toBe('object')
     // The receipt is a delivery statement; the board answer stays in the report.
