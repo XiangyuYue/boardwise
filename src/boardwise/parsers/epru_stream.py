@@ -115,7 +115,17 @@ KEPT_DOC_TYPES: frozenset[str] = frozenset(
 #: 14 ``.epro2`` fixtures: ``POUR`` occurs on 9 of them, 145 records in total
 #: (2..46 each); ``REGION`` on 2 of them, 7 records. A drift signal that fires
 #: on a type the parser consumes is worse than no signal — it hides the real
-#: ones (``TABLE``, ``UNIVERSAL``, ``LAYER_FILL``, ``IMAGE``, ...).
+#: ones (``LAYER_FILL``, ``IMAGE``, ...).
+#:
+#: ``TABLE`` and ``UNIVERSAL`` joined in 038Q17, the batch that first read a
+#: native CBB block instance out of a V4 container. Both were firing on every
+#: ``.epro2`` measured there (``unknown_types == {"TABLE": 1, "UNIVERSAL": 1}``,
+#: before **and** after the block was placed, so neither is block drift): the
+#: ``TABLE`` is the page frame's, which ``core/pageframe.py`` already consumes,
+#: and the ``UNIVERSAL`` is a CONFIG option record this module only counts.
+#: Nothing about their framing changed — they are counted in
+#: ``records_by_type`` exactly as before, they just stop being reported as
+#: format drift. A genuinely unseen type is still reported.
 KNOWN_RECORD_TYPES: frozenset[str] = frozenset(
     {
         "ACTIVE_LAYER", "ARC", "ATTR", "BEZIER", "BLOB", "CANVAS", "CIRCLE",
@@ -124,7 +134,7 @@ KNOWN_RECORD_TYPES: frozenset[str] = frozenset(
         "NET", "OBJ", "PAD", "PAD_NET", "PANELIZE", "PART", "PIN",
         "POLY", "POUR", "POURED", "PREFERENCE", "PRIMITIVE", "RECT", "REGION",
         "RULE", "RULE_SELECTOR", "RULE_TEMPLATE", "SILK_OPTS", "STRING",
-        "TEXT", "VIA", "WIRE",
+        "TABLE", "TEXT", "UNIVERSAL", "VIA", "WIRE",
     }
 )
 

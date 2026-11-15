@@ -104,6 +104,15 @@ class Pin:
 WELDED_BY_NAME = "welded-by-name"
 TRUNCATED_BY_DESIGNATOR = "truncated-by-duplicate-designator"
 TRUNCATED_BY_CROSS_PAGE_DESIGNATOR = "truncated-by-cross-page-designator"
+#: 038Q18: a **native CBB block's port** sits on this net's wire, and the block's
+#: ports are not members of ``Net.pins`` — a placed block is not a
+#: :class:`Component` at all (038Q17), so nothing about its inside is expanded
+#: into this netlist. The member list therefore has a hole exactly where the
+#: block is drawn, and a rule that counts members ("is this reset pin alone?")
+#: must refuse instead of concluding. Measured on the P47 container: the block's
+#: port meets the ``NRST`` wire end that only ``U10.7`` is filed on, and the old
+#: reading called that a single-member net — a false F3-shaped WARN.
+TRUNCATED_BY_BLOCK_PORT = "truncated-by-block-port"
 
 #: 041 §3: the only evidence level a cross-board **unproven** edge may cite, and
 #: what this reading can actually establish. ``E0`` is "the two sides spell the

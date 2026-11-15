@@ -1625,8 +1625,40 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # test_133b 与 test_126b；188a 合成夹具补真实 PAD，不靠放宽断言通过。
     # recursive 与 manifest/input 的 rulebody 均由官方生成器同步；生成器另外带出的
     # toolVersion/expectedConnectorVersion 漂移不属于本批，已按生成前字节保留。
-    assert old_digest == "626e16ef"
-    assert recursive == "d2ff8ae4", (
+    # **038Q18 两个值都动** — direct 626e16ef -> **d345bfc0**、recursive
+    # d2ff8ae4 -> **2b62613f**：`rules/unproven.py` 是 `rules/` 顶层的直接文件，
+    # 本批给它加了 038Q18 的块端口 refusal 收尾句（`unproven_message` 的
+    # `_tail`：block-only / duplicate+block 两种说法，107 与 welded 文案逐字未动），
+    # 所以直接口径也看见了——不是 `rules/pcb/` 内的一次改动。判定语义只在
+    # “块端口未展开”这一支新增披露，既有 107/焊接文案与所有既有判决不动
+    # （`tests/test_038q18_block_port_unproven.py` 22 条 + `tests/test_107_...`
+    # 未改仍绿）。两个值都在**当前这棵工作树**上按上方同一配方直接量得
+    # （`.venv/Scripts/python.exe -c "from pathlib import Path; from
+    # boardwise.engines.review_eval import rulebody_fingerprint as f;
+    # print(f(Path('src/boardwise/rules')))"`）；recursive 与
+    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`、
+    # `contracts/differential/inputs/review-report.json` 的
+    # `completion.sourceVersions.rulebody` 一致，均由官方
+    # `tools.build_differential_fixtures` 重生成同步。这次重生成在合同里落下的
+    # 变化有**三项**，来源不同，必须分开记：
+    #   ① `rulebody` d2ff8ae4 -> 2b62613f（manifest 与 report 两处）——**038Q18**，
+    #      即本批对 `rules/unproven.py` 的收尾句；
+    #   ② `source.parseStats.unknown_types` `{TABLE:1,UNIVERSAL:1}` -> `{}` ——
+    #      **038Q17** 把 `TABLE`/`UNIVERSAL` 登记进 `KNOWN_RECORD_TYPES` 之后的
+    #      真实解析读数。它不是无关漂移，也不是本批顺手改的：上一批落了代码却没
+    #      重生成合同，于是这份输入一直冻着旧读数；既然这次要重生成，就按当前
+    #      工作树的真实输出落盘（`tools.build_differential_fixtures` 是唯一读数来源，
+    #      已核对：本仓测试里没有任何一处把这两个类型**故意**钉成未知——
+    #      `grep -rn "unknown_types" tests/test_540c_*.py` 只命中生成器/本注释，
+    #      `rules` 侧唯一的读数是 `tests/test_162b_epru_truth.py` 的「已知类型不得
+    #      出现在 `unknown_types` 里」那条正向断言）；
+    #   ③ `toolVersion` / `environment.expectedConnectorVersion` 0.6.0 -> 0.6.1 ——
+    #      **与本批、与 038Q17 都无关**的版本漂移（另一批未提交的版本号），按生成
+    #      前的 0.6.0 恢复，两处成对，不给一份自相矛盾的期望值。
+    # 于是净 diff 只有 `rulebody` 两处、`unknown_types` 两行与本表 inputs 里该输入的
+    # 哈希（随字节重算）。
+    assert old_digest == "d345bfc0"
+    assert recursive == "2b62613f", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

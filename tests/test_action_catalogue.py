@@ -36,6 +36,9 @@ NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*){1,2}$")
 #: The three-segment families that exist on purpose.
 THREE_SEGMENT_FAMILIES = (
     re.compile(r"^lib\.[a-z_]+\.(get|search)$"),
+    # 038Q14: native-CBB personal-library discovery, the other libraries' list,
+    # and the opaque archive export.
+    re.compile(r"^lib\.cbb\.(personal|export|libraries)$"),
     re.compile(r"^(sch|pcb)\.doc\.(new|save)$"),
 )
 

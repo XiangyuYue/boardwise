@@ -822,7 +822,16 @@ ACTIONS: tuple[Action, ...] = (
             "is re-read through lib_Cbb.get and must come back with the same uuid "
             "and a matching libraryUuid — a non-array answer, an over-sized page, "
             "a malformed item or a missing get answer is CONNECTOR_ERROR, never an "
-            "empty library. count is this page's size, not a library total."
+            "empty library. count is this page's size, not a library total. "
+            "`libraryUuid: 'project'` is a SCOPE keyword, not a uuid (038Q16): in "
+            "that scope lib_Cbb.get is not called at all (it refuses project-local "
+            "blocks) and each hit is verified through lib_Symbol.get(uuid, "
+            "'project') — same uuid, a name string, type===17, libraryType==='2' — "
+            "then reported as libraryUuid:'project' with the host symbol's own "
+            "libraryUuid as sourceLibraryUuid and libraryIdentitySource:"
+            "'lib_Symbol.get(project)'. That source uuid is provenance and never "
+            "replaces the caller's scope; every other library keeps lib_Cbb.get and "
+            "its hard checks unchanged."
         ),
         params=("query", "libraryUuid", "limit", "page"),
         returns=(
@@ -831,7 +840,8 @@ ACTIONS: tuple[Action, ...] = (
         ),
         params_schema=(
             "query: search text, default '' (empty inventories the library); "
-            "libraryUuid: optional, omitted = the host's system library; "
+            "libraryUuid: optional, omitted = the host's system library, 'project' = "
+            "the open project's own library (read through lib_Symbol.get); "
             "limit: 1..100, default 20; page: >=1, default 1"
         ),
         risk="read",
@@ -852,6 +862,74 @@ ACTIONS: tuple[Action, ...] = (
             "uuid: reuse-module uuid (required); libraryUuid: optional, omitted = "
             "the host's system library"
         ),
+        risk="read",
+    ),
+    # --- 038Q14: the archive half of the same reads -------------------------
+    Action(
+        name="lib.cbb.personal",
+        summary=(
+            "Read-only: the uuid of this workspace's personal library "
+            "(lib_LibrariesList.getPersonalLibraryUuid, @public). An absent "
+            "namespace or method is NOT_IMPLEMENTED; undefined/null is "
+            "CONNECTOR_ERROR with detail.reason='personal-library-unresolved' — no "
+            "uuid was resolved in this workspace/session, and the declaration only "
+            "says a private deployment always answers undefined, which does not "
+            "diagnose this call. An unresolved uuid is not evidence of an empty "
+            "library; a blank or non-string answer is refused the same way."
+        ),
+        params=(),
+        returns=(
+            "{libraryUuid, source: 'lib_LibrariesList.getPersonalLibraryUuid', "
+            "apiStatus: 'public'}"
+        ),
+        params_schema="none — the call takes no arguments, and any parameter is refused",
+        risk="read",
+    ),
+    Action(
+        name="lib.cbb.export",
+        summary=(
+            "Read-only: one native reuse module's own .epro2 container, as base64 and "
+            "opaque. lib_Cbb.get is re-read FIRST with the caller's uuid and library, "
+            "so the bytes belong to a module whose identity is verified by a second "
+            "host answer; then sys_FileManager.getCbbFileByCbbUuid(uuid, libraryUuid, "
+            "{fileName: <the name get returned>, fileType:'epro2'}) — the declaration "
+            "documents that fileName as 复用模块名, so it is the module's own name "
+            "passed verbatim and a module without a usable name is refused before the "
+            "file call. Nothing is unpacked, no internal record format is guessed, and "
+            "neither the library nor the project is written. A file that is missing, "
+            "zero-byte, over 16 MiB, of unreadable size, or whose bytes disagree with "
+            "its declared size is CONNECTOR_ERROR."
+        ),
+        params=("uuid", "libraryUuid"),
+        returns=(
+            "{uuid, libraryUuid, format: 'epro2', size, base64, "
+            "source: 'sys_FileManager.getCbbFileByCbbUuid', apiStatus: 'beta'}"
+        ),
+        params_schema=(
+            "uuid: reuse-module uuid (required); libraryUuid: the library the module "
+            "must be in (required — the identity check is made against the library "
+            "the caller names, so no system-library default is applied here)"
+        ),
+        risk="read",
+    ),
+    Action(
+        name="lib.cbb.libraries",
+        summary=(
+            "Read-only: the workspace's other libraries as a list "
+            "(lib_LibrariesList.getAllLibrariesList, @public), each item just "
+            "{uuid, name}. The declaration states this list EXCLUDES the system, "
+            "personal, project and favourite libraries — it is not a substitute for "
+            "lib.cbb.personal — and this action neither writes nor registers a "
+            "library. An empty array is a real reading (count 0); a non-array "
+            "answer, an item without a non-blank uuid or a string name, a duplicated "
+            "uuid or a throw is CONNECTOR_ERROR, never an empty list."
+        ),
+        params=(),
+        returns=(
+            "{items: [{uuid, name}], count, "
+            "source: 'lib_LibrariesList.getAllLibrariesList', apiStatus: 'public'}"
+        ),
+        params_schema="none — the call takes no arguments, and any parameter is refused",
         risk="read",
     ),
     Action(
@@ -1086,6 +1164,98 @@ ACTIONS: tuple[Action, ...] = (
         ),
         returns="{uuid, device: {uuid, libraryUuid, name}, resolvedBy, elapsedMs}",
         params_schema="timeoutMs: override the 30 s placement deadline (200..60000, clamped)",
+        risk="write",
+    ),
+    Action(
+        name="sch.place_cbb",
+        summary=(
+            "Place one native reuse module (CBB / 复用模块) as a block instance on "
+            "the focused schematic page (038Q15). The module is re-read through "
+            "`lib_Cbb.get` and its name must equal `expectedName`; the focused "
+            "project and page (`dmt_Project.getCurrentProjectInfo` / "
+            "`dmt_SelectControl.getCurrentDocumentInfo`, `documentType === 1`) must "
+            "equal `projectUuid`/`pageUuid` before and after the write. The source "
+            "symbol is checked through `lib_Symbol.get` when the host can read it; "
+            "an unreadable symbol is refused unless the caller passes "
+            "`allowUnverifiedSourceSymbol: true`, and the answer then reports "
+            "`symbolVerification.mode: 'unverified-source-symbol'`. The page's "
+            "components are read completely first (unique ids, finite geometry) and "
+            "again afterwards: exactly one new id, every old component's geometry "
+            "unchanged, `block_symbol` type, the requested pose, the CBB/CBB-symbol "
+            "identity, and `getAllPinsByPrimitiveId` as an array (an empty one is a "
+            "real reading). Any failure after the host call answers "
+            "`{partial: true, verified: false, primitiveId, state, problems}` — the "
+            "evidence is kept, nothing is retried or rolled back."
+        ),
+        params=(
+            "uuid", "libraryUuid", "expectedName", "symbolUuid", "projectUuid",
+            "pageUuid", "x", "y", "rotation", "mirror",
+            "allowUnverifiedSourceSymbol",
+        ),
+        returns=(
+            "{uuid, libraryUuid, expectedName, symbolUuid, projectUuid, pageUuid, "
+            "requested, symbolVerification, beforeCount, primitiveId, state, cbb, "
+            "cbbSymbol, pins, preserved, problems, verified, partial, error?}"
+        ),
+        params_schema=(
+            "uuid/libraryUuid/expectedName: the module identity to re-read; "
+            "symbolUuid: the source CBB symbol; projectUuid/pageUuid: the only "
+            "project and page this may write to (PAGE_MISMATCH otherwise, "
+            "detail.guard says which); x/y: finite numbers; rotation: 0|90|180|270; "
+            "mirror: boolean; allowUnverifiedSourceSymbol: boolean, true only when "
+            "the source identity is backed by another host reading — an unreadable "
+            "source is reported as unverified, never as verified"
+        ),
+        risk="write",
+    ),
+    Action(
+        name="sch.place_project_cbb",
+        summary=(
+            "Place one project-*local* native CBB block — a module imported into "
+            "the open project — on the focused schematic page (038Q16B). The "
+            "schematic is proved first: `dmt_Schematic.getSchematicInfo(schematicUuid)` "
+            "must answer the same uuid, `parentProjectUuid === projectUuid`, "
+            "`name === expectedName`, `itemType === 'CBB Schematic'` and a "
+            "`cbbSymbol` of `type === 17`; those graph fields are kept in the answer "
+            "as the source identity. `expectedName` is then resolved through the "
+            "038Q16A project scope of `lib.cbb.search`, and every candidate is "
+            "re-read with `lib_Symbol.get(uuid, 'project')` — the host symbol's own "
+            "name is the authority, not the search row — so exactly one local symbol "
+            "must match and `symbolUuid` must be that local uuid (zero, several or a "
+            "different uuid are refusals before anything is written). The focused "
+            "project and page (`documentType === 1`) are checked before and after. "
+            "The write is the ordinary project-symbol call "
+            "`sch_PrimitiveComponent.create({libraryType: '2', libraryUuid: "
+            "projectUuid, uuid: symbolUuid}, x, y, '', 0, false, true, true)` — "
+            "rotation/mirror are fixed at 0/false in this action. The page is "
+            "inventoried completely before (unique ids, finite geometry) and again "
+            "after: exactly one new component, every old one unchanged, "
+            "`block_symbol`, `getState_Symbol().uuid === symbolUuid`, the fixed "
+            "pose, and `getAllPinsByPrimitiveId` as an array (empty is a real "
+            "reading). Any failure after the host call answers "
+            "`{partial: true, verified: false, primitiveId, state, problems}`; "
+            "`lib_Cbb.get` with the project scope, `createCbbSymbol` and every "
+            "library write are never reached."
+        ),
+        params=(
+            "schematicUuid", "expectedName", "symbolUuid", "projectUuid", "pageUuid",
+            "x", "y", "rotation", "mirror",
+        ),
+        returns=(
+            "{schematicUuid, expectedName, symbolUuid, projectUuid, pageUuid, graph, "
+            "resolution, requested, beforeCount, primitiveId, state, symbol, pins, "
+            "preserved, problems, verified, partial, error?}"
+        ),
+        params_schema=(
+            "schematicUuid: the CBB schematic document whose graph must match; "
+            "expectedName: the block's display name, matched only against "
+            "`lib_Symbol.get(uuid, 'project').name`; symbolUuid: the project-local "
+            "symbol uuid the name must resolve to; projectUuid/pageUuid: the only "
+            "project and page this may write to (PAGE_MISMATCH otherwise, "
+            "detail.guard says which); x/y: finite numbers; rotation: fixed 0 "
+            "(any other value is refused); mirror: fixed false (any other value is "
+            "refused)"
+        ),
         risk="write",
     ),
     Action(
@@ -1795,7 +1965,12 @@ def timeout_for(action: str) -> float:
     # A placement resolves the library on first use; the connector bounds the
     # call itself (30 s default) and reads back on a miss, so the daemon's
     # budget must outlast that readback for its answer to reach the caller.
-    if action in ("sch.place_component", "pcb.place_component"):
+    if action in (
+        "sch.place_component",
+        "pcb.place_component",
+        "sch.place_cbb",
+        "sch.place_project_cbb",
+    ):
         return PLACEMENT_TIMEOUT
     # 012 measured 2026-09-21: a schematic delete costs ~3.7 s per primitive
     # (the editor re-solves the page each time), so the 17-part cleanup ran

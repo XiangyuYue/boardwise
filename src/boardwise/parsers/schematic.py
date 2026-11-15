@@ -65,6 +65,7 @@ from boardwise.core.geometry import (
 )
 from boardwise.core.geometry import transform_point as _transform_point
 from boardwise.core.model import (
+    TRUNCATED_BY_BLOCK_PORT,
     TRUNCATED_BY_CROSS_PAGE_DESIGNATOR,
     TRUNCATED_BY_DESIGNATOR,
     BoardModel,
@@ -1465,6 +1466,470 @@ def collect_library_documents(path: str | Path) -> dict[str, tuple[str, str]]:
     return out
 
 
+# --------------------------------------------------------------------------
+# 038Q17: native CBB block instances (read-only)
+# --------------------------------------------------------------------------
+
+#: The ``META.docType`` of a **block** symbol document — the SYMBOL document the
+#: editor creates for a placed CBB. A number, and deliberately not the
+#: ``DOCHEAD`` namespace: every symbol document's head says
+#: ``docType: "SYMBOL"``, block or not, so only the ``META`` field separates
+#: them (measured 2026-11-15 on the placed block: ``META.docType = 17`` against
+#: ``2``/``18``/``19``/``20``/``22`` on every other symbol document of the same
+#: container).
+BLOCK_SYMBOL_DOC_TYPE = 17
+
+#: ``identity_status`` of a :class:`BlockInstance`. All three anchors held.
+BLOCK_VERIFIED = "verified"
+#: All three anchors held, so this **is** a block — but its ``META.source`` did
+#: not name a source symbol + CBB project, so where it came from is unknown.
+BLOCK_SOURCE_UNRESOLVED = "source-unresolved"
+#: The part id names a block symbol, and the ``Symbol`` anchor does not bind
+#: the instance to it. Not a block, and not an ordinary part either.
+BLOCK_UNRESOLVED = "unresolved"
+
+#: The two ways anchor 2 can fail after anchor 1 matched.
+BLOCK_SYMBOL_MISSING = "symbol-missing"
+BLOCK_SYMBOL_MISMATCH = "symbol-mismatch"
+
+#: The two ways ``META.source`` can fail to name a source symbol + CBB.
+BLOCK_SOURCE_EMPTY = "source-empty"
+BLOCK_SOURCE_MALFORMED = "source-malformed"
+
+
+@dataclass(frozen=True)
+class BlockPort:
+    """One pin of a block's local symbol, in **symbol-local** coordinates.
+
+    Read through the existing SYMBOL pin path (:func:`_collect_symbols`), so a
+    port is a port by the same rules a component's pin is: a ``PIN`` record with
+    a ``Pin Number`` somewhere in its document. ``point`` is the file's own
+    symbol-local coordinate (already page-y-normalised), **not** the placed page
+    position — the block's placement is on the row itself, and a caller that
+    wants page geometry transforms by it.
+    """
+
+    number: str
+    name: str
+    pin_type: str
+    point: Point
+
+
+@dataclass(frozen=True)
+class BlockInstance:
+    """One placed native CBB block, exactly as the container states it.
+
+    **Identity is three anchors, all required** (038Q17): the instance's
+    ``partId`` names a ``PART`` record inside a SYMBOL document; the instance's
+    ``ATTR Symbol`` is that very document's uuid; and that document's
+    ``META.docType`` is :data:`BLOCK_SYMBOL_DOC_TYPE`. Anchor 1 alone matches
+    ordinary parts too — an ordinary part's ``partId`` is ``<device>.1`` and its
+    symbol document carries a ``PART`` record with exactly that id — so it is
+    anchor 3 that separates a block from a part, and anchor 2 that binds *this*
+    instance to the symbol rather than to a page-wide guess.
+
+    **What is not identity** (measured on a real placed block, all of it empty
+    there): ``Reuse Block`` is ``null`` on a genuine block, so its emptiness
+    refutes nothing and its value proves nothing; an instance-level
+    ``Designator``/``Name`` is a label a user may type into any placement; the
+    ``partId`` shape alone cannot decide (the page frame and the power flags
+    share one template id across several symbol documents). ``designator`` and
+    ``reuse_block`` are on the row **as disclosure only** — no decision in this
+    module reads them.
+
+    ``ports`` is the local symbol's pin set, and an empty tuple is a real
+    reading: the measured block has zero PIN records, so a caller must not read
+    ``ports == ()`` as "the ports were not parsed".
+    """
+
+    #: The ``SCH_PAGE`` uuid the placement is drawn on (its own coordinate
+    #: system, and in a multi-board project its own board).
+    page_uuid: str
+    #: The ``COMPONENT`` record id — the instance identity a page can have two of
+    #: under one ``part_id``.
+    primitive_id: str
+    part_id: str
+    #: The local SYMBOL document the three anchors resolved, or ``""`` when they
+    #: did not.
+    local_symbol: str
+    #: The ``ATTR Symbol`` value **verbatim** (``""`` when the attribute is
+    #: absent). Kept next to ``local_symbol`` so a mismatch is visible instead of
+    #: being flattened into "no block".
+    symbol_attr: str
+    #: ``META.source`` first segment — the block's symbol in its source CBB.
+    #: Opaque identity, kept exactly as stored (no shape or case is imposed).
+    source_symbol: str
+    #: ``META.source`` second segment — the source **CBB project** identity. Not
+    #: a library identity: the same field on a library document pairs a document
+    #: with a library, which is why only a block symbol's source is read here.
+    #: Opaque and verbatim, like the first segment.
+    source_cbb: str
+    #: The local symbol document's ``META.title``.
+    title: str
+    x: float
+    y: float
+    rotation: float
+    is_mirror: bool
+    z_index: Any
+    ports: tuple[BlockPort, ...]
+    identity_status: str
+    #: Empty for :data:`BLOCK_VERIFIED`; one of the ``BLOCK_*`` reason constants
+    #: otherwise.
+    identity_reason: str
+    #: Instance-level label, disclosed only — never part of the identity.
+    designator: str
+    #: ``ATTR Reuse Block``, disclosed only — never part of the identity.
+    reuse_block: str
+
+
+@dataclass(frozen=True)
+class _SymbolDocument:
+    """The four facts about one SYMBOL document that block identity needs.
+
+    Collected in one pass rather than by widening :class:`_SymbolDef`: that
+    dataclass is compared copy-against-copy by :func:`_symbol_definition`, so a
+    field added there would change what "the same library symbol" means.
+    """
+
+    uuid: str
+    title: str = ""
+    #: ``META.docType`` as written — kept untyped so a string ``"17"`` is not
+    #: silently accepted as the block number.
+    doc_type: Any = None
+    #: ``META.source`` verbatim (``""`` when the document has none).
+    source: str = ""
+    #: ``PART`` record ids of this document, in stream order.
+    part_ids: tuple[str, ...] = ()
+
+
+def _symbol_document_view(document: _SymbolDocument) -> tuple[Any, ...]:
+    """The model-visible projection two copies of one SYMBOL document compare by.
+
+    Everything this reader's callers decide on: title, ``docType``, ``source`` and
+    the ``PART`` ids it declares (sorted, because a re-save may reorder records
+    without changing what the document says). Record order, ``editVersion`` and
+    anything else outside this file's reading are deliberately left out — they
+    differ between two copies that mean the same thing.
+    """
+    return (
+        document.title,
+        document.doc_type,
+        document.source,
+        tuple(sorted(document.part_ids)),
+    )
+
+
+def _collect_symbol_documents(
+    records: list[Any], parse_stats: ParseStats | None = None
+) -> dict[str, _SymbolDocument]:
+    """SYMBOL document uuid -> :class:`_SymbolDocument`, **first copy wins**.
+
+    ``records`` is the shape :func:`_iter_schematic_records` returns. A document
+    is read as a whole (``PART`` ids anywhere inside it), because an
+    incrementally saved symbol writes its records in an arbitrary order — the
+    same reason :func:`_collect_symbols` buffers a document before committing it.
+
+    First-wins is not a detail: a V4 export copies a used symbol into **every**
+    page that places it, so the same uuid reaches this pass more than once. The
+    block reading takes its ``META`` (``docType``, ``source``) and its ``PART``
+    ids from here while it takes its ports from :func:`_collect_symbols`, so a
+    last-wins merge would let a row mix one copy's document type and source with
+    another copy's pins — a block read out of two different documents. Both
+    passes therefore keep the first copy.
+
+    ``parse_stats`` (optional, so the independent view pass can stay silent)
+    counts the later copies whose :func:`_symbol_document_view` differs from the
+    first: that is the "same uuid, a different document" case, and it lands on
+    ``conflicting_library_documents`` — the same counter :func:`_collect_symbols`
+    uses for pin-level differences, which keeps its own comparison and its own
+    counting untouched. A copy that differs only in a way this reading cannot see
+    counts nothing.
+    """
+    out: dict[str, _SymbolDocument] = {}
+    uuid = ""
+    title = ""
+    doc_type: Any = None
+    source = ""
+    parts: list[str] = []
+    read_meta = False
+
+    def commit() -> None:
+        if not uuid:
+            return
+        document = _SymbolDocument(
+            uuid=uuid, title=title, doc_type=doc_type, source=source,
+            part_ids=tuple(parts),
+        )
+        first = out.get(uuid)
+        if first is None:
+            out[uuid] = document
+        elif first != document and parse_stats is not None:
+            # Not a drop of a record but of a meaning: the first copy is what
+            # the block view reads, and the later one now leaves a trace.
+            if _symbol_document_view(first) != _symbol_document_view(document):
+                parse_stats.conflicting_library_documents += 1
+
+    for record in records:
+        if record.type == "DOCHEAD":
+            commit()
+            body = record.body or {}
+            uuid = (
+                str(body.get("uuid") or "")
+                if body.get("docType") == "SYMBOL" else ""
+            )
+            title, doc_type, source, parts = "", None, "", []
+            read_meta = False
+            continue
+        if not uuid or record.body is None:
+            continue
+        if record.type == "PART":
+            part_id = str(record.id or "")
+            if part_id:
+                parts.append(part_id)
+        elif record.type == "META" and not read_meta:
+            read_meta = True
+            body = record.body
+            title = str(body.get("title") or "")
+            doc_type = body.get("docType")
+            source = str(body.get("source") or "")
+    commit()
+    return out
+
+
+def _block_part_index(
+    documents: dict[str, _SymbolDocument],
+) -> dict[str, tuple[str, ...]]:
+    """``PART.id`` -> the SYMBOL documents that declare it, in document order.
+
+    One id can live in several documents: the page frame and the power flags
+    share a template id (``pid8a0e77bacb214e`` on the fixtures), so a lookup that
+    kept only one document would hand the block question to an arbitrary symbol.
+    """
+    by_part: dict[str, list[str]] = {}
+    for document in documents.values():
+        for part_id in document.part_ids:
+            by_part.setdefault(part_id, []).append(document.uuid)
+    return {part_id: tuple(uuids) for part_id, uuids in by_part.items()}
+
+
+def _is_block_document(document: _SymbolDocument | None) -> bool:
+    """Is this the SYMBOL document of a block (anchor 3)?
+
+    ``type(...) is int`` on purpose: the container writes ``17`` as a JSON
+    number, while ``"17"`` (a string somewhere else in the format) is not the
+    document type this rule is about.
+    """
+    return (
+        document is not None
+        and type(document.doc_type) is int
+        and document.doc_type == BLOCK_SYMBOL_DOC_TYPE
+    )
+
+
+def _block_symbol_of(
+    inst: _Instance,
+    documents: dict[str, _SymbolDocument],
+    by_part: dict[str, tuple[str, ...]],
+) -> tuple[str, str]:
+    """``(local symbol uuid, unresolved reason)`` for one placement.
+
+    Three answers, and the caller must keep them apart:
+
+    * ``("", "")`` — **not a block question at all**: the ``partId`` names no
+      ``PART`` record, or the symbol it resolves to is a plain symbol document
+      (docType 2/18/20/…). Ordinary parts, the page frame and the power flags
+      land here, which is what keeps their readings untouched.
+    * ``("<uuid>", "")`` — all three anchors held: this is a block.
+    * ``("", "<reason>")`` — anchor 1 matched a block symbol document and anchor
+      2 did not bind the instance to it (:data:`BLOCK_SYMBOL_MISSING` /
+      :data:`BLOCK_SYMBOL_MISMATCH`). The block question is **open**: it is
+      neither a block nor an ordinary part, and a caller may not file it as
+      either.
+
+    Why **any** block document among the hits opens the question: the contract is
+    "the part id matched a block, so a missing or disagreeing ``Symbol`` may not
+    be filed as an ordinary part". Shared template ids (the page frame's) are
+    declared by several documents at once, so both shapes occur in one hit list —
+    a block document *and* plain ones — and a placement carrying that id with no
+    usable ``Symbol`` would otherwise fall back to "just a part" silently. A
+    ``Symbol`` that does resolve still decides on its own: it names a block
+    document -> a block, it names a plain one -> an ordinary placement, whatever
+    else shares the id.
+    """
+    part_id = (inst.part_id or "").strip()
+    hits = by_part.get(part_id) if part_id else None
+    if not hits:
+        return "", ""
+    names_a_block = any(_is_block_document(documents[uuid]) for uuid in hits)
+    symbol = inst.attrs.get("Symbol") or ""
+    if symbol:
+        if symbol not in hits:
+            return ("", BLOCK_SYMBOL_MISMATCH) if names_a_block else ("", "")
+        return (symbol, "") if _is_block_document(documents[symbol]) else ("", "")
+    return ("", BLOCK_SYMBOL_MISSING) if names_a_block else ("", "")
+
+
+def _split_block_source(source: str) -> tuple[str, str] | None:
+    """``"<source symbol>|<source CBB project>"`` -> its two segments verbatim.
+
+    The real placed block states its origin **only** here, two hops from the
+    instance (``COMPONENT`` → ``ATTR Symbol`` → that symbol's ``META.source``),
+    and exactly two segments: measured 2026-11-15 as
+    ``"c657f757a2cf294b|e1534426e8710eee54c05f40826edc26bfeecd…"`` — the source
+    CBB's symbol id and the CBB project id. The second segment is **not** a
+    library uuid.
+
+    The two segments are treated as **opaque identities**: the container writes
+    bare hex ids today, but nothing in the format promises that, so no shape is
+    imposed here. A segment comes back exactly as stored (case included), and
+    "usable" means only: exactly two segments, both non-empty, neither with
+    leading or trailing whitespace. Empty, blank, padded or differently split
+    values come back ``None`` — the caller reports them as source-unresolved
+    instead of trimming or reassembling the pieces it happens to recognise.
+    """
+    segments = str(source or "").split("|")
+    if len(segments) != 2:
+        return None
+    symbol, cbb = segments
+    if not symbol or not cbb:
+        return None
+    if symbol != symbol.strip() or cbb != cbb.strip():
+        return None
+    return symbol, cbb
+
+
+@dataclass(frozen=True)
+class _BlockCatalogue:
+    """One container's SYMBOL documents, indexed the way block identity asks.
+
+    Built once per parse: :func:`collect_block_instances` reads it for the rows it
+    returns, and :func:`_fill_board_model` consults it so a placed block is not
+    filed as a part that lost its designator. Both ask the **same** function
+    (:func:`_block_symbol_of`), so the two views cannot disagree about what a
+    block is.
+    """
+
+    documents: dict[str, _SymbolDocument] = field(default_factory=dict)
+    by_part: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+    @classmethod
+    def from_records(
+        cls, records: list[Any], parse_stats: ParseStats | None = None
+    ) -> "_BlockCatalogue":
+        """Build the index; ``parse_stats`` counts same-uuid copies that differ.
+
+        ``collect_block_instances`` is an **independent view pass** and leaves it
+        out (its reading of the stream is not the parse's), while
+        :func:`build_project_model` passes its own counters so a diverging copy
+        is reported once, by the pass that owns the diagnostics.
+        """
+        documents = _collect_symbol_documents(records, parse_stats)
+        return cls(documents=documents, by_part=_block_part_index(documents))
+
+    def reading(self, inst: _Instance) -> tuple[str, str]:
+        return _block_symbol_of(inst, self.documents, self.by_part)
+
+
+def collect_block_instances(path: str | Path) -> list[BlockInstance]:
+    """Every placed native CBB block on the pages of ``path``, in stream order.
+
+    Read-only, and deliberately **not** a second parser: it walks the pages
+    through :func:`_iter_schematic_records` + :func:`_split_page`, so a block's
+    attributes are grouped by exactly the rules a component's are, and its ports
+    come from the same SYMBOL pin reader a component's pins do. Nothing was added
+    to a record whitelist for this.
+
+    A row is returned for:
+
+    * a **verified block** — all three anchors (:class:`BlockInstance`) — whose
+      ``identity_status`` is :data:`BLOCK_VERIFIED`, or
+      :data:`BLOCK_SOURCE_UNRESOLVED` when its symbol's ``META.source`` is empty
+      or malformed (the block is still a block; where it came from is not
+      stated, and nothing is guessed);
+    * an **unresolved block candidate** — ``partId`` names a block symbol
+      document and the ``Symbol`` anchor is missing or points elsewhere —
+      ``identity_status`` :data:`BLOCK_UNRESOLVED` with the reason named.
+
+    An instance that is not a block question at all is **not** returned: an
+    ordinary part, the page frame, a power/net flag, and a page whose only
+    block-document is unplaced (a docType-17 symbol with no instance) produce no
+    row. A block that a user typed a designator onto is still a block — the value
+    is disclosed in ``designator`` and changes nothing.
+
+    What this batch does **not** claim: the measured block's symbol has no pins,
+    so an empty ``ports`` here is the container's reading, not proof that a
+    block's ports are read in general; and nothing here says anything about
+    multi-block pages, nested blocks, or whether such a block is electrically
+    complete.
+    """
+    text, meta = load_epru_text(Path(path))
+    stats = ParseStats(source=str(path), editor_version=meta.get("editorVersion"))
+    records = _iter_schematic_records(text, stats)
+    # No ``stats``: this is an independent view pass, and its counters would be
+    # a second reading of the same stream (same reason as
+    # `collect_part_devices`, which also calls `_split_page` bare).
+    split = _split_page(records)
+    symbols = _collect_symbols(records, pin_key=_pin_key_for(meta))
+    blocks = _BlockCatalogue.from_records(records)
+
+    out: list[BlockInstance] = []
+    for inst in split.instances:
+        local_symbol, reason = blocks.reading(inst)
+        if not local_symbol and not reason:
+            continue
+        document = blocks.documents.get(local_symbol) if local_symbol else None
+        source_symbol = ""
+        source_cbb = ""
+        if document is None:
+            status = BLOCK_UNRESOLVED
+        else:
+            pair = _split_block_source(document.source)
+            if pair is None:
+                status = BLOCK_SOURCE_UNRESOLVED
+                reason = (
+                    BLOCK_SOURCE_EMPTY
+                    if not document.source.strip() else BLOCK_SOURCE_MALFORMED
+                )
+            else:
+                status = BLOCK_VERIFIED
+                source_symbol, source_cbb = pair
+        ports: tuple[BlockPort, ...] = ()
+        symbol_def = symbols.get(local_symbol) if local_symbol else None
+        if symbol_def is not None:
+            ports = tuple(
+                BlockPort(
+                    number=number,
+                    name=symbol_def.pin_names.get(number, ""),
+                    pin_type=symbol_def.pin_types.get(number, ""),
+                    point=point,
+                )
+                for number, (point, _ref) in sorted(symbol_def.pins.items())
+            )
+        out.append(
+            BlockInstance(
+                page_uuid=inst.page,
+                primitive_id=inst.record_id,
+                part_id=inst.part_id,
+                local_symbol=local_symbol,
+                symbol_attr=inst.attrs.get("Symbol") or "",
+                source_symbol=source_symbol,
+                source_cbb=source_cbb,
+                title=document.title if document is not None else "",
+                x=inst.x,
+                y=inst.y,
+                rotation=inst.rotation,
+                is_mirror=inst.is_mirror,
+                z_index=inst.z_index,
+                ports=ports,
+                identity_status=status,
+                identity_reason=reason,
+                designator=(inst.attrs.get("Designator") or "").strip(),
+                reuse_block=inst.attrs.get("Reuse Block") or "",
+            )
+        )
+    return out
+
+
 def collect_symbol_details(path: str | Path) -> dict[str, SymbolDetail]:
     """SYMBOL document uuid -> :class:`SymbolDetail`. One parse, all geometry.
 
@@ -1629,13 +2094,18 @@ def build_project_model(
     # types) against it, so handing it here would count every duplicate group
     # twice. The titles are read from the same view either way.
     footprint_titles = _collect_footprint_titles(text)
+    # 038Q17: one index of the SYMBOL documents, so the parts pass and
+    # `collect_block_instances` ask the same question about the same placement.
+    # ``stats`` in: a second copy of one symbol uuid that this reading can see
+    # differently is counted once, here, not in the independent view pass.
+    blocks = _BlockCatalogue.from_records(records, stats)
 
     project = ProjectModel(source=str(path), project_raw={"project": dict(meta)})
     for ref in board_partition(records, project_meta=meta):
         board_model = BoardModel(board=ref)
         _fill_board_model(
             board_model, _board_slice(split, ref.page_uuids), symbols, device_meta,
-            stats, footprint_titles,
+            stats, footprint_titles, blocks,
         )
         project.boards.append(board_model)
 
@@ -1711,6 +2181,7 @@ def _fill_board_model(
     device_meta: dict[str, dict[str, str]],
     stats: ParseStats,
     footprint_titles: dict[str, str],
+    blocks: _BlockCatalogue,
 ) -> None:
     """Fill one board's model from the records of its own pages (040b §WI-2).
 
@@ -1724,6 +2195,18 @@ def _fill_board_model(
     ``footprint_titles`` is the archive's ``FOOTPRINT uuid -> title`` table
     (:func:`_collect_footprint_titles`); it is consulted only when the declared
     footprint field holds a library id instead of a name.
+
+    ``blocks`` (038Q17) is the container's block index, asked about **every**
+    placement before the designator branch — not only the nameless ones. A block
+    is not a part of this model in any designator state: it has none by nature
+    (counting it as a part that lost its name was a false alarm — measured: one
+    placed block turned ``instances_without_designator`` from 0 to 1 on the V4
+    container while the model's component list stayed correct), and a user-typed
+    ``Designator`` on it is a label, not a library part, so turning it into a
+    ``Component`` would put a part in the model the drawing does not have. An
+    unresolved block candidate is treated the same way: it is neither. Both stay
+    out of the ordinary netlist too, and ``collect_block_instances`` is where they
+    are reported.
     """
     instances, segments = split.instances, split.segments
     loose = [item.body for item in split.loose]
@@ -1740,6 +2223,21 @@ def _fill_board_model(
     # --- instances that carry a real designator become model components
     for inst in instances:
         designator = (inst.attrs.get("Designator") or "").strip()
+        # 038Q17, before the designator branch and regardless of its value: a
+        # block instance — and an instance whose part id names a block symbol
+        # while its Symbol anchor fails — is not a part of this model at all. It
+        # has no `Device` document and no library part behind it, so building a
+        # `Component` would invent a part the drawing does not have (a
+        # hand-typed `Designator` on a block is a label, not a library part).
+        # This is also what keeps a block from turning up in
+        # `instances_without_designator` as "a part we could not name" — the
+        # false signal — without touching `_looks_like_a_nameless_part`, whose
+        # semantics are still exactly right for every real part. Diverting for
+        # **every** designator state is the point: the measured block carries
+        # none, but a filled one must not change what the placement is.
+        local_symbol, block_reason = blocks.reading(inst)
+        if local_symbol or block_reason:
+            continue
         if not designator or designator.endswith("?"):
             # Power symbols and the title-block frame are not parts — but a
             # placement the *library* says is a part has to be reported when it
@@ -2263,6 +2761,45 @@ def _fill_board_model(
         model.unproven_nets[name] = tuple(sorted(set(seen) | _dropped_pages(
             placements_seen, designators)))
 
+    # --- 038Q18: a block port drawn on a wire truncates that net's members too
+    #
+    # Same channel as 107 above, for a different hole: a placed CBB block is not
+    # a ``Component`` (038Q17), so the net its port is drawn on lists every *other*
+    # pin and none of the block's. That made the P47 container's ``NRST`` read as a
+    # single-member net — "nothing is under this label, so the reset pin is bare"
+    # — while the block's port sat on the very wire end. Filed, not exempted: no
+    # global pass is awarded and no rule threshold moves; a rule that counts
+    # members finds the name here and refuses, exactly as it does for 107.
+    #
+    # Runs **after** the duplicate-designator filing so a net that already
+    # carries that reason keeps its code: the older evidence is not replaced by
+    # this one, the detail is appended to it.
+    for name, (pages, ports) in sorted(
+        _block_port_net_hits(
+            blocks, symbols, instances, point_index, uf, labels, nc_set
+        ).items()
+    ):
+        seen = model.unproven_nets.get(name, ())
+        model.unproven_nets[name] = tuple(sorted(set(seen) | pages))
+        # A net whose **only** connection is a block port has no ordinary member,
+        # so the reverse-built ``nets`` above never created it. It still exists on
+        # the drawing (a named wire with a block on it), and a name filed as
+        # unproven while absent from ``nets`` is a contradiction a consumer cannot
+        # read: ``unproven_nets[name]`` says "this net's membership is unknown",
+        # ``nets[name]`` says "no such net". Created empty — ``pins=[]`` is the
+        # reading, the same way an empty sheet is — and **after** the auto-names
+        # are fixed, so no ``NETn`` moves (names are already assigned above).
+        nets.setdefault(name, Net(name=name))
+        detail = _block_port_detail(ports)
+        existing = model.unproven_reasons.get(name)
+        if existing is None:
+            model.unproven_reasons[name] = (TRUNCATED_BY_BLOCK_PORT, detail)
+        else:
+            code, old_detail = existing
+            model.unproven_reasons[name] = (
+                code, f"{old_detail}; {detail}" if old_detail else detail,
+            )
+
 
 def _dropped_pages(
     placements_seen: dict[str, dict[str, int]], designators: list[str]
@@ -2273,6 +2810,91 @@ def _dropped_pages(
         for designator in designators
         for page in placements_seen.get(designator, {})
     }
+
+
+#: One block port that meets a wire end: ``(primitive id, block label, port, page)``.
+#:
+#: The **primitive id** is in the tuple because a designator is not an identity:
+#: two block instances may both be labelled ``CBB1`` (nothing stops a user typing
+#: the same label twice), and the detail has to be able to say *which* one is on
+#: the wire. Merging them would report one port where the drawing has two.
+_BlockPortHit = tuple[str, str, str, str]
+
+
+def _block_port_net_hits(
+    blocks: _BlockCatalogue,
+    symbols: dict[str, _SymbolDef],
+    instances: list[_Instance],
+    point_index: dict[tuple[str, Point], list[Any]],
+    uf: _UnionFind,
+    labels: dict[Any, str],
+    nc_set: set[tuple[str, str]],
+) -> dict[str, tuple[set[str], list[_BlockPortHit]]]:
+    """``net name -> (pages, [(primitive id, block, port, page), ...])``.
+
+    The one question this answers (038Q18) is **geometric**, and it has to be:
+    the container has no record that ties a block port to a wire (measured on the
+    P47 container — only the numbers agree, ``(380, 370)`` on both sides). So the
+    port is placed with the *same* :func:`transform_point` the parts pass uses
+    (rotation, mirror and origin, never a second copy of that arithmetic) and
+    looked up in the same ``point_index`` the pins are looked up in; a hit means
+    the port sits on a real ``WIRE`` endpoint, not merely near one.
+
+    Read **after** ``labels`` are final, and without touching the union-find: a
+    block is not a netlist node (038Q17 keeps it out of ``Component`` and out of
+    ``Net.pins``), so adding one would renumber the auto-named clusters and move
+    every ``NETn`` on every board that carries a block (N3). This function only
+    *reads* the root a wire end already has.
+
+    Nothing is reported for a block whose ports are empty, for a port that meets
+    no wire end, for an NC port (the same ``NO_CONNECT`` skip the parts pass
+    makes), or for an unresolved block candidate (its symbol was never bound, so
+    it has no ports to speak of).
+    """
+    hits: dict[str, tuple[set[str], list[_BlockPortHit]]] = {}
+    for inst in instances:
+        local_symbol, _reason = blocks.reading(inst)
+        if not local_symbol:
+            continue
+        symbol_def = symbols.get(local_symbol)
+        if symbol_def is None or not symbol_def.pins:
+            continue
+        label = (inst.attrs.get("Designator") or "").strip() or inst.record_id
+        for number, (point, ez) in sorted(symbol_def.pins.items()):
+            if (inst.container_id, ez) in nc_set:
+                continue  # an NC port is not drawn on the net, same rule as a pin
+            page_point = _transform_point(
+                point[0], point[1], rotation=inst.rotation,
+                mirror=inst.is_mirror, ox=inst.x, oy=inst.y,
+            )
+            nodes = point_index.get((inst.page, page_point))
+            if not nodes:
+                continue  # no wire end under this port: nothing to disclose
+            name = labels.get(uf.find(nodes[0]), "")
+            if not name:
+                continue
+            pages, ports = hits.setdefault(name, (set(), []))
+            pages.add(inst.page)
+            hit = (inst.record_id, label, number, inst.page)
+            if hit not in ports:
+                ports.append(hit)
+    return hits
+
+
+def _block_port_detail(ports: list[_BlockPortHit]) -> str:
+    """The sentence :attr:`DesignModel.unproven_reasons` files for one net.
+
+    Each port is named by its designator **and** its primitive id, so two
+    instances that carry the same label stay two facts.
+    """
+    listed = "; ".join(
+        f"block {label!r} (primitive {primitive!r}) port {number!r} on page {page!r}"
+        for primitive, label, number, page in ports
+    )
+    return (
+        "a native block's ports are not expanded into this netlist, so its "
+        f"connection is missing from the member list ({listed})"
+    )
 
 
 def _truncation_code(pages_of: dict[str, int]) -> str:

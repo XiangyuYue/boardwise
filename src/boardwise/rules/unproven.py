@@ -76,6 +76,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 
 from ..core.model import (
+    TRUNCATED_BY_BLOCK_PORT,
     TRUNCATED_BY_CROSS_PAGE_DESIGNATOR,
     TRUNCATED_BY_DESIGNATOR,
     WELDED_BY_NAME,
@@ -204,6 +205,7 @@ class RefusedNet(tuple):
         return self.reason in (
             TRUNCATED_BY_DESIGNATOR,
             TRUNCATED_BY_CROSS_PAGE_DESIGNATOR,
+            TRUNCATED_BY_BLOCK_PORT,
         )
 
 
@@ -274,6 +276,15 @@ TRUNCATION_PHRASES = {
         "a netlist in which no placement was left out — this net's membership "
         "may be truncated by a duplicate designator drawn across pages: "
     ),
+    # 038Q18: nothing was dropped and no page was welded — the netlist simply
+    # has no vocabulary for a placed block's inside. Its port is drawn on the
+    # wire, so the net's member list is short by however many connections the
+    # block makes there.
+    TRUNCATED_BY_BLOCK_PORT: (
+        "a netlist in which no placement was left out — this net's membership "
+        "may be truncated by a native CBB block's port, which this reading does "
+        "not expand into Net.pins: "
+    ),
 }
 
 
@@ -296,6 +307,41 @@ def _truncated_clause(found: Sequence[RefusedNet]) -> str:
     )
 
 
+#: 038Q18's tail for a refusal that is **only** about an unexpanded block port.
+#: A block is not a dropped placement — nothing was thrown away — so the 107
+#: sentence would send the reader looking for a duplicate designator that does
+#: not exist.
+BLOCK_PORT_TAIL = "a native CBB block's ports are not expanded into this netlist"
+
+#: Both gaps on the same judgement: a dropped placement **and** a block port.
+MIXED_TRUNCATION_TAIL = (
+    "a placement the model did not keep may be the part this judgement needs, "
+    "and a native CBB block's ports are not expanded into this netlist"
+)
+
+
+def _tail(found: Sequence[RefusedNet]) -> str:
+    """The last clause of :func:`unproven_message`, by the gaps actually present.
+
+    ``found`` is what one judgement refused on, so its reasons say which gaps
+    exist. Block-only and 107-only are not the same story; a judgement that hits
+    both says both. A net coded :data:`TRUNCATED_BY_DESIGNATOR` keeps that code
+    even when a block detail was appended to it (the parser appends rather than
+    overwrites), so its own clause stays the 107 one — the appended detail is
+    printed inside the parentheses by :func:`_truncated_clause`, which is where
+    that reader sees the block part.
+    """
+    reasons = {entry.reason for entry in found if entry.truncated}
+    if reasons == {TRUNCATED_BY_BLOCK_PORT}:
+        return BLOCK_PORT_TAIL
+    if TRUNCATED_BY_BLOCK_PORT in reasons:
+        return MIXED_TRUNCATION_TAIL
+    return (
+        "a placement the model did not keep may be the part this judgement "
+        "needs"
+    )
+
+
 def unproven_message(
     subject: str,
     found: Sequence[RefusedNet],
@@ -308,16 +354,20 @@ def unproven_message(
     rule and the repair, and returns its own :class:`PinRuling`, so it needs the
     same words without owning a row. One builder, so the rule's UNKNOWN and the
     four-state row say the same thing.
+
+    The closing clause is chosen by :func:`_tail`: a net whose member list a
+    **dropped placement** truncated (107) and a net a **block's unexpanded
+    port** left short (038Q18) are different facts, and telling a reader to go
+    looking for a duplicate designator on a board that has none would be a false
+    lead in the one row that exists to be honest about what is unknown.
     """
     if _truncated(found):
-        # 107: the withheld conclusion is the same one — is that part on that
-        # net? — and so is the both-directions rule, but the reason a reader is
-        # given is the one that applies: the netlist this rule read is missing
-        # the placement, so neither "it is there" nor "it is not" is established.
+        # The withheld conclusion is the same one — is that part on that net? —
+        # and so is the both-directions rule; only the *reason* the netlist
+        # cannot answer differs, and that is what the tail names.
         return (
             f"{subject}: {_net_clause(found)}, so {what} cannot be established — "
-            "a placement the model did not keep may be the part this judgement "
-            "needs"
+            + _tail(found)
         )
     return (
         f"{subject}: {_net_clause(found)}, so {what} cannot be established — "

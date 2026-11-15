@@ -8114,7 +8114,12 @@ def _cmd_checkup_run(args: argparse.Namespace) -> int:
     # model's own reason rather than assuming the merge's. A consumer reading
     # "这些网名在多于一个页里出现" about a single-page board would be told a
     # falsehood about the very thing it is being asked to distrust.
-    from .core.model import WELDED_BY_NAME
+    from .core.model import (
+        TRUNCATED_BY_BLOCK_PORT,
+        TRUNCATED_BY_CROSS_PAGE_DESIGNATOR,
+        TRUNCATED_BY_DESIGNATOR,
+        WELDED_BY_NAME,
+    )
 
     unproven: dict[str, tuple[tuple[str, ...], str]] = {}
     for board_model in (getattr(model, "boards", None) or [model]):
@@ -8124,8 +8129,17 @@ def _cmd_checkup_run(args: argparse.Namespace) -> int:
         welded = sorted(
             name for name, (_pages, reason) in unproven.items() if reason == WELDED_BY_NAME
         )
-        truncated = sorted(
-            name for name, (_pages, reason) in unproven.items() if reason != WELDED_BY_NAME
+        # 038Q18: the two truncations are different facts and are named apart —
+        # a dropped duplicate designator and an unexpanded block port are not
+        # the same hole, and one sentence covering both told a reader to look
+        # for a repeated designator on a board that has none.
+        by_designator = sorted(
+            name for name, (_pages, reason) in unproven.items()
+            if reason in (TRUNCATED_BY_DESIGNATOR, TRUNCATED_BY_CROSS_PAGE_DESIGNATOR)
+        )
+        by_block = sorted(
+            name for name, (_pages, reason) in unproven.items()
+            if reason == TRUNCATED_BY_BLOCK_PORT
         )
         notes_about_unproven: list[str] = []
         if welded:
@@ -8134,12 +8148,19 @@ def _cmd_checkup_run(args: argparse.Namespace) -> int:
                 "已验证连接：名单里的规则对它们一律不下通过/违规结论，只报 UNKNOWN"
                 "（agreement by name is not a verified connection）"
             )
-        if truncated:
+        if by_designator:
             notes_about_unproven.append(
-                "这些网名（" + "、".join(truncated) + "）的成员清单可能已被位号重复"
+                "这些网名（" + "、".join(by_designator) + "）的成员清单可能已被位号重复"
                 "截断：图上重复位号的第 2+ 份 placement 没有进这份网表，被丢弃的那份"
                 "可能就是这张网上的关键件（去耦电容之类）；同一批规则对它们只报 "
                 "UNKNOWN，通过和违规都不成立"
+            )
+        if by_block:
+            notes_about_unproven.append(
+                "这些网名（" + "、".join(by_block) + "）上有原生 CBB 块端口：块不是普通"
+                "器件，它的端口没有展开成网表成员，所以这张网的成员清单不完整（缺的是"
+                "块内部那一支，不是位号重复）；同一批规则对它们只报 UNKNOWN，通过和"
+                "违规都不成立"
             )
         source["unprovenNets"] = {
             "count": len(unproven),

@@ -156,8 +156,27 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   **Q11/Q13 及 Q11A/Q13A 的 CBB 绘制相关工作已由岳裁定搁置（2026-11-12）**：保留现有离线
   证据，不再推进内部网语义命名、多脚ESD/短载体或旗标，不 plan/apply
   （`tasks/038q13a_ch340_presentation_gaps.md`）。book/模块仍是 candidate、不接 compile；
-  CH340 的 EP 与 GND 关系缺厂家图纸，原生 `block_symbol` 样件、端口规则与个人库放置未做，
-  type 17 仍待真实样本证实；库搜索成功不等于原生块兼容。
+  CH340 的 EP 与 GND 关系缺厂家图纸。**038Q16–Q18 已打通原生块首轮垂直链（2026-11-15）**：
+  project 搜索改用 `lib_Symbol.get(project)`，`sch.place_project_cbb` 得到真实 block_symbol、
+  local/源身份与视觉/容器证据；`collect_block_instances` 三锚读出，普通读数不变，无位号假信号已修。
+  Q18 用真实 PIN 证明 N1：已接块端口不再被 `arch-nrst-closure` 误报单成员网，转为
+  `TRUNCATED_BY_BLOCK_PORT` 的 unproven；N2 普通真悬空仍报，N3 无块 findings 逐字不变。
+  探针页全部回收，导入模块保留。V3、嵌套、非端点接触和块内部展开未覆盖；证据
+  `evidence/038q16/live-report.md`、`evidence/038q18/live-report.md`。
+  最终 Python **11226 passed / 26 skipped / 3 xfailed / 3 failed**，本批新增失败清零，
+  三红均属绘制线未提交 548D/K/P；Connector 774、DSH 137/1、Rust 177/4，均通过，不称全量全绿。
+  **038Q14 只读调查（2026-11-12）**：工作树新增 `lib.cbb.personal/libraries/export`，只负责个人库身份、
+  其他可枚举库与身份核对后的 opaque `.epro2` 归档。真机个人库 UUID 为 `undefined`，系统库非空关键词、
+  当前工程库及两个其他可读库均返回 0 个 CBB；故没有真实样件可归档，创建/放置/解析与端口规则继续停闸。
+  未写任何库或工程内容，test V4 Connector 0.6.0 已恢复。恢复阶段曾读到 daemon 0.6.1；随后当前进程变为
+  另一工作流拉起的源码 daemon，本批不再重启或冒称正式 exe 仍在运行；详见
+  `tasks/038q14_native_block_bootstrap.md`、`evidence/038q14/report.md`。
+  Q14 聚焦 94 passed，Connector 720、DSH 137/1、Rust 177/4；全量 Python 10902 passed / 26 skipped /
+  1 xfailed / **1 failed**，唯一红项属于未提交绘制线 548D forced-topology，不称四线全绿。
+  **038Q15 真实样件与幻影放置**：`晶振` CBB 身份和工程导出已核实，`META.docType=17`，但零 PIN、
+  `boards=[]`，源页无块实例。`sch.place_cbb` 已实现并在 test V4 新 P43 试探；宿主返回 primitiveId，
+  但组件清单/source/渲染均无块，动作正确报 partial。P43 已回收，源 CBB 未改；下一步需要岳用宿主 UI
+  真实放置、最好带 PIN 的块实例。Connector 740、Python 邻接 176；证据 `evidence/038q15/live-report.md`。
   提交前挖洞的 portPins key、跨组重复脚、LF 与 catalog symbolRef 四项已修；最终完整 Python
   **10873 passed / 26 skipped / 1 xfailed / 1 warning**，Connector 691、DSH 137/1、Rust 177/4
   均通过（`.tmp_038q14_final/`、`.tmp_038q14_accept/`）。

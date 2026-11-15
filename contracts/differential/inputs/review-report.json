@@ -41,10 +41,7 @@
         "UNIVERSAL": 1,
         "WIRE": 33
       },
-      "unknown_types": {
-        "TABLE": 1,
-        "UNIVERSAL": 1
-      },
+      "unknown_types": {},
       "unconsumed_types": {},
       "document_types": {},
       "pcb_records": 0,
@@ -2006,7 +2003,7 @@
     },
     "sourceVersions": {
       "ruleset": "a0c5e0a0",
-      "rulebody": "d2ff8ae4"
+      "rulebody": "2b62613f"
     },
     "verdict": "incomplete",
     "verdictWhy": [

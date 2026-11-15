@@ -103,6 +103,23 @@ native netlabel 仍不可用（走 name stub）、H2 `Name` 需改为 `2x5P` 才
 详见 [`tasks/534b_v4_layout.md`](../tasks/534b_v4_layout.md) 与
 [`evidence/534b/report.md`](../evidence/534b/report.md)（实验证据）。
 
+**原生块实例的只读覆盖（038Q17，工作树）**：V4 容器把 CBB 块放成页上一个普通 `COMPONENT`，
+身份要**三锚全中**——`partId` 命中某 SYMBOL 文档的 `PART.id`、子 `ATTR Symbol` 逐字等于该文档
+uuid、该文档 `META.docType` 是数字 **17**；`Reuse Block`/`Designator`/`Name` 在真块上全为空，
+**不作身份**（填了值也不改变判定）。实测 `q46` 页 `393dfe0bb84bf7cb` 上一块
+`bf1c81ee9e14827d`：`partId=32c6fc8b0adcd464`、本地符号 `ca89fed3a434c5cb`、`META.source`
+两段 = 源符号 `c657f757a2cf294b` | 源 CBB 工程 `e1534426…`、位姿 x400/y300、端口 **0**；
+放置前同一容器无块实例，未放置的 17 号符号不产生块。普通读数逐字不变（三块板
+`components` 9/0/11、`nets` 63/0/20、20 位号、18 符号），`instances_without_designator`
+由 1 回落到 0（块不再被算成"说不清为何没位号的器件"），多板拒绝仍是 3 块板；
+`TABLE`/`UNIVERSAL` 不再报格式漂移。块在任何位号状态下都不进模型 `Component`（手填位号只是标签，
+不造器件也不进普通网表），同一符号 uuid 多份副本按**首份**读、可见投影不同的副本计入
+`conflicting_library_documents`。块端口画在导线上时，该网在 `unproven_nets` 里标
+`truncated-by-block-port`（块内部不展开、成员名单缺这一支，规则据此 refuse 而不是按单成员判），
+并在 `nets` 里以空成员存在（只有块连着的有名导线也是一条网，不造 `NETn` 位移）；
+导线端点没命中的端口不标；UF 不因块新增节点，网名与普通成员逐字不变。**未覆盖**：块内展开网表、
+非端点接触、多块同页、嵌套块、`lib.cbb.export`。
+
 ## 4. 绘制线专用边界
 
 ### 4.1 共用

@@ -18,7 +18,13 @@
 import { PROBE_CHECKS, ADDED_SINCE } from './api-names';
 // 038Q1: the native CBB (复用模块) reads. `library-cbb.ts` imports only the
 // *types* of this module, so this is the one value edge and there is no cycle.
-import { libCbbGet, libCbbSearch } from './library-cbb';
+import { libCbbExport, libCbbGet, libCbbLibraries, libCbbPersonal, libCbbSearch } from './library-cbb';
+// 038Q15: the one CBB *write* — placing a native module as a block instance.
+// Same one-way value edge as `library-cbb.ts`, which it reuses for identity.
+import { schPlaceCbb } from './cbb-placement';
+// 038Q16B: the project-local CBB block, placed through the ordinary project
+// symbol call. One-way value edge, same as the two above.
+import { schPlaceProjectCbb } from './project-cbb-placement';
 import { ActionError, isActionError, type ResponseContext } from './protocol';
 import { ambientRandomHost, describeRandomHost } from './random';
 import { sysSelfUpdate } from './self-update';
@@ -9820,6 +9826,17 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     // cannot reach, and these two ride the catalogue like every other action).
     'lib.cbb.search': bind(libCbbSearch),
     'lib.cbb.get': bind(libCbbGet),
+    // 038Q14: which library is this workspace's personal one, and one module's
+    // own `.epro2` container. Both reads; the export re-reads the module through
+    // `lib.cbb.get` before it fetches a byte and hands the container back opaque
+    // (base64, no unpacking), so this batch cannot become a library write.
+    'lib.cbb.personal': bind(libCbbPersonal),
+    'lib.cbb.export': bind(libCbbExport),
+    // 038Q14 follow-up: the workspace's *other* libraries as a list, so a real
+    // CBB sample can be found without guessing a uuid. Read-only; the
+    // declaration excludes system/personal/project/favourite from this list, so
+    // it is not a substitute for `lib.cbb.personal` and registers nothing.
+    'lib.cbb.libraries': bind(libCbbLibraries),
     'sch.set_component_attribute': bind(schSetComponentAttribute),
     'pcb.readback': bind(pcbReadback),
     'export.screenshot': bind(exportScreenshot),
@@ -9847,6 +9864,14 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'sch.doc.new': bind(schDocNew),
     'sch.doc.save': bind(schDocSave),
     'sch.place_component': bind(schPlaceComponent),
+    // 038Q15: a native reuse module (CBB) as a block instance, with the module,
+    // project, page and source-symbol identities verified before the write and
+    // the whole result read back after it.
+    'sch.place_cbb': bind(schPlaceCbb),
+    // 038Q16B: a project-*local* CBB block (imported into this project), placed
+    // with the ordinary project-symbol call. `lib_Symbol.get(project)` is its
+    // reader; `lib_Cbb.get(project)` is never reached.
+    'sch.place_project_cbb': bind(schPlaceProjectCbb),
     // R1-1: the PCB twin — a footprint onto the focused board, guarded and
     // diff-read-back on a miss. Write; `pageUuid` is required.
     'pcb.place_component': bind(pcbPlaceComponent),

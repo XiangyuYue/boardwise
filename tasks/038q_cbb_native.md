@@ -4,7 +4,16 @@
 > 本文是**原生 `block_symbol`** 的总合同与阶段路线。Q1–Q4 已完成库只读、模块候选和
 > 单符号 profile 支撑批（2026-11-11），不等于本文阶段 A–E 已完成。
 
-状态：**原生块阶段 A 仍待真实 CBB 样件**。没有真实样件就不开工；不承诺版本、不承诺发布日期。
+状态：**项目内真实块放置、回读、导出、解析及 N1–N3 已完成首轮验证**。
+038Q14 完成库只读通路；038Q15 证明库路径 `createCbbSymbol` 的幻影 ID 并拒收。
+038Q16 改用项目内本地 symbol，得到真实 `block_symbol`、三锚身份与视觉/容器证据；
+038Q17 的 `collect_block_instances` 读出实例且普通读数不变，无位号假信号已修。
+038Q18 用真实 PIN 和 U10/U2 对照证明：已接块端口不再被 `arch-nrst-closure` 误报单成员网，
+转为 `TRUNCATED_BY_BLOCK_PORT` 的 unproven；普通真悬空仍报，无块 findings 逐字不变。
+`lib.cbb.export` 仍超时，工程导出可用；探针页全部回收，导入模块保留。详见
+`tasks/038q16_project_cbb.md`、`tasks/038q17_block_instance_parser.md`、
+`tasks/038q18_block_port_unproven.md`、`evidence/038q18/live-report.md`。
+该结论限 V4 单块/端点连接；V3、嵌套、非端点接触与块内部展开仍未覆盖。
 
 ## 1. 现状证据（截至 2026-11-03，均为本仓库可核对的事实）
 
