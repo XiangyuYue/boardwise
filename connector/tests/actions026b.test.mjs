@@ -117,6 +117,24 @@ test('sys.connector_status reports a throwing getStatus instead of pretending it
   assert.match(String(report.error), /the controller was released/);
 });
 
+test('sys.connector_status advertises the PCB viewport capability on every branch', async () => {
+  // 087F2: the bit a live collector reads **before** it calls `export.render`
+  // for a PCB. It is a fact about this bundle, so it must survive the branches
+  // where the runtime record is missing or unreadable — otherwise a caller
+  // cannot tell "old connector" from "this window has no status record".
+  const branches = [
+    fakeEda(),
+    fakeEda({ __boardwiseTransportRuntime: 'not a record' }),
+    fakeEda({ __boardwiseTransportRuntime: { implementation: 'x' } }),
+    fakeEda({ __boardwiseTransportRuntime: { getStatus: () => ({ state: 'connected' }) } }),
+    fakeEda({ __boardwiseTransportRuntime: { getStatus: () => { throw new Error('gone'); } } }),
+  ];
+  for (const eda of branches) {
+    const report = await status(eda);
+    assert.deepEqual(report.capabilities, { pcbRenderViewport: true });
+  }
+});
+
 test('the record is called through its own object, never detached from it', async () => {
   // `getStatus` closes over the publishing evaluation's module state, so a
   // detached call would answer about nothing. The action calls it as a method.

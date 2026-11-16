@@ -456,9 +456,10 @@ def test_the_sop_and_the_writer_agree_that_one_answer_fills_both_voltage_keys():
     )
 
 
-# ============================ #87⑤ readback 缺 value/mpn 的离线归档配方
-#: SOP §3.2 里那条配方的标题锚点（pits #3 指向它）。
-_READBACK_RECIPE_MARKER = "**`sch.readback` 没有 value/mpn**"
+# ============================ #87⑤ readback 的 value/mpn：可选键 + 离线归档配方
+#: SOP §3.2 里那条配方的标题锚点（pits #3 指向它）。087E 起改口：新 connector
+#: 每行**可选**带 value/mpn，旧 connector / 缺键才走这条归档配方。
+_READBACK_RECIPE_MARKER = "**`sch.readback` 的 value/mpn 是 087E 起的可选键"
 #: 仓库既有匿名 fixture：47 个器件，C3 的 Value/MPN 都可读，C1 有 MPN 但没有 Value
 #: ——后半句正是「空值不伪造」要钉的形状。
 _READBACK_FIXTURE = REPO / "tests" / "fixtures" / "llc_board.epro2"
@@ -545,11 +546,29 @@ def test_pit_3_points_at_the_sop_readback_recipe():
     assert "`sch.readback`" in row
     assert "docs/review-sop.md" in row and "§3.2" in row
     assert "value/mpn" in row, "pit 3 must name the fields the recipe recovers"
+    # 087E: 坑表与 SOP 必须说同一件事——新 connector 可选给，缺键/旧 connector
+    # 才回落归档。只留其中一半就是把「读不到」或「已经能读」写成了唯一事实。
+    for token in ("valueSource", "mpnSource", "ManufacturerId", "OtherProperty"):
+        assert token in row, f"pit 3 lost the 087E optional-lift field {token!r}"
 
 
-# ============================ #87② PCB 目视复核：没有独立的已验图像通道
+def test_the_sop_readback_section_states_the_optional_lift_before_the_recipe():
+    """护 #87⑤ 的改口：SOP 必须先说新 connector 可选给，再说缺键才导归档。"""
+    section = _sop_readback_section()
+    for token in ("value", "mpn", "valueSource", "mpnSource", "ManufacturerId", "null"):
+        assert token in section, f"the readback section lost the 087E field {token!r}"
+    assert "缺键" in section or "没有这四个键" in section, (
+        "the section must keep the old-connector / missing-key fallback explicit"
+    )
+    # 归档配方仍在同一段里、仍可直接跑（`test_the_sop_readback_recipe_runs_…` 提取它）。
+    assert "build_project_model" in section
+
+
+# ============================ #87② PCB 目视复核：几何与 viewport 两级证据
 #: SOP §3.2 里 PCB 目视复核那条的标题（pits #23 的 PCB 边界指向它）。
-_PCB_VISUAL_MARKER = "- **PCB 目视复核没有独立的已验图像通道**"
+#: 087F3 定稿：标题不再写「没有独立的已验图像通道」——test V4 上 viewport 通道已在线出图，
+#: 标题得同时容得下几何与 viewport 两级，**但不等于**新能力已发布。
+_PCB_VISUAL_MARKER = "- **PCB 目视复核：几何与 viewport 两级证据**"
 _ACTIONS_TS = REPO / "connector" / "src" / "actions.ts"
 
 
@@ -595,8 +614,9 @@ def test_the_sop_separates_pcb_readonly_geometry_from_having_looked_at_the_board
 def test_the_sop_never_turns_a_readback_or_a_png_into_a_visual_pass():
     """护 #87② 的第二句话：没图就写 missing / 人工待办，不写 visual-pass。
 
-    `pcbImage` 的 `ok` 只等于「采集到一张合规 PNG」；`visual: missing` 才是
-    「本次没有看过板子」的诚实写法。真机出图与否**不在本条断言范围**。
+    `pcbImage` 的 `ok` 只等于「采集到一张合规 PNG」——087F1 之后这张 PNG 可能是
+    viewport 级的，`ok` 的含义**不变**；`visual: missing` 才是「本次没有看过板子」
+    的诚实写法。真机出图与否**不在本条断言范围**。
     """
     section = _sop_pcb_visual_section()
     assert "pcbImage: missing" in section
@@ -607,41 +627,48 @@ def test_the_sop_never_turns_a_readback_or_a_png_into_a_visual_pass():
         "evidence that someone looked at it"
     )
     assert "伪造证据" in section
-    assert "视觉通过" not in section, (
+    # 唯一允许出现「视觉通过」的地方是那条否定式；把它当结论写就是造假。
+    assert "PNG≠视觉通过" in section, (
+        "the bullet must state that a PNG is not a visual pass by name"
+    )
+    assert "视觉通过" not in section.replace("PNG≠视觉通过", ""), (
         "the bullet must not claim a visual pass; the honest states are "
         "missing / failed / a named manual todo"
     )
 
 
-def test_the_sop_records_the_v4_pcb_60s_timeout_and_stops_calling_render():
-    """护 #87② 的第三句话：PCB 上的 60 s 是 **V4.1.93 实测**，此后不再调用该 API。
+def test_the_sop_keeps_the_v4_pcb_document_render_60s_boundary_as_history():
+    """护 #87② 的第三句话：PCB 上的 60.01 s 是 **V4.1.93 实测**，钉在**文档出图路径**上。
 
     O2（2026-10-31）在已 `doc.open` + `document.current` 确证的 PCB1 上单发一次
-    `timeoutMs:60000`，整 60.01 s 不返回；同会话原理图页秒回 ⇒ schematic-only。
-    所以 SOP 必须写实测读数、`not-applicable`、以及"停止对 PCB 调用"，
-    **不许**回退成「本批没有复现」这类过期口径。
+    `timeoutMs:60000`，整 60.01 s 不返回；同会话原理图页秒回 ⇒
+    `sch_ManufactureData.getExportDocumentFile` 那条路径是 schematic-only。
+    087F1 的 viewport 分支不让这条读数过期：文档必须**同时**写实测读数、上限设计
+    （`not-applicable` 的旧态处置仍在），**不许**回退成「本批没有复现」这类过期口径，
+    也不许把 60 s 写成板子的性质。
     SOP 说的两个数字（`timeoutMs` 夹取 1–60 s、缺省 30 s）必须仍对得上
     connector 源码，否则文案里的「上限」就成了二手转述。
     """
     section = _sop_pcb_visual_section()
     assert "60.01" in section, (
-        "the SOP must carry the measured wall clock of the V4 PCB render timeout"
+        "the SOP must carry the measured wall clock of the V4 PCB document render timeout"
     )
-    assert "not-applicable" in section, (
-        "the SOP must fix pcbImage at not-applicable — the call no longer happens"
-    )
-    assert "停止对 PCB 调用" in section, (
-        "the SOP must say the render action is no longer invoked on PCB pages"
+    assert "4.1.93" in section, "the 60.01 s reading is 4.1.93's, not a general claim"
+    assert "schematic-only" in section, (
+        "the bullet must name the document-render path as schematic-only"
     )
     assert "只服务原理图" in section, (
-        "the SOP must name the API as schematic-only, not as a budget problem"
+        "the SOP must name the document render as schematic-only, not as a budget problem"
+    )
+    assert "不给 60 s 盲重试" in section
+    assert "上限" in section and "TIMEOUT" in section
+    assert "not-applicable" in section, (
+        "a connector without the viewport capability still has to answer not-applicable"
     )
     assert "本批没有复现" not in section and "历史报告" not in section, (
         "the stale 'unreproduced this batch / historical report' wording is back; "
         "O2 reproduced it on V4.1.93"
     )
-    assert "不给 60 s 盲重试" in section
-    assert "上限" in section and "TIMEOUT" in section
     source = _ACTIONS_TS.read_text(encoding="utf-8")
     assert "const EXPORT_RENDER_TIMEOUT_MS = 30_000;" in source, (
         "the connector no longer defaults to 30 s; the SOP's default is stale"
@@ -650,6 +677,72 @@ def test_the_sop_records_the_v4_pcb_60s_timeout_and_stops_calling_render():
         "the connector no longer clamps to 60 s; the SOP's upper bound is stale"
     )
     assert "1–60 s" in section and "30 s" in section
+
+
+def test_the_sop_states_the_pcb_viewport_branch_as_accepted_but_unreleased():
+    """护 #87② 的新态定稿（087F3 §8）：**工作树实现、test V4 已在线验收、未发布**。
+
+    087F1（PCB viewport 分支）与 087F2（`capabilities.pcbRenderViewport` 门）已由岳批准热更，
+    2026-11-16 在 test V4 上跑完真机验收（PCB1/PCB2 直接出图、SVG 具名拒绝、默认全部页/板
+    `review-evidence` exit 0、`pcbImage.status=ok` 三板）。所以文档既**不许**留着
+    「未在线验收」的候选声明，也**不许**写成已发布/已上线：新态要带在线读数，同时保留
+    旧态（缺旗标 → 零 render 调用 → `not-applicable`）与历史 60.01 s schematic-only 边界。
+    本条对**新态 + 旧态**两侧都下钉，并回源码核旗标名与 channel/grade 取值。
+    """
+    section = _sop_pcb_visual_section()
+    # 新态：能力旗标 + 通道语义 + 只收 png/page
+    for token in ("pcbRenderViewport", "capabilities", "viewport", "evidenceGrade"):
+        assert token in section, f"the PCB visual bullet lost the new-state token {token!r}"
+    assert "不是 document render" in section, (
+        "a viewport capture must be named as *not* a document render"
+    )
+    assert "PNG≠视觉通过" in section
+    assert "format=png" in section and "scope=page" in section, (
+        "the viewport branch accepts png + page only; the bullet must say so"
+    )
+    for token in ("svg", "pdf", "selection", "project", "NOT_IMPLEMENTED"):
+        assert token in section, (
+            f"the bullet must name what the PCB branch refuses ({token!r})"
+        )
+    # 在线验收读数：验收做过就要带读数，不能只说「验过了」
+    for token in ("已在线验收", "工作树实现", "0.6.1", "196764", "93676",
+                  "exit 0", "capture.ok=true", "pcbImage.status=ok", "P43"):
+        assert token in section, (
+            f"the accepted-but-unreleased bullet lost the live reading {token!r}"
+        )
+    # 旧态：缺旗标 = 零调用，不许拿 PCB 去试探（那正是 10 s / 60 s 的空等）
+    assert "零 render 调用" in section, (
+        "an old connector must be described as making no PCB render call at all"
+    )
+    assert "not-applicable" in section
+    # 不许写成已发布/已上线；候选期的说法必须退场
+    assert "已上线" not in section, "the branch is not shipped as a released capability"
+    assert "已发布" not in section.replace('"已发布"', ""), (
+        "only the negated '不是\"已发布\"' form may appear"
+    )
+    assert '这不是"已发布"' in section
+    assert "工作树候选" not in section and "未在线验收" not in section, (
+        "the pre-verification candidate wording is stale after the 2026-11-16 run"
+    )
+    # 未覆盖的宿主/板子
+    assert "未发布" in section
+    for token in ("生产非空板", "V3", "SVG/PDF"):
+        assert token in section, (
+            f"the bullet must state the uncovered scope {token!r}"
+        )
+    # 源码对拍：旗标名/通道取值必须还在两份实现里，文档不是自说自话
+    live = (REPO / "src" / "boardwise" / "engines" / "liveevidence.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'PCB_VIEWPORT_CAPABILITY = "pcbRenderViewport"' in live
+    assert 'PCB_RENDER_CHANNEL = "viewport"' in live
+    assert 'PCB_RENDER_GRADE = "viewport"' in live
+    connector = _ACTIONS_TS.read_text(encoding="utf-8")
+    assert "pcbRenderViewport" in connector, (
+        "the connector no longer publishes the capability the SOP gates on"
+    )
+    assert "channel: 'viewport'" in connector
+    assert "evidenceGrade: 'viewport'" in connector
 
 
 def test_every_pcb_visual_command_in_the_sop_uses_a_parameter_the_connector_reads():
@@ -681,7 +774,9 @@ def test_pit_23_carries_the_pcb_boundary_without_growing_a_new_pit_number():
     """护 #87② 的第五句话：坑表与 SOP 说同一句话，且不另开坑号。
 
     PCB 边界是同一个坑的另一个面：新开坑号会让「导出挂死」在坑表里看起来像
-    两个不同的病。锚点原文必须仍在 SOP 里（上一条测试钉着它）。
+    两个不同的病。锚点原文必须仍在 SOP 里（上一条测试钉着它）。087F3 起坑表要
+    **同时**保留旧态（60.01 s schematic-only 历史 + 缺旗标零调用）与候选态
+    （viewport 分支：工作树实现、test V4 已在线验收、未发布），不许只跟新文案改字符串。
     """
     pits = (REPO / "docs" / "pits.md").read_text(encoding="utf-8")
     rows = [line for line in pits.splitlines() if line.startswith("| 23 |")]
@@ -689,15 +784,37 @@ def test_pit_23_carries_the_pcb_boundary_without_growing_a_new_pit_number():
     row = rows[0]
     assert "PCB 例外/边界" in row and "#87②" in row
     assert "docs/review-sop.md" in row and "§3.2" in row
-    assert "PCB 目视复核没有独立的已验图像通道" in row, (
+    assert "PCB 目视复核：几何与 viewport 两级证据" in row, (
         "pit 23 must quote the SOP anchor verbatim or the pointer rots"
     )
     assert "`export.render`" in row and "`pcb.readback`" in row and "`pcbImage`" in row
-    for token in ("V4.1.93", "60.01", "not-applicable", "停止对 PCB 调用", "schematic-only"):
+    for token in ("V4.1.93", "60.01", "schematic-only", "not-applicable"):
         assert token in row, (
             f"pit 23 must carry the V4 O2 measured boundary token {token!r}; "
             "the '未复现' era wording is gone"
         )
+    assert "已停止对 PCB 调用" not in row, (
+        "the unconditional 'stopped calling on PCB' claim was replaced by the "
+        "capability gate — an old connector makes no call, a flagged one may"
+    )
+    for token in (
+        "pcbRenderViewport",
+        "零 render 调用",
+        "viewport",
+        "PNG≠视觉通过",
+        "工作树实现",
+        "已在线验收",
+        "未发布",
+        "exit 0",
+    ):
+        assert token in row, (
+            f"pit 23 must carry the 087F3 two-state token {token!r} — a pit table "
+            "that only knows the old absolute claim sends the reader to the wrong "
+            "recipe"
+        )
+    assert "未在线验收" not in row and "工作树候选" not in row, (
+        "the pre-verification candidate wording is stale after the 2026-11-16 run"
+    )
     assert "本批未复现" not in row and "没有逐项条目" not in row
 
 

@@ -1,20 +1,22 @@
-# 审查分阶段交付的运行时闸（541R3/I 已实现，真实 DSH 加载待验）
+# 审查分阶段交付的运行时闸（541R3/I/R4 已实现，隔离真实 DSH 已验）
 
-> 状态：**运行时切片已实施（2026-11-15）**。R1 版本化 RunManifest、R2 重算 guard、R4
-> `--strict-partial` 已随 `cdff88b` 落地；R3 DSH pre-execute 与公开接口 tool-gap 已在工作树实现。
-> R3 需要显式 out、同目录/callId 的 initial/partial Session receipt，预算为 30 分钟/60 model steps；
-> 任何欠账批次都阻止换 out 绕过。公开接口复用唯一 protocol 目录的 `--read-only` 闸并增加 tool-gap，
-> 不复制第二份动作名单。两项均为 DSH **165 passed / 1 skipped** 与独立变异证据，**真实桌面/profile
-> 尚未重启加载**。任务书见 [`541r3_dsh_stage_gate.md`](541r3_dsh_stage_gate.md) 与
-> [`541i_public_interface_allowlist.md`](541i_public_interface_allowlist.md)。
+> 状态：**运行时切片已实施并完成隔离实载（2026-11-16）**。R1 版本化 RunManifest、R2 重算 guard、R4
+> `--strict-partial` 已随 `cdff88b` 落地；R3 DSH pre-execute 与公开接口 tool-gap 已实现。R3 需要显式
+> out、同目录/callId 的 initial/partial Session receipt，预算为 30 分钟/60 model steps；任何欠账批次
+> 都阻止换 out 绕过。541R4 修正真实 DSH 对被拒调用也写 error `tool/result` 的记账：error 只清 pending，
+> 不增加 dive/检查点。公开接口复用唯一 protocol 目录的 `--read-only` 闸并增加 tool-gap，不复制第二份
+> 动作名单。DSH **169 passed / 1 skipped**；隔离 DSH 0.2.2-rc.3 已验证文件收据不解锁、initial/partial
+> 解锁、跨目录欠账与 tool-gap，桌面 profile **未部署**。任务书见 [`541r3_dsh_stage_gate.md`](541r3_dsh_stage_gate.md)、
+> [`541i_public_interface_allowlist.md`](541i_public_interface_allowlist.md) 与
+> [`541r4_dsh_error_result_fold.md`](541r4_dsh_error_result_fold.md)。
 
 | 项 | 状态 | 落点 |
 |---|---|---|
 | R1 版本化 RunManifest 与语义 diff | 已实施（shared 切片，未接 CLI） | `src/boardwise/core/runmanifest.py`；`tests/test_541_run_manifest.py` |
 | R2 `--strict` 重算 guard | 已实施（opt-in，默认行为不变） | `src/boardwise/cli.py`；`commands/review.py`；`tests/test_541_strict_reuse.py` |
-| R3 DSH pre-execute 硬闸 | 工作树已实现；真实 DSH 加载未验 | `dsh-plugin/src/review-stage-gate.ts`；`tests/review-stage-gate.spec.ts` |
+| R3 DSH pre-execute 硬闸 + R4 error fold | 已实现；隔离真实 DSH 已验，桌面未部署 | `dsh-plugin/src/review-stage-gate.ts`；`tests/review-stage-gate.spec.ts`；`.tmp_541_live/session-4-events.jsonl` |
 | R4 `--strict-partial` 四档披露 | 已实施（opt-in 披露闸） | `engines/evidence.py`；`tests/test_541_partial_categories.py` |
-| 公开接口 allowlist / tool-gap | 工作树已实现；任意宿主文件解析不覆盖 | `dsh-plugin/src/shared-tools.ts`；`tests/tools.spec.ts`；Python `bridge/protocol.py` 唯一目录 |
+| 公开接口 allowlist / tool-gap | 已实现；任意宿主文件解析不覆盖 | `dsh-plugin/src/shared-tools.ts`；`tests/tools.spec.ts`；Python `bridge/protocol.py` 唯一目录 |
 
 > SOP 的 [`docs/review-sop.md`](../docs/review-sop.md) §3.0a 仍是纪律：Python CLI 的默认
 > `checkup` / `finalize` 不变；R3 只改变受管 DSH Session 的下一项深挖，且不取消已派发命令。

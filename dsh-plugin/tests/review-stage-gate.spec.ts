@@ -227,6 +227,29 @@ function result(
   )
 }
 
+/**
+ * A legacy Session log's `tool/result`: the message carries **no** `isError`
+ * field at all, as every log written before 541R4 did.
+ */
+function legacyResult(
+  session: InstanceType<typeof Session>,
+  options: { callId: string; step: number },
+): void {
+  const message: Record<string, unknown> = {
+    ...createToolResultMessage({
+      callId: options.callId as never,
+      content: [{ type: 'text', text: 'done' }],
+      isError: false,
+    }),
+  }
+  delete message['isError']
+  session.append(
+    'tool/result',
+    { turn: 1, step: options.step, message: message as never },
+    { surfaceOp: 'append' },
+  )
+}
+
 /** One completed managed deep dive for `out`. */
 function dive(
   session: InstanceType<typeof Session>,
@@ -605,6 +628,112 @@ describe('541R3 budgets run from the current checkpoint', () => {
     // finalize that records nothing leaves the stale one as the baseline.
     finalize(session, out, { callId: 'call-fin-seg-3', step: 140, stage: 'partial', record: false })
     expectDenied(await decide(h.gate(ALWAYS_NOW), session, 'boardwise_checkup', { out }), /no \*current\* stage checkpoint/)
+  })
+})
+
+describe('541R4 an errored tool/result books nothing', () => {
+  it('does not let a refused managed call open a second batch or a second dive', async () => {
+    const h = await harness()
+    const session = h.session('session-stage-error-refused')
+    const a = tempDir('boardwise-stage-err-a-')
+    const b = tempDir('boardwise-stage-err-b-')
+    dive(session, a, { callId: 'call-dive-err-a', step: 1 })
+    // The real DSH 0.2.2-rc.3 shape of a pre-execute refusal: the host booked
+    // the call, the gate denied it, and the host still answered it with a
+    // `tool/result` carrying `isError: true`.
+    call(session, { callId: 'call-refused-err', name: 'boardwise_review_evidence', args: { out: a }, step: 2 })
+    result(session, { callId: 'call-refused-err', step: 2, isError: true })
+
+    const state = h.stageState(session)
+    expect(Object.keys(state?.batches ?? {})).toEqual([directoryKeyOf(a)])
+    expect(state?.batches[directoryKeyOf(a)]?.diveCount).toBe(1)
+    expect(state?.pending).toEqual({})
+    // The error result only moved the step clock.
+    expect(state?.lastStep).toBe(2)
+
+    // … and the refusal for another directory still reports one dive, not two.
+    const refused = await decide(h.chain, session, 'boardwise_checkup', { out: b })
+    expectDenied(refused, /no \*current\* stage checkpoint/)
+    const reason = refused.decision.kind === 'deny' ? refused.decision.reason : ''
+    expect(reason).toContain(`${JSON.stringify(a)} has 1 completed deep dive(s)`)
+    expect(reason).not.toContain('2 completed deep dive(s)')
+    // B was never created by the refused call.
+    expect(Object.keys(h.stageState(session)?.batches ?? {})).toEqual([directoryKeyOf(a)])
+  })
+
+  it('does not let an errored staged finalize start a checkpoint or reset the budget', async () => {
+    const h = await harness()
+    const session = h.session('session-stage-error-finalize')
+    const out = tempDir('boardwise-stage-err-fin-')
+    dive(session, out, { callId: 'call-dive-err-fin', step: 1 })
+    finalize(session, out, { callId: 'call-fin-err-c1', step: 2, stage: 'initial' })
+    otherCall(session, 2 + REVIEW_STAGE_STEP_LIMIT)
+    expectDenied(await decide(h.gate(ALWAYS_NOW), session, 'boardwise_checkup', { out }), /model steps behind/)
+
+    // A staged finalize that fails at the CLI writes no receipt, and its
+    // `isError: true` result must not become a checkpoint either: the old
+    // receipt stays the baseline, so this error cannot reset the segment.
+    const failedAt = 2 + REVIEW_STAGE_STEP_LIMIT + 18
+    call(session, {
+      callId: 'call-fin-err-failed',
+      name: REVIEW_FINALIZE_TOOL,
+      args: { out, stage: 'partial' },
+      step: failedAt,
+    })
+    result(session, { callId: 'call-fin-err-failed', step: failedAt, isError: true })
+
+    const batch = h.stageState(session)?.batches[directoryKeyOf(out)]
+    expect(batch?.checkpoints.length).toBe(1)
+    expect(batch?.checkpoints.at(-1)?.callId).toBe('call-fin-err-c1')
+    expect(batch?.diveCount).toBe(1)
+    expect(h.stageState(session)?.pending).toEqual({})
+    expect(h.stageState(session)?.lastStep).toBe(failedAt)
+
+    const stillDenied = await decide(h.gate(ALWAYS_NOW), session, 'boardwise_checkup', { out })
+    expectDenied(stillDenied, /model steps behind/)
+    const reason = stillDenied.decision.kind === 'deny' ? stillDenied.decision.reason : ''
+    // Measured from the surviving checkpoint, not from the errored finalize.
+    expect(reason).toContain(`${failedAt - 2} model steps behind`)
+  })
+
+  it('still books a completed exit 3 result and a legacy result without isError', async () => {
+    const h = await harness()
+    const session = h.session('session-stage-error-legacy')
+    const protocol = tempDir('boardwise-stage-err-exit-')
+    const legacy = tempDir('boardwise-stage-err-legacy-')
+    // A boardwise checkup answering protocol-level exit 3 is a completed result:
+    // DSH marks it `isError: false`, so it is a dive like any other.
+    call(session, { callId: 'call-dive-exit3', name: 'boardwise_checkup', args: { out: protocol }, step: 1 })
+    result(session, { callId: 'call-dive-exit3', step: 1, isError: false })
+    // An older log recorded its result message with no `isError` field at all.
+    call(session, { callId: 'call-dive-legacy', name: 'boardwise_review_evidence', args: { out: legacy }, step: 2 })
+    legacyResult(session, { callId: 'call-dive-legacy', step: 2 })
+
+    const state = h.stageState(session)
+    expect(state?.batches[directoryKeyOf(protocol)]?.diveCount).toBe(1)
+    expect(state?.batches[directoryKeyOf(legacy)]?.diveCount).toBe(1)
+    expect(state?.pending).toEqual({})
+    expectDenied(await decide(h.chain, session, 'boardwise_checkup', { out: protocol }), /no \*current\* stage checkpoint/)
+  })
+
+  it('clears the pending call on an error, so a repeated result books nothing twice', async () => {
+    const h = await harness()
+    const session = h.session('session-stage-error-repeat')
+    const a = tempDir('boardwise-stage-err-repeat-')
+    call(session, { callId: 'call-dive-err-repeat', name: 'boardwise_checkup', args: { out: a }, step: 1 })
+    result(session, { callId: 'call-dive-err-repeat', step: 1, isError: true })
+    expect(h.stageState(session)?.pending).toEqual({})
+    expect(h.stageState(session)?.batches).toEqual({})
+    // A later non-error result for the same callId finds no pending call: the
+    // errored call was settled, not queued for a second booking.
+    result(session, { callId: 'call-dive-err-repeat', step: 1 })
+    expect(h.stageState(session)?.batches).toEqual({})
+
+    // The same holds for a completed dive: a repeated result adds no dive.
+    dive(session, a, { callId: 'call-dive-ok-repeat', step: 2 })
+    expect(h.stageState(session)?.batches[directoryKeyOf(a)]?.diveCount).toBe(1)
+    result(session, { callId: 'call-dive-ok-repeat', step: 2 })
+    expect(h.stageState(session)?.batches[directoryKeyOf(a)]?.diveCount).toBe(1)
   })
 })
 

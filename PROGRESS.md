@@ -1240,3 +1240,44 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 2026-11-10 **549 真机/回滚验收（EDA 4.1.93，`test V4`）**：新 Connector 以 `update-connector --no-reload` 写入、用户经宿主菜单激活；独立 `BOARDWISE_HOME` 下首次 `bridge pair EQE5-W2YC` 成功，审计 `authorizedBy=pair.authorize`（编号只留掩码 `EQ****YC`）；`sys.probe`（报 4.1.93）与 `doc.list`（9 文档/5 原理图页/2 PCB）通过；`checkup --project "test V4"` 取到真实模型 **77 components / 225 nets**（Board1 66/205、Board2 11/20），**exit 1 是工程自身 85 项 ERROR**（77 条 pcb-footprint-consistency + 7 条位号重复 + 1 条宿主 Import Changes），不是认证/读取失败，`completion=incomplete`——不据此称板子干净或可投板。隔离 daemon 重启后**未再授权**，旧 token 自动重连（19:41:02）且 `doc.list` 仍完整；隔离审计 `pair-authorize=1 / pairing=1 / re-pairing=0`。随后用原 0.6.0 bundle 以 `--no-reload` 回滚，最终 Connector **0.6.0**、daemon **0.6.1**、两窗口 connected，paired fingerprint `8b82a227` 不变；临时对齐的 package/extension 元数据已逐字节恢复。原 daemon EXE 首次启动报 `Could not create temporary directory` 是临时目录不可写，改用既有可写目录后恢复，与配对无关。证据 `outputs/review/549_real/ACCEPTANCE.md`、`outputs/review/549_real/checkup/`。**状态：本地实现、离线验收及 4.1.93 真机/回滚验收完成，待发布**；4.1.71 仍只有模拟 Origin 证据，未提交/未推送/未 bump/未发布，生产未升级，未做整板验收。此前全量一轮 10611/25/1 xfailed/23 failed/5 errors（非全绿）的说明仍然有效。
 
 - 2026-11-10 **v0.6.1 正式发布**：main 推送 `47713c2`、`8ad625e`、`9ffeb3b`；tag 与 Release `targetCommitish` 均为 `9ffeb3b2850f8391f75700f1f3f37851a4ee4ac2`，`prerelease=false` 且 latest（<https://github.com/XiangyuYue/boardwise/releases/tag/v0.6.1>）。三件附件回读下载并逐字节比对：exe `b748e37d…c0cfe884`、eext `2d493493…5dd76bfc`、tgz `c98ceaef…6791f5f0c`；内嵌 Connector bundle `418c7a023b44d5d5cbc659c8d0e3e26fe8eaca17b2a3b4df4acd4cfac89e05dc`。发布快照：Python **10628 passed / 39 skipped / 1 xfailed**，另有两条已登记 115/116 的 098 基线差异、**0 errors**（不称全量全绿）、Connector **608 passed** + typecheck、DSH **137/1** + typecheck/build、Rust **111 passed / 4 ignored**；冻结 exe 离线审查 **0 ERROR / 1 WARN / 1 INFO**。0.6.1 含 546 同系列版本兼容与 **549 首次配对显式授权**（EDA 4.1.93 的首次配对、重连、checkup 与回滚已验；4.1.71 仍只有模拟证据）。候选货架 `blocklib/parts.json`、review-test-plan、548H 草稿与临时目录**未纳入提交**，不计入本版。
+## 2026-11-16 · 审查线：541、pcb gate 与 #87②⑤ 垂直验收
+
+- **541R4**：真实 DSH 0.2.2-rc.3 对被 pre-execute 拒绝的调用也写 error `tool/result`，fold 已修为只清 pending、不记 dive/checkpoint。主代理变异 3 failed/22 passed 后恢复 25 passed；隔离真实 Session 验证文件收据不解锁、initial/partial 解锁、跨目录欠账与 tool-gap，桌面 profile 未部署。
+- **038Y5M/N**：PCB1/2 在 test V4 均为严格 DRC 1 错、RED/exit 2；第三板天然 DRC=0 后新鲜 checkup 真跑，因工程自身 26 ERROR、缺手册/分诊与 boardsEmpty 得 INCOMPLETE/exit 3。DRC 清洁后的在线 checkup 编排已补齐；V3 与天然 GREEN 仍待授权样本。
+- **#87⑤**：`sch.readback` 新增可选 value/mpn/valueSource/mpnSource，旧 connector 缺键仍走归档。主代理 node 22、Python 41+13+60，变异先红后恢复；热更后 P43 三器件与公开 ATTR 双源一致，11 netflag 为 null。
+- **#87②**：`export.render` 新增确证 PCB 的 viewport PNG 分支，`capabilities.pcbRenderViewport` 让旧 connector 零 render，liveevidence 只接受 viewport grade。F1 主代理 74、F2 Python 242、connector 809，独立变异均先红后恢复。直接 render 两板目检、SVG 具名拒绝；默认全部页/板 `review-evidence` exit0/capture.ok=true，`pcbImage.status=ok` 三板、livePcb ok、P43 焦点恢复，delivery 仅 datasheets=unavailable。工作树实现、未发布；V3/生产非空板未覆盖，Issue 待提出人复验不关单。
+- 定稿文档与 doc-claims 已同步；最终 doc-claims + 537C 联合 **186 passed**，两 SKILL 副本一致。所有改动未提交，绘制线未提交 hunk 未混入审查线验收。
+
+## 2026-11-16 · 第四项：真实 eprj3 多文件与兼容边界
+
+- 宿主升级到 **4.1.100** 后，test V4 与 connector 0.6.1 正常在线。真实目录
+  `E:/LC Project/test V4` 含 3 个 `.epcb2` 与 7 个 `.esch2`。
+- 038Z2 离线/在线均 exit 1、schema7；三板字段完全相同，各 35 checks、findings 22/20/9，
+  自有 findings 各 60 条多重集一致，archivePcb ok/errors 一致。真实多文件正路径成立；
+  无库副本，重复 PCB/分歧库/相同库 guard 未在真实文件上触发，17 个合成测试仅补充。
+- 038Z3 共 2603 条 `yAxisDirection` 全为 up，NO_CONNECT=0，SCH_PAGE 本体内缺省标记的
+  坐标记录=0；真实 NC 与缺省路径未覆盖。038Z4 逐板 components 全为 0，真实非空多板未覆盖。
+  未修改设计、未放置器件、未用其它工程替代。
+- 证据：`outputs/review/038z2/differential.json`、`038z3/record-scan.json`、
+  `038z4/board-scan.json`。任务书 `tasks/038z2_v4_folder_live.md`、`038z3_nc_yaxis_live.md`、
+  `tasks/038z4_nonempty_multiboard_live.md`。
+
+## 2026-11-16 · 本机全量回归与 V3 补验
+
+- 全量 Python **154 failed / 41 errors / 11331 passed / 26 skipped / 2 xfailed**。本批责任 5 条已修：
+  `contracts/cli/v1.json` 由官方生成器重建，540c 聚焦 43 passed；SOP 3.0a 补齐墙钟、私有 API、
+  全局去重措辞，review_stage_delivery 10 passed、doc-claims 52 passed。其余失败按 owner 复核，
+  未重跑全量、未宣称全绿。Connector 809、DSH 169/1、Rust 177/4 ignored 均通过。
+- DSH 桌面安装被 minimumReleaseAge 供应链闸阻断，已从备份恢复 profile；旧插件未变，未绕过检查，
+  桌面验收仍未完成（`tasks/541r5_desktop_deploy.md`）。
+- 038Y5O：V3 `test` 的宿主实测仍为 **4.1.100**，PCB1/2 各严格 DRC errors=1，gate RED、
+  checkup 未运行，Start Page 已恢复。只完成 `.eprj2` 路径验证，不是 3.2.x 宿主验收，也没有 GREEN。
+  后续需要清洁授权测试板与 V3 宿主环境（`outputs/review/038y5o/`）。
+
+## 2026-11-16 · 验收边界裁定
+
+- 岳确认没有满足当前严格审查规则的天然 GREEN PCB，成熟产品也可能存在若干问题。天然 GREEN
+  不再列为本机必做；GREEN 正向编排继续由 fake/合成测试支撑，真实 RED/INCOMPLETE 如实保留，
+  不为凑通过放宽规则。
+- 身边设备均已升级 V4，V3 宿主验收转为等待其他用户反馈；`.eprj2` 在 4.1.100 上的读数不冒充
+  3.2.x 宿主兼容，仍标未验证。

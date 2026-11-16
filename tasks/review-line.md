@@ -84,10 +84,12 @@ owner=审查线；绘制线独立开发、互不改文件，主仓及绘制线�
   `tasks/038y4_silk_under_body.md`、`tasks/038y5_pcb_gate.md`（autofix 另见
   `tasks/038y6_silk_autofix.md`，**暂缓**）。联合读数 **1505 passed / 2 skipped**（不是全量）；
   两条既有归档 4 板实跑 WARN=0、近似披露 INFO 4，**不能写成所有板干净**。
-  038Y5L 已完成 test V4 在线验收：活动 P45 时 exit 3 且零 DRC/checkup；PCB1 严格 DRC
-  `checked=true / errors=1 / truncated=false`，gate exit **2 RED** 并按合同不继续 checkup；
-  旧目录复用 exit 3，焦点已恢复。V3、天然 GREEN 和 DRC 清洁后的在线 checkup 仍未覆盖。
-  证据 `outputs/review/038y5l/`，任务书 `tasks/038y5l_pcb_gate_live.md`。
+  038Y5L/M/N 已完成 test V4 在线验收：活动页拒绝、PCB1/2 严格 DRC 各 1 错得 RED 且不继续
+  checkup；第三板天然 DRC=0 后新鲜 checkup 真跑，因工程自身 26 ERROR、缺手册/分诊与
+  boardsEmpty 得 INCOMPLETE/exit 3，不是 GREEN。DRC 清洁后的在线 checkup 已补齐；V3 与天然
+  GREEN 仍待合适授权样本。证据 `outputs/review/038y5l/`、`038y5m/`、`038y5n/`，任务书
+  `tasks/038y5l_pcb_gate_live.md`、`tasks/038y5m_pcb_gate_checkup_live.md`、
+  `tasks/038y5n_pcb_gate_third_live.md`。
 - **038Z1 test V4 真实三板骨架对拍（2026-11-15）**：两次 117295 B 导出哈希不同，
   只报语义对拍；离线/在线均 exit 1，57 条自有 findings 一致，三板各 35 checks、findings
   20/20/9，逐板字段与 crossView 一致。三板全 0 器件、铜层 2/0/0，不声称真实非空多板或
@@ -99,13 +101,44 @@ owner=审查线；绘制线独立开发、互不改文件，主仓及绘制线�
 - **527C2 跨视图几何分类与全部位号（已随 `cdff88b` 提交）**：合同见
   `tasks/527c2_cross_view_geometry.md`。lonely-pin 的 note 按几何分「没画线 / 网名不同 /
   落位嫌疑」并点名全部位号；`min_pins` 仍为 3，哪一侧电气结论更有权威不变。
-- **541 运行时闸（R1/R2/R4 strict 已随 `cdff88b` 提交；R3/I 工作树实现）**：
-  R3 `dsh-plugin/src/review-stage-gate.ts` 已提供显式 out、receipt+callId 检查点、跨目录欠账拒绝和
+- **541 运行时闸（R1/R2/R4 strict 已随 `cdff88b`；R3/I/R4 隔离实载）**：
+  R3 `dsh-plugin/src/review-stage-gate.ts` 提供显式 out、receipt+callId 检查点、跨目录欠账拒绝和
   30 分钟/60 model steps 预算；541I 复用 protocol 唯一目录的 `--read-only` 并补 tool-gap。
-  联合 DSH **165 passed / 1 skipped**，主代理四项独立变异均先红且哈希恢复；Python 目录闸
-  **36 passed**。真实 DSH 桌面/profile 未重启加载，任意宿主文件解析不覆盖。任务书
-  `tasks/541r3_dsh_stage_gate.md`、`tasks/541i_public_interface_allowlist.md`。
+  541R4 让 error `tool/result` 只清 pending、不记深挖/检查点。联合 DSH **169 passed / 1 skipped**，
+  主代理独立变异均先红且哈希恢复；Python 目录闸 **36 passed**。隔离 DSH 0.2.2-rc.3 已验文件收据
+  不解锁、initial/partial 解锁、跨目录欠账与 tool-gap；桌面 profile 未部署，任意宿主文件解析不覆盖。
+  任务书 `tasks/541r3_dsh_stage_gate.md`、`tasks/541i_public_interface_allowlist.md`、
+  `tasks/541r4_dsh_error_result_fold.md`，实载 `.tmp_541_live/session-4-events.jsonl`。
 - 以上批次的最终全量 **9893 passed / 25 skipped / 14 failed / 1 warning**。
   其中 12 条是工作树既有货架数据漂移，2 条是既有 Windows 环境失败，不宣称全量全绿；
   connector、DSH、Rust 均通过。
 - 新版宿主能力探针仍等明确的 4.1.94+ 测试环境和授权非空 PCB。
+
+- **#87②⑤ 工作树实现与 test V4 在线验收（2026-11-16，未发布）**：087E `sch.readback`
+  可选 value/mpn 与来源已实现，P43 三器件与公开 ATTR 双源一致、11 netflag 为 null；087F1/F2
+  PCB viewport、`capabilities.pcbRenderViewport` 与 liveevidence 已接入，旧 connector 缺 flag
+  零 render。主代理 F1 **74 passed**、F2 Python **242 passed**、connector **809 passed**，
+  独立变异均先红后恢复；直接 render 两板目检、SVG 具名拒绝；`review-evidence` exit0/
+  capture.ok=true，`pcbImage.status=ok` 三板、livePcb ok、P43 焦点恢复，delivery 仅
+  datasheets=unavailable。V3/生产非空板未覆盖，#87 待提出人复验不关单。任务书
+  `tasks/087e_readback_value_mpn.md`、`tasks/087f1_pcb_viewport_render.md`、
+  `tasks/087f2_pcb_evidence_integration.md`、`tasks/087f3_pcb_visual_docs_live.md`。
+
+- **038Z2–Z4 真实 eprj3 兼容核查（2026-11-16，EDA 4.1.100）**：真实目录
+  `E:/LC Project/test V4` 的 3 个 `.epcb2` 与 7 个 `.esch2` 只读合流；离线/在线均 exit 1、
+  schema7，三板字段完全相同，60 条 findings 多重集一致，archivePcb ok/errors 一致。
+  真实多文件正路径成立，但三块文件没有库副本，重复 PCB/分歧库/相同库三种 guard 未在真实文件
+  上触发；17 个合成测试仅补充，不冒充真实负例。7 页 2603 条 `yAxisDirection` 全为 up，
+  NO_CONNECT=0，SCH_PAGE 本体内缺省标记的坐标记录=0；NC 与缺省路径仍未覆盖。逐板
+  components 全为 0，真实非空多板仍未覆盖。证据 `outputs/review/038z2/differential.json`、
+  `038z3/record-scan.json`、`038z4/board-scan.json`。
+
+- **038Y5O V3 `test` 在线 gate（2026-11-16）**：宿主实测仍为 4.1.100，PCB1/2 各严格
+  DRC errors=1 / items=1 / truncated=false，gate RED / exit 2，checkup 均未运行；Start Page
+  已恢复。只完成 `.eprj2` 路径验证，不是 3.2.x 宿主验收，也没有 GREEN。后续需清洁授权
+  测试板与 V3 宿主环境。证据 `outputs/review/038y5o/`。
+
+- **天然 GREEN 与 V3 环境裁定（岳，2026-11-16）**：没有满足当前严格审查规则的天然
+  GREEN PCB，成熟产品也可能存在若干问题；天然 GREEN 不再列为本机必做，不为凑通过放宽规则。
+  GREEN 正向编排继续由既有 fake/合成测试支撑，真实 RED/INCOMPLETE 如实保留。身边设备均为
+  V4，V3 宿主验收转为等待其他用户反馈，仍不宣称 V3 已验证。

@@ -39,7 +39,9 @@ disposer 仍走原同步路径，不会被误 await 成注销。这是包级兼�
 首次深挖后，下一项 checkup/review_evidence 先要求同目录、同 callId 的
 `boardwise_review_finalize(stage=initial|partial)` Session receipt；其它未交付批次也不能靠换 out
 绕过。每段预算为 30 分钟或 60 个 model steps，到线拒绝下一项深挖，新的阶段收据开启下一段；
-review_read/finalize/doctor 始终可收尾，已派发命令不被取消。真实 DSH 桌面加载另需独立验收。
+review_read/finalize/doctor 始终可收尾，已派发命令不被取消。541R4 起，真实 DSH 以 error `tool/result`
+回答 pre-execute 拒绝时只清 pending，不把拒绝计成深挖或检查点。隔离 DSH 0.2.2-rc.3 已验证文件收据
+不解锁、initial/partial 解锁、跨目录欠账与 tool-gap（169 passed / 1 skipped）；桌面 profile 未部署。
 
 ## 工具面
 
@@ -342,6 +344,7 @@ npm publish --dry-run           # 只看文件面，不上传
 | `0.2.0-rc.1` | ✔ 全通 | 同一轮实测，输出与 0.1.7-rc.2 **逐字节相同** |
 | `0.2.1-rc.2` | ✔ 桌面版实读 | 2026-10-24 桌面 profile 实测：`plugin why` 报 1 个版本、`--dump-config` 有 `tool-boardwise`、`boardwise_doctor` 真调 exit 1（daemon 在线、结果非失败）、`boardwise_checkup` 真调 exit 3 且 report.json / report.md / architecture.md / design-intent.md 四件产物均 `[present]` |
 | `0.2.2-rc.1` | ✔ 包级与隔离 CLI profile 通过 | 2026-11-06 同版依赖 typecheck/build + **137 passed / 1 skipped**；隔离 `bw022` 的 `plugin why` 报 1 个版本、`--dump-config` 含 `tool-boardwise`；DSH NEXT 2.0.22 桌面应用尚未实测 |
+| `0.2.2-rc.3` | ✔ 隔离真实 Session 两阶段通过 | 2026-11-16 `boardwise-clean` 同哈希插件、真实 projection/listener：文件收据不解锁、initial/partial 解锁、跨目录欠账与 tool-gap；**169 passed / 1 skipped**；桌面 profile 未部署 |
 
 原始日志与结论：`outputs/066_dsh_matrix/VERDICT.md`（零 FAIL 格；`0.2.1-rc.2`
 一行是 2026-10-24 在桌面 profile 上的补读，不是矩阵里那一轮的产物）。
@@ -363,7 +366,7 @@ npm publish --dry-run           # 只看文件面，不上传
 
 ```sh
 npm run typecheck     # tsc --noEmit（src 为唯一被检查的源码）
-npm test              # vitest run tests —— 138 例（137 过 1 跳过；mock spawn，不起真进程）
+npm test              # vitest run tests —— 170 例（169 过 1 跳过；mock spawn，不起真进程）
 npm run build         # → lib/
 npm run smoke         # 独立冒烟：import lib/index.js，真起 CLI（见下）
 ```

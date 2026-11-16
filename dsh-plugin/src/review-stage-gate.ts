@@ -13,10 +13,13 @@
  *    separator or in another case is one batch. A managed checkup without an
  *    explicit `out` is refused up front: a temp directory can never be bound to
  *    a checkpoint.
- * 2. **A batch starts at its first *completed* deep dive.** Only a matching
- *    `tool/result` books a dive — a `tool/call` the gate denied never produces a
- *    result, so a refused attempt cannot open a batch (or switch one to another
- *    `out`). A protocol-level exit 1/3 is still a completed review and counts.
+ * 2. **A batch starts at its first *completed* deep dive.** Only a successful
+ *    matching `tool/result` books a dive. A refused attempt cannot open a batch
+ *    (or switch one to another `out`): DSH 0.2.2-rc.3 answers a pre-execute
+ *    denial with a `tool/result` whose `message.isError` is `true` (541R4), so
+ *    the fold settles that pending call without booking anything. A missing
+ *    `isError` is a legacy success. A protocol-level exit 1/3 is still a
+ *    completed review and counts.
  * 3. **The next deep dive in a batch needs a checkpoint.** The checkpoint is
  *    the *Session* pair, never a file: the `boardwiseReviewFinalized` receipt
  *    recorded by 537D3a (its `reviewDir` folds to this batch's key) plus a
@@ -352,6 +355,7 @@ function foldResult(
   callId: string,
   step: number,
   time: number,
+  failed: boolean,
 ): BoardwiseReviewStageState {
   const lastStep = state.lastStep === null ? step : Math.max(state.lastStep, step)
   const booked = state.pending[callId]
@@ -360,6 +364,12 @@ function foldResult(
   }
   const pending: Record<string, ReviewStagePendingCall> = { ...state.pending }
   delete pending[callId]
+
+  // 541R4: a managed call the gate refused is still answered by the host with a
+  // `tool/result` carrying `message.isError: true`. That result advances the
+  // step clock and settles the pending call, but it is neither a completed deep
+  // dive nor a delivery, so it books no dive and no checkpoint.
+  if (failed) return { ...state, lastStep, pending }
 
   // A dive or checkpoint that cannot name its directory cannot be bound to a
   // batch, so it books nothing: the gate refuses such calls up front, and a
@@ -412,7 +422,15 @@ function fold(state: BoardwiseReviewStageState, event: SessionEvent): BoardwiseR
   }
   if (event.type === 'tool/result') {
     const data = event.data
-    return foldResult(state, String(data.message.toolCallId), data.step, event.time)
+    // `isError` is optional on the message: an older Session log without it
+    // is a success, exactly as before this rule existed.
+    return foldResult(
+      state,
+      String(data.message.toolCallId),
+      data.step,
+      event.time,
+      data.message.isError === true,
+    )
   }
   return state
 }

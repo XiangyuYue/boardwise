@@ -171,10 +171,10 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 | `document.current` | 活动文档/标签属于哪个工程 | 与 `doc.list` **不一致**是已知坑（坑 1） |
 | `sys.probe` | 宿主 API 面在位检查 | `params:{"checks":true}` 按生成的名单逐个 `typeof`；`{"checks":{...}}` 显式名单逐名覆盖；`{"call":"<动作>","params":{...}}` 调白名单内四个只读动作（025 批 1，绕坑 8 的加载期目录，probe 专用）；`{"realm":true}` 跑内置常量探针测扩展 realm 能力（PR#82，参数不参与构造、无任意执行面）；权威依据是**真机 probe**，不是类型包声明 |
 | `doc.open` | 打开/切到某个 uuid 的文档 | `{uuid}`；只在**活动工程**内寻址，跨工程找不到（坑 1） |
-| `sch.readback` | 页内器件清单 | 键集合写死：**没有 value、没有 mpn**（坑 3）；527B 起**焦点不是原理图页就 `PAGE_MISMATCH`**（以前会读 PCB 命名空间、返回幻影行或 `TypeError`）。`unreadable` 是**计数**（含宿主留的 null 空槽），`problems` 非空 = 焦点读数不可用、守卫没跑 |
+| `sch.readback` | 页内器件清单 | 087E 起每行**可选**带 `value`/`mpn`/`valueSource`/`mpnSource`（`value` ← `OtherProperty['Value']`，`mpn` 先 `ManufacturerId` 后回退 `OtherProperty` 料号键，空白为 `null`；旧 connector 没有这四个键——缺键才回落到 §3.2 归档配方，坑 3）；527B 起**焦点不是原理图页就 `PAGE_MISMATCH`**（以前会读 PCB 命名空间、返回幻影行或 `TypeError`）。`unreadable` 是**计数**（含宿主留的 null 空槽与失败的 getter），`problems` 非空 = 焦点读数不可用、守卫没跑 |
 | `sch.geometry` | 原始几何 + 实测页面 bbox | `{bboxIds}`；整页只读一次的坐标来源（打标/定位用） |
 | `sch.netlist` | 编辑器自己的网表 | 60 s；**没有** connector 内回退（旧 `getNetlist()` 实测会挂） |
-| `export.render` | 页/选区/工程的 PNG/SVG/PDF | **验收图走这条**；`scope:'selection'` 需 `ids`；多页工程可能回 zip |
+| `export.render` | 页/选区/工程的 PNG/SVG/PDF；PCB 走 viewport 分支（工作树实现，test V4 已在线验收 2026-11-16，未发布） | **验收图走这条**；`scope:'selection'` 需 `ids`；多页工程可能回 zip；PCB 只在 `sys.connector_status.capabilities.pcbRenderViewport===true` 时可用，答 `channel=viewport`/`evidenceGrade=viewport`（png+page only，svg/pdf/selection/project 具名拒绝；`review-evidence` 已跑出 exit 0、`pcbImage.status=ok` 三板 artifact），**viewport≠document render、PNG≠视觉通过**；旧 connector 缺该键 = 零 render 调用（历史 60.01 s schematic-only 边界见坑 23）；V3/生产非空板未覆盖 |
 | `canvas.highlight` | 按 uuid 画框（overlay） | `{uuids, color, clear}`；uuid 解析不上的在 `unresolved`，非空 = 先确认焦点在哪张画布 |
 | `review.mark` | 把审查发现画到焦点原理图页 | `{pageUuid, marks:[{ref,ruleId,severity,text}], clear, focus, markers}`；CLI 封装是 `boardwise review-mark` |
 | `sch.set_component_attribute` | 改器件属性（单键 + 读回） | `applied` 的含义是**回读匹配**；`clobberedOtherKeys` 非空要警觉 |
@@ -202,7 +202,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 |---|---|
 | 1 | 两层焦点可以不一致 |
 | 2 | 删除逐件 ~3.7 s |
-| 3 | sch.readback` 没有 value / 没有 mpn 通道 |
+| 3 | sch.readback` 的 value/mpn 是可选键（旧 connector 缺，缺键走 §3.2 归档配方） |
 | 4 | .eprj2` 只是工程目录册 |
 | 5 | 保存是异步落盘 |
 | 6 | 缓存空帧 |
@@ -222,7 +222,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 | 20 | 让窗口真"后台"只能抢走前台 |
 | 21 | 诊断脚本自己会把现场搞死 |
 | 22 | 多窗口 update-connector 的三档行为与共享存储盲区 |
-| 23 | export.render` 挂死 = 目标页自载入后从未被激活 |
+| 23 | export.render` 挂死 = 目标页自载入后从未被激活；PCB 例外：缺 `pcbRenderViewport` 零 render 调用、有旗标走 viewport（工作树实现，test V4 已在线验收、未发布，见 docs/pits.md 坑 23） |
 | 24 | 导出文件对删除永不重算 |
 | 25 | 036 三条宿主习性（真机实证） |
 | 26 | 037 两条宿主习性（真机实证） |

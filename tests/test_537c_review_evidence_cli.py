@@ -210,6 +210,10 @@ class FakeClient:
             }
         if action == "sch.netlist":
             return {"type": "EasyEDA", "text": "NETLIST SYNTHETIC\n"}
+        if action == "sys.connector_status":
+            # Same reading as the collector's fake: an **old** connector, i.e. no
+            # `capabilities` object, so `liveevidence` calls no PCB render (087F2).
+            return {"present": True, "readStatus": True, "status": {}}
         if action == "export.render":
             return {"format": "image/png", "data": PNG_B64}
         raise AssertionError(f"unexpected action {action!r}")

@@ -134,16 +134,18 @@ AI 该怎么做（「未形成硬约束」那节把话说死）。
 - **Python CLI 的 opt-in 闸**：R2 `checkup --file --strict` 对同基准重算拒绝，R4
   `review finalize --strict-partial` 校验 partial 四档披露；默认 CLI 路径不变。`review-read`
   仍只读报告，不产生新结论。
-- **541R3 DSH pre-execute（工作树实现）**：受管 Session 的 checkup 必须显式 out；一批完成
+- **541R3/I/R4 DSH pre-execute（隔离真实 DSH 已验，桌面未部署）**：受管 Session 的 checkup 必须显式 out；一批完成
   深挖后，下一项 checkup/review_evidence 需要同目录、同 callId 的 initial/partial Session
-  receipt。欠账批次不能靠换 out 绕过。预算是 30 分钟或 60 model steps，新阶段收据开新段；
-  review_read/finalize/doctor 可收尾。联合 DSH **165 passed / 1 skipped**，跨目录、预算等
-  独立变异均先红后恢复。
+  receipt。欠账批次不能靠换 out 绕过。墙钟预算是 30 分钟或 60 model steps，新阶段收据开新段；
+  review_read/finalize/doctor 可收尾。联合 DSH **169 passed / 1 skipped**，跨目录、预算与
+  error-result 独立变异均先红后恢复；541R4 起 error `tool/result` 只清 pending、不记深挖。
 - **公开接口**：受管工具固定 argv，review_read 只有六个公开 section；bridge 由 protocol
   唯一目录在 daemon 前拒绝非 read/未知动作，并附 `tool-gap`。Python 目录闸 **36 passed**，
   DSH 拒绝/普通结果回归已核。
 
-这些证据不等于真实 DSH 桌面/profile 已加载：本批未重启、未部署，独立加载仍是验收项。
+隔离 DSH 0.2.2-rc.3 的两轮实载已验证：文件收据不解锁、initial/partial Session receipt
+解锁、跨目录欠账与 tool-gap；证据 `.tmp_541_live/session-4-events.jsonl`。**桌面 profile
+未部署**，任意宿主文件解析仍未覆盖。
 
 #### 未形成硬约束 / 未覆盖
 
@@ -151,14 +153,15 @@ AI 该怎么做（「未形成硬约束」那节把话说死）。
   仍由各自 harness 决定；
 - **已派发命令**：预算闸只在下一次 pre-execute 拒绝，不设计时器打断当前命令，也不把杀进程
   写成阶段交付；
-- **全局重复计算**：Python CLI 默认路径没有全局去重，只有显式 R2 strict 和受管 DSH R3
+- **全局重复计算**：`review-read` 可复读不等于全局去重。Python CLI 默认路径没有全局去重，只有显式 R2 strict 和受管 DSH R3
   按各自合同拒绝；`review-read` 再稳定也不会让下一次 checkup 自动变便宜；
-- **任意宿主工具**：普通 Read/Grep/Bash 手解析内部文件没有被 allowlist 拦截，仍是覆盖缺口；
+- **任意宿主工具 / 私有 API**：普通 Read/Grep/Bash 手解析内部文件没有被 allowlist 拦截，仍是覆盖缺口；
   bridge 的每个 read 动作也不都有高级工具等价物。
 
 实现与验收边界见 [`../tasks/review-stage-runtime-gates.md`](../tasks/review-stage-runtime-gates.md)、
 [`../tasks/541r3_dsh_stage_gate.md`](../tasks/541r3_dsh_stage_gate.md) 和
-[`../tasks/541i_public_interface_allowlist.md`](../tasks/541i_public_interface_allowlist.md)。
+[`../tasks/541i_public_interface_allowlist.md`](../tasks/541i_public_interface_allowlist.md) 和
+[`../tasks/541r4_dsh_error_result_fold.md`](../tasks/541r4_dsh_error_result_fold.md)。
 
 ### 3.1 审板子＝`boardwise checkup`（首选，一条命令）
 
@@ -626,9 +629,11 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   原理图的导出——"没读到"不是"干净板"，073 起不再退 `0`）。**`review --live` 同一档**（075）：
   在线拿到了模型但模型是空的（0 器件 0 网）也退 `3`，与 `checkup` 的 `coverage.modelEmpty`
   对齐——它与「根本没拿到模型」是两句话，两句话都不许读成通过。
-- **`sch.readback` 没有 value/mpn**（pits #3）：readback 每行只回
-  designator/name/footprint/supplier/…，`Value`/`mpn` 不在键里——**别拿 readback 当复查
-  模型，也别去手解析 `.epru`**。需要按位号核对值/料号时，先按上一段把工程导出成
+- **`sch.readback` 的 value/mpn 是 087E 起的可选键，缺键才走归档**（pits #3）：**新 connector** 的每行
+  可选带 `value` / `mpn` / `valueSource` / `mpnSource`（`value` ← `OtherProperty['Value']`，`mpn` 先
+  `ManufacturerId`、空则回退 `OtherProperty` 的料号键，空白是 `null` 不是空串）——这两项能对上，
+  **就不必导归档**；但**旧 connector 或响应里没有这四个键**时，`Value`/`mpn` 不在键里，
+  **别拿 readback 当复查模型，也别去手解析 `.epru`**。需要按位号核对值/料号时，先按上一段把工程导出成
   `.epro2`（取消加密），再用仓库既有 parser 逐件读这份**只读归档**。把下面这段原样粘进
   `python -`（仓库 checkout 里用 `.venv/Scripts/python.exe -`），并把 `<导出.epro2>`
   换成实际归档路径：
@@ -656,21 +661,47 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   要在线取档先按 `docs/bridge.md` 核返回形态与落盘方式。**钉子**：
   `tests/test_doc_claims.py` 原样提取上面的代码块，在仓库既有匿名 fixture 上真跑
   （C3 值/料号可读、C1 空值仍空）——改字段或改代码而不改文档，测试当场红。
-- **PCB 目视复核没有独立的已验图像通道**（pits #23 的 PCB 边界）：`export.render` 是**一个**
-  动作，原理图页与 PCB 页共用同一份实现（`sch_ManufactureData.getExportDocumentFile`），
-  `scope=page` 时先激活目标页再导出、激活不成立就拒（不导出）——**没有 PCB 专用的第二个出图动作**。
-  **V4 O2 实测（2026-10-31，宿主 4.1.93）**：PCB1 已 `doc.open` + `document.current` 逐字确证激活，
+- **PCB 目视复核：几何与 viewport 两级证据**（pits #23 的 PCB 边界）：`export.render` 是**一个**
+  动作，**没有 PCB 专用的第二个出图动作**。**历史边界（已实测，仍成立）**：V4 O2 实测
+  （2026-10-31，宿主 4.1.93）PCB1 已 `doc.open` + `document.current` 逐字确证激活，
   `export.render(format=png, scope=page, timeoutMs=60000)` 仍**整 60.01 s 不返回**，同会话原理图页
   ~100 ms 返回（V3 同样；首次 10 s 那次是**同一失效**）。⇒ 不是预算太短、也不是焦点没激活：
-  **该 API 只服务原理图，对 PCB 页不适用**，是宿主能力边界。**处置：已停止对 PCB 调用
-  `export.render`**（不给 60 s 盲重试）。`timeoutMs` 的 1–60 s 夹取与 30 s 缺省是**上限设计**（防一个不 settle 的 promise
-  占住动作槽），不是修法 ⇒ 也不把一次 `TIMEOUT` 写成板子的性质。
-  因此 `review-evidence` **不对 PCB 调用该 API**：`pcbImage` 固定为 **`not-applicable`**，
-  `detail` 与 `errors` 写明「schematic-only API 不适用于 PCB，已停止调用」——**不生成伪图、
-  不写 `ok`、也不写成 `failed`**（调用根本不发生，没有失败步骤可记）。原理图 `schematicImage`
-  仍由 `export.render` 采集，**原理图成功不能替代 PCB 成功，反之亦然**。旧记录里那类
-  `pcbImage` 的 `ok` 只证明**采集到一张合规 PNG**（magic 字节对、base64 非空）——**不证明有人看过**；
-  本机现在没有这个通道。PCB 的「看过板子」要两条腿，缺一条就不是看过：
+  **原理图那条文档出图路径（`sch_ManufactureData.getExportDocumentFile`）只服务原理图**，
+  对 PCB 页不适用，是 schematic-only 的宿主能力边界。`timeoutMs` 的 1–60 s 夹取与 30 s 缺省是
+  **上限设计**（防一个不 settle 的 promise 占住动作槽），不是修法 ⇒ 不给 60 s 盲重试，也不把一次
+  `TIMEOUT` 写成板子的性质。
+  **新态：工作树实现、test V4 已在线验收（2026-11-16）、未发布**：connector 0.6.1 的热更实例
+  （`inst-121517427-g280bz4e`）上报 `capabilities.pcbRenderViewport=true`；对**已确认的 PCB 目标**，
+  `export.render` 另走一条 viewport 分支——目标页 `doc.open` 之后经
+  `dmt_SelectControl.getCurrentDocumentInfo` 回读确证（回读不确认就**不取图**、具名报错），
+  再 `zoomToAllPrimitives` + `dmt_EditorControl.getCurrentRenderedAreaImage`，答
+  `channel: 'viewport'` + `evidenceGrade: 'viewport'`；PCB 只收 `format=png` + `scope=page`，
+  `svg`/`pdf`/`selection`/`project` 具名拒绝（`NOT_IMPLEMENTED`，原理图出图口不被触碰）。
+  调用前提是能力旗标 `sys.connector_status.capabilities.pcbRenderViewport === true`；**旧 connector
+  缺这个键（或回 false）就是零 render 调用**——`review-evidence` 只在旗标为 true 时才渲染 PCB。
+  **在线读数（逐字）**：PCB1 196764 B / SHA-256 `5300e566b498…9111f51d878a`、PCB2 93676 B /
+  `6c1a51744bda…d40183d8818c`，均为真实 PNG、`channel=evidenceGrade=viewport`、activated uuid 正确；
+  PCB1 的 SVG exit 1 / `NOT_IMPLEMENTED`（「不支持 PCB 文档导出，未尝试」）；主代理目检
+  `outputs/review/087f3/pcb1.png` 与 `pcb2.png` 分别是 PCB1 板框与 PCB2 空板，**不是缓存错板**。
+  默认全部页/板 `review-evidence` **exit 0**：`capture.ok=true`、
+  `identity.verifiedAgainstReport=true`、`focusRestore=restored(originalUuid=P43)`；
+  `live-evidence.json` 182276 B / `dd0c57cd5083…6678ff03a514`，`pcbImage.status=ok`（三块 PCB 各有
+  viewport PNG artifact 与成功 step，第三板 93750 B / `aa3826a13ad0…00d85f216298`）、
+  `livePcb.status=ok`（三块 readback + geometry）；delivery 仍 **partial**，只因
+  `datasheets=unavailable`——**不写成整板通过**。同批 #87⑤：P43 C24 `100nF/CC0603KRX7R9BB104`、
+  R15 `10k/0603WAF1002T5E`、U9 `STM32G431/STM32G431RBT6`（`valueSource=OtherProperty`、
+  `mpnSource=ManufacturerId`），`sys.get_document_source` 逐件 ATTR 双源一致，11 个 netflag 的
+  value/mpn 全 null。**这不是"已发布"**：实现仍在工作树里，未发版、未进发布件；覆盖面只有
+  test V4 这一套（V3、生产非空板、SVG/PDF 与多板并发**未覆盖**）。`channel=viewport`
+  是**视口级**画面，不是 document render（不是文档级出图、不含 bbox、不是 SVG/PDF，视口新鲜度
+  要自己核），更不是 `export.screenshot` 的缓存帧通道。
+  `pcbImage` 按旗标分**三种诚实写法**：**缺旗标**（旧 connector）→ 固定 **`not-applicable`**，
+  `detail` 与 `errors` 记的是同一条理由（schematic-only API 不适用于 PCB、本次未调用）——**不生成伪图、不写 `ok`、
+  也不写成 `failed`**（调用根本不发生，没有失败步骤可记）；**旗标读不出** → **未核实**（既不是
+  `not-applicable` 也不是 `failed`，同样零调用）；**旗标为 true 且真拿到 PNG** → 状态 `ok` +
+  `evidenceGrade=viewport`，但它只证明**采集到一张合规 PNG**（magic 字节对、base64 非空）——
+  **不证明有人看过**，**PNG≠视觉通过**。原理图 `schematicImage` 仍由 `export.render` 的文档出图
+  采集，**原理图成功不能替代 PCB 成功，反之亦然**。PCB 的「看过板子」要两条腿，缺一条就不是看过：
   ① **只读几何**（必做）：参数名核对过的固定命令是
   `boardwise bridge call --action pcb.readback --params '{"includePrimitives": true}'`
   （`pcb.readback` 回 `{kind, components[], componentCount, primitives[]}`：位号/封装/坐标/层，
@@ -678,10 +709,11 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   `boardwise bridge call --action pcb.geometry --params '{"bboxIds": ["<primitiveId>"]}'`
   （`pcb.geometry` 给实测包围盒，读不出的 id 点名在 `meta.unreadable`）。它们全是**数字**，用来做离线/自绘
   **几何复核**（间距、越界、丝印压焊盘）。
-  ② **图**（才叫「目视」）：本机没有 PCB 位图通道，所以一份 live 版图**拿不到**。别把
+  ② **图**（才叫「目视」）：旧 connector 上本机**没有** PCB 位图通道，一份 live 版图拿不到；
+  工作树这条 viewport 分支（旗标为 true 才走）在 test V4 上已在线出图。两种情况都别把
   `pcb.readback` / `pcb.geometry` / 归档 PCB 审查 / 离线几何 SVG 写成 live 位图或
-  `pcbImage: ok`——它们是**不同通道**。报告里这一项写 `not-applicable`（附上面的理由）；
-  旧写法 `pcbImage: missing` / `visual: missing` 仍可用来表示「本次没有图」，也可写成
+  `pcbImage: ok`——它们是**不同通道**。没图时报告写 `not-applicable`（缺旗标）或
+  旧写法 `pcbImage: missing` / `visual: missing`（本次没有图），也可写成
   **人工待办**并注明「PCB 图未取到」；若用编辑器外部截图人工看过，注明那是人工/外部证据，
   仍不填进 `pcbImage`。
   **`pcb.readback` 回 `ok:true` / `componentCount:N` 只说「这几件被读到了」**：把它写成

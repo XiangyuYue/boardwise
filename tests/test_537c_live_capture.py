@@ -100,6 +100,7 @@ ALLOWED_ACTIONS = {
     "pcb.readback",
     "pcb.geometry",
     "export.render",
+    "sys.connector_status",
 }
 READ_ACTIONS = {"sch.readback", "sch.netlist", "pcb.readback", "pcb.geometry", "export.render"}
 
@@ -243,6 +244,11 @@ class FakeClient:
                     "measured": len(requested),
                 },
             }
+        if action == "sys.connector_status":
+            # An **old** connector: the action answers, but no `capabilities`
+            # object is on it. 087F2 reads that as「no PCB viewport capability」
+            # and never calls `export.render` for a PCB.
+            return {"present": True, "readStatus": True, "status": {}}
         if action == "export.render":
             return {"format": "image/png", "data": PNG_B64}
         raise AssertionError(f"unexpected action {action!r}")
@@ -1208,4 +1214,380 @@ def test_the_collector_has_no_shell_and_no_client_lifecycle(tmp_path):
     capture, _ = collect(client, tmp_path)
     assert client.close_calls == 0
     assert {call["action"] for call in client.calls} <= ALLOWED_ACTIONS
+
+
+# ---------------------------------------------------------------------------
+# 9. the PCB viewport capability gate (087F2)
+# ---------------------------------------------------------------------------
+
+#: What a connector with `capabilities.pcbRenderViewport: true` answers for a
+#: PCB render (087F1): the two markers are what make it a *viewport* and not a
+#: document render.
+VIEWPORT_ANSWER = {
+    "format": "image/png",
+    "data": PNG_B64,
+    "scope": "page",
+    "channel": "viewport",
+    "evidenceGrade": "viewport",
+}
+
+
+def with_capability(flag=True):
+    return {
+        "present": True,
+        "readStatus": True,
+        "status": {},
+        "capabilities": {"pcbRenderViewport": flag},
+    }
+
+
+def renders_by_document(bad_pcb=None):
+    """A render handler that answers schematic pages normally and can put a chosen
+    (wrong) payload in front of the PCB call."""
+
+    def handler(_client, params):
+        is_pcb = str(params.get("pageUuid") or "").startswith("b")
+        if is_pcb and bad_pcb is not None:
+            return bad_pcb
+        answer = {"format": "image/png", "data": PNG_B64}
+        if is_pcb:
+            answer.update({
+                "scope": "page",
+                "channel": "viewport",
+                "evidenceGrade": "viewport",
+            })
+        return answer
+
+    return handler
+
+
+def pcb_render_calls(client):
+    return [
+        call for call in calls_named(client, "export.render")
+        if str(call["params"].get("pageUuid") or "").startswith("b")
+    ]
+
+
+def test_a_connector_with_the_viewport_flag_gets_a_pcb_png_and_an_honest_grade(tmp_path):
+    """087F2: the gate is the connector's own flag. With `true` the focused PCB is
+    rendered through 087F1's viewport branch, the file lands under its own name,
+    the artifact carries the provenance, and the row says viewport — not document
+    render. No schematic picture is ever counted as a PCB one."""
+    client = FakeClient(
+        make_listing(),
+        overrides={
+            "sys.connector_status": with_capability(),
+            "export.render": renders_by_document(),
+        },
+    )
+
+    capture, out_dir = collect(client, tmp_path)
+
+    assert capture["ok"] is True
+    pcb_image = capture["channels"]["pcbImage"]
+    assert pcb_image["status"] == "ok"
+    assert [step["action"] for step in pcb_image["steps"]] == ["export.render"]
+    assert [step["documentUuid"] for step in pcb_image["steps"]] == ["b1"]
+    assert "viewport" in pcb_image["detail"]
+    assert "document render" in pcb_image["detail"]
+
+    assert len(pcb_image["artifacts"]) == 1
+    artifact = pcb_image["artifacts"][0]
+    assert artifact["channel"] == "pcbImage"
+    assert artifact["documentUuid"] == "b1"
+    assert artifact["page"] == "B1"
+    assert artifact["renderChannel"] == "viewport"
+    assert artifact["evidenceGrade"] == "viewport"
+    assert artifact["file"] == "live-pcb-B1-b1.png"
+    blob = (out_dir / artifact["file"]).read_bytes()
+    assert blob == PNG_BYTES
+    assert artifact["bytes"] == len(blob)
+    assert artifact["sha256"] == hashlib.sha256(blob).hexdigest()
+
+    # Attribution: the schematic PNGs stay theirs and none is in the PCB row.
+    sch_files = {
+        row["file"] for row in capture["channels"]["schematicImage"]["artifacts"]
+    }
+    assert len(sch_files) == 2
+    assert all(name.startswith("live-sch-") for name in sch_files)
+    assert artifact["file"] not in sch_files
+    assert [
+        row["file"] for row in capture["artifacts"] if row["channel"] == "pcbImage"
+    ] == [artifact["file"]]
+
+    # The PCB call is the documented one: png + page scope + the same 10 s leash.
+    pcb_calls = pcb_render_calls(client)
+    assert len(pcb_calls) == 1
+    assert pcb_calls[0]["params"] == {
+        "format": "png",
+        "scope": "page",
+        "pageUuid": "b1",
+        "fileName": "live-pcb-B1-b1.png",
+        "timeoutMs": 10000,
+    }
+    assert len(calls_named(client, "export.render")) == 3, "2 schematic pages + 1 PCB"
+
+    # The capability is a host-level reading: one step, no document, and not a
+    # step of the board's channel.
+    probes = [
+        step for step in capture["steps"] if step["action"] == "sys.connector_status"
+    ]
+    assert len(probes) == 1
+    assert probes[0]["documentUuid"] == ""
+    assert probes[0]["status"] == "ok"
+    assert len(calls_named(client, "sys.connector_status")) == 1
     assert_steps_well_formed(capture)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(
+            {"present": True, "readStatus": True, "status": {}},
+            id="no-capabilities-key",
+        ),
+        pytest.param(with_capability(False), id="flag-false"),
+        pytest.param(
+            {"present": True, "readStatus": True, "status": {}, "capabilities": {}},
+            id="flag-missing",
+        ),
+    ],
+)
+def test_a_connector_without_the_flag_never_renders_a_pcb(tmp_path, answer):
+    """The old-connector control: no flag means **zero** `export.render` calls for
+    a PCB — not one with a 10 s leash, not one with a longer one. The row keeps
+    537C4's reading: `not-applicable` plus the recorded host limit."""
+    client = FakeClient(make_listing(), overrides={"sys.connector_status": answer})
+
+    capture, out_dir = collect(client, tmp_path)
+
+    assert not pcb_render_calls(client), (
+        "an unadvertised capability is never probed by rendering"
+    )
+    assert len(calls_named(client, "export.render")) == 2, "only the schematic pages"
+
+    pcb_image = capture["channels"]["pcbImage"]
+    assert pcb_image["status"] == "not-applicable"
+    assert pcb_image["steps"] == []
+    assert pcb_image["artifacts"] == []
+    assert pcb_image["errors"] == [PCB_IMAGE_LIMIT]
+    assert not list(out_dir.glob("live-pcb-*"))
+    assert capture["ok"] is True, "an old connector is still a complete capture"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(
+            FakeBridgeError("UNKNOWN_ACTION", "sys.connector_status is not registered"),
+            id="status-call-failed",
+        ),
+        pytest.param("not a status report", id="answer-is-not-an-object"),
+        pytest.param(with_capability("true"), id="flag-is-a-string"),
+        pytest.param(
+            {"present": True, "status": {}, "capabilities": "yes"},
+            id="capabilities-not-an-object",
+        ),
+    ],
+)
+def test_an_unreadable_capability_is_disclosed_and_never_rendered(tmp_path, answer):
+    """A status read that decides nothing is **not** ok, and it is also not
+    `not-applicable` (that would confirm the capability is missing) or `failed`
+    (no render was attempted): `missing`, with the code travelling on the row and
+    zero PCB render calls."""
+    client = FakeClient(make_listing(), overrides={"sys.connector_status": answer})
+
+    capture, out_dir = collect(client, tmp_path)
+
+    assert not pcb_render_calls(client)
+    assert len(calls_named(client, "export.render")) == 2
+
+    pcb_image = capture["channels"]["pcbImage"]
+    assert pcb_image["status"] == "missing"
+    assert pcb_image["artifacts"] == []
+    assert not list(out_dir.glob("live-pcb-*"))
+    assert "未核实" in pcb_image["detail"]
+    assert pcb_image["errors"], pcb_image
+    assert any(
+        marker in pcb_image["errors"][0]
+        for marker in ("CAPABILITY_BAD_PAYLOAD", "CAPABILITY_NOT_BOOLEAN", "UNKNOWN_ACTION")
+    ), pcb_image["errors"]
+    assert capture["ok"] is False, "unknown is never a pass"
+
+
+@pytest.mark.parametrize(
+    ("bad_pcb", "code"),
+    [
+        pytest.param(
+            {"format": "image/png", "data": PNG_B64, "scope": "page",
+             "channel": "document", "evidenceGrade": "viewport"},
+            "RENDER_CHANNEL_MISMATCH",
+            id="channel-document",
+        ),
+        pytest.param(
+            {"format": "image/png", "data": PNG_B64, "scope": "page",
+             "evidenceGrade": "viewport"},
+            "RENDER_CHANNEL_MISMATCH",
+            id="channel-missing",
+        ),
+        pytest.param(
+            {"format": "image/png", "data": PNG_B64, "scope": "page",
+             "channel": "viewport"},
+            "RENDER_GRADE_MISMATCH",
+            id="grade-missing",
+        ),
+        pytest.param(
+            {"format": "image/png", "data": PNG_B64, "scope": "page",
+             "channel": "viewport", "evidenceGrade": "geometry"},
+            "RENDER_GRADE_MISMATCH",
+            id="grade-wrong",
+        ),
+    ],
+)
+def test_only_a_viewport_grade_answer_can_become_a_pcb_picture(tmp_path, bad_pcb, code):
+    """A document render — or any answer without both markers — is not a PCB
+    viewport: the step fails, nothing is written, and the channel is not ok."""
+    client = FakeClient(
+        make_listing(),
+        overrides={
+            "sys.connector_status": with_capability(),
+            "export.render": renders_by_document(bad_pcb),
+        },
+    )
+
+    capture, out_dir = collect(client, tmp_path)
+
+    step = step_named(capture, "b1", "export.render")
+    assert step["status"] == "failed"
+    assert step["error"]["code"] == code
+
+    pcb_image = capture["channels"]["pcbImage"]
+    assert pcb_image["status"] == "failed"
+    assert pcb_image["artifacts"] == []
+    assert any(code in error for error in pcb_image["errors"]), pcb_image["errors"]
+    assert not list(out_dir.glob("live-pcb-*"))
+    assert capture["ok"] is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(
+            {**VIEWPORT_ANSWER,
+             "data": base64.b64encode(b"PK\x03\x04zip body").decode("ascii")},
+            id="zip-container",
+        ),
+        pytest.param(
+            {**VIEWPORT_ANSWER,
+             "data": base64.b64encode(b"not a png at all").decode("ascii")},
+            id="no-png-signature",
+        ),
+        pytest.param({**VIEWPORT_ANSWER, "format": "image/svg+xml"}, id="svg"),
+    ],
+)
+def test_a_viewport_graded_answer_that_is_not_a_png_is_never_written(tmp_path, payload):
+    """The grade markers do not excuse the bytes: the PNG signature is checked on
+    the PCB path exactly as on the schematic one."""
+    client = FakeClient(
+        make_listing(),
+        overrides={
+            "sys.connector_status": with_capability(),
+            "export.render": renders_by_document(payload),
+        },
+    )
+
+    capture, out_dir = collect(client, tmp_path)
+
+    step = step_named(capture, "b1", "export.render")
+    assert step["status"] == "failed"
+    assert step["error"]["code"] in {"RENDER_NOT_IMAGE", "RENDER_NOT_PNG"}
+    assert capture["channels"]["pcbImage"]["status"] == "failed"
+    assert capture["channels"]["pcbImage"]["artifacts"] == []
+    assert not list(out_dir.glob("live-pcb-*"))
+
+
+def test_a_failed_pcb_render_is_failed_with_no_artifact(tmp_path):
+    client = FakeClient(
+        make_listing(),
+        overrides={
+            "sys.connector_status": with_capability(),
+            "export.render": renders_by_document(
+                FakeBridgeError("TIMEOUT", "export.render did not answer within 10000 ms")
+            ),
+        },
+    )
+
+    capture, out_dir = collect(client, tmp_path)
+
+    step = step_named(capture, "b1", "export.render")
+    assert step["status"] == "failed"
+    assert step["error"]["code"] == "TIMEOUT"
+    pcb_image = capture["channels"]["pcbImage"]
+    assert pcb_image["status"] == "failed"
+    assert pcb_image["artifacts"] == []
+    assert any("TIMEOUT" in error for error in pcb_image["errors"])
+    assert not list(out_dir.glob("live-pcb-*"))
+    assert capture["ok"] is False
+    # The readings still stand: a missing picture does not erase them.
+    assert step_named(capture, "b1", "pcb.readback")["status"] == "ok"
+    assert step_named(capture, "b1", "pcb.geometry")["status"] == "ok"
+
+
+def test_an_explicit_pcb_subset_with_the_flag_is_missing_not_ok(tmp_path):
+    """The picture that was taken is kept, but a subset is coverage — never ok."""
+    client = FakeClient(
+        make_listing(pcbs=(("b1", "B1"), ("b2", "B2"))),
+        overrides={
+            "sys.connector_status": with_capability(),
+            "export.render": renders_by_document(),
+        },
+    )
+
+    capture, out_dir = collect(client, tmp_path, pcb_uuids=["b1"])
+
+    assert [call["params"]["pageUuid"] for call in pcb_render_calls(client)] == ["b1"]
+    pcb_image = capture["channels"]["pcbImage"]
+    assert pcb_image["status"] == "missing"
+    assert [row["documentUuid"] for row in pcb_image["artifacts"]] == ["b1"]
+    assert (out_dir / pcb_image["artifacts"][0]["file"]).is_file()
+    assert not (out_dir / "live-pcb-B2-b2.png").exists()
+    assert capture["ok"] is False
+
+
+def test_a_board_whose_focus_was_never_proven_gets_no_picture(tmp_path):
+    """The gate opens the render; it does not skip the focus proof. A skipped
+    board leaves the channel failed — a picture that is not there is not ok."""
+    client = FakeClient(
+        make_listing(active="b1", pcbs=(("b1", "B1"), ("b2", "B2"))),
+        ignore_open={"b2"},
+        overrides={
+            "sys.connector_status": with_capability(),
+            "export.render": renders_by_document(),
+        },
+    )
+
+    capture, out_dir = collect(client, tmp_path)
+
+    assert [call["params"]["pageUuid"] for call in pcb_render_calls(client)] == ["b1"]
+    skipped = step_named(capture, "b2", "export.render")
+    assert skipped["status"] == "skipped"
+    assert "焦点未核实" in skipped["error"]["message"]
+    pcb_image = capture["channels"]["pcbImage"]
+    assert pcb_image["status"] == "failed"
+    assert [row["documentUuid"] for row in pcb_image["artifacts"]] == ["b1"]
+    assert not (out_dir / "live-pcb-B2-b2.png").exists()
+    assert capture["ok"] is False
+
+
+def test_a_capture_with_no_pcb_never_asks_for_the_capability(tmp_path):
+    """No PCB is not an unknown capability: nothing is read and the row stays
+    `not-applicable` for the reason「确认没有 PCB」."""
+    client = FakeClient(make_listing(pcbs=()))
+
+    capture, _ = collect(client, tmp_path)
+
+    assert not calls_named(client, "sys.connector_status")
+    pcb_image = capture["channels"]["pcbImage"]
+    assert pcb_image["status"] == "not-applicable"
+    assert pcb_image["steps"] == []
+    assert pcb_image["errors"] == []

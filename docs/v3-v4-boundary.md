@@ -98,6 +98,17 @@ copperLayers、35 项 checks、crossView 及 findings 完整内容一致，逐�
 逐板规则执行，不证明真实非空多板；单文件 `.epro2` 也不触发上述多文件守卫。证据
 `outputs/review/038z1/differential.json`，任务书 `tasks/038z1_v4_live_archive_differential.md`。
 
+**038Z2 真实 eprj3 多文件对拍（2026-11-16，EDA 4.1.100）**：`E:/LC Project/test V4` 的 3 个
+`.epcb2` 与 7 个 `.esch2` 只读合流，离线/在线均 exit 1、schema 均为 `boardwise.checkup/7`；
+三板字段完全相同，各 35 checks、findings 22/20/9，自有 findings 各 60 条完整多重集一致，
+仅 RC 条目顺序不同。`pcbReviewMissing=false`，archivePcb 均 ok 且 errors 一致。三块 PCB 文件
+各只有一份 PCB 文档、没有库副本，因此重复 PCB/分歧库/相同库三种 guard **未在真实文件上触发**；
+17 个合成多文件测试仅作补充，不冒充真实负例。证据 `outputs/review/038z2/differential.json`。
+**038Z3**：7 页共 2603 条 `yAxisDirection` 全为 `up`，`NO_CONNECT=0`，SCH_PAGE 本体内缺省
+标记的坐标记录也为 0，真实 NC 与缺省标记仍未覆盖（`outputs/review/038z3/record-scan.json`）。
+**038Z4**：逐板 components 全为 0、copperLayers 为 2/0/0，原理图器件数不冒充 PCB 已放置器件，
+真实非空多板仍未覆盖（`outputs/review/038z4/board-scan.json`）。
+
 **当前样本归属（2026-11-01 534B 撤回后）**：Board2 P2 `dc46ef64fc7385ec` 已删除，
 Board2 只保留岳的参考页 P1；Board1 P3 `5d5f8f9f7ac34562` 为空页，等待重做。
 534B 的实验读数（6 岛、lint 0E/1W、17 网/58 脚/3 NC PASS）只作历史证据，**不是当前交付**；
@@ -155,7 +166,7 @@ uuid、该文档 `META.docType` 是数字 **17**；`Reuse Block`/`Designator`/`N
 - V4 **全格式边界**：全部跨视图语义、网差与单位语义（POUR/POURED 等）仍逐项实测；
 - **单模型承载多板**：`review --view pcb` 仍拒绝多板（一个 `DesignModel` 就是一块板，
   拒绝时列出板名并指向 `checkup`）；多板走 `checkup` 的逐板路径；
-- V4 实时 PCB 位图；
+- V3 与生产非空板的实时 PCB 位图；V4 test V4 已有 viewport 在线证据，但不等于 document render、SVG/PDF 或所有板可用；
 - V4 native netlabel；
 - “V4 全格式、全工程、全电路都能自动画好”；
 - 用 V4 单页 D3 的通过，替代任意新页的三关验收。

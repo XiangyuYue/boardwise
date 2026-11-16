@@ -628,17 +628,24 @@ ACTIONS: tuple[Action, ...] = (
             "between a window that recovers by itself in the background and one that "
             "waits for the user to bring it to the front. Read-only: it never starts, "
             "stops or reconnects anything. If no evaluation has published its runtime "
-            "record, present=false says so rather than guessing."
+            "record, present=false says so rather than guessing. Since 087F2 it also "
+            "answers `capabilities.pcbRenderViewport` (a fact about the connector build, "
+            "present on every branch): `true` only where `export.render` really accepts a "
+            "PCB target and answers `channel/evidenceGrade: 'viewport'` (#87②, 087F1). A "
+            "connector that omits the key is older than that branch, so a caller must "
+            "read a missing key as **no such capability** and never as a reason to spend "
+            "a render timeout finding out — the flag exists to be read before the call."
         ),
         params=(),
         returns=(
-            "{present: bool, readStatus: bool, status: {state, detail?, lastError?, "
+            "{present: bool, readStatus: bool, capabilities?: "
+            "{pcbRenderViewport?: bool}, status: {state, detail?, lastError?, "
             "paired?, fingerprint?, minConnectorVersion?, connectorOutdated?, "
             "moduleBootstrapObserved, activateObserved, evaluations, bootstrapAt?, "
             "activateAt?, watchdog?: {state, reason?, wakes, lastWakeAt?, "
             "activityPosts, checkIntervalMs, activityTimeoutMs, lastWake}}, "
             "moduleBootstrapObserved, activateObserved, evaluations} | "
-            "{present: false, error?|observed|note}"
+            "{present: false, capabilities?, error?|observed|note}"
         ),
         risk="read",
     ),
@@ -705,7 +712,14 @@ ACTIONS: tuple[Action, ...] = (
             "unreadable?: int (count of unreadable rows + failed reads + null "
             "holes the host left), reason?: str (the first of them), "
             "problems?: [str] (an unusable focus reading — an unnamed document "
-            "type means the page guard did not run)}"
+            "type means the page guard did not run)}. Each component row carries "
+            "the optional `value` / `mpn` / `valueSource` / `mpnSource` lift "
+            "(#87⑤): `value` is `OtherProperty['Value']`, `mpn` prefers "
+            "`ManufacturerId` and falls back to `OtherProperty['Manufacturer "
+            "Part'|'ManufacturerPart'|'partNumber']`, blanks read as null and a "
+            "failed getter keeps the row and is counted — an old connector "
+            "without these keys still answers, so callers keep the archive "
+            "fallback instead of inventing an empty value"
         ),
         risk="read",
     ),
@@ -734,22 +748,39 @@ ACTIONS: tuple[Action, ...] = (
     Action(
         name="export.render",
         summary=(
-            "Render the *document* to an image file (base64) via "
-            "sch_ManufactureData.getExportDocumentFile — the acceptance image. "
-            "A viewport capture (export.screenshot) can return cached frames on "
-            "this host, so it is never evidence. Scope can be the current page, "
-            "a selection of primitives, or the whole project; a multi-page "
-            "project may come back as a zip and the `format` field says which."
+            "Render the target document to an image file (base64). On a "
+            "**schematic** page this is the *document* render via "
+            "sch_ManufactureData.getExportDocumentFile — the acceptance image; a "
+            "viewport capture (export.screenshot) can return cached frames on this "
+            "host, so it is never evidence. On a **confirmed PCB** (#87②) the "
+            "document-render API hangs on this host (EDA 4.1.93, measured 60 s), "
+            "so the action takes the one channel the 087f probe proved — "
+            "zoomToAllPrimitives + dmt_EditorControl.getCurrentRenderedAreaImage — "
+            "and answers a *viewport* PNG marked channel/evidenceGrade='viewport'. "
+            "Scope can be the current page, a selection of primitives, or the whole "
+            "project on a schematic; a multi-page project may come back as a zip "
+            "and the `format` field says which. A PCB accepts format=png + "
+            "scope=page only: svg/pdf/selection/project are refused by name and "
+            "never reach the schematic export."
         ),
-        params=("format", "scope", "ids", "fileName"),
+        params=("format", "scope", "ids", "fileName", "pageUuid", "timeoutMs"),
         returns=(
-            "{format: 'image/png'|'image/svg+xml'|'application/pdf'|'zip', "
-            "encoding: 'base64', bytes, data, scope, note}"
+            "schematic: {format: 'image/png'|'image/svg+xml'|'application/pdf'|'zip', "
+            "encoding: 'base64', bytes, data, scope, channel: 'document', "
+            "activatedPageUuid?, activated?, note}. PCB: the same fields with format "
+            "'image/png', scope 'page', plus channel: 'viewport', evidenceGrade: "
+            "'viewport' and a note saying it is not a document render and freshness "
+            "must be checked before use; there are no bboxes (a capture is not "
+            "geometry)"
         ),
         params_schema=(
-            "format: png|svg|pdf (default png); scope: page|selection|project "
-            "(default page); ids: primitive ids, required when scope=selection; "
-            "fileName: optional, default render.<ext>"
+            "format: png|svg|pdf (default png; a PCB accepts png only); scope: "
+            "page|selection|project (default page; a PCB accepts page only); ids: "
+            "primitive ids, required when scope=selection; fileName: optional, "
+            "default render.<ext>; pageUuid (0.4.22): the page the render is about "
+            "— and #87② the *only* doc.list-confirmed way to name a PCB target "
+            "when it is not the active document; timeoutMs (0.4.20): clamped into "
+            "1..60 s, default 30 s, and it bounds the PCB viewport capture too"
         ),
         risk="read",
     ),

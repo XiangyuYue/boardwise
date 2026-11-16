@@ -970,6 +970,115 @@ function readbackKindOf(type: unknown): 'sch' | 'pcb' | null {
   return null;
 }
 
+/**
+ * `OtherProperty` keys a manufacturer part number can live in, in priority order.
+ *
+ * `ManufacturerId` wins when the host answers it — that is the field the library
+ * fills in. These are the fallbacks the same host uses for hand-entered parts:
+ * on `test V4` P43 (2026-11, #87⑤) `snapshot()` folded the attribute map and
+ * the readback row lifted neither identity channel into a named top-level key.
+ */
+const MPN_OTHER_PROPERTY_KEYS = ['Manufacturer Part', 'ManufacturerPart', 'partNumber'];
+
+/**
+ * An attribute as text, or `null` when it carries nothing.
+ *
+ * Blanks carry nothing (`''`, `'   '`), numbers and booleans are their own
+ * spelling — a host that stores `Value: 100` means the string `'100'`. Nothing
+ * is invented: a missing key answers `null`, never `''`, so a caller can tell
+ * "the part has no value" from "this connector could not say".
+ */
+function attributeText(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
+  if (typeof value === 'boolean') return String(value);
+  return null;
+}
+
+/**
+ * One `getState_*` read for the identity lift, with the failure kept.
+ *
+ * `getState` (the `snapshot` walk) is deliberately quiet about a getter that
+ * throws — it answers `undefined`, which is right for a summary that must not
+ * die on one exotic primitive. Here the read decides a named field, so a throw
+ * is recorded in the caller's `readErrors` and counted in `unreadable`, while
+ * the row still comes back: one broken attribute must not hide the part.
+ */
+async function readStateForIdentity(
+  item: any, name: string, readErrors: string[],
+): Promise<unknown> {
+  const member = readMember(item, `getState_${name}`);
+  if (member.error !== undefined) {
+    readErrors.push(`read getState_${name}: ${member.error}`);
+    return undefined;
+  }
+  if (typeof member.value !== 'function') return undefined;
+  try {
+    return await settle((member.value as () => unknown).call(item));
+  } catch (error) {
+    readErrors.push(`read getState_${name}: ${String((error as Error)?.message ?? error)}`);
+    return undefined;
+  }
+}
+
+/**
+ * A schematic part's `Value` and manufacturer part number, with their sources.
+ *
+ * `snapshot` folds `OtherProperty` into `{object: true}` and cuts the walk at 40
+ * names, so neither `Value` nor `ManufacturerId` reliably reaches a caller: a
+ * live read of P43 answered 15 keys with no value and no MPN anywhere at the
+ * top level (#87⑤). The two reads below are therefore taken **by name**, not
+ * out of the summary, and the sources are reported so a caller never has to
+ * guess which channel answered:
+ *
+ * 1. `value` ← `OtherProperty['Value']` only (`valueSource: 'OtherProperty'`).
+ * 2. `mpn` ← `ManufacturerId` first (`mpnSource: 'ManufacturerId'`), else the
+ *    first non-blank of {@link MPN_OTHER_PROPERTY_KEYS}
+ *    (`mpnSource: 'OtherProperty'`), else `null`.
+ *
+ * Every failure degrades to `null` plus a counted read error — never to `''`,
+ * and never to a missing row.
+ */
+async function schPartIdentity(item: any, readErrors: string[]): Promise<{
+  value: string | null;
+  mpn: string | null;
+  valueSource: 'OtherProperty' | null;
+  mpnSource: 'ManufacturerId' | 'OtherProperty' | null;
+}> {
+  const attributes = await readStateForIdentity(item, 'OtherProperty', readErrors);
+  const map = attributes !== null && typeof attributes === 'object'
+    ? (attributes as Record<string, unknown>)
+    : null;
+  const readAttribute = (key: string): unknown => {
+    if (map === null) return undefined;
+    const member = readMember(map, key);
+    if (member.error !== undefined) {
+      readErrors.push(`read OtherProperty[${JSON.stringify(key)}]: ${member.error}`);
+      return undefined;
+    }
+    return member.value;
+  };
+
+  const value = attributeText(readAttribute('Value'));
+  const valueSource = value === null ? null : 'OtherProperty' as const;
+  const manufacturerId = attributeText(
+    await readStateForIdentity(item, 'ManufacturerId', readErrors),
+  );
+  if (manufacturerId !== null) {
+    return { value, mpn: manufacturerId, valueSource, mpnSource: 'ManufacturerId' };
+  }
+  for (const key of MPN_OTHER_PROPERTY_KEYS) {
+    const fallback = attributeText(readAttribute(key));
+    if (fallback !== null) {
+      return { value, mpn: fallback, valueSource, mpnSource: 'OtherProperty' };
+    }
+  }
+  return { value, mpn: null, valueSource, mpnSource: null };
+}
+
 /** Shared readback: every primitive of the current document, summarised. */
 async function readback(eda: Eda, kind: 'sch' | 'pcb', params: Record<string, unknown>) {
   const api = kind === 'pcb' ? 'pcb_PrimitiveComponent' : 'sch_PrimitiveComponent';
@@ -1083,6 +1192,7 @@ async function readback(eda: Eda, kind: 'sch' | 'pcb', params: Record<string, un
       unreadable.push(String((error as Error)?.message ?? error));
       continue;
     }
+    const identity = kind === 'sch' ? await schPartIdentity(item, readErrors) : null;
     components.push({
       primitiveId: String(fields.PrimitiveId ?? ''),
       designator: fields.Designator ?? null,
@@ -1095,6 +1205,11 @@ async function readback(eda: Eda, kind: 'sch' | 'pcb', params: Record<string, un
       y: fields.Y ?? null,
       rotation: fields.Rotation ?? null,
       ...(kind === 'sch' ? { net: fields.Net ?? null } : { layer: fields.Layer ?? null }),
+      // #87⑤: schematic rows carry `value` / `mpn` / `valueSource` /
+      // `mpnSource`. PCB rows do **not** — their shape is frozen for the layer
+      // and footprint consumers, so the lift is keyed on the kind, not on
+      // whether a component happens to have attributes.
+      ...(identity ?? {}),
       fields,
     });
   }
@@ -4309,17 +4424,328 @@ export function exportRenderTimeoutMs(params: Record<string, unknown> | undefine
   return Math.min(Math.max(asked, EXPORT_RENDER_TIMEOUT_MIN_MS), EXPORT_RENDER_TIMEOUT_MAX_MS);
 }
 
-export const exportRender: ActionHandler = async (params, eda) => {
-  const mfg = namespaceOf(eda, 'sch_ManufactureData');
-  const getExportDocumentFile = mfg.getExportDocumentFile;
-  if (typeof getExportDocumentFile !== 'function') {
+/**
+ * The 8 bytes every PNG starts with (`\x89PNG\r\n\x1a\n`).
+ *
+ * **Why this exists at all (#87②).** The PCB channel is a *viewport* capture,
+ * and the host's `Blob.type` is a claim, not a reading: on the 4.1.93 editor the
+ * probe (087f) got real PNGs, but a mis-typed blob, an empty one, or a JSON
+ * error page dressed as an image would all arrive looking successful. The
+ * signature is the only part of the answer this code can check without decoding
+ * the picture, so it is checked — and the bytes it saw are named when it fails.
+ */
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
+
+function pngSignatureMatches(bytes: Uint8Array): boolean {
+  if (bytes.length < PNG_SIGNATURE.length) return false;
+  return PNG_SIGNATURE.every((expected, index) => bytes[index] === expected);
+}
+
+/**
+ * Which document an `export.render` is about, and of which kind.
+ *
+ * **Why the action has to ask before it exports anything (#87②).** Since
+ * `exportRender` was written it has had exactly one backend:
+ * `sch_ManufactureData.getExportDocumentFile` — a *schematic* document export.
+ * Called with a PCB as the active document it does not fail: on EDA 4.1.93 it
+ * hangs until the caller gives up (measured 2026-11-16, `engines/liveevidence`
+ * recorded the 60 s timeout and stopped using the channel for PCBs). So the
+ * kind of the target decides which backend answers, and the answer has to come
+ * from a *reading*, never from a guess:
+ *
+ * - `pageUuid` given → its row in `doc.list` (`collectDocumentRows`, the same
+ *   builder `doc.list` itself uses, so the two cannot disagree about a uuid's
+ *   type). A uuid the project does not list stays `'unknown'` — the active
+ *   document says nothing about a page that is not it, and asking it would cost
+ *   the schematic path an extra host read for an answer it cannot use.
+ * - no `pageUuid` → the active document, through `activeDocument` — the same
+ *   reader `doc.list` and `document.current` use.
+ *
+ * A kind that is neither PCB nor schematic (a symbol editor, the home tab, a
+ * host that answered no type at all) stays `'unknown'`, and an unknown target
+ * keeps the old path: this action has no evidence to route it anywhere else,
+ * and the schematic path is the one that at least fails loudly.
+ *
+ * `resolvedFromActive` is what keeps the schematic path's host-call order
+ * unchanged: when the target came from the active document, the uuid is handed
+ * to `activateExportPage` as if the caller had passed it, so the export still
+ * performs exactly one "which document is active" read.
+ */
+interface ExportTarget {
+  kind: 'pcb' | 'sch' | 'unknown';
+  /** The uuid the kind was read for; `''` when nothing could be resolved. */
+  uuid: string;
+  /** True when {@link ExportTarget.uuid} came from the active document. */
+  resolvedFromActive: boolean;
+}
+
+async function exportTarget(eda: Eda, params: Record<string, unknown>): Promise<ExportTarget> {
+  const asked = typeof params?.pageUuid === 'string' ? params.pageUuid.trim() : '';
+  if (asked) {
+    const rows = await collectDocumentRows(eda, [], null);
+    const row = rows.find((candidate) => candidate.uuid === asked);
+    if (!row) return { kind: 'unknown', uuid: '', resolvedFromActive: false };
+    return { kind: row.type === 'pcb' ? 'pcb' : 'sch', uuid: asked, resolvedFromActive: false };
+  }
+
+  const active = await activeDocument(eda, []);
+  if (!active) return { kind: 'unknown', uuid: '', resolvedFromActive: false };
+  const kind = active.type === 'pcb'
+    ? 'pcb'
+    : (active.type === 'page' || active.type === 'schematic') ? 'sch' : 'unknown';
+  return { kind, uuid: active.uuid, resolvedFromActive: true };
+}
+
+/**
+ * `export.render` on a **confirmed PCB**: the editor's viewport, as a PNG.
+ *
+ * What this is, stated as narrowly as the evidence allows (087f, 2026-11-16 on
+ * EDA 4.1.93): `dmt_EditorControl.getCurrentRenderedAreaImage` returned two
+ * different, signature-correct PNGs for `test V4`'s PCB1 and PCB2, each matching
+ * the board it was asked for after inspection — so the *viewport* channel is a
+ * PCB image source, and the document-render channel
+ * (`sch_ManufactureData.getExportDocumentFile`) is not, because it hangs.
+ *
+ * What this is **not**: a document render. A viewport capture is the canvas as
+ * it stands at the moment of the call — the same API is why `export.screenshot`
+ * is a diagnostic and never evidence (006b). So the answer carries
+ * `channel: 'viewport'` and `evidenceGrade: 'viewport'`, and its `note` says
+ * that freshness has to be checked before the picture is used as visual
+ * evidence. It is also not an SVG/PDF source, not a selection render and not a
+ * project archive: those four requests are refused *by name* here rather than
+ * being handed to the schematic API that hangs on a PCB.
+ *
+ * The order below is the order the schematic path already uses (033/034) and it
+ * is deliberate: activate and **confirm** the target first, then capture. A
+ * capture of "whatever is in front" is exactly the wrong-board bug R1 exists
+ * for, and on this host it costs nothing to rule out — the page has to be
+ * activated anyway.
+ */
+async function exportPcbViewport(
+  eda: Eda,
+  params: Record<string, unknown>,
+  target: { format: string; scope: string; pageUuid: string },
+): Promise<unknown> {
+  if (target.format !== 'png') {
     throw new ActionError(
       'NOT_IMPLEMENTED',
-      'sch_ManufactureData.getExportDocumentFile() is not available on this editor build',
-      { path: 'sch_ManufactureData.getExportDocumentFile' },
+      `export.render on a PCB target supports only format=png (got format=${target.format}): `
+        + 'sch_ManufactureData.getExportDocumentFile has no PCB document member — on this host a '
+        + 'PCB sent through it hangs until the caller gives up (#87②) — and the one measured PCB '
+        + 'image channel, dmt_EditorControl.getCurrentRenderedAreaImage, answers a raster viewport '
+        + 'PNG only. No export was attempted.',
+      {
+        path: 'sch_ManufactureData.getExportDocumentFile',
+        target: 'pcb',
+        format: target.format,
+        supportedFormats: ['png'],
+      },
+    );
+  }
+  if (target.scope !== 'page') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      `export.render on a PCB target supports only scope=page (got scope=${target.scope}): the `
+        + 'viewport channel captures the active canvas and has no selection or whole-project form, '
+        + 'and the document-render API is schematic-only (#87②). No export was attempted.',
+      {
+        path: 'sch_ManufactureData.getExportDocumentFile',
+        target: 'pcb',
+        scope: target.scope,
+        supportedScopes: ['page'],
+      },
     );
   }
 
+  // 033/034, reused rather than reimplemented: doc.open's three steps, and a
+  // refusal — not a best-effort attempt — when the page did not become the
+  // active document. `activateExportPage` already demands `matchesRequest`; the
+  // read below is what adds the *kind*, which is the whole question here.
+  const activatedPageUuid = await activateExportPage(eda, { ...params, pageUuid: target.pageUuid });
+
+  const problems: string[] = [];
+  const active = await activeDocument(eda, problems);
+  const confirmed = active !== null
+    && active.source === DIRECT_DOCUMENT_SOURCE
+    && active.uuid === activatedPageUuid
+    && active.type === 'pcb';
+  if (!confirmed) {
+    // Deliberately a refusal: a capture taken now would be a picture of another
+    // document's canvas, reported as this page's. On a real review that is worse
+    // than no image at all.
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `export.render could not confirm PCB ${activatedPageUuid} as the active document: `
+        + (active
+          ? `the direct read says uuid=${active.uuid}, type=${active.type}, source=${active.source}`
+          : 'the editor reports no active document after activating it')
+        + '. No capture was taken — a viewport image of an unconfirmed document would be evidence '
+        + 'about the wrong page'
+        + (problems.length ? ` (${problems.join('; ')})` : ''),
+      {
+        target: 'pcb',
+        pageUuid: activatedPageUuid,
+        activeDocument: active ?? null,
+        problems,
+      },
+    );
+  }
+
+  const control = namespaceOf(eda, 'dmt_EditorControl');
+  const zoomToAll = control.zoomToAllPrimitives;
+  if (typeof zoomToAll !== 'function') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      'dmt_EditorControl.zoomToAllPrimitives() is not available in this editor version, so a PCB '
+        + 'viewport cannot be framed to the whole board (#87②)',
+      { path: 'dmt_EditorControl.zoomToAllPrimitives', target: 'pcb' },
+    );
+  }
+  const capture = control.getCurrentRenderedAreaImage;
+  if (typeof capture !== 'function') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      'dmt_EditorControl.getCurrentRenderedAreaImage() is not available in this editor version — '
+        + 'there is no other measured PCB image channel on this host (#87②)',
+      { path: 'dmt_EditorControl.getCurrentRenderedAreaImage', target: 'pcb' },
+    );
+  }
+
+  const timeoutMs = exportRenderTimeoutMs(params);
+  // One deadline for zoom + capture, for the reason the schematic path has one:
+  // a host that swallows the request answers neither success nor failure, and
+  // the action slot must not be held hostage by a promise that never settles.
+  // Note the argument: the type package declares `getCurrentRenderedAreaImage(
+  // tabId?)` and the just-confirmed reading gives us one; an argument this host
+  // dislikes is *dropped* rather than rejected (the 2026-09-18 trap), so passing
+  // it is not the risk it looks like — and naming the tab is sharper than
+  // "whatever is in front" if two tabs move during the call.
+  const tabId = active.tabId;
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    const timer = setTimeout(
+      () =>
+        reject(
+          new ActionError(
+            'TIMEOUT',
+            `the PCB viewport capture did not settle within ${timeoutMs / 1000} s `
+              + `(page ${activatedPageUuid}, format=png, scope=page). Nothing was returned: treat `
+              + 'the picture as absent, not as an empty board. The measured PCB channel is '
+              + 'dmt_EditorControl.getCurrentRenderedAreaImage after zoomToAllPrimitives; if this '
+              + 'repeats, reload the document — do NOT fall back to '
+              + 'sch_ManufactureData.getExportDocumentFile, which hangs on a PCB (#87②).',
+            {
+              path: 'dmt_EditorControl.getCurrentRenderedAreaImage',
+              target: 'pcb',
+              pageUuid: activatedPageUuid,
+              format: 'png',
+              scope: 'page',
+              timeoutMs,
+            },
+          ),
+        ),
+      timeoutMs,
+    );
+    settle(zoomToAll.call(control))
+      .then(() => settle(typeof tabId === 'string' && tabId ? capture.call(control, tabId) : capture.call(control)))
+      .then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value as Blob);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+  });
+
+  if (!blob || typeof (blob as Blob).arrayBuffer !== 'function') {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `the editor returned no image for PCB ${activatedPageUuid}; is a PCB open and focused?`,
+      { target: 'pcb', pageUuid: activatedPageUuid },
+    );
+  }
+  let buffer: Uint8Array;
+  try {
+    buffer = new Uint8Array(await blob.arrayBuffer());
+  } catch (error) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `the PCB viewport image could not be read: ${String((error as Error)?.message ?? error)}`,
+      { target: 'pcb', pageUuid: activatedPageUuid },
+    );
+  }
+  if (buffer.byteLength === 0) {
+    // Never "an empty board": zero bytes is the host saying nothing, and a board
+    // with no primitives still renders a grid and a frame (087f's PCB2, 93840 B).
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `the PCB viewport capture for ${activatedPageUuid} came back empty (0 bytes) — that is a `
+        + 'missing capture, not an empty board',
+      { target: 'pcb', pageUuid: activatedPageUuid, bytes: 0 },
+    );
+  }
+  if (!pngSignatureMatches(buffer)) {
+    const head = Array.from(buffer.subarray(0, PNG_SIGNATURE.length))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join(' ');
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `the PCB viewport capture for ${activatedPageUuid} is not a PNG: the first bytes are `
+        + `[${head}] (blob.type said ${JSON.stringify(blob.type)}, which is a claim and not a `
+        + `reading). ${buffer.byteLength} bytes were returned and are not passed on as an image`,
+      {
+        target: 'pcb',
+        pageUuid: activatedPageUuid,
+        bytes: buffer.byteLength,
+        blobType: blob.type ?? null,
+        signature: head,
+        expectedSignature: Array.from(PNG_SIGNATURE)
+          .map((byte) => byte.toString(16).padStart(2, '0'))
+          .join(' '),
+      },
+    );
+  }
+
+  return {
+    // The field names of the document path, so a caller's existing reader keeps
+    // working; the two new fields are what tells it *which* channel answered.
+    format: 'image/png',
+    encoding: 'base64',
+    bytes: buffer.byteLength,
+    data: bytesToBase64(buffer),
+    scope: 'page',
+    channel: 'viewport',
+    evidenceGrade: 'viewport',
+    activatedPageUuid,
+    activated: true,
+    note:
+      'PCB viewport capture (channel=viewport, evidenceGrade=viewport) — NOT a document render: '
+      + 'it is the editor canvas as it stands right now, so confirm freshness (the page named in '
+      + 'activatedPageUuid was activated immediately before this capture) before treating it as '
+      + 'visual evidence. The document-render channel is schematic-only on this host and hangs on '
+      + 'a PCB (#87②).',
+  };
+}
+
+/**
+ * `export.render`'s parameter vocabulary, in one place and in the order each
+ * path needs it.
+ *
+ * Both backends ask the same two questions (`format`, `scope`), and both must
+ * answer an unknown word with `BAD_REQUEST` — but *when* they ask differs, and
+ * that is deliberate: the schematic path probes the host capability first (see
+ * the frozen order at its call site), the PCB path has no host capability to
+ * probe and asks immediately. One helper, called from two places, so the two
+ * can never disagree about what `svg` means.
+ */
+function exportRenderRequest(params: Record<string, unknown> | undefined): {
+  format: string;
+  spec: { fileType: string; ext: string; mime: string };
+  scope: string;
+  objectLiteral: string;
+} {
   const format = String(params?.format ?? 'png').toLowerCase();
   const spec = EXPORT_RENDER_FORMATS[format];
   if (!spec) {
@@ -4336,6 +4762,43 @@ export const exportRender: ActionHandler = async (params, eda) => {
       `export.render needs params.scope in ${Object.keys(EXPORT_RENDER_SCOPES).join(' | ')} (got ${JSON.stringify(params?.scope)})`,
     );
   }
+  return { format, spec, scope, objectLiteral };
+}
+
+export const exportRender: ActionHandler = async (params, eda) => {
+  // Which document this render is about decides the backend (#87②). A *confirmed*
+  // PCB takes the viewport branch and never touches the schematic export; an
+  // unknown target keeps the old path, because guessing a kind is how a render
+  // lands on the wrong page.
+  const target = await exportTarget(eda, params);
+  if (target.kind === 'pcb') {
+    // A PCB needs no `sch_ManufactureData` at all: its vocabulary check runs
+    // here, after the branch is decided and before any host call.
+    const pcbRequest = exportRenderRequest(params);
+    return exportPcbViewport(eda, params, {
+      format: pcbRequest.format,
+      scope: pcbRequest.scope,
+      pageUuid: target.uuid,
+    });
+  }
+
+  // The schematic path keeps its **frozen order** (#87② review 2026-11-16): the
+  // host capability probe comes first, then the caller's parameters, exactly as
+  // before this batch. Hoisting the vocabulary checks above the probe looks
+  // tidier and is still the wrong change — with both a bad `format` and a host
+  // without `getExportDocumentFile`, the caller would start seeing
+  // `BAD_REQUEST` where it has always seen `NOT_IMPLEMENTED`.
+  const mfg = namespaceOf(eda, 'sch_ManufactureData');
+  const getExportDocumentFile = mfg.getExportDocumentFile;
+  if (typeof getExportDocumentFile !== 'function') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      'sch_ManufactureData.getExportDocumentFile() is not available on this editor build',
+      { path: 'sch_ManufactureData.getExportDocumentFile' },
+    );
+  }
+
+  const { format, spec, scope, objectLiteral } = exportRenderRequest(params);
 
   let ids: string[] = [];
   if (params?.ids !== undefined) {
@@ -4361,7 +4824,14 @@ export const exportRender: ActionHandler = async (params, eda) => {
   // measured on 3.2.149; `pageUuid` says which page when the active document is
   // not the one meant. `selection` and `project` are untouched: a selection
   // carries its own ids and a project export is a whole-project archive.
-  const activatedPageUuid = scope === 'page' ? await activateExportPage(eda, params) : '';
+  //
+  // #87②: when the target came from the active document, the resolved uuid is
+  // handed over as if the caller had named it — the same value from the same
+  // reader, so the export still performs exactly one "which document is active"
+  // read and the host-call order of this path is unchanged.
+  const activatedPageUuid = scope === 'page'
+    ? await activateExportPage(eda, target.resolvedFromActive ? { ...params, pageUuid: target.uuid } : params)
+    : '';
 
   const fileName = typeof params?.fileName === 'string' && params.fileName
     ? params.fileName
@@ -4434,6 +4904,11 @@ export const exportRender: ActionHandler = async (params, eda) => {
     bytes: bytes.byteLength,
     data: bytesToBase64(bytes),
     scope,
+    // #87②: the discriminator a consumer needs, and the only addition to this
+    // path — every other field is exactly what it was. A PCB answer says
+    // `channel: 'viewport'` (plus its own `evidenceGrade`); this one is the
+    // document render, which is the grade the acceptance image has always had.
+    channel: 'document',
     // Which page was made active for this export (033): the caller named it, or
     // it was the active document. Reported so a reader can tell what was
     // exported without guessing from the file name.
@@ -9695,19 +10170,42 @@ function sanitiseHostValue(value: unknown, depth = 0, seen: Set<unknown> = new S
  * host a member read is a trap invocation that can throw, and a diagnostic
  * action that dies on its own subject is worse than useless.
  *
+ * `capabilities` (087F2) is a fact about **this bundle**, not about the editor
+ * session, so it is answered by every branch, including the ones where no
+ * runtime record was published. It exists so a caller outside the editor can
+ * decide *before calling* whether a PCB viewport render is available at all
+ * (#87②/#87F1): an old connector omits the key, and a live collector that reads
+ * a missing key must not spend a render timeout discovering the same thing.
+ * Add a flag here only when the action it announces is really implemented —
+ * a capability bit is a promise, and a caller cannot tell a lie from a slow host.
+ *
  * Read-only. It never starts, stops or reconnects anything.
  */
 export const sysConnectorStatus: ActionHandler = async (_params, eda) => connectorStatusReport(eda);
 
+/**
+ * The capabilities this connector build really has, keyed by action family.
+ *
+ * `pcbRenderViewport`: `export.render` accepts a **PCB** target and answers
+ * `channel: 'viewport'` + `evidenceGrade: 'viewport'` (#87②, 087F1). Absent on
+ * every connector built before that branch existed.
+ */
+const CONNECTOR_CAPABILITIES = Object.freeze({ pcbRenderViewport: true });
+
 function connectorStatusReport(eda: Eda): Record<string, unknown> {
   const member = readMember(eda, '__boardwiseTransportRuntime');
   if (member.error !== undefined) {
-    return { present: false, error: `read __boardwiseTransportRuntime: ${member.error}` };
+    return {
+      present: false,
+      capabilities: { ...CONNECTOR_CAPABILITIES },
+      error: `read __boardwiseTransportRuntime: ${member.error}`,
+    };
   }
   const box = member.value;
   if (!box || typeof box !== 'object') {
     return {
       present: false,
+      capabilities: { ...CONNECTOR_CAPABILITIES },
       observed: typeof box,
       note: 'the shared runtime record is not on the editor object — no evaluation published one',
     };
@@ -9717,6 +10215,7 @@ function connectorStatusReport(eda: Eda): Record<string, unknown> {
     return {
       present: true,
       readStatus: false,
+      capabilities: { ...CONNECTOR_CAPABILITIES },
       error: `getStatus is ${typeof getStatus.value}`,
     };
   }
@@ -9725,6 +10224,7 @@ function connectorStatusReport(eda: Eda): Record<string, unknown> {
     return {
       present: true,
       readStatus: true,
+      capabilities: { ...CONNECTOR_CAPABILITIES },
       status,
       // Spelled out, because these three are the whole question of issue #4: the
       // module was evaluated at all, `activate()` was dispatched, and how many
@@ -9734,7 +10234,12 @@ function connectorStatusReport(eda: Eda): Record<string, unknown> {
       evaluations: status?.evaluations ?? null,
     };
   } catch (error) {
-    return { present: true, readStatus: false, error: String((error as Error)?.message ?? error) };
+    return {
+      present: true,
+      readStatus: false,
+      capabilities: { ...CONNECTOR_CAPABILITIES },
+      error: String((error as Error)?.message ?? error),
+    };
   }
 }
 

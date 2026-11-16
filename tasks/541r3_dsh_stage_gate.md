@@ -59,3 +59,10 @@
 - 最终 DSH：**9 files / 165 passed / 1 skipped**，typecheck、build 均通过；主代理独立复跑读数相同，日志 `.tmp_541_main/acceptance.log`。
 - 主代理独立变异：①跳过所有欠账批次 → **7 failed / 14 passed**，两条跨目录负例均红；②时间/步数 `>=`→`>` → **3 failed / 18 passed**。恢复后 `review-stage-gate.ts` SHA-256 均为 `33682d65712d82432562b1fefb686f339c7f4c06128ea73c7e54fea6dda018f5`。
 - 同步更新 `review-tools.ts`、README 的显式 out 与新预算说明，tracked `lib/` 已由官方 build 重生成。未跑 Python 全量、未部署、未重启真实 DSH；桌面/profile 独立加载仍未验证。
+
+## 8. 真实 DSH 首轮与 R4 缺口（2026-11-16）
+
+- 隔离 `boardwise-clean` + DSH 0.2.2-rc.3 已安装同哈希插件，`--dump-config` 含 `tool-boardwise`。真实 Session `session-8c0db486-c180-4468-8c8f-fedfd1f65a3a` 使用本机 scripted OpenAI 端点，只固定发工具调用；真实 DSH 内核、插件、Session 投影与 listener 均在线，未使用外部模型额度。
+- 实测通过：无 out 在 spawn 前拒绝；显式 out 的 checkup 真跑 exit 3 并生成四件产物；欠账 evidence 拒绝；未知 bridge 动作返回 tool-gap + `READ_ONLY_VIOLATION / risk=unknown / exit 2 / Nothing was forwarded`；跨 out 深挖拒绝。
+- **新缺陷**：真实宿主对被拒调用也写 `tool_result(status=error)`，R3 fold 未读 `message.isError`，把 denied evidence 计入 diveCount，后续文案成为 2 而非 1。单测“拒绝后无 tool/result”的假设不覆盖该宿主形状。修复与复验单列 `tasks/541r4_dsh_error_result_fold.md`；在 R4 安装复验前，不宣称真实 DSH 验收完成。
+- CLI 已为 live-a 做出 `strict-partial` exit 0 的文件收据，报告仍为 `incomplete/partial`；该文件只用于后续 negative control，不能替代当前 Session 的 initial/partial receipt。

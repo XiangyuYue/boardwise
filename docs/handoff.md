@@ -135,15 +135,39 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   `tasks/527c2_cross_view_geometry.md`、`tasks/529_decap_mid_band.md`、
   `tasks/541_offline_runtime_gates.md`。最终全量 **9893 passed / 25 skipped / 14 failed /
   1 warning**（12 条工作树既有货架数据漂移 + 2 条既有 Windows 环境失败，不宣称全量全绿）；
-  connector、DSH、Rust 均通过。后续 541R3/I 已在工作树实现（DSH 165 passed/1 skipped），
-  真实 DSH 桌面/profile 尚未加载，任意宿主文件解析仍不覆盖；见 `tasks/541r3_dsh_stage_gate.md`。
-- **038Y5L 在线验收（2026-11-15）**：test V4 活动页拒绝、PCB1 严格 DRC 1 错得 RED/exit 2、
-  旧目录拒绝和焦点恢复均完成；V3/GREEN/DRC 清洁后的 checkup 腿未在线覆盖。证据
-  `outputs/review/038y5l/`，任务书 `tasks/038y5l_pcb_gate_live.md`。
+  connector、DSH、Rust 均通过。后续 541R3/I/R4 已在工作树实现（DSH 169 passed/1 skipped），
+  隔离 DSH 0.2.2-rc.3 已验文件收据不解锁、initial/partial 解锁、跨目录欠账与 tool-gap；
+  桌面 profile 尚未部署，任意宿主文件解析仍不覆盖；见 `tasks/541r3_dsh_stage_gate.md`、
+  `tasks/541r4_dsh_error_result_fold.md` 与 `.tmp_541_live/session-4-events.jsonl`。
+- **#87②⑤ 工作树实现与 test V4 在线验收（2026-11-16，未发布）**：087E 的 `sch.readback`
+  可选 value/mpn 与来源已实现，P43 三器件与公开 ATTR 双源一致、11 netflag 为 null；087F1/F2
+  PCB viewport、`capabilities` 能力闸与 liveevidence 已接入，旧 connector 缺 flag 零 render。
+  主代理 F1 74、F2 Python 242、connector 809，独立变异均先红后恢复；直接 render 两板目检、SVG
+  具名拒绝；`review-evidence` exit0/capture.ok=true，`pcbImage.status=ok` 三板、livePcb ok、
+  P43 焦点恢复，delivery 仅 datasheets=unavailable。V3/生产非空板未覆盖，#87 待提出人复验不关单。
+  任务书 `tasks/087e_readback_value_mpn.md`、`tasks/087f1_pcb_viewport_render.md`、
+  `tasks/087f2_pcb_evidence_integration.md`、`tasks/087f3_pcb_visual_docs_live.md`。
+- **038Y5L/M/N 在线验收（2026-11-15/16）**：test V4 活动页拒绝、PCB1 与 PCB2 严格 DRC
+  各 1 错得 RED/exit 2、旧目录拒绝和焦点恢复均完成；第三板天然 DRC=0 后新鲜 checkup 真跑，
+  因工程自身 26 ERROR、缺手册/分诊与 boardsEmpty 得 INCOMPLETE/exit 3，不是 GREEN。
+  DRC 清洁后的 checkup 编排已补齐；V3 与天然 GREEN 仍需合适授权样本。证据
+  `outputs/review/038y5l/`、`038y5m/`、`038y5n/`，任务书同名 `tasks/038y5l_pcb_gate_live.md`、
+  `tasks/038y5m_pcb_gate_checkup_live.md`、`tasks/038y5n_pcb_gate_third_live.md`。
+- **038Y5O 与验收边界裁定（2026-11-16）**：V3 `test` 的宿主实测仍为 4.1.100，PCB1/2
+  各严格 DRC errors=1，gate RED、checkup 未运行，Start Page 已恢复；只完成 `.eprj2` 路径验证，
+  不是 3.2.x 宿主验收。岳确认没有天然 GREEN 可用板，天然 GREEN 不再本机必做、不为凑通过放宽规则；
+  V3 宿主验收等待外部用户反馈，仍不宣称已验证。证据 `outputs/review/038y5o/`。
 - **038Z1 真实三板骨架对拍（2026-11-15）**：两次导出哈希不同，只做语义对拍；离线/在线
   57 条自有 findings 一致，三板各 35 checks、findings 20/20/9。三板全 0 器件、铜层 2/0/0，
   不是非空多板或真实多文件守卫证据；NC/缺省 yAxisDirection 待样本。证据
   `outputs/review/038z1/differential.json`，任务书 `tasks/038z1_v4_live_archive_differential.md`。
+- **038Z2–Z4 真实 eprj3 兼容核查（2026-11-16，EDA 4.1.100）**：`E:/LC Project/test V4`
+  的 3 个 `.epcb2` 与 7 个 `.esch2` 只读合流；离线/在线均 exit 1、schema7，三板字段一致、
+  60 条 findings 多重集一致。真实多文件正路径成立，但无库副本，三种 guard 未在真实文件上触发；
+  17 个合成测试仅补充。NC 与缺省 yAxisDirection 样本均不存在；逐板 components 全为 0，
+  真实非空多板仍未覆盖。证据 `outputs/review/038z2/differential.json`、`038z3/record-scan.json`、
+  `038z4/board-scan.json`，任务书同名 `tasks/038z2_v4_folder_live.md`、`038z3_nc_yaxis_live.md`、
+  `tasks/038z4_nonempty_multiboard_live.md`。
 - **038Q 的 Q1–Q4 支撑批已完成各自范围（2026-11-11）**：库只读 `lib.cbb.search/get`、
   上游候选归一化、符号文件只读通路与单符号 elibz2 profile；AMS1117 单符号身份/几何已核对。
   四模块仍 candidate/unverified/notForDrawCompile。Q5 已补齐 AMS1117 三个电容的真实身份与

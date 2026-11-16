@@ -13,10 +13,13 @@
  *    separator or in another case is one batch. A managed checkup without an
  *    explicit `out` is refused up front: a temp directory can never be bound to
  *    a checkpoint.
- * 2. **A batch starts at its first *completed* deep dive.** Only a matching
- *    `tool/result` books a dive — a `tool/call` the gate denied never produces a
- *    result, so a refused attempt cannot open a batch (or switch one to another
- *    `out`). A protocol-level exit 1/3 is still a completed review and counts.
+ * 2. **A batch starts at its first *completed* deep dive.** Only a successful
+ *    matching `tool/result` books a dive. A refused attempt cannot open a batch
+ *    (or switch one to another `out`): DSH 0.2.2-rc.3 answers a pre-execute
+ *    denial with a `tool/result` whose `message.isError` is `true` (541R4), so
+ *    the fold settles that pending call without booking anything. A missing
+ *    `isError` is a legacy success. A protocol-level exit 1/3 is still a
+ *    completed review and counts.
  * 3. **The next deep dive in a batch needs a checkpoint.** The checkpoint is
  *    the *Session* pair, never a file: the `boardwiseReviewFinalized` receipt
  *    recorded by 537D3a (its `reviewDir` folds to this batch's key) plus a

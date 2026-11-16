@@ -13958,7 +13958,9 @@ async def _draw_apply_flow(
     report["write"]["valueChannel"] = (
         "sch.set_component_attribute (the host's only attribute namespace is "
         "`otherProperty`, which is where the key Value lives — 016 reads the same key "
-        "there, and `sch.readback` carries no value at all: pit 3)"
+        "there, and new connectors optionally lift the same value into "
+        "`sch.readback`; older responses without that key keep the archive "
+        "fallback: pit 3)"
     )
     if unresolved:
         notes.append(

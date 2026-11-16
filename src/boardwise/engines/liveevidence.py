@@ -35,11 +35,19 @@ JSON-serialisable capture:
   (``liveSchematic / livePcb / schematicImage / pcbImage``), in the same row
   shape as 537C3a's ledger (``status / source / detail / artifacts / errors /
   steps``). Archive and datasheet channels are deliberately not fabricated.
-  ``pcbImage`` is ``not-applicable`` by host capability, not by failure:
-  ``export.render`` is a schematic-only API (an activated PCB returned nothing
-  even with a 60 s leash, on V4 and V3), so no PCB is rendered at all. PCB live
-  evidence is ``livePcb`` (readback + geometry); archived PCB review and the
-  offline geometry SVG are separate channels and are never written as live PNG.
+  ``pcbImage`` is gated on a **capability flag**, not on a version number
+  (087F2): the connector's ``sys.connector_status`` answers
+  ``capabilities.pcbRenderViewport``, and only an explicit ``true`` opens the
+  path. Without it — a missing key is an old connector — ``export.render`` is
+  never called for a PCB and the row is ``not-applicable`` with the recorded
+  host limit (``PCB_IMAGE_LIMIT``), exactly as before 087F1 existed. With it,
+  a focused PCB is rendered (``channel/evidenceGrade: viewport``) and the file
+  is written as ``live-pcb-<board>-<short uuid>.png``; an answer that does not
+  carry both fields is a failed step with no artifact, and a capability that
+  cannot be read is ``missing`` — never ``ok``, never a fabricated picture. PCB
+  live readback stays ``livePcb`` (readback + geometry); archived PCB review
+  and the offline geometry SVG are separate channels and are never written as
+  live PNG.
 * ``artifacts`` — every file written, relative to ``out_dir``, with byte count
   and sha256; images only after ``format == image/png`` + non-empty valid base64
   (a zip container or a broken payload is never written).
@@ -107,19 +115,21 @@ STEP_STDOUT_LIMIT = 2000
 
 #: One page render's leash. A correct schematic render answers in ~100–200 ms;
 #: 10 s also keeps a hung host (pit 23) from freezing the editor's progress toast
-#: for longer than a human should wait. Only schematic pages are rendered:
-#: ``export.render`` does not return for a PCB (see ``PCB_IMAGE_LIMIT``), so no
-#: PCB call is made and this leash never applies to one.
+#: for longer than a human should wait. A PCB is rendered only where the connector
+#: advertises ``capabilities.pcbRenderViewport`` (087F2), and the 087F1 branch does
+#: its own activating, measuring and drawing inside that same leash.
 RENDER_TIMEOUT_MS = 10_000
 
-#: Why ``pcbImage`` is ``not-applicable``. Measured 2026-10-31 on the V4 host:
-#: PCB1 was ``doc.open`` + ``document.current`` active, then
+#: Why ``pcbImage`` is ``not-applicable`` **on a connector without the viewport
+#: capability**. Measured 2026-10-31 on the V4 host: PCB1 was ``doc.open`` +
+#: ``document.current`` active, then
 #: ``export.render(format=png, scope=page, timeoutMs=60000)`` timed out whole 60 s
 #: while a schematic page answered in ~100 ms in the same session; V3 behaves the
-#: same. That is a host capability boundary, not a short leash: the API is the
-#: schematic export endpoint and has no PCB drawing to return. Retrying with a
-#: larger timeout only freezes the editor longer, so the channel stops calling it
-#: and says why instead of manufacturing a failed step or a placeholder image.
+#: same. Before 087F1 that endpoint had no PCB drawing to return, so asking again
+#: only froze the editor longer. 087F2's gate is what keeps this a *capability*
+#: statement instead of a guess: the string travels only when the connector did
+#: not advertise ``pcbRenderViewport``, and the SOT wording for the new branch is
+#: 087F3's batch (``docs/pits.md`` / ``docs/review-sop.md``), not this module's.
 PCB_IMAGE_LIMIT = (
     "HOST_API_SCOPE: export.render 是原理图（schematic）出图口，对 PCB 不适用——"
     "PCB1 已 doc.open + document.current 激活后仍整 60s 不返回（V4 实测；V3 同样），"
@@ -137,6 +147,43 @@ PCB_IMAGE_DETAIL = (
 
 #: The only render payload this module accepts as an image.
 RENDER_FORMAT = "image/png"
+
+#: The host capability this module gates the PCB render on (087F2), and the
+#: action that publishes it. Read **before** any render: an old connector
+#: simply omits the flag, and finding that out by calling `export.render` on a
+#: PCB is exactly the 10 s — or 60 s — wait this flag exists to prevent.
+CAPABILITY_ACTION = "sys.connector_status"
+PCB_VIEWPORT_CAPABILITY = "pcbRenderViewport"
+
+#: The three verdicts of that gate. Only `available` may render.
+CAPABILITY_AVAILABLE = "available"
+CAPABILITY_ABSENT = "absent"
+CAPABILITY_UNREADABLE = "unreadable"
+
+#: What a PCB render answer must say about itself (087F1). A document render
+#: carries `channel: 'document'` and no evidence grade; it is not this picture.
+PCB_RENDER_CHANNEL = "viewport"
+PCB_RENDER_GRADE = "viewport"
+
+#: ``pcbImage``'s detail when the picture really was taken. The wording matters:
+#: this is the editor's **current viewport**, not a document render, and the
+#: freshness of a viewport is the caller's to check before using it as evidence.
+PCB_VIEWPORT_DETAIL = (
+    "PCB viewport 位图已落盘：export.render 按 channel=viewport、"
+    "evidenceGrade=viewport 返回当前视口的绘制画面，这是 viewport 级画面，"
+    "不是 document render（不是文档级出图、不含 bbox、不是 SVG/PDF），"
+    "当视觉证据用之前还要核它是否新鲜。"
+)
+
+#: ``pcbImage``'s detail when the capability question could not be answered.
+#: Neither answer is available: saying not-applicable would confirm an absence
+#: nobody read, saying failed would confirm a render that was never attempted.
+CAPABILITY_UNVERIFIED_DETAIL = (
+    "PCB 位图能力未核实：sys.connector_status 没有给出可判定的 "
+    "capabilities.pcbRenderViewport，既不能声称宿主能出 PCB 图，也不能声称不能；"
+    "本次未调用 export.render、未生成伪图。这不是 not-applicable（确认无能力），"
+    "也不是 failed（确认出图失败）。"
+)
 
 #: The 8-byte PNG signature. A payload that merely *claims* `image/png` in a
 #: well-formed base64 string is not a picture; only these bytes are.
@@ -160,9 +207,10 @@ _CHANNEL_ACTIONS: dict[str, frozenset[str]] = {
     CHANNEL_SCHEMATIC_IMAGE: frozenset(
         {"doc.open", "document.current", "export.render"}
     ),
-    # No action: PCB images are never attempted (``PCB_IMAGE_LIMIT``), so the
-    # channel has no steps to attribute.
-    CHANNEL_PCB_IMAGE: frozenset(),
+    # A PCB's own render steps. `sys.connector_status` is deliberately absent: it
+    # is a host-level reading (no document, like `doc.list`), not something this
+    # board's picture was made of.
+    CHANNEL_PCB_IMAGE: frozenset({"export.render"}),
 }
 
 #: Per-document actions a channel needs to be `ok`.
@@ -172,8 +220,9 @@ _REQUIRED_ACTIONS: dict[str, tuple[str, ...]] = {
         "doc.open", "document.current", "pcb.readback", "pcb.geometry"
     ),
     CHANNEL_SCHEMATIC_IMAGE: ("doc.open", "document.current", "export.render"),
-    # Nothing is required: the channel is closed as not-applicable, never failed
-    # for an API it must not call.
+    # Nothing unconditional here: whether a PCB render is required depends on the
+    # connector's `capabilities.pcbRenderViewport` (087F2), so `_failures_for`
+    # decides it per run instead of this fixed table.
     CHANNEL_PCB_IMAGE: (),
 }
 
@@ -626,6 +675,120 @@ def _component_ids(data: dict) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# the PCB viewport capability gate (087F2)
+# ---------------------------------------------------------------------------
+
+
+def _capability_verdict(payload: Any) -> tuple[str, dict | None]:
+    """Read ``capabilities.pcbRenderViewport`` off a ``sys.connector_status`` answer.
+
+    Only an explicit ``true`` opens the gate. A missing ``capabilities`` object or
+    a missing flag is an **old connector** (``absent``) — the branch that answers
+    ``channel: 'viewport'`` did not exist there — and an answer that decides
+    neither way is ``unreadable``, kept apart so no caller can read it as a
+    capability in either direction.
+    """
+    if not isinstance(payload, dict):
+        return CAPABILITY_UNREADABLE, _error(
+            "CAPABILITY_BAD_PAYLOAD",
+            "sys.connector_status 没有返回对象：无法判定 "
+            f"capabilities.{PCB_VIEWPORT_CAPABILITY}",
+        )
+    capabilities = payload.get("capabilities")
+    if capabilities is None:
+        return CAPABILITY_ABSENT, None
+    if not isinstance(capabilities, dict):
+        return CAPABILITY_UNREADABLE, _error(
+            "CAPABILITY_BAD_PAYLOAD",
+            f"sys.connector_status 的 capabilities 是 "
+            f"{type(capabilities).__name__}，不是对象：无法判定 "
+            f"{PCB_VIEWPORT_CAPABILITY}",
+        )
+    flag = capabilities.get(PCB_VIEWPORT_CAPABILITY)
+    if flag is None:
+        return CAPABILITY_ABSENT, None
+    if flag is True:
+        return CAPABILITY_AVAILABLE, None
+    if flag is False:
+        return CAPABILITY_ABSENT, None
+    return CAPABILITY_UNREADABLE, _error(
+        "CAPABILITY_NOT_BOOLEAN",
+        f"capabilities.{PCB_VIEWPORT_CAPABILITY} 是 {flag!r}，不是 true/false："
+        "能力状态无法判定，只能按未核实披露（不按有能力处理）",
+    )
+
+
+def _viewport_state(pcb_viewport: dict | None) -> str | None:
+    return (pcb_viewport or {}).get("state")
+
+
+def _viewport_available(pcb_viewport: dict | None) -> bool:
+    return _viewport_state(pcb_viewport) == CAPABILITY_AVAILABLE
+
+
+def _png_blob(payload: Any) -> tuple[bytes, dict | None]:
+    """The bytes of a render answer that really is a PNG, or the reason it is not.
+
+    A payload that merely *claims* ``image/png`` in well-formed base64 is not a
+    picture: the 8-byte signature is checked, and a zip container (the export
+    path's other favourite) is named as the container it is.
+    """
+    if not isinstance(payload, dict):
+        return b"", _error("RENDER_BAD_PAYLOAD", "export.render 没有返回对象")
+    if payload.get("format") != RENDER_FORMAT:
+        return b"", _error(
+            "RENDER_NOT_PNG",
+            f"render 回的是 {payload.get('format')!r}，不是 {RENDER_FORMAT}"
+            "（不落盘）",
+        )
+    encoded = payload.get("data")
+    if not isinstance(encoded, str) or not encoded:
+        return b"", _error("RENDER_EMPTY", "render 没有回非空 base64 data")
+    try:
+        blob = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        return b"", _error("RENDER_BAD_BASE64", "render 的 data 不是合法 base64")
+    if not blob:
+        return b"", _error("RENDER_EMPTY", "render 的 data 解码后为空")
+    if blob[:4] == b"PK\x03\x04":
+        return b"", _error(
+            "RENDER_NOT_IMAGE", "render 的 data 是 zip 容器，不是 PNG（不落盘）"
+        )
+    if not blob.startswith(PNG_SIGNATURE):
+        return b"", _error(
+            "RENDER_NOT_IMAGE",
+            "render 的 data 不是 PNG（缺 8 字节 PNG 签名，不落盘）",
+        )
+    return blob, None
+
+
+def _viewport_provenance_error(payload: Any) -> dict | None:
+    """A PCB render must say ``channel/evidenceGrade: 'viewport'`` about itself.
+
+    The step is claimed as a PCB viewport, so an answer that does not carry both
+    fields — a document render, a geometry dump, a payload from some other path —
+    is refused **before anything is written**. Neither field is defaulted.
+    """
+    if not isinstance(payload, dict):
+        return _error("RENDER_BAD_PAYLOAD", "export.render 没有返回对象")
+    channel = payload.get("channel")
+    if channel != PCB_RENDER_CHANNEL:
+        return _error(
+            "RENDER_CHANNEL_MISMATCH",
+            f"render 回的是 channel={channel!r}，不是 {PCB_RENDER_CHANNEL!r}："
+            "document/几何不能冒充 PCB viewport（不落盘、不记 ok）",
+        )
+    grade = payload.get("evidenceGrade")
+    if grade != PCB_RENDER_GRADE:
+        return _error(
+            "RENDER_GRADE_MISMATCH",
+            f"render 回的是 evidenceGrade={grade!r}，不是 {PCB_RENDER_GRADE!r}："
+            "证据等级不对，不落盘、不记 ok",
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # the collector
 # ---------------------------------------------------------------------------
 
@@ -640,6 +803,9 @@ class _Capture:
         self.steps: list[dict] = []
         self.artifacts: list[dict] = []
         self.navigated = False
+        #: The PCB viewport capability verdict, read once per run before the first
+        #: PCB is touched: ``{"state": ..., "error": ...}`` or None (not read).
+        self.pcb_viewport: dict | None = None
 
     async def call(
         self,
@@ -688,53 +854,71 @@ class _Capture:
         self.steps.append(step)
         return step
 
+    def _store_png(
+        self,
+        document: dict,
+        blob: bytes,
+        *,
+        channel: str,
+        prefix: str,
+        extra: dict | None = None,
+    ) -> None:
+        stem = (
+            f"{prefix}-{_safe_stem(document['name'])}-"
+            f"{_short_uuid(document['uuid'])}"
+        )
+        relative = _write_unique(self.out_dir, stem, ".png", blob)
+        row = {
+            "channel": channel,
+            "documentUuid": document["uuid"],
+            "kind": "image",
+            "page": document["name"],
+            "file": relative,
+            "bytes": len(blob),
+            "sha256": hashlib.sha256(blob).hexdigest(),
+            "format": RENDER_FORMAT,
+        }
+        row.update(extra or {})
+        self.artifacts.append(row)
+
     def png_check(self, document: dict) -> Callable[[Any], dict | None]:
         """Validate one schematic render payload and write the PNG only if it is
-        one. Only schematic pages are rendered (``PCB_IMAGE_LIMIT``)."""
+        one."""
 
         def check(payload: Any) -> dict | None:
-            if not isinstance(payload, dict):
-                return _error("RENDER_BAD_PAYLOAD", "export.render 没有返回对象")
-            if payload.get("format") != RENDER_FORMAT:
-                return _error(
-                    "RENDER_NOT_PNG",
-                    f"render 回的是 {payload.get('format')!r}，不是 {RENDER_FORMAT}"
-                    "（不落盘）",
-                )
-            encoded = payload.get("data")
-            if not isinstance(encoded, str) or not encoded:
-                return _error("RENDER_EMPTY", "render 没有回非空 base64 data")
-            try:
-                blob = base64.b64decode(encoded, validate=True)
-            except (binascii.Error, ValueError):
-                return _error("RENDER_BAD_BASE64", "render 的 data 不是合法 base64")
-            if not blob:
-                return _error("RENDER_EMPTY", "render 的 data 解码后为空")
-            if blob[:4] == b"PK\x03\x04":
-                return _error(
-                    "RENDER_NOT_IMAGE", "render 的 data 是 zip 容器，不是 PNG（不落盘）"
-                )
-            if not blob.startswith(PNG_SIGNATURE):
-                return _error(
-                    "RENDER_NOT_IMAGE",
-                    "render 的 data 不是 PNG（缺 8 字节 PNG 签名，不落盘）",
-                )
-            stem = (
-                f"live-sch-{_safe_stem(document['name'])}-"
-                f"{_short_uuid(document['uuid'])}"
-            )
-            relative = _write_unique(self.out_dir, stem, ".png", blob)
-            self.artifacts.append(
-                {
-                    "channel": CHANNEL_SCHEMATIC_IMAGE,
-                    "documentUuid": document["uuid"],
-                    "kind": "image",
-                    "page": document["name"],
-                    "file": relative,
-                    "bytes": len(blob),
-                    "sha256": hashlib.sha256(blob).hexdigest(),
-                    "format": RENDER_FORMAT,
-                }
+            blob, error = _png_blob(payload)
+            if error is not None:
+                return error
+            self._store_png(document, blob, channel=CHANNEL_SCHEMATIC_IMAGE, prefix="live-sch")
+            return None
+
+        return check
+
+    def pcb_png_check(self, document: dict) -> Callable[[Any], dict | None]:
+        """Validate one **PCB viewport** render and keep it only if it is one.
+
+        Two questions, in this order: did this answer come from the viewport
+        branch at all (``channel`` / ``evidenceGrade``), and are the bytes really
+        a PNG. Either one failing is a failed step with **no file**: a document
+        render recorded as a PCB picture would be an evidence grade nobody took.
+        """
+
+        def check(payload: Any) -> dict | None:
+            provenance = _viewport_provenance_error(payload)
+            if provenance is not None:
+                return provenance
+            blob, error = _png_blob(payload)
+            if error is not None:
+                return error
+            self._store_png(
+                document,
+                blob,
+                channel=CHANNEL_PCB_IMAGE,
+                prefix="live-pcb",
+                extra={
+                    "renderChannel": PCB_RENDER_CHANNEL,
+                    "evidenceGrade": PCB_RENDER_GRADE,
+                },
             )
             return None
 
@@ -790,7 +974,7 @@ async def _open_and_verify(capture: _Capture, document: dict) -> bool:
 
 
 async def _render_page(capture: _Capture, document: dict) -> dict:
-    """Render one schematic page. Never called for a PCB (``PCB_IMAGE_LIMIT``)."""
+    """Render one schematic page (``channel: 'document'``)."""
     params = {
         "format": "png",
         "scope": "page",
@@ -806,6 +990,60 @@ async def _render_page(capture: _Capture, document: dict) -> dict:
         "export.render",
         params,
         check=capture.png_check(document),
+    )
+    return step
+
+
+async def _read_pcb_viewport_capability(capture: _Capture) -> dict:
+    """Ask the connector what it can do **before** any PCB render (087F2).
+
+    One ``sys.connector_status`` read for the whole run, recorded as a host-level
+    step (``documentUuid: ""``, like ``doc.list``) because it is a fact about the
+    connector build, not about one board. Only an explicit ``true`` opens the
+    render path, so an old connector gets zero PCB render calls instead of a
+    render timeout spent rediscovering that its ``export.render`` has no PCB
+    branch; an answer that decides neither way stays ``unreadable``.
+    """
+    verdict: dict = {"state": CAPABILITY_UNREADABLE, "error": None}
+
+    def check(payload: Any) -> dict | None:
+        state, error = _capability_verdict(payload)
+        verdict["state"] = state
+        verdict["error"] = error
+        return error
+
+    _, step = await capture.call("", CAPABILITY_ACTION, {}, check=check)
+    if verdict["error"] is None and step["status"] != STATUS_OK:
+        verdict["error"] = step.get("error") or _error(
+            "CAPABILITY_UNREADABLE",
+            f"{CAPABILITY_ACTION} 调用失败：无法判定 "
+            f"capabilities.{PCB_VIEWPORT_CAPABILITY}",
+        )
+    return verdict
+
+
+async def _render_pcb_viewport(capture: _Capture, document: dict) -> dict:
+    """Render the **focused PCB's viewport** — only where the gate said yes.
+
+    The connector's 087F1 branch activates the board, measures it and draws the
+    current rendered area; the answer must carry ``channel/evidenceGrade:
+    viewport`` or nothing is written (``pcb_png_check``).
+    """
+    params = {
+        "format": "png",
+        "scope": "page",
+        "pageUuid": document["uuid"],
+        "fileName": (
+            f"live-pcb-{_safe_stem(document['name'])}-"
+            f"{_short_uuid(document['uuid'])}.png"
+        ),
+        "timeoutMs": RENDER_TIMEOUT_MS,
+    }
+    _, step = await capture.call(
+        document["uuid"],
+        "export.render",
+        params,
+        check=capture.pcb_png_check(document),
     )
     return step
 
@@ -845,17 +1083,25 @@ async def _collect_schematic(
 
 
 async def _collect_pcb(capture: _Capture, documents: list[dict]) -> None:
-    """One PCB at a time: readback, then geometry.
+    """One PCB at a time: readback, then geometry, then — if the connector says
+    it can — one viewport PNG of the board.
 
-    No picture is taken. ``export.render`` is schematic-only and never returns
-    for a PCB (``PCB_IMAGE_LIMIT``), so calling it here would only burn a timeout
-    and leave a failed step for a capability the host does not have.
+    The capability read comes first and only once (``capture.pcb_viewport``):
+    without ``capabilities.pcbRenderViewport`` no PCB render call is made at all,
+    so an old connector costs nothing but one status read. ``export.render`` is
+    still never called before the board's focus is proven.
     """
+    if documents and capture.pcb_viewport is None:
+        capture.pcb_viewport = await _read_pcb_viewport_capability(capture)
     for document in documents:
         if not await _open_and_verify(capture, document):
             uuid = document["uuid"]
             capture.skip(uuid, "pcb.readback", "SKIPPED", "焦点未核实，不在错误页面回读")
             capture.skip(uuid, "pcb.geometry", "SKIPPED", "焦点未核实，不测几何")
+            if _viewport_available(capture.pcb_viewport):
+                capture.skip(
+                    uuid, "export.render", "SKIPPED", "焦点未核实，不在错误页面出图"
+                )
             continue
 
         readback_data, readback_step = await capture.call(
@@ -880,6 +1126,8 @@ async def _collect_pcb(capture: _Capture, documents: list[dict]) -> None:
                 "DEPENDENCY_MISSING",
                 "pcb.readback 没有给出可用组件读数，bboxIds 依赖缺失，几何未测量",
             )
+        if _viewport_available(capture.pcb_viewport):
+            await _render_pcb_viewport(capture, document)
 
 
 async def _restore_focus(
@@ -968,12 +1216,49 @@ def _channel_row(
     }
 
 
+def _pcb_image_failures(
+    selected: list[dict],
+    index: dict[tuple[str, str], dict],
+    pcb_viewport: dict | None,
+) -> list[str]:
+    """A PCB picture is required only where the connector says it can draw one.
+
+    Without the capability nothing is required (the channel closes as
+    ``not-applicable`` with the recorded host limit). With it, **every** selected
+    board needs one successful viewport render: a board whose focus was never
+    proven has no picture, and calling the channel ``ok`` would claim one that
+    does not exist.
+    """
+    if not _viewport_available(pcb_viewport):
+        return []
+    failures: list[str] = []
+    for document in selected:
+        step = index.get((document["uuid"], "export.render"))
+        if step is None:
+            failures.append(f"export.render ({document['uuid']}): 没有该步骤记录")
+            continue
+        if step["status"] == STATUS_OK:
+            continue
+        error = step.get("error") or {}
+        reason = (
+            f"{error.get('code')}: {error.get('message')}"
+            if error.get("code") or error.get("message")
+            else step["status"]
+        )
+        failures.append(f"export.render ({document['uuid']}): {reason}")
+    return failures
+
+
 def _failures_for(
     channel: str,
     selected: list[dict],
     index: dict[tuple[str, str], dict],
     steps: list[dict],
+    *,
+    pcb_viewport: dict | None = None,
 ) -> list[str]:
+    if channel == CHANNEL_PCB_IMAGE:
+        return _pcb_image_failures(selected, index, pcb_viewport)
     failures: list[str] = []
     for document in selected:
         for action in _REQUIRED_ACTIONS[channel]:
@@ -996,6 +1281,40 @@ def _failures_for(
     return failures
 
 
+def _pcb_image_verdict(
+    pcb_viewport: dict | None,
+    *,
+    selected: list[dict],
+    covers_all: bool,
+    failures: list[str],
+) -> tuple[str, str]:
+    """Status and detail of ``pcbImage``, decided by the capability gate first.
+
+    Three worlds, never mixed: an unreadable capability is ``missing`` (nothing
+    is confirmed either way); no capability is 537C4's ``not-applicable`` plus
+    the recorded host limit; an advertised capability is judged like any other
+    evidence channel — ``failed`` if a board's picture is missing, ``missing``
+    for an explicit subset, ``ok`` only when every selected board was drawn.
+    """
+    if _viewport_state(pcb_viewport) == CAPABILITY_UNREADABLE:
+        return STATUS_MISSING, CAPABILITY_UNVERIFIED_DETAIL
+    if not _viewport_available(pcb_viewport):
+        return STATUS_NOT_APPLICABLE, PCB_IMAGE_DETAIL
+    if failures:
+        return STATUS_FAILED, (
+            f"{len(failures)} 块 PCB 没有拿到合规的 viewport 图：{failures[0]}。"
+            "已成功的图仍保留在 steps / artifacts。"
+        )
+    if not covers_all:
+        return STATUS_MISSING, (
+            f"显式选择只覆盖 {len(selected)} 块 PCB：其余没有出图，"
+            "覆盖不全只能记 missing（不是 ok，也不是 failed）。"
+        )
+    if not selected:
+        return STATUS_FAILED, "有 PCB 文档但没有任何一块被选中：没有 viewport 图可记，本通道 failed。"
+    return STATUS_OK, PCB_VIEWPORT_DETAIL
+
+
 def _build_channels(
     *,
     documents: dict[str, list[dict]],
@@ -1004,15 +1323,17 @@ def _build_channels(
     steps: list[dict],
     artifacts: list[dict],
     abort: dict | None,
+    pcb_viewport: dict | None = None,
 ) -> dict:
     """Derive the four channel rows from the steps that really ran.
 
-    Status rules, in this order (537C3b1 三):
+    Status rules, in this order (537C3b1 三, 087F2 for ``pcbImage``):
     * an unusable ``doc.list`` → **missing**: the document set is unknown;
     * no PCB document → ``not-applicable``; no schematic page → ``failed``;
     * a refused run (identity/selection/focus) → ``missing``: nothing was read;
-    * ``pcbImage`` → ``not-applicable`` by host capability: ``export.render`` is
-      schematic-only and is never called for a PCB, so there is no step to judge;
+    * ``pcbImage`` → decided by the capability gate (``_pcb_image_verdict``):
+      capability unreadable → ``missing``, no capability → ``not-applicable``
+      with the recorded host limit, capability + a missing picture → ``failed``;
     * any attempted required step failed → ``failed`` (successes stay listed);
     * an explicit subset that has not failed → ``missing`` (coverage, not quality);
     * every required step ok (and a non-empty netlist) → ``ok``;
@@ -1040,7 +1361,9 @@ def _build_channels(
             if row.get("channel") == channel
             and row.get("documentUuid") in selected_uuids
         ]
-        failures = _failures_for(channel, selected, index, steps)
+        failures = _failures_for(
+            channel, selected, index, steps, pcb_viewport=pcb_viewport
+        )
 
         if not listing_valid:
             status = STATUS_MISSING
@@ -1064,11 +1387,14 @@ def _build_channels(
             status = STATUS_MISSING
             detail = f"未导航采集：{abort.get('message') or abort.get('code')}"
         elif channel == CHANNEL_PCB_IMAGE:
-            # The host has no PCB render endpoint. This is a capability boundary,
-            # not a failure of this run and not a missing step: saying ok would
-            # invent a picture, saying failed would invite a pointless retry.
-            status = STATUS_NOT_APPLICABLE
-            detail = PCB_IMAGE_DETAIL
+            # 087F2: decided by the connector's own capability flag, never by a
+            # version number and never by trying the render and waiting.
+            status, detail = _pcb_image_verdict(
+                pcb_viewport,
+                selected=selected,
+                covers_all=bool(selection[kind].get("coversAll")),
+                failures=failures,
+            )
         elif failures:
             status = STATUS_FAILED
             detail = (
@@ -1110,14 +1436,16 @@ def _build_channels(
         ]
         if status == STATUS_FAILED and not errors:
             errors = list(failures) or [detail]
-        if (
-            channel == CHANNEL_PCB_IMAGE
-            and status == STATUS_NOT_APPLICABLE
-            and all_documents
-        ):
-            # The reason must travel with the row, not only in prose. With no PCB
-            # at all the earlier "no PCB" detail is the whole reason.
-            errors = [PCB_IMAGE_LIMIT]
+        if channel == CHANNEL_PCB_IMAGE:
+            if status == STATUS_NOT_APPLICABLE and all_documents:
+                # The reason must travel with the row, not only in prose. With no
+                # PCB at all the earlier "no PCB" detail is the whole reason.
+                errors = [PCB_IMAGE_LIMIT]
+            elif _viewport_state(pcb_viewport) == CAPABILITY_UNREADABLE:
+                capability_error = (pcb_viewport or {}).get("error")
+                errors = (
+                    [_error_text(capability_error)] if capability_error else [detail]
+                )
 
         channels[channel] = _channel_row(
             status,
@@ -1322,6 +1650,7 @@ async def collect_live_evidence(
         steps=capture.steps[:restore_split],
         artifacts=capture.artifacts,
         abort=abort,
+        pcb_viewport=capture.pcb_viewport,
     )
     ok = (
         identity["ok"] is True
