@@ -60,6 +60,19 @@ DRC/net class 影响面见 `.tmp_review_attribution/drc-netclass-impact.md`。�
 - 主代理变异 `count:null → 0`：第一次未重建 dist，变异无效，不记成功；重建后 **2 failed / 10 passed**，分别钉住 missing/throwing 不得伪造 0。随后 cp + SHA-256 恢复、重建 dist，12/12 恢复通过。子代理的空数组与去页 guard 变异也均先红并恢复。
 - 没有新增 CLI/DSH 工具，没有改 daemon 路由、版本号或真实工程，没有重启/热更。旧 drc_ruleset 行为不变。
 
-### 真机仍待办
+### 真机待办（下列 ROBOT 补验前的状态）
 
 当前没有活动 PCB 与已确认网络类样本，daemon 也未加载新目录，因此 `getAllNetClasses/getNetRules` 的真实字段、classes 空/非空两态、daemon 端到端和调用前后规则集零变化均未验证。不得把上述离线读数写成真机兼容或发布通过。
+
+
+## ROBOT 真实只读验收（2026-11-17）
+
+岳点名在 `ROBOT ctrl FOC` 验证。先准备 0.6.1 回滚包，再以 `--no-reload` 写入 0.6.2 connector；岳点击扩展菜单后，新实例上报 `pcbNetClassList=true`。没有页面 reload、没有设计写、没有丢失未保存状态。
+
+- `doc.focus` 精确进入 PCB1，`document.current` 确证后调用；finally 恢复 Start Page，恢复后 active=null 与原始状态一致。
+- 实际 `classes=[]`、`count=0`、`netRules` 为 **49 条**对象，两个 reads 均 true，missing/unreadable 均空，jsonChars=19156。这是合同中的真实「classes 为空而 netRules 非空」负例，不是“读不到”。
+- netRules 实测为 `type:"net"` 的记录，含 `name/targetNet` 及 Track、Via Size、Safe Spacing、Copper Zone、Plane Zone、Differential Pair 等约束键；原始值完整保存在本地 `.tmp_551_live/net-class-list.json`，公开文档不复制板级明细。
+- 调用前后 `pcb.drc_ruleset.ruleset` **逐字相同**，jsonChars 均 7128，零写旁证成立。
+- 因真实调用成功且无设计副作用，保留 daemon/ROBOT connector 0.6.2；0.6.1 回滚包仍留在 `.tmp_551_live/rollback/`。
+
+**仍未覆盖**：至少一个非空网络类及其 `{name,nets,color}` 字段、非空 classes 与 netClass 规则的对应关系。当前样本只能证明空 classes + 49 条 netRules 的真实路径，不能宣称非空网络类已验。新增样本不得通过修改这块真实工程制造。

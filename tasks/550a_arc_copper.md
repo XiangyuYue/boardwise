@@ -38,4 +38,11 @@ P3 继续禁止，直到 P2 取得宿主角度证据。P1 完成不等于 ARC �
 - net-path 只在同网且可能为铜的 ARC 时以 `arc_geometry_unsupported` 降级；非铜层进 ignored，旧手写 stats 仍有 `arc_copper_unparsed` 回退。ROBOT 查询仍为 INDETERMINATE，且仍有 pad_via_contact，未宣称转绿。
 - 新测试 17 条；主代理最终组合 **726 passed / 1 skipped in 58.16s**，仓库卫生 **4 passed**。首次组合因主代理写错测试文件名 exit 5，修正为 `test_126a_pcb_review_plumbing.py` 后重跑，未把该次当业务失败。
 - 主代理把 parser 临时改成 `math.radians(angle)`，原始值测试 **4 failed / 13 passed**，cp + SHA-256 恢复；子代理的 net 分组和全板 ARC 降级变异也均先红并恢复。
-- 格式文档 `docs/epru-format.md` §6.11 已同步。P3 几何、真实 V4 ARC、CENT 样本和在线角度核查仍未覆盖；KiCad 既有弧摊平不在本批改动。
+- 格式文档 `docs/epru-format.md` §6.11 已同步。P3 几何、真实 V4 ARC、CENT 样本和正负扫向仍未覆盖；KiCad 既有弧摊平不在本批改动。
+
+
+## P2 ROBOT 补验（2026-11-17）
+
+通过 `doc.focus` 进入 PCB1 并恢复 Start Page 后，`pcb.readback(includePrimitives=true)` 读到两条 ARC：目标记录 `ArcAngle=2.2`、`InteractiveMode=1`，另一条为 `-11.6`；归档目标值 2.1761 与宿主显示精度 2.2 一致。结合官方 `getState_ArcAngle` 的度数合同，**角度单位按度已有宿主证据**，不做弧度转换。
+
+`pcb.geometry` 对两条 ARC 返回的包围盒基本只覆盖起终点/弦，未提供足以区分正负扫向的弧腹证据。因此 **P3 仍不能只凭本批数据安全接入几何**；度数已核，正负方向与宿主 arc bbox 的口径仍是未决项。全程无设计写，Start Page 已恢复。
