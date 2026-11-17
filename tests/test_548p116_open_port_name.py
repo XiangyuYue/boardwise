@@ -199,4 +199,3 @@ def test_a_clear_stated_run_keeps_its_original_geometry_verbatim():
     assert not dc._overlaps(row, body), row
     assert _length(port.run) == 40.0
     assert port.run[-1] == _straight(start, direction, 40.0)[-1]
-
