@@ -27542,7 +27542,7 @@ def _local_label_carriers(
         direction, far = fars[index]
         trial = None
         for box_rung in range(1, TEXT_ESCALATION_STEPS + 1):
-            avoid = [*occupied, *flag_boxes, *rows, *(item.bbox for item in placed)]
+            avoid = [*occupied, *flag_boxes, *rows, *(item.bbox for item in seated)]
             trial = _local_label_trial_box(
                 nets[index], far, direction, box_rung, avoid, segments,
                 blocks[index], parts[index],
@@ -27588,7 +27588,7 @@ def _local_label_carriers(
                 - own_points.get(nets[index], set())
             )
             avoid_now = [*occupied, *flag_boxes, *rows,
-                         *(item.bbox for item in placed)]
+                         *(item.bbox for item in seated)]
             chosen_run = None
             refusals: list[str] = []
             layer_direction = fars[index][0]
@@ -27668,10 +27668,10 @@ def _local_label_carriers(
         if _declared_input_wire(ctx, nets[index], len(own_points[nets[index]])):
             trial.stub_min = _stated_stub_floor(ctx.presentation)
             trial.row_model = ctx.presentation.label_policy.row_model
-        placed.append(trial)
+        seated.append(trial)
 
     for index in range(len(nets)):
-        label = placed[index]
+        label = seated[index]
         labels.append(label)
         occupied.append(label.bbox)
         solids.append(label.bbox)
