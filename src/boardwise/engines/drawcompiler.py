@@ -28677,6 +28677,23 @@ def _relation_violations(
                 points = stated
         if points is None:
             continue
+        # 548P143-B: an order relation that names a **net** endpoint is measured
+        # between that net's part-own pin and the same part's origin — two points
+        # one translation moves together. :func:`placement._repair_delta` already
+        # refuses to repair such a pair (548P141), so no placement can ever
+        # *satisfy* it by moving anything: pricing it as a violation turned the
+        # drawing layer's side preference (where a label's seat stands) into a
+        # hard refusal of long-accepted pages — CH340/ESP/CH343's single-member
+        # ports declare `right-of(TXD, U)` over a symbol whose pin leaves left and
+        # were refused on every variant. It stays measurable, so the search keeps
+        # the pose preference 548P107 pinned; it is not a page gate. A multi-member
+        # net was already unmeasurable (548P143), and a part-to-part order relation
+        # is untouched: those two origins can be moved apart.
+        if item.kind in (ABOVE, BELOW, LEFT_OF, RIGHT_OF) and (
+            circuit_spec.net(str(item.subject)) is not None
+            or circuit_spec.net(str(item.object)) is not None
+        ):
+            continue
         kind = item.kind
         if (
             pair_reading and escape_of is not None and frame_of is not None
