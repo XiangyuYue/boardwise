@@ -709,7 +709,9 @@ plan that drew no wire.
 `gndClustering`（只许 `radius`、必须正有限、缺省不写不序列化、非法值具名拒绝）。
 声明后，**power 与 gnd** 的同网焊盘按半径分簇，每簇各画一枚旗 + 短轨、簇间不拉母线；
 power 网在声明时取 `wire`（轨）样式而不是逐脚旗。`gndClustering` 的既有语义不被改写，
-两者对同一 gnd 网都适用时取较大半径；未声明该键的页逐字节不变。
+两者对同一 gnd 网都适用时取较大半径；未声明该键的页逐字节不变。若文档另写了
+`flagShareGroups`，显式旗域成员分组优先，`railClustering` / `gndClustering` 的聚簇整体不生效，
+不叠加两套分组。
 按岳 2026-10-20 的旗标裁定与 `boardwise-draw` §5A：power 逐脚、GND 聚簇的旧分歧不是
 合法视觉裁决，需要聚簇时两条轨走同一策略。
 
@@ -1112,6 +1114,16 @@ the series conflict each declaration already states is checked by the parser.
 Page slicing carries a group **whole or not at all**: a module carries the group
 only when every branch's part belongs to it, and otherwise omits the group
 entirely. Absent and `[]` read the same and change nothing.
+
+**Explicit local flag membership (`flagShareGroups`).** This optional top-level key
+names the pads that share each local flag seat for one net, for example
+`{"net":"GND","groups":[["C4.2","J1.2"]]}`. It is not another spelling of
+`serviceGroups`: the latter states joint service seating, while this key states
+which pins share a flag. Missing or `[]` keeps the automatic policy. When stated,
+`railClustering` and `gndClustering` do not add a second clustering pass. Members
+must be real pins of that net, each group stays inside one module, and duplicate,
+cross-group, cross-module or otherwise conflicting declarations are refused by name;
+it never licenses a page-wide bus.
 
 **Historical 548J-A/B1 status:** 548J-A is the contract and the page slice, not
 an accepted algorithm. The
