@@ -13571,6 +13571,15 @@ class _SeatFirstTextPlan:
     scene: _SeatFirstScene
     hypothetical: tuple[tuple[str, str, _SeatFirstSeat], ...]
     refusals: tuple[GrammarFailure, ...]
+    #: 548D3D-A2: the **page-level** failure this enumeration itself returned, if
+    #: any. ``refusals`` is a different channel: it also carries the probe's own
+    #: conclusions (a hypothetical seat that the real texts did not reproduce),
+    #: which are evidence about the search, not a reason for the page to refuse.
+    #: Reusing ``plans`` downstream is only safe when the two channels stay apart —
+    #: measured: handing ``refusals[0]`` to the terminal as its page failure turned
+    #: sixteen A3 contract cases red with "hypothetical seat … moved in the real
+    #: scene", a probe note that had no business refusing the page.
+    page: GrammarFailure | None = None
 
     @property
     def ok(self) -> bool:
@@ -13749,7 +13758,7 @@ def _seat_first_text_plan(
                 gaps.append(entry)
             collided.append((plan.net, item.group, item.seat))
     if not gaps and not collided:
-        return _SeatFirstTextPlan(plans, scene, (), tuple(refusals))
+        return _SeatFirstTextPlan(plans, scene, (), tuple(refusals), page=page)
     hypothetical: list[tuple[str, str, _SeatFirstSeat]] = []
     # A seat that already exists keeps its own anchor and lead: the wall the one
     # re-layout gets is **that** glyph, so the row moves off the flag the seat
@@ -13772,7 +13781,9 @@ def _seat_first_text_plan(
             continue
         hypothetical.append((net_id, group, seat))
     if not hypothetical:
-        return _SeatFirstTextPlan(plans, scene, tuple(hypothetical), tuple(refusals))
+        return _SeatFirstTextPlan(
+            plans, scene, tuple(hypothetical), tuple(refusals), page=page,
+        )
     extra = tuple(seat.glyph for _net, _group, seat in hypothetical)
     walls2 = [*text_walls, *extra] if not extra_walls else [
         *text_walls, *extra_walls, *extra]
@@ -13791,7 +13802,9 @@ def _seat_first_text_plan(
             "different answers; the allocator does not shorten or nudge text "
             "and does not run a second re-layout",
         ))
-        return _SeatFirstTextPlan(plans, scene, tuple(hypothetical), tuple(refusals))
+        return _SeatFirstTextPlan(
+            plans, scene, tuple(hypothetical), tuple(refusals), page=page,
+        )
     scene2 = _seat_first_scene_of(
         ctx, placed, texts2,
         obstacles if not extra_walls else [*obstacles, *extra_walls],
@@ -13851,7 +13864,9 @@ def _seat_first_text_plan(
             f"{plan.net!r} is still incomplete after the one text re-layout: "
             + "; ".join(item.detail for item in plan.refusals),
         ))
-    return _SeatFirstTextPlan(plans2, scene2, tuple(hypothetical), tuple(refusals))
+    return _SeatFirstTextPlan(
+        plans2, scene2, tuple(hypothetical), tuple(refusals), page=page,
+    )
 
 
 @dataclass(frozen=True)
@@ -14032,7 +14047,7 @@ def _seat_first_text_terminal(
     # replay below, which is a genuine second enumeration measured against this
     # one. Nothing is cached across calls, which is what 201F measured as unsafe.
     plans = discovery.plans
-    page = discovery.refusals[0] if discovery.refusals else None
+    page = discovery.page
     refusals: list[GrammarFailure] = []
     if page is not None:
         refusals.append(page)
