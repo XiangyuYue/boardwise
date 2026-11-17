@@ -27537,7 +27537,7 @@ def _local_label_carriers(
         if row is not None:
             rows.append(row)
 
-    placed: list[LayoutLabel] = []
+    seated: list[LayoutLabel] = []
     for index in range(len(nets)):
         direction, far = fars[index]
         trial = None
