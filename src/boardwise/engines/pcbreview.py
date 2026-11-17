@@ -1576,6 +1576,22 @@ def _review_units(source_path: str | Path) -> list[tuple[str, str, Any, Any]]:
     ]
 
 
+def review_units(source_path: str | Path) -> list[tuple[str, str, Any, Any]]:
+    """The public name of :func:`_review_units` — one implementation, two callers.
+
+    550 is why this exists: the offline ``boardwise pcb net-path`` adapter is
+    assembly-owned and needs exactly this seam (container chosen once, boards
+    ``(title, board uuid, read board, read pcb model)``, readers still deferred
+    so one board parses at a time), and a ``_name`` may not cross a layer
+    boundary (``tests/test_layer_rules.py``). A wrapper rather than a second
+    reader keeps the tuple shape, the laziness and every refusal in one place,
+    so the reviewer and the net-path command cannot drift apart on which board
+    is which. ``_review_units`` stays private for the in-layer callers
+    (:func:`run_pcb_review`), whose behaviour is unchanged.
+    """
+    return _review_units(source_path)
+
+
 def run_pcb_review(
     source_path: str | Path,
     model: Any = None,

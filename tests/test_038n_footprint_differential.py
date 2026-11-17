@@ -276,9 +276,16 @@ V4_COPIES = "footprint-library-v4-copies"
 #: `rulebody` d2ff8ae4 -> 2b62613f. Only that one row is new. A generator-
 #: ratified update, **not** an unreviewed baseline: the other ten rows are
 #: byte-identical, and re-pinning them is out of bounds.
+#:
+#: A **third** move of that one row is reviewed the same way: 038Y appended
+#: `rules/pcb/{overlap,silkbody,silkpad}.py`, moving `rulebody`
+#: 2b62613f -> 1cc2bff3, and the 0.6.1 release raised `toolVersion` and
+#: `expectedConnectorVersion` 0.6.0 -> 0.6.1; the official generator run in
+#: `d422e7a` regenerated input and manifest together but re-pinned neither this
+#: literal nor its two siblings. The other ten rows stay byte-identical.
 PRE_EXISTING = {
     "review-report-projection": (
-        "8597f0ce9ea9cadf0259842def71a4e81324e0c9de8f5765c0d273db48f81618"
+        "f1713af652c8c6d2aa77b627271754309c820589c050d167f1208e89bb8080c7"
     ),
     "layout-plan-geometry": (
         "5241c07f5f0417ea8226720cfbd39f74c813c2a0513635fb1d83cf866f48a233"

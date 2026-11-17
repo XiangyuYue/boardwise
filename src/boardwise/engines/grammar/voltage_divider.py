@@ -65,6 +65,28 @@ in any circuit. The branch is consulted **only when the power branch finds no
 chain**, so every circuit that binds from a power rail binds exactly as before
 (same chain, same evidence, same refusals) — the power reading stays the
 first reading.
+
+**A family of independent chains (548D3D-F1).** Two status LEDs on one page are
+two dividers: `LED1_K→R2→LED1_A→D1→GND` and `LED2_K→R3→LED2_A→D2→GND`. Reading
+only the first leaves the second one unbound, and an unbound twin is the "成对
+支路偶然不一致" defect the drawing line refuses (boardwise-draw sec.3). So a bind
+may consume a **family**: chains in the canonical order that share **no arm and
+no tap** with one already read, and that live in the **same module**. Two
+readings of one ladder — a chain that reuses an arm, or one that hangs on a tap
+this chain already owns — are not another chain, and saying otherwise would
+draw one divider twice. The shared power and ground nets are not a reason to
+duplicate a binding either: `in` and `gnd` are bound once per net.
+
+The family reading is **opt-in on the page's two layout declarations** (548D3D-F1A):
+a stated `serviceLayout` **and** a stated `labelPolicy.stubMin` above zero. Both
+are the author asking for served seats and real name stubs — the reading a pair
+of twin branches is drawn for — and neither is `textPlacement: native-attr`,
+which the first build used and which turned the compiler's page-wide paired
+reading on for unrelated islands. The predicate is restated here rather than
+imported, so this module keeps its own judgment. A page that states neither, a
+page whose `stubMin` is zero or absent, and every **power**-driven divider keeps
+the single-chain result byte for byte — only a declared signal top reads a
+family, because that is the measured two-branch island and nothing else.
 """
 
 from __future__ import annotations
@@ -221,7 +243,9 @@ class VoltageDividerGrammar:
                 )])
         if not chains:
             return refused_result([_no_chain_failure(circuit, edges, power, ground)])
-        return self._result(circuit, presentation, edges, chains)
+        family = _family(presentation, chains)
+        others = [chain for chain in chains if not any(chain is taken for taken in family)]
+        return self._result(circuit, presentation, edges, family, others)
 
     # ------------------------------------------------------------- internals
 
@@ -279,181 +303,230 @@ class VoltageDividerGrammar:
         circuit: CircuitSpec,
         presentation: PresentationSpec,
         edges: dict[str, tuple[str, str]],
-        chains: list[_Chain],
+        family: list[_Chain],
+        others: list[_Chain],
     ) -> GrammarResult:
-        chain = chains[0]
-        runners = _runner_up_note(chains)
-        power_side = presentation.side_for("power") or "top"
+        runners = _runner_up_note(len(family), others)
+        input_side = _input_pair_side(circuit, presentation, family)
+        power_side = input_side or presentation.side_for("power") or "top"
         gnd_side = presentation.side_for("gnd") or "bottom"
         axis, order_kind, tap_kind = _orientation(power_side, gnd_side)
-        chain_nets = (chain.in_net, *chain.taps, chain.gnd_net)
-        prov = weakest_provenance(
-            *(net_provenance(circuit, net_id) for net_id in chain_nets),
-            *(part_provenance(circuit.part(arm)) for arm in chain.arms),
-        )
+        # Every arm of the family: a part that is one chain's arm is never
+        # another chain's tap branch (548D3D-F1).
+        family_arms = frozenset(arm for chain in family for arm in chain.arms)
+        # `in`/`gnd` are bound once per net: two branches returning to one
+        # ground share the ground role, they do not duplicate it.
+        ends_bound: set[tuple[str, str]] = set()
+        branches_bound: set[str] = set()
 
         bindings: list[RoleBinding] = []
         constraints: list[RelativeConstraint] = []
-        branch_constraints: list[RelativeConstraint] = []
         obligations: list[GrammarObligation] = []
 
-        for index, arm in enumerate(chain.arms):
-            role = _arm_role(index, len(chain.arms))
-            bindings.append(
-                RoleBinding(
-                    role=role,
-                    part_id=arm,
-                    evidence=evidence(
-                        f"role={role}: {_arm_clause(index, chain)}",
-                        part_clause(circuit, arm),
-                        f"chain chosen: {chain.describe()}",
-                        f"provenance={prov}",
-                        runners,
-                    ),
-                )
+        for chain in family:
+            chain_nets = (chain.in_net, *chain.taps, chain.gnd_net)
+            prov = weakest_provenance(
+                *(net_provenance(circuit, net_id) for net_id in chain_nets),
+                *(part_provenance(circuit.part(arm)) for arm in chain.arms),
             )
+            chain_constraints: list[RelativeConstraint] = []
+            branch_constraints: list[RelativeConstraint] = []
+            chain_obligations: list[GrammarObligation] = []
+            chain_branches: list[str] = []
 
-        for role, net_id in (("in", chain.in_net), ("gnd", chain.gnd_net)):
-            if role == "in" and chain.top == TOP_SIGNAL:
-                end = (
-                    "signal-input end (a declared input port, not a rail: "
-                    f"{_port_clause(circuit, presentation, net_id)} — 057 sec.7.1)"
-                )
-            else:
-                end = f"{'power' if role == 'in' else 'ground'} end"
-            bindings.append(
-                RoleBinding(
-                    role=role,
-                    part_id=net_id,
-                    evidence=evidence(
-                        f"role={role}: the {end} of the chain "
-                        f"{chain.describe()}",
-                        _spec_net_clause(circuit, net_id),
-                        f"provenance={net_provenance(circuit, net_id)}",
-                        runners,
-                    ),
-                )
-            )
-
-        for index, tap in enumerate(chain.taps):
-            upper = chain.arms[index]
-            lower = chain.arms[index + 1]
-            branches = _branches(presentation, edges, chain, tap)
-            bindings.append(
-                RoleBinding(
-                    role="tap",
-                    part_id=tap,
-                    evidence=evidence(
-                        f"role=tap: the net between arm {index + 1} ({upper}) and "
-                        f"arm {index + 2} ({lower}) of the chain",
-                        _spec_net_clause(circuit, tap),
-                        part_clause(circuit, upper),
-                        part_clause(circuit, lower),
-                        f"provenance={weakest_provenance(net_provenance(circuit, tap), prov)}",
-                        runners,
-                    ),
-                )
-            )
-            constraints.append(
-                RelativeConstraint(
-                    kind=SAME_COLUMN if axis == "vertical" else SAME_ROW,
-                    subject=upper,
-                    object=lower,
-                    reason=(
-                        "053 sec.3: the two arms of a divider share one "
-                        f"{'column' if axis == 'vertical' else 'row'} — segment "
-                        f"{index + 1}/{len(chain.taps)} of {chain.describe()}"
-                    ),
-                )
-            )
-            constraints.append(
-                RelativeConstraint(
-                    kind=order_kind,
-                    subject=upper,
-                    object=lower,
-                    reason=(
-                        f"053 sec.3: upper_arm {_order_words(order_kind)} lower_arm "
-                        f"— {upper} is the end nearer {chain.in_net} "
-                        f"(sidePreferences.power={power_side}, "
-                        f"sidePreferences.gnd={gnd_side})"
-                    ),
-                )
-            )
-            constraints.append(
-                RelativeConstraint(
-                    kind=tap_kind,
-                    subject=upper,
-                    object=lower,
-                    reason=(
-                        f"053 sec.3: the tap leaves the junction of {upper} and "
-                        f"{lower} "
-                        f"{'horizontally' if tap_kind == HORIZONTAL_TAP else 'vertically'}"
-                        f" (tap={tap}) — stub plus label or port, directly visible"
-                    ),
-                )
-            )
-            obligations.append(
-                GrammarObligation(
-                    kind=VISIBLE_TAP,
-                    nets=(tap,),
-                    reason=(
-                        "053 sec.3: the tap is directly visible (stub + label or "
-                        "port), not absorbed by the upper/lower junction"
-                    ),
-                )
-            )
-            for branch in branches:
+            for index, arm in enumerate(chain.arms):
+                role = _arm_role(index, len(chain.arms))
                 bindings.append(
                     RoleBinding(
-                        role=TAP_BRANCH,
-                        part_id=branch,
+                        role=role,
+                        part_id=arm,
                         evidence=evidence(
-                            f"role={TAP_BRANCH}: a two-terminal part hanging on "
-                            f"tap {tap}, not an arm of the chain",
-                            part_clause(circuit, branch),
+                            f"role={role}: {_arm_clause(index, chain)}",
+                            part_clause(circuit, arm),
                             f"chain chosen: {chain.describe()}",
-                            f"provenance={weakest_provenance(net_provenance(circuit, tap), part_provenance(circuit.part(branch)))}",
-                        ),
-                    )
-                )
-                branch_constraints.append(
-                    RelativeConstraint(
-                        kind=NEAR,
-                        subject=branch,
-                        object=upper,
-                        reason=(
-                            f"053 sec.3: a parallel branch on the tap stays with "
-                            f"the tap node — {branch} is placed next to {upper} "
-                            "(the arm the tap leaves), not across a module boundary"
-                        ),
-                    )
-                )
-            if branches:
-                obligations.append(
-                    GrammarObligation(
-                        kind=OWNED_BRANCH,
-                        nets=(tap,),
-                        reason=(
-                            f"053 sec.3: the parallel branch on {tap} reads as "
-                            "owned by the tap node"
+                            f"provenance={prov}",
+                            runners,
                         ),
                     )
                 )
 
-        # The chain's own relations first, then the branches hanging off it:
-        # that is the order a reader follows the drawing in.
-        constraints.extend(branch_constraints)
-        obligations.insert(
-            0,
-            GrammarObligation(
-                kind=DIRECT_WIRE,
-                nets=chain_nets,
-                reason=(
-                    "053 sec.3: in→upper→tap→lower→gnd is wired end to end — a "
-                    "divider is never read by chasing labels"
+            for role, net_id in (("in", chain.in_net), ("gnd", chain.gnd_net)):
+                if (role, net_id) in ends_bound:
+                    continue
+                ends_bound.add((role, net_id))
+                if role == "in" and chain.top == TOP_SIGNAL:
+                    end = (
+                        "signal-input end (a declared input port, not a rail: "
+                        f"{_port_clause(circuit, presentation, net_id)} — 057 sec.7.1)"
+                    )
+                else:
+                    end = f"{'power' if role == 'in' else 'ground'} end"
+                bindings.append(
+                    RoleBinding(
+                        role=role,
+                        part_id=net_id,
+                        evidence=evidence(
+                            f"role={role}: the {end} of the chain "
+                            f"{chain.describe()}",
+                            _spec_net_clause(circuit, net_id),
+                            f"provenance={net_provenance(circuit, net_id)}",
+                            runners,
+                        ),
+                    )
+                )
+
+            for index, tap in enumerate(chain.taps):
+                upper = chain.arms[index]
+                lower = chain.arms[index + 1]
+                branches = _branches(
+                    presentation, edges, chain, tap, family_arms, branches_bound
+                )
+                bindings.append(
+                    RoleBinding(
+                        role="tap",
+                        part_id=tap,
+                        evidence=evidence(
+                            f"role=tap: the net between arm {index + 1} ({upper}) and "
+                            f"arm {index + 2} ({lower}) of the chain",
+                            _spec_net_clause(circuit, tap),
+                            part_clause(circuit, upper),
+                            part_clause(circuit, lower),
+                            f"provenance={weakest_provenance(net_provenance(circuit, tap), prov)}",
+                            runners,
+                        ),
+                    )
+                )
+                chain_constraints.append(
+                    RelativeConstraint(
+                        kind=SAME_COLUMN if axis == "vertical" else SAME_ROW,
+                        subject=upper,
+                        object=lower,
+                        reason=(
+                            "053 sec.3: the two arms of a divider share one "
+                            f"{'column' if axis == 'vertical' else 'row'} — segment "
+                            f"{index + 1}/{len(chain.taps)} of {chain.describe()}"
+                        ),
+                    )
+                )
+                chain_constraints.append(
+                    RelativeConstraint(
+                        kind=order_kind,
+                        subject=upper,
+                        object=lower,
+                        reason=(
+                            f"053 sec.3: upper_arm {_order_words(order_kind)} lower_arm "
+                            f"— {upper} is the end nearer {chain.in_net} "
+                            f"(sidePreferences.{'input' if input_side else 'power'}={power_side}, "
+                            f"sidePreferences.gnd={gnd_side})"
+                        ),
+                    )
+                )
+                chain_constraints.append(
+                    RelativeConstraint(
+                        kind=tap_kind,
+                        subject=upper,
+                        object=lower,
+                        reason=(
+                            f"053 sec.3: the tap leaves the junction of {upper} and "
+                            f"{lower} "
+                            f"{'horizontally' if tap_kind == HORIZONTAL_TAP else 'vertically'}"
+                            f" (tap={tap}) — stub plus label or port, directly visible"
+                        ),
+                    )
+                )
+                chain_obligations.append(
+                    GrammarObligation(
+                        kind=VISIBLE_TAP,
+                        nets=(tap,),
+                        reason=(
+                            "053 sec.3: the tap is directly visible (stub + label or "
+                            "port), not absorbed by the upper/lower junction"
+                        ),
+                    )
+                )
+                for branch in branches:
+                    chain_branches.append(branch)
+                    bindings.append(
+                        RoleBinding(
+                            role=TAP_BRANCH,
+                            part_id=branch,
+                            evidence=evidence(
+                                f"role={TAP_BRANCH}: a two-terminal part hanging on "
+                                f"tap {tap}, not an arm of the chain",
+                                part_clause(circuit, branch),
+                                f"chain chosen: {chain.describe()}",
+                                f"provenance={weakest_provenance(net_provenance(circuit, tap), part_provenance(circuit.part(branch)))}",
+                            ),
+                        )
+                    )
+                    branch_constraints.append(
+                        RelativeConstraint(
+                            kind=NEAR,
+                            subject=branch,
+                            object=upper,
+                            reason=(
+                                f"053 sec.3: a parallel branch on the tap stays with "
+                                f"the tap node — {branch} is placed next to {upper} "
+                                "(the arm the tap leaves), not across a module boundary"
+                            ),
+                        )
+                    )
+                if branches:
+                    chain_obligations.append(
+                        GrammarObligation(
+                            kind=OWNED_BRANCH,
+                            nets=(tap,),
+                            reason=(
+                                f"053 sec.3: the parallel branch on {tap} reads as "
+                                "owned by the tap node"
+                            ),
+                        )
+                    )
+
+            # The chain's own relations first, then the branches hanging off it:
+            # that is the order a reader follows the drawing in.
+            branches_bound.update(chain_branches)
+            constraints.extend(chain_constraints)
+            constraints.extend(branch_constraints)
+            chain_obligations.insert(
+                0,
+                GrammarObligation(
+                    kind=DIRECT_WIRE,
+                    nets=chain_nets,
+                    reason=(
+                        "053 sec.3: in→upper→tap→lower→gnd is wired end to end — a "
+                        "divider is never read by chasing labels"
+                    ),
                 ),
-            ),
-        )
+            )
+            obligations.extend(chain_obligations)
+
+        # Sibling chains of one module are read **side by side** (548D3D-F1):
+        # the corresponding arms of two chains share one row (one column when
+        # the chains are drawn horizontally), which is boardwise-draw sec.3's
+        # "同向、对齐" stated as a relation instead of left to a search. Only
+        # chains of one length can be aligned arm by arm; a ladder of another
+        # length is a different shape and keeps the ties it states itself.
+        if len(family) > 1 and len({len(chain.arms) for chain in family}) == 1:
+            align_kind = SAME_ROW if axis == "vertical" else SAME_COLUMN
+            head = family[0]
+            for index in range(len(head.arms)):
+                for chain in family[1:]:
+                    constraints.append(
+                        RelativeConstraint(
+                            kind=align_kind,
+                            subject=head.arms[index],
+                            object=chain.arms[index],
+                            reason=(
+                                "548D3D-F1: two independent chains of one module are "
+                                f"read side by side — {head.arms[index]} and "
+                                f"{chain.arms[index]} are both arm {index + 1} of "
+                                f"their own chain and share one "
+                                f"{'row' if align_kind == SAME_ROW else 'column'} "
+                                "(same direction, same reading rule)"
+                            ),
+                        )
+                    )
         return bound_result(bindings, constraints, obligations)
 
 
@@ -564,6 +637,43 @@ def _arm_clause(index: int, chain: _Chain) -> str:
     )
 
 
+def _input_pair_side(
+    circuit: CircuitSpec,
+    presentation: PresentationSpec,
+    family: list[_Chain],
+) -> str | None:
+    """Repair the mixed-axis fallback for two matching, declared input chains.
+
+    Same-axis power/ground layouts keep their old meaning. Only a horizontal
+    input opposite ground can replace the fallback: the compiler's horizontal
+    progress already reads input, while vertical progress still reads power.
+    More than two chains can change that compiler's axis vote, so this rule is
+    limited to the pair whose corresponding arms the grammar aligns.
+    """
+    if len(family) != 2 or not _paired_layout(presentation):
+        return None
+    if len(family[0].arms) != len(family[1].arms):
+        return None
+    if any(chain.top != TOP_SIGNAL for chain in family):
+        return None
+    if (presentation.side_for("power") or "top") not in ("top", "bottom"):
+        return None
+    input_side = presentation.side_for("input")
+    if {input_side, presentation.side_for("gnd")} != {"left", "right"}:
+        return None
+    for chain in family:
+        directions = {
+            item.direction for item in circuit.open_interfaces
+            if item.net == chain.in_net and item.direction
+        }
+        role = presentation.port_roles.get(chain.in_net)
+        if role:
+            directions.add(role)
+        if directions != {"input"}:
+            return None
+    return input_side
+
+
 def _orientation(power_side: str, gnd_side: str) -> tuple[str, str, str]:
     """``(axis, ordering kind, tap-stub kind)`` from the side preferences.
 
@@ -593,21 +703,75 @@ def _order_words(order_kind: str) -> str:
     }[order_kind]
 
 
+def _paired_layout(presentation: PresentationSpec) -> bool:
+    """The page's two layout declarations (548D3D-F1A), restated not imported.
+
+    A stated `serviceLayout` and a stated `labelPolicy.stubMin` above zero: the
+    author asked for served seats and real name stubs, which is the layout a
+    pair of twin branches is drawn for. `textPlacement: native-attr` is **not**
+    part of the question — the first build keyed on it and that turned the
+    compiler's page-wide paired reading on for islands that had nothing to do
+    with this grammar (measured: two unrelated modules lost every candidate).
+    """
+    return (
+        presentation.service_layout is not None
+        and presentation.label_policy.stub_min > 0.0
+    )
+
+
+def _family(presentation: PresentationSpec, chains: list[_Chain]) -> list[_Chain]:
+    """The chains one bind consumes, in the order the walk found them.
+
+    One chain, unless the page asks for the paired layout and its top is a
+    declared signal port (548D3D-F1's measured two-branch island): a power
+    divider keeps the single-chain result byte for byte.
+
+    A candidate joins the family only when it lives in the **same module** as
+    the family and shares **no arm and no tap** with any chain already read.
+    Reusing an arm is the same ladder read another way; hanging on a tap the
+    family already owns is a parallel branch on a node this divider owns, not a
+    second divider. Both are named in the runner-up note instead of being bound
+    twice.
+    """
+    if not chains:
+        return []
+    first = chains[0]
+    if first.top != TOP_SIGNAL or not _paired_layout(presentation):
+        return [first]
+    family = [first]
+    arms = set(first.arms)
+    taps = set(first.taps)
+    for chain in chains[1:]:
+        if chain.module != first.module:
+            continue
+        if set(chain.arms) & arms or set(chain.taps) & taps:
+            continue
+        family.append(chain)
+        arms.update(chain.arms)
+        taps.update(chain.taps)
+    return family
+
+
 def _branches(
     presentation: PresentationSpec,
     edges: dict[str, tuple[str, str]],
     chain: _Chain,
     tap: str,
+    arms: frozenset[str],
+    taken: set[str],
 ) -> tuple[str, ...]:
-    """Two-terminal parts on this tap that are not arms of the chain.
+    """Two-terminal parts on this tap that are not arms of the family.
 
     Restricted to the chain's module where one is declared: a branch reaching
     into another module is that module's business, not this grammar's (052
-    sec.5).
+    sec.5). ``arms`` is every arm of the consumed family, so one chain's arm is
+    never another chain's branch, and ``taken`` names the branches an earlier
+    chain in the family already bound (a part hanging on two chains' taps is
+    bound once).
     """
     out: list[str] = []
     for part_id in sorted(edges):
-        if part_id in chain.arms or tap not in edges[part_id]:
+        if part_id in arms or part_id in taken or tap not in edges[part_id]:
             continue
         if chain.module:
             here = modules_of_part(presentation, part_id)
@@ -617,15 +781,16 @@ def _branches(
     return tuple(out)
 
 
-def _runner_up_note(chains: list[_Chain]) -> str:
+def _runner_up_note(bound: int, others: list[_Chain]) -> str:
     """``other candidates not bound: …`` — the readings this bind did not take."""
-    if len(chains) < 2:
+    if not others:
         return ""
-    shown = "; ".join(chain.describe() for chain in chains[1:5])
-    more = "" if len(chains) <= 5 else f"; +{len(chains) - 5} more"
+    shown = "; ".join(chain.describe() for chain in others[:5])
+    more = "" if len(others) <= 5 else f"; +{len(others) - 5} more"
+    count = "one chain" if bound <= 1 else f"{bound} independent chains"
     return (
         "other in→gnd chains found but not bound (this grammar instance bound "
-        f"one chain): {shown}{more}"
+        f"{count}): {shown}{more}"
     )
 
 

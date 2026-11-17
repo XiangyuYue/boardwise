@@ -1448,6 +1448,14 @@ class PlacementInput:
     #: contract like the templates themselves, never read from a presentation
     #: here and never serialised: this request carries no ``to_jsonable``.
     service_joint_order: bool = False
+    #: Whether the binder picks each service branch's host foot **itself**, from
+    #: the current answer's real pose/origin and before any order or seat
+    #: (548D3D-H). Off — the default, and every historical request — keeps the
+    #: template's stated ``host_token`` exactly as it was handed over. On is the
+    #: draw layer's own statement for a page that states ``serviceLayout``
+    #: seats: the templates then carry the admitted foot set and no answer, and
+    #: base and topology share this one selection.
+    service_host_choice: bool = False
 
     def __post_init__(self) -> None:
         if not self.parts:
@@ -1854,13 +1862,14 @@ def relation_points_between(
 ) -> tuple[tuple[float, float], tuple[float, float]] | None:
     """The two points a relation is measured between — **the one reading**.
 
-    Origins, except for the five kinds ``grammar/base.py`` measures between the
-    pair's **pins on the net they share** — a branch belongs to the node its own
-    pin sits on, and a tap is a junction between two arm pins. This is
-    ``drawcompiler._points_for_relation``'s own rule, moved here in 201B so that
-    the layer that *places* the parts and the layer that *grades* the finished
-    plan cannot be two rulers for one word (they were for the length of stage 1:
-    the same sentence measured twice by two copies of one rule).
+    The five pin kinds from ``grammar/base.py`` are measured between the pair's
+    **pins on the net they share** — a branch belongs to the node its own pin
+    sits on, and a tap is a junction between two arm pins. Order kinds normally
+    use the two part origins; when one endpoint is a net id and the other a part,
+    the net endpoint uses that part's pin on the named net and the part endpoint
+    uses its origin. This is ``drawcompiler._points_for_relation``'s ruler,
+    moved here in 201B so placement and the finished-plan gate cannot measure
+    one relation by two copies of one rule.
 
     The three callables are the whole interface because the two callers hold
     their parts differently — the search holds a state, the compiler holds the
@@ -1869,18 +1878,19 @@ def relation_points_between(
     ``nets_of(part_id)`` is that part's ``pin token -> net id``; ``origin_of``
     and ``pin_of(part_id, token)`` are the two points.
 
-    Which pin pair a kind is measured between is part of the answer, so it is
-    written out exactly as the compiler wrote it: the **first** token in sorted
-    order on the **first net in :func:`shared_net_order`** that has a point at
-    each end. A version that kept looking for a token whose point existed would
-    be more forgiving than the compiler by exactly the cases this rule is most
-    likely to be asked about.
+    For a pin kind, the measured pair is the **first** token in sorted order on
+    the **first net in :func:`shared_net_order`** that has a point at each end.
+    For an order kind with a net endpoint, the existing ``_pin_on_net`` rule
+    selects the part's pin on that named net. In both cases, a version that kept
+    looking for a later token whose point existed would be more forgiving than
+    the compiler by exactly the cases this rule is most likely to be asked about.
 
-    547S: ``class_of`` is the netlist's declared class, and it is what makes
-    this ruler read the *same* shared net the placement seated the branch from —
-    a branch that shares its signal and a rail is measured on the signal, not on
-    whichever id sorts first. ``None`` keeps the old sorted reading for any
-    caller that has no netlist to hand.
+    547S: for pin kinds, ``class_of`` is the netlist's declared class, and it is
+    what makes this ruler read the *same* shared net the placement seated the
+    branch from — a branch that shares its signal and a rail is measured on the
+    signal, not on whichever id sorts first. ``None`` keeps the old sorted
+    reading for any caller that has no netlist to hand. Other endpoint forms
+    keep the existing origin-based reading.
     """
     if relation.kind in _PIN_KINDS:
         subject_nets = nets_of(relation.subject)
@@ -1893,6 +1903,35 @@ def relation_points_between(
             there = _pin_on_net(object_nets, relation.object, net_id, pin_of)
             if here is not None and there is not None:
                 return (here, there)
+
+    if relation.kind in _ORDER_KINDS:
+        subject_origin = origin_of(relation.subject)
+        object_origin = origin_of(relation.object)
+
+        if subject_origin is None and object_origin is not None:
+            net_id = relation.subject
+            object_nets = nets_of(relation.object)
+            if net_id in object_nets.values():
+                subject_pin = _pin_on_net(
+                    object_nets, relation.object, net_id, pin_of,
+                )
+                if subject_pin is not None:
+                    return (subject_pin, object_origin)
+
+        elif subject_origin is not None and object_origin is None:
+            net_id = relation.object
+            subject_nets = nets_of(relation.subject)
+            if net_id in subject_nets.values():
+                object_pin = _pin_on_net(
+                    subject_nets, relation.subject, net_id, pin_of,
+                )
+                if object_pin is not None:
+                    return (subject_origin, object_pin)
+
+        if subject_origin is None or object_origin is None:
+            return None
+        return (subject_origin, object_origin)
+
     here = origin_of(relation.subject)
     there = origin_of(relation.object)
     if here is None or there is None:
@@ -6209,6 +6248,12 @@ class PanelCell:
     to_token: str
     host_token: str
     pose: SymbolPose
+    #: The host feet this cell may hang off (548D3D-H). Empty — the default, and
+    #: every panel cell — means the stated ``host_token`` is the only foot. A
+    #: service cell whose document states no pin carries the whole allowed set
+    #: and an **empty** ``host_token``: which of the set drives the branch is the
+    #: binder's answer, read off the host's real pose/origin, never the template's.
+    host_allowed: tuple[str, ...] = ()
     #: The part's printed rows, relative to its own origin (the caller's
     #: `_line_boxes` at a part box built from origin ``(0, 0)``).
     text_boxes: tuple[Box, ...] = ()
@@ -6229,6 +6274,21 @@ class PanelCell:
         if not self.from_token or not self.to_token:
             raise PlacementError(
                 f"{self.part_id}: a panel cell states the pin on each of its nets")
+        for token in self.host_allowed:
+            if not token:
+                raise PlacementError(
+                    f"{self.part_id}: the allowed host feet hold an empty token")
+        if len(set(self.host_allowed)) != len(self.host_allowed):
+            raise PlacementError(
+                f"{self.part_id}: the allowed host feet repeat a token "
+                f"({self.host_allowed!r})")
+        if self.host_token and self.host_allowed and (
+                len(self.host_allowed) != 1
+                or self.host_allowed[0] != self.host_token):
+            raise PlacementError(
+                f"{self.part_id}: the stated host foot {self.host_token!r} is "
+                f"not the whole set it may be chosen from "
+                f"({self.host_allowed!r}) — a stated foot is not a preference")
 
 
 @dataclass(frozen=True)
@@ -6278,6 +6338,10 @@ class BoundPanelSeat:
     to_seat: tuple[float, float] | None
     reserved: tuple[Box, ...] = ()
     host_path: tuple[tuple[float, float], ...] = ()
+    #: The net the cell's near foot sits on — the branch's shared net (§43). The
+    #: plan states it so a reader (and the channel replay) does not have to walk
+    #: back to the template to know which rail this seat belongs to.
+    from_net: str = ""
 
 
 @dataclass(frozen=True)
@@ -6306,6 +6370,13 @@ class BoundPanelSeatPlan:
     grid: float = DEFAULT_GRID
     lattice: tuple[float, float] = (0.0, 0.0)
     refusal: PanelSeatRefusal | None = None
+    #: 548P126: the host feet this plan's own template **selected**, as
+    #: ``(part_id, token)`` — stated even when the seat was refused and carries
+    #: no cell, because the refusal must still tell the page which foot it tried.
+    #: Internal and read-only (the draw consumer retires these from the next
+    #: attempt); appended with a default so every older constructor keeps its
+    #: meaning, and never serialised into a plan/CLI/DSH document.
+    tried_hosts: tuple[tuple[str, str], ...] = ()
 
     @property
     def seated(self) -> bool:
@@ -6421,11 +6492,28 @@ class ServiceSeatTemplate:
     lattice: tuple[float, float] = (0.0, 0.0)
     clearance: float = 0.0
     pitch: float = DEFAULT_CHANNEL
+    #: Every (reading side, branch pose, printed rows) this branch can be drawn
+    #: in (§43). A host whose supply net lands on feet of both sides needs one
+    #: of these per side: the side is a decision the binder makes together with
+    #: the foot, and the pose and rows follow it. Empty — the default, and every
+    #: panel cell — is the historical single ``side`` with the cell's own pose.
+    side_variants: tuple[tuple[str, SymbolPose, tuple[Box, ...]], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.group_id or not self.host_part:
             raise PlacementError(
                 "a service seat names its group and its host part")
+        seen_sides: set[str] = set()
+        for side, _pose, _rows in self.side_variants:
+            if side not in SERVICE_SIDES:
+                raise PlacementError(
+                    f"service seat {self.group_id}: side variant {side!r} is not "
+                    f"one of {SERVICE_SIDES}")
+            if side in seen_sides:
+                raise PlacementError(
+                    f"service seat {self.group_id}: side {side!r} is stated "
+                    "twice")
+            seen_sides.add(side)
         if self.side not in SERVICE_SIDES:
             raise PlacementError(
                 f"service seat {self.group_id}: side must be one of "
@@ -6861,7 +6949,7 @@ def _solve_service_relative(
     seat = BoundPanelSeat(
         part_id=cell.part_id, host_token=cell.host_token, origin=origin,
         pose=cell.pose, from_seat=from_seat, to_seat=to_seat,
-        reserved=tuple(moved), host_path=host_path,
+        reserved=tuple(moved), host_path=host_path, from_net=cell.from_net,
     )
     return BoundPanelSeatPlan(
         group_id=template.group_id, host_part=template.host_part,
@@ -6898,6 +6986,7 @@ def _bind_one_service_joint(
     poses: Mapping[str, SymbolPose],
     siblings: Sequence[tuple[BoundPanelSeatPlan, ServiceSeatTemplate]] = (),
     panel_walls: Sequence[Box] = (),
+    rung_offset: int = 0,
 ) -> tuple[BoundPanelSeatPlan, bool]:
     """One service template -> one bound plan, or a named refusal.
 
@@ -6975,14 +7064,14 @@ def _bind_one_service_joint(
         box for other, _ in siblings for box in other.reserved_boxes
     ] + list(panel_walls)
     joint = False
-    if taken and plan.seated and plan.cells:
+    if (taken or rung_offset) and plan.seated and plan.cells:
         step = max(template.pitch, template.grid, DEFAULT_GRID)
         sign = 1.0 if template.side == PANEL_SIDE_RIGHT else -1.0
         base = plan
         crossed: str | None = None
         # The ladder's length is the page's own size, not a constant: a page
         # with N parts cannot need more than N distinct columns on one side.
-        for rung in range(0, max(1, len(request.parts))):
+        for rung in range(rung_offset, rung_offset + max(1, len(request.parts))):
             moved = base if rung == 0 else base.translated(
                 (sign * step * rung, 0.0))
             if host_tip is not None:
@@ -7022,6 +7111,12 @@ def _bind_one_service_joint(
         if request.service_joint_order else None)
     if clash is not None:
         return clash, True
+    # 548D3D-H: the seat is measured against the foot it says it hangs off, in
+    # this answer's pose — a lead that starts anywhere else, or a foot that the
+    # branch's shared net does not carry, is a named refusal.
+    audit = _service_host_audit(request, template, plan, host_tip)
+    if audit is not None:
+        return audit, joint
     return _service_foreign_refusal(
         request, template, plan, origins, poses, panel_walls), joint
 
@@ -7053,6 +7148,214 @@ def _service_flag_axis(template: ServiceSeatTemplate) -> int:
     return 1 if drop > SERIES_EPS else 0
 
 
+def _service_allowed_hosts(cell: PanelCell) -> tuple[str, ...]:
+    """The host feet this cell may hang off (548D3D-H).
+
+    A stated ``host_token`` is the whole set: a document that names the service
+    foot does not let the geometry pick another same-net foot. An empty token is
+    the document *not* naming one, and then the admitted set is
+    :attr:`PanelCell.host_allowed` — which is not a decision, only the feet the
+    netlist puts on the branch's shared net.
+    """
+    if cell.host_token:
+        return (cell.host_token,)
+    return cell.host_allowed
+
+
+def _service_select_host(
+    request: PlacementInput,
+    template: ServiceSeatTemplate,
+    host_pose: SymbolPose,
+    banned: frozenset[str] = frozenset(),
+) -> tuple[str, str, str]:
+    """The host foot that drives this branch in **this** pose — ``(token, detail)``.
+
+    ``detail`` is empty on success. The answer is geometric and lives here, once:
+    the branch's terminal flag hangs on its own far foot, so the foot that leaves
+    the shortest channel is the outermost admitted foot in that vertical reading
+    direction — the **lowest** when the flag hangs down, the **highest** when it
+    rises. Feet are read through the host's real pose (:func:`posed_tip`), never
+    from the unrotated symbol, and ties break on the token so the choice is
+    stable. A stated foot is answered as it stands (:func:`_service_allowed_hosts`);
+    the geometry never overrides a document.
+
+    Every way this cannot answer is a detail string the caller turns into a named
+    refusal: no admitted foot, no foot that exists on the symbol, no foot on the
+    seat's reading side, or several admitted feet on that side with no reading
+    direction (a flagless branch) to order them.
+    """
+    cell = template.cell
+    stated = _service_allowed_hosts(cell)
+    # A branch with one admitted foot has no alternative to be retired to: the
+    # ban list is about *choosing*, and a singleton is not a choice.
+    allowed = (
+        stated if len(stated) <= 1
+        else tuple(token for token in stated if token not in banned))
+    if stated and not allowed:
+        # Every foot the document admitted has already produced a page that
+        # failed the drawing's own check. A stated foot is never replaced.
+        return "", template.side, (
+            f"{cell.part_id}: every admitted host foot of {template.host_part!r} "
+            f"({', '.join(repr(token) for token in stated)}) was already tried "
+            "in this pose and the page it produced did not hold")
+    if cell.host_token:
+        pin = _pin_for_token(request.part(template.host_part).profile,
+                             cell.host_token)
+        side = template.side
+        if pin is not None:
+            faced = _service_faced_side(pin, host_pose)
+            if faced is not None and _service_side_admitted(template, faced):
+                side = faced
+        return cell.host_token, side, ""
+    if not allowed:
+        return "", template.side, (
+            f"{cell.part_id}: the branch states neither a host foot nor a set "
+            f"of host feet it may hang off {template.host_part!r}")
+    profile = request.part(template.host_part).profile
+    eligible: list[tuple[str, str, float]] = []
+    for token in allowed:
+        pin = _pin_for_token(profile, token)
+        if pin is None:
+            return "", "", (
+                f"{cell.part_id}: the host {template.host_part!r} has no pin "
+                f"{token!r}, so the admitted host foot cannot be read")
+        side = _service_faced_side(pin, host_pose)
+        if side is None or not _service_side_admitted(template, side):
+            continue
+        eligible.append((
+            token, side, posed_tip(pin.tip, host_pose, (0.0, 0.0))[1]))
+    if not eligible:
+        stated_sides = (
+            tuple(one for one, _pose, _rows in template.side_variants)
+            if template.side_variants else (template.side,))
+        return "", "", (
+            f"{cell.part_id}: none of the host feet {allowed!r} of "
+            f"{template.host_part!r} is read on the {stated_sides!r} side in "
+            "this host pose, so the branch has no foot to hang off")
+    sides_here = sorted({side for _token, side, _y in eligible})
+    hang = _service_flag_axis(template)
+    if len(eligible) > 1 and hang == 0:
+        return "", "", (
+            f"{cell.part_id}: the host feet "
+            f"{tuple(token for token, _side, _y in eligible)!r} of "
+            f"{template.host_part!r} stand on {sides_here!r} and the branch "
+            "states no terminal-flag direction, so nothing says which one "
+            "drives it")
+    if hang < 0:
+        eligible.sort(key=lambda item: (item[2], item[0]))
+    else:
+        eligible.sort(key=lambda item: (-item[2], item[0]))
+    return eligible[0][0], eligible[0][1], ""
+
+
+def _service_faced_side(pin, host_pose: SymbolPose) -> str | None:
+    """The reading side this foot faces in **this** host pose (§43)."""
+    outward = _panel_pin_direction(pin)
+    if outward is None:
+        return None
+    faced = transform_point(
+        *outward, rotation=host_pose.rotation, mirror=host_pose.mirror,
+        ox=0.0, oy=0.0,
+    )
+    if abs(faced[1]) > SERIES_EPS:
+        return None
+    if abs(faced[0] - 1.0) <= SERIES_EPS:
+        return PANEL_SIDE_RIGHT
+    if abs(faced[0] + 1.0) <= SERIES_EPS:
+        return PANEL_SIDE_LEFT
+    return None
+
+
+def _service_side_admitted(template: ServiceSeatTemplate, side: str) -> bool:
+    """May this branch be read on that side? (The template says which.)"""
+    if template.side_variants:
+        return any(one == side for one, _pose, _rows in template.side_variants)
+    return side == template.side
+
+
+def _service_side_facts(
+    template: ServiceSeatTemplate, side: str,
+) -> tuple[SymbolPose, tuple[Box, ...]] | None:
+    """The branch pose and printed rows that belong to this side (§43)."""
+    for one, pose, rows in template.side_variants:
+        if one == side:
+            return pose, tuple(rows)
+    if not template.side_variants and side == template.side:
+        return template.cell.pose, tuple(template.cell.text_boxes)
+    return None
+
+
+def _service_net_has_foot(
+    request: PlacementInput, net_id: str, part_id: str, token: str,
+) -> bool:
+    """Does the netlist put this host foot on the branch's shared net?"""
+    for net in request.nets:
+        if net.net_id == net_id:
+            return (part_id, token) in net.members
+    return False
+
+
+def _service_host_audit(
+    request: PlacementInput,
+    template: ServiceSeatTemplate,
+    plan: BoundPanelSeatPlan,
+    host_tip: tuple[float, float] | None,
+) -> BoundPanelSeatPlan | None:
+    """Does this seat's host lead start on the foot the plan says it does?
+
+    Two facts are measured, both against the answer in hand: every host path
+    begins at the **posed tip** of the plan's own ``host_token`` (so a host that
+    moved without the seat being re-bound is refused by name, not left as a lead
+    to nowhere), and that foot is on the branch's shared net. The stated foot
+    must also be one the cell admitted — a binder that swapped in another foot
+    the document never allowed is the same offence.
+    """
+    if not plan.seated or not plan.cells:
+        return None
+    cell = plan.cells[0]
+    allowed = _service_allowed_hosts(template.cell)
+    if allowed and cell.host_token not in allowed:
+        return _service_refusal(
+            template,
+            f"{cell.part_id}: the seat hangs off {cell.host_token!r}, which is "
+            f"not one of the host feet this branch may use ({allowed!r})",
+            "connect the host to the branch's shared net, or drop the entry")
+    if host_tip is None:
+        return _service_refusal(
+            template,
+            f"{cell.part_id}: the chosen host foot {cell.host_token!r} of "
+            f"{template.host_part!r} has no posed tip in this answer",
+            "give that library pin a real tip, or drop the entry")
+    shared = template.cell.from_net
+    if request.service_host_choice and not _service_net_has_foot(
+            request, shared, template.host_part, cell.host_token):
+        return _service_refusal(
+            template,
+            f"{cell.part_id}: the host foot {template.host_part}."
+            f"{cell.host_token} is not on the branch's shared net "
+            f"{shared!r}, so it does not drive it",
+            "connect that foot to the shared net, or drop the entry")
+    if not plan.host_paths:
+        return _service_refusal(
+            template,
+            f"{cell.part_id}: the seat records no host lead, so the branch is "
+            "drawn from nowhere",
+            "rebind the seat against this answer, or drop the entry")
+    for path in plan.host_paths:
+        start = path[0]
+        if (abs(start[0] - host_tip[0]) > SERIES_EPS
+                or abs(start[1] - host_tip[1]) > SERIES_EPS):
+            return _service_refusal(
+                template,
+                f"{cell.part_id}: its host lead starts at "
+                f"({start[0]:g}, {start[1]:g}) while the chosen foot "
+                f"{template.host_part}.{cell.host_token} stands at "
+                f"({host_tip[0]:g}, {host_tip[1]:g}) — the lead does not start "
+                "on the foot it says it hangs off",
+                "rebind the seat against this answer, or drop the entry")
+    return None
+
+
 def _service_host_row(
     request: PlacementInput,
     template: ServiceSeatTemplate,
@@ -7074,6 +7377,7 @@ def _service_seat_orders(
     request: PlacementInput,
     origins: Mapping[str, tuple[float, float]],
     poses: Mapping[str, SymbolPose],
+    templates: Sequence[ServiceSeatTemplate] | None = None,
 ) -> tuple[tuple[ServiceSeatTemplate, ...], ...]:
     """The orders a joint seat conflict may be asked to settle (§548D3C1).
 
@@ -7091,7 +7395,8 @@ def _service_seat_orders(
     remaining permutation follows, in the templates' own order — the search is
     bounded by the page's own count, never open-ended.
     """
-    templates = request.service_templates
+    if templates is None:
+        templates = request.service_templates
     if len(templates) < 2:
         return (templates,)
 
@@ -7135,6 +7440,7 @@ def _bind_service_sequence(
     walls: Sequence[Box],
     *,
     stop_at_refusal: bool = False,
+    rung_offset: int = 0,
 ) -> tuple[tuple[BoundPanelSeatPlan, ...], bool]:
     """One order of the page's service seats, and whether the joint test bit.
 
@@ -7159,7 +7465,14 @@ def _bind_service_sequence(
         # boxes, and the ladder below must see them — that is the legacy answer,
         # measured (one rung per refused-but-placed cell).
         plan, moved = _bind_one_service_joint(
-            request, template, local_origins, local_poses, tuple(pairs), walls)
+            request, template, local_origins, local_poses, tuple(pairs), walls,
+            rung_offset)
+        if not plan.seated and template.cell.host_token:
+            # 548P126: a refused plan has no cell to read the foot off, and the
+            # page must still learn which foot this template already selected —
+            # otherwise the same foot is chosen again and never retired.
+            plan = replace(plan, tried_hosts=(
+                (template.cell.part_id, template.cell.host_token),))
         out.append(plan)
         pairs.append((plan, template))
         joint = joint or moved
@@ -7174,11 +7487,68 @@ def _bind_service_sequence(
     return tuple(out), joint
 
 
+def _resolve_service_hosts(
+    request: PlacementInput,
+    templates: Sequence[ServiceSeatTemplate],
+    poses: Mapping[str, SymbolPose],
+    bans: Mapping[str, frozenset[str]] | None = None,
+) -> tuple[tuple[ServiceSeatTemplate, ...], dict[str, BoundPanelSeatPlan]]:
+    """One resolved template per declared seat, and the unnamed-later ones.
+
+    Only a request that states :attr:`PlacementInput.service_host_choice` gets a
+    selection; every other request is handed back exactly as it came in, so the
+    historical binder sees the same templates byte for byte. A branch whose
+    document states its foot is not re-decided — the geometry is asked only where
+    the document left the answer to the page.
+    """
+    if not request.service_host_choice:
+        return tuple(templates), {}
+    resolved: list[ServiceSeatTemplate] = []
+    unanswered: dict[str, BoundPanelSeatPlan] = {}
+    for template in templates:
+        if template.cell.host_token:
+            resolved.append(template)
+            continue
+        host_pose = poses.get(template.host_part)
+        if host_pose is None:
+            token, side, detail = "", template.side, (
+                f"the host {template.host_part!r} is not part of this answer, so "
+                "the foot that drives the branch has no pose")
+        else:
+            token, side, detail = _service_select_host(
+                request, template, host_pose,
+                (bans or {}).get(template.group_id, frozenset()))
+        if not token:
+            unanswered[template.group_id] = _service_refusal(
+                template, detail,
+                "connect the host to the branch's shared net, or drop the entry")
+            resolved.append(template)
+            continue
+        facts = _service_side_facts(template, side)
+        if facts is None:
+            unanswered[template.group_id] = _service_refusal(
+                template,
+                f"{template.cell.part_id}: the chosen host foot is read on the "
+                f"{side!r} side, and this branch states no pose or text rows for "
+                "that side",
+                "state that side's pose and rows for the branch, or drop the "
+                "entry")
+            resolved.append(template)
+            continue
+        pose, rows = facts
+        resolved.append(replace(template, side=side, cell=replace(
+            template.cell, host_token=token, host_allowed=(token,),
+            pose=pose, text_boxes=rows)))
+    return tuple(resolved), unanswered
+
+
 def bind_service_plans(
     request: PlacementInput,
     origins: Mapping[str, tuple[float, float]],
     poses: Mapping[str, SymbolPose],
     panel_plans: Sequence[BoundPanelSeatPlan] = (),
+    rung_offset: int = 0,
+    host_bans: Mapping[str, frozenset[str]] | None = None,
 ) -> tuple[BoundPanelSeatPlan, ...]:
     """The one binder for every declared service seat, against this answer.
 
@@ -7209,11 +7579,21 @@ def bind_service_plans(
     if not request.service_templates:
         return ()
     walls = _panel_service_walls(panel_plans)
+    # 548D3D-H: one selection per branch, made **here** — before any ordering,
+    # any seat and any host lead — from this answer's real pose. Every consumer
+    # below reads the resolved template, so the declared order, the reading
+    # orders, the seat and the recorded lead all hang off one foot.
+    templates, unanswered = _resolve_service_hosts(
+        request, request.service_templates, poses, host_bans)
     # Sequential on purpose: one service cell's seat is another's foreign part
     # until it is placed, so every later cell is measured against the seats the
     # earlier ones already took. The caller's mappings are not mutated here.
     plans, joint = _bind_service_sequence(
-        request, request.service_templates, origins, poses, walls)
+        request, templates, origins, poses, walls, rung_offset=rung_offset)
+    if unanswered:
+        return tuple(
+            unanswered.get(template.group_id, plan)
+            for template, plan in zip(templates, plans))
     if not request.service_joint_order:
         # Legacy page (the default): the declared order is the answer, however
         # many cells it seats. No re-ordering, no joint rung, no extra refusal —
@@ -7231,9 +7611,10 @@ def bind_service_plans(
     # declared order dies on an earlier branch's *printed rows* in the outward
     # lane (a rung-exhaustion, not a lead crossing), and the reversed order seats
     # both cells with every lead one straight run.
-    for order in _service_seat_orders(request, origins, poses)[1:]:
+    for order in _service_seat_orders(request, origins, poses, templates)[1:]:
         attempt, moved = _bind_service_sequence(
-            request, order, origins, poses, walls, stop_at_refusal=True)
+            request, order, origins, poses, walls, stop_at_refusal=True,
+            rung_offset=rung_offset)
         if (not moved and len(attempt) == len(order)
                 and all(plan.seated for plan in attempt)):
             by_group = {plan.group_id: plan for plan in attempt}

@@ -140,6 +140,16 @@ xianyuyijinban's rule: **signal nets are named with net labels; I/O ports are ba
 (`sch.place_netport` stays in the catalogue for the solver's last resort, but
 the replay never emits one). Power/ground rails keep the standard flag drawing.
 
+**岳 2026-11-16 重申：打了旗标就不要再打网络标签。** 有电源/地旗标陈述的导线不再显示
+同名 `NET` 标签；旗标自己的名字保留，跨岛信号仍保留必要的可见标签。既有 `draw apply`
+已经只给信号标签载体传 `net`，由实际相连的旗标给电源/地命名；不要绕过此策略给全部导线
+强行加名字。P47 人工 LCD 样例去掉了全部 3V3/GND 导线标签，10 脚/7 网保持一致，见
+`evidence/548P97/human-reference-summary.json`。
+
+P47 同时示范了 LCD 局部的功能关系：去耦与 VCC 同行，去耦回地与紧邻的 J1.2 共用本地地旗，
+J1.7 单独就近落地，五个跨岛信号用等长有名短桩。样例中的 55 单位去耦正端至 VCC 路径、
+100 单位信号桩和 95×35 器件原点跨度只作测量依据，不写成通用硬阈值，也不复刻绝对坐标。
+
 `sch.place_netlabel` is **timeout-bounded and self-reporting**:
 
 - the call races an 8 s deadline (`timeoutMs` may shorten it, 200..30000 ms);
@@ -513,6 +523,60 @@ Verification steps:
    disguised text, flip to `--naming wire` and re-run: zero rework, the wire
    already carries the net.
 
+### Baseline: a fingerprint is not a quality reference (548O ruling, 2026-11-14)
+
+A `geometry_sha256` recorded in `evidence/` is a **fingerprint**. It proves the
+drawing did not move — nothing more. It never proves the drawing is readable, and
+it must never be reported as a gate: "the geometry is byte-identical" is a note,
+is not a pass.
+
+The only quality baseline is **a page a human accepted**. Until one exists this
+line has no quality baseline and must say so. The current reference is 岳's
+hand-drawn P44 (`evidence/548J/wifi-canvas/agent-adjusted/P44-render.svg`, with
+the corresponding `.png` and `RULES.md`): a human reference, not an automatic
+delivery.
+
+**Retired — do not reintroduce.** `8802d317cfae…` was 548L's own candidate for
+the calibrated WiFi page. 548M carried it as "默认页逐字节不变", 548N2 and 548O
+repeated it, and three batches read that as a pass. It is the fingerprint of a
+drawing the visual gate had already rejected, and the spec behind it is not a
+defaults page either: it carries `stubLaneReserve: true` (the switch-off page is
+`81557467…`). Both are fingerprints; neither is a reference.
+
+Rules that follow:
+
+1. A byte pin is allowed **only** over a synthetic unit-test fixture, and only to
+   prove "this feature is off by default" — never over a page whose readability
+   is still open.
+2. A batch that touches the page reports the three gates separately; a
+   fingerprint may appear in the machine-gate line as a note, never as the
+   reason the gate passed.
+3. A rejected geometry stays in `evidence/` with its rejection reason; repetition
+   never promotes it to a reference.
+
+岳's 2026-11-14 correction is explicit: **以 P44 样例为准，按功能关系修正机械指标**.
+The former universal body-to-host distance of 30–65 and minimum origin y-span
+of 60 reject P44 itself and are retired. Distances and origin spans are
+diagnostics, not universal acceptance thresholds. The archived editor readback
+measures R17→RST **50**, R16→EN **95**, R18→IO0 **70**, C25→VCC **205**, and
+C26→VCC **165**; the component-origin span is **265 × 25**
+(`evidence/548P2/reference-metrics.json`). These values describe P44; they do not
+become new thresholds or coordinates to replay.
+
+The P1–P4 checklist now records functional relationships and their evidence:
+
+| # | P44 property | How it is read | Reference / rejected-candidate evidence |
+|---|---|---|---|
+| P1 | functional host-pin groups: pull-ups follow the actual pin side and pin order; the decoupling pair remains one functional group | inspect host paths, shared terminal alignment and branch membership; body-origin → host-pin distances are diagnostic only | P44: 50 / 95 / 70 / 205 / 165; a distant local decoupling group is not rejected by distance alone |
+| P2 | local flags follow functional groups: right pull-ups share VCC, left boot pull-up is independent, the decoupling pair shares VCC/GND, host GND is local | inspect connected flag clusters and member pins, with no full-page bus | flag counts alone cannot prove that the right pins share a cluster |
+| P3 | no gratuitous detours, host-body crossings, foreign-net crossings or hidden connection destinations; open TX/RX have visible equal outward stubs | inspect actual wire paths, obstacles and visible names; necessary obstacle avoidance is not a gratuitous detour | 548M `ESP_RST`: drawn path 420 versus direct Manhattan 240; the unnecessary detour remains a rejection |
+| P4 | functional subgroup relationships and consistent alignment make the island readable | inspect same-group orientation, terminal rows and reading order; component-origin spans are diagnostic only | P44: 265 × 25; 548M: 370 × 45. Neither span alone establishes readability |
+
+Report the four checks separately, including diagnostic distances/spans and the
+actual path or grouping evidence. None replaces reading the render; numerical
+agreement alone is not a visual pass. A rejected candidate remains rejected
+until its functional and visual defects are resolved.
+
 ## Persistence: the facts about a write (M0-P0d, extended 2026-09-18)
 
 "The write API said ok", "the editor's page is right" and "the file kept it" are
@@ -628,6 +692,26 @@ net that has a name and **no conductor at all** (a one-pin net like the flyback'
 `GATE`/`VFB_NF`), because the editor's netlist otherwise holds neither the name
 nor the pin — the label's downgrade used to state "the name is on the wire" over a
 plan that drew no wire.
+
+**名字桩带 `labelPolicy.stubLaneReserve`（548K）**：默认关闭。不写（或写
+`false`）时，桩带预留与 534 r15 的车道顺序完全照旧，老页面逐字节不变。写 `true`
+时，本文档要求编译器**先**给只能靠可见名字表达的单脚标签网预留名字桩带，再让旗标
+引线与宿主支路取车道；桩带长度以 `labelPolicy.stubMin` 为下限，交付期
+`drawapply._label_stub_candidates` 要找的名字桩因此不会落空。开关只改顺序与长度，
+不动页框、`near`、`GAP` 或字号。
+
+**待走直线走廊（548L，同一开关）**：`stubLaneReserve` 打开时，编译器还会把
+**`style=wire`、恰好两脚、正交**的网的那条直线，在旗位与标签轮到**之前**登记成预留
+（`_reserve_pending_runs`）。于是旗标图形盒会让开这条走廊，这条网本身才画得成一条导线，
+而不是被压成两截各带名字的桩。它同样只加"谁先占位"，不新增规划器，也不改页框与阈值。
+
+**轨旗聚簇 `railClustering`（548M）**：顶层可选 `{"radius": N}`，形状与校验同
+`gndClustering`（只许 `radius`、必须正有限、缺省不写不序列化、非法值具名拒绝）。
+声明后，**power 与 gnd** 的同网焊盘按半径分簇，每簇各画一枚旗 + 短轨、簇间不拉母线；
+power 网在声明时取 `wire`（轨）样式而不是逐脚旗。`gndClustering` 的既有语义不被改写，
+两者对同一 gnd 网都适用时取较大半径；未声明该键的页逐字节不变。
+按岳 2026-10-20 的旗标裁定与 `boardwise-draw` §5A：power 逐脚、GND 聚簇的旧分歧不是
+合法视觉裁决，需要聚簇时两条轨走同一策略。
 
 **Wire ends and vertices (145d)**: the canvas leg asks that **both ends of every
 planned wire be vertices of the page's own wiring for that net**. The host merges
@@ -981,6 +1065,156 @@ and `tests/test_548d_panel_placement.py`.
 and flag replay is the next batch; a full `LayoutPlan`, the actual SmartMedicineBox
 MCU and the fixed 1170×825 page are not thereby claimed to compile or pass visual
 acceptance. See `tasks/548_drawing_capability_ladder.md` §33.
+
+### Joint service groups (548J contract; 548P54/P55 bounded seating)
+
+`serviceGroups` is an optional top-level array of **joint seat and flag domains**: a
+host and the local branches that are seated, supplied and returned together (three
+pull-ups on one host, a decoupling pair, an MCU and its shunts). It is not a
+`panelGroups` side and not a `serviceLayout` interval, and it is never written when
+absent, so every document compiled before 548J keeps its bytes, digest and drawing.
+
+```json
+"serviceGroups": [
+  {"id": "config-pullups",
+   "branches": [{"part": "R1", "from": "CFG_A", "to": "PWR"}]}
+]
+```
+
+The group has a closed `id/branches` pair and each branch the closed
+`part/from/to` triple (`from`/`to` are net ids; the same branch shape
+`panelGroups` uses). At least one branch — a single arm is still a joint seating
+statement. The declared order is what a refusal and the reader's traversal name,
+and it **promises no geometry**. Host side, pin side, pose, terminal row, pitch,
+flag sites, text boxes and frame are derived from the real `CircuitSpec`,
+symbol profile and candidate, so no `side`, `columns`, `gap`, `pitch`, `frame`
+or coordinate key exists, and none is honoured.
+
+A group seat yields to the page's **reserved open ports** (548N2): the room an open port's
+run and label box already hold is a wall the seat may not stand on, so a branch that would
+land there steps outward along the host side instead. When no rung fits, the seat is
+refused by name (the branch and the room it collides with) — a joint seat is never silently
+dropped back to the scattered pose.
+
+A group is one **joint** statement: one local flag per distinct terminal rail
+inside the group, and decoupling pairs whose two ends are both rails share the
+group's flags at both ends. A local signal inside the group is drawn as a real
+conductor, not as a repeated name; `directWiringObligations` stays a separate
+net-level declaration and does not stand in for a group (or the reverse).
+Groups do not share rails across each other — a same-net flag in another group
+is not a licence to pull a bus. An unsatisfiable or conflicting declaration is
+refused by name, never resolved by silently choosing one reading.
+
+Parts must belong to one module, and a part may appear in exactly one of
+`seriesBranches`, `panelGroups` and `serviceGroups`. Documents mixing
+`panelGroups` and `serviceGroups` — on one module or across modules — are legal;
+the series conflict each declaration already states is checked by the parser.
+Page slicing carries a group **whole or not at all**: a module carries the group
+only when every branch's part belongs to it, and otherwise omits the group
+entirely. Absent and `[]` read the same and change nothing.
+
+**Historical 548J-A/B1 status:** 548J-A is the contract and the page slice, not
+an accepted algorithm. The
+later B1 experiment was stopped: its 22 focused tests pass, but the main agent
+rejected the rendered CFG_A/PWR loops, the nearest-host-row experiments were
+reverted, and no real WiFi module, live apply, independent B1 mutation or full
+regression has accepted it. The independent-builder route must not be continued
+as though it were a delivered capability. Current hashes, evidence and the
+cleanup/redesign decision are in `evidence/548J/HANDOFF.md`. Contract tests:
+`tests/test_548j_service_group_views.py`.
+This records the stopped B1 experiment; the later bounded capabilities below do
+not turn that rejected drawing into an accepted result.
+
+**Current bounded seating (548P54/P55).** After the original row attempts are
+all refused, the existing complete builder can try one column an existing `GAP`
+farther outward. Rows, columns and variants share the original complete-build
+budget; an unsuccessful attempt cannot move the next attempt's seed. Evidence:
+`tests/test_548p54_service_columns.py::test_one_outward_column_reaches_the_complete_builder`,
+`tests/test_548p54_service_columns.py::test_complete_build_budget_can_stop_before_the_new_column`
+and `tests/test_548p54_service_columns.py::test_refused_complete_build_cannot_move_the_next_columns_seed`.
+
+When `modules[].branchOrder` names at least two members of a power-pull group,
+the compiler first tries existing real host **from-pin rows** whose natural
+near-to-far foot-distance order matches that declaration. These preferred rows
+use the same complete builder and column feedback. Power-pull groups on the
+same host and terminal net align only on a common real from-pin row; no common
+row means no invented coordinate. A candidate whose natural near-to-far order
+contradicts the declaration cannot be accepted; if no matching legal geometry
+survives, the compiler refuses by name. Evidence:
+`tests/test_548p55_service_order.py::test_stated_near_order_and_shared_rail_reach_the_real_row`,
+`tests/test_548p55_service_order.py::test_reversing_intent_selects_the_other_natural_pin_row`,
+`tests/test_548p55_service_order.py::test_reversed_intent_is_drawn_when_its_natural_row_is_physically_reachable`
+and `tests/test_548p55_service_order.py::test_no_common_real_row_does_not_invent_a_shared_coordinate`.
+
+This near-to-far intent comes from `modules[].branchOrder`, not the
+`serviceGroups[].branches` array order, and promises no fixed upper/lower
+coordinate. No declaration keeps the original path; pull-downs are outside this
+new preference, which makes no claim that all pull-down geometry is correct.
+Evidence:
+`tests/test_548p55_service_order.py::test_branch_array_order_cannot_change_the_stated_reading`,
+`tests/test_548p55_service_order.py::test_no_statement_keeps_the_preexisting_success_byte_for_byte`,
+`tests/test_548p55_service_order.py::test_a_pull_on_another_terminal_is_not_aligned_by_its_neighbour`
+and `tests/test_548p55_service_order.py::test_pull_down_order_does_not_enable_the_pull_up_preference`.
+These are focused synthetic capabilities, not acceptance of an automatic real
+WiFi drawing, the complete page or a live editor result. The documentation
+checks only retain these boundaries and test references; they do not replace
+the algorithm tests or the independent machine, connectivity and visual gates.
+
+### Independent divider chains in one module (548D3D-F1/F1A)
+
+`voltage-divider` can now bind more than one independent chain in the same module. The
+trigger is narrow and explicit: the net must be a **signal top**, `serviceLayout` must
+exist, and `labelPolicy.stubMin` must be greater than zero. The first attempt gated
+this on `textPlacement: "native-attr"`; that global key made `bmp280_optional` and
+`wifi` lose every candidate, so it was withdrawn and the real LED specification carries
+no `textPlacement`. Omission, `stubMin` absent or zero, `serviceLayout` alone, and
+single-chain or power-divider pages keep the old result byte for byte.
+
+Chains must share no arm and no tap; `in`/`gnd` roles are de-duplicated by `(role, net)`,
+so a common rail is stated once. Each chain keeps its own `direct-wire` and
+`visible-tap` obligation, and sibling chains of the same shape add `same-row`
+(vertical) or `same-column` (horizontal) constraints. The measured LED island draws
+R2/D1 and R3/D2 with one direction, one pitch and both taps visible on their own side;
+the module frame shrinks from 276×241.5 to **236×216.5** and the independent per-pin
+check reads 6/6. This is a module-level reading, not a page capability: the real
+10-module page still fails page packing (see below). Evidence:
+`evidence/548D/full-page/divider-families/README.md`.
+
+### Forced topology without a core chain (548D3D-T1)
+
+When the forced-topology path has to draw a module whose chains carry no core part,
+the projection reuses `_place_coreless_column`: it chooses one common legal pose,
+makes the shared terminals collinear, keeps the real measured box pitch, and picks the
+widest grade that neither presses a part nor leaves the page. It does not call the base
+constructor, so `_variants` / `_widened_variants` stay empty and `_place_chain_and_shelf`
+is never invoked. Same-net flag pre-reservation and replay both measure the sibling
+flag's real box, so a heavy box can no longer fall through to the readability final
+check. The forced path also refuses internal crossings between ordinary signal spans
+and flag leads/member paths.
+
+Measured on the frozen three-island fixture: all three islands `ok`, per-pin empty, page
+hard empty, per-module crossings zero, and the port-native geometry was signed visually
+island by island. The baseline variant keeps the old bare labels and the BOOT0 crossing,
+so it is recorded as a machine contract only, not as a deliverable drawing. Evidence:
+`evidence/548D/host-binding/three-island/implementation/ACCEPTANCE.md`.
+
+### Host port columns (548D3D-P1)
+
+For a page that sets `serviceLayout.localSeats: true` **and** `labelPolicy.stubMin > 0`
+(and declares no `panelGroups`), label-style nets already produced by the seat-first
+label map get a real port column: pin tip → visible stub segment → `LayoutLabel` at the
+stub's far end. One `(host part, escape direction)` group shares one stub length and one
+reading column; the document's `stubMin` is tried first and the group moves to a later
+legal rung as a whole, never per pin. Before a rung is accepted, the candidate span is
+checked with the same conductor walls used elsewhere (`_span_free`), so a stub cannot
+cross a neighbour flag lead. When carriers exist the final label boxes are fed back
+into `_seat_first_plans`, and flags are re-allocated against the carrier walls; the path
+audit refuses a missing, zero-length or wrongly anchored carrier segment.
+
+Boundary: this is not a page-sizing tool. The full SmartMedicineBox page uses
+`serviceLayout={"pinGap": 30}` **without** `localSeats`, so P1 does not enter it, and a
+visible stub plus a label box can only make a module frame larger. Evidence:
+`evidence/548D/host-binding/port-column-p1/`, `tasks/548d_host_port_columns.md`.
 
 ### One shared-net reading for branches and relations (547S)
 

@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.device-library-sample/1",
+ "name": "d-falsy-zero",
+ "text": "{\"type\": \"DOCHEAD\"}||{\"docType\": \"DEVICE\", \"uuid\": \"d-f-zero\"}|\n{\"type\": \"META\"}||{\"title\": \"T\", \"attributes\": 0}|"
+}

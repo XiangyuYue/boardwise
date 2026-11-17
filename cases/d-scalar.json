@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.device-library-sample/1",
+ "name": "d-scalar",
+ "text": "{\"type\": \"DOCHEAD\"}||{\"docType\": \"DEVICE\", \"uuid\": \"d2\"}|\n{\"type\": \"META\"}||{\"title\": \"N\", \"attributes\": {\"Supplier Part\": 12345, \"Manufacturer Part\": 1.5, \"Manufacturer\": true, \"Datasheet\": 1e-07, \"Supplier Footprint\": -0.0, \"Name\": 1e+16, \"Designator\": true}}|"
+}

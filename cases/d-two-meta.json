@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.device-library-sample/1",
+ "name": "d-two-meta",
+ "text": "{\"type\": \"DOCHEAD\"}||{\"docType\": \"DEVICE\", \"uuid\": \"dm\"}|\n{\"type\": \"META\"}||{\"title\": \"A\", \"attributes\": {\"Designator\": \"R?\"}}|\n{\"type\": \"META\"}||{\"title\": \"B\", \"attributes\": {\"Designator\": \"C?\"}}|"
+}

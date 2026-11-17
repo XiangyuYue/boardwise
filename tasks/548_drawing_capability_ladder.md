@@ -2252,3 +2252,236 @@ localSeats回归，也不应回退已审定的547S。
 `shared_net_order`改回旧sorted变异使两条先红，cp/hash恢复后两条通过。证据
 `evidence/548D/scene08-baseline-repair.md`。最终全量 **10775 passed / 26 skipped / 1 xfailed /
 0 failed / 0 errors**，两条目标测试均消失，绘制线全绿（另有1条既有编码警告）；未真机、未git写。
+
+### 41. 548D3D-H：宿主脚绑定统一（2026-11-12，本批合同）
+
+岳裁决顺序为：**统一宿主脚绑定 → MCU右侧端口列 → 强制topology三岛验收 → 真实整页**；
+547G作为独立的agent-adjusted交付链任务另行收口。本批只做第一项及当前MCU的强制topology真实
+候选验证，不提前修改右侧标签、不重开KEY/LED独立岛、不重写packing、不进入548E真机。
+
+已实测根因：base `_service_templates` 有位姿时C1选VBAT，`_topology_request` 无位姿时仍提前固定
+VDD，之后binder消费固定token；`_panel_text_map` 与 `_service_terminal_seats` 又重建模板，存在再次
+选择的风险。证据 `evidence/548D/service-seat/mcu-local/topology-host-boundary.log`。
+
+实现合同：
+
+1. 内部服务模板保存宿主件、支路两端网络、**允许的宿主脚集合**及阅读方向约束；没有位姿不是退回
+   首脚的理由。输入明确指定服务脚时集合只能有该脚；仅允许同网选择时才由几何规则决定。不得把
+   “VDD/VBAT同属3V3”误写成任意专用去耦都可换归属。
+2. binder在任何支路排序、座位与host path生成之前，按当前候选的真实pose/origin统一解析脚位置与
+   出脚方向并选脚；base/topology不得各自再作选择。最终选脚、座位、host path、文字和旗标事实由同一
+   BoundPlan携带或由其确定性回放，后续不得重新生成一套不同选择。
+3. 增加宿主端点审计：host path起点必须等于BoundPlan选定宿主脚在当前位姿下的真实pin tip，且其网络
+   等于支路shared net。模板缺合法脚、位姿变化后非法或回放漂移必须具名拒绝，不能静默保留旧布局。
+4. 新逻辑只进入显式 `serviceLayout.localSeats:true` 且无panelGroups的路径；旧panelGroups、未开启
+   localSeats及CH34 pinned逐候选保持。若需改placement，严格登记shared §19；不改公共schema、CLI、
+   connector、DSH或Rust。
+
+验收：同一宿主位姿下base/topology选脚、相对座位和host path一致；平移、合法镜像/旋转、pin列表重排
+仍遵循同一规则，不强求永远选VBAT；当前MCU在`_variants`与`_widened_variants`均为空、禁止base兜底时
+真实产出候选，并通过compile/readability/grammar、独立逐脚分区、渲染与主代理视觉。保留其他真实失败
+的负例；旧“必须无候选”的实测钉只有在新读数证明行为合法演进后才能改写，不能删断言或改xfail。
+至少两项独立变异（topology不选脚、回放绕过BoundPlan/错误host path起点）先红后cp+SHA-256恢复；
+跑548D邻域、CH34负控与约定工具链。右侧端口列、完整三岛组合与真实整页仍分别记账，不能借本批关闭。
+
+### 42. 548D3D-H2：把岳的旗标规则接回自动局部闭环（2026-11-12）
+
+§41主体已实现并由主代理亲跑独立合同 **10 passed / 1 failed**：同位姿base/topology选脚、座位和
+host path一致，平移/pin顺序扰动/端点审计通过；唯一红仍是当前MCU禁止base兜底的真实候选。
+后续诊断证明不是选脚问题：topology服务座停最近档，U1.VBAT的3V3与U1.VSS的GND自动旗只剩
+相互冲突的位置；强制改回VBAT仍无解。详见 `host-binding/topology-followup.md`。
+
+岳已在test V4 P42用手改给出合法图形，主代理亲看after并记录
+`evidence/548D/host-binding/live-reference/rules-from-adjustment.md`。本批据此关闭§41唯一红：
+
+1. 旗标保持竖直阅读，水平引脚以末端短竖段接旗；0/180由真实库字形、出线方向和净空决定，
+   不把90/270横放当合法默认。电气锚点、lead、glyph与文字作为同一结果生成和校验。
+2. 服务座位的每个既有合法档位必须同时证明宿主剩余电源/地脚存在真实合法旗位；不能把器件体
+   不碰撞当作座位成立。优先复用既有旗位几何/分配器做有限档位验证，最终仍由同一BoundPlan和
+   `_seat_first_plans`产出实际旗，不写死第3档、5/30/40/60等P42实例数值。
+3. 同类服务支路整组保持同向/节距，旗阵随支路；页框包含文字/旗/线并避开标题栏。旗数量跟随
+   可见阅读支路，不机械跟随焊盘数，不合并不同语义组。
+4. 新逻辑仍限localSeats:true；旧panelGroups、未开启localSeats和CH34轨迹不变。禁止调near/reach/
+   排名/硬闸/页框或扩大flag_lead_limit，禁止复制P42坐标/userLocks冒充automatic。
+
+验收：§41合同11条全绿，当前MCU强制topology真实SVG经独立逐脚/分区/readability/grammar和主代理
+视觉；补竖旗/短竖段/完整外框负例，两项独立变异先红后cp+SHA-256恢复，CH34 pinned不变。
+H2首次试验证明k=0旗位不可行、k=1/2可行，但成员路径另绕导致 `_path_first_audit` 拒绝；实现已回滚，
+主代理用HEAD+事前diff重建并cp恢复 `drawcompiler=0788a029…`。本批同源闭环同时包含：**固定service
+channel必须作为本网既有导体参与成员路径与最终回放，不得另画一条绕行/并行线；审计不得放宽。**
+`_path_first_plan` 默认 `_panel_channels` 排除service及 `_seat_first_paths` 独立route是当前明确接点，
+先验证再接，不能仅把报错消掉或叠加两条导体形成回环。
+
+H2b后§41合同 **11/11** 已真实出候选，原四文件 **79 passed**；新增独立回放合同仍抓出channel被U形
+绕行，主代理亲跑 **19 passed / 1 failed**。现裁决localSeats内的定序：**BoundPlan固定channel是已承诺
+事实，不是另一个候选；其节点必须先于假想自动旗候选得到所有权，冲突候选在联合选择中让位。**
+`_pool_blocked` 对自由路径的旧约束保留，不能全局删候选墙或只豁免真实重叠。固定channel拼接路径若只
+与假想候选冲突，可进入本组candidate，但其全部节点必须进入该candidate的lanes/occupancy，让联合选择
+拒绝与其冲突的其它组；最终选中答案仍需逐点无重叠、channel真实画出且去掉它两端不再连通。
+这不是排名/成本调整，也不改变旧panelGroups或未开localSeats页面。若简单豁免导致下一处红，给新真实
+障碍，不得回滚成旧绕行冒充完成。
+
+H2c节点级反证：镜像U1行序为VDD(-50)/VSS(-40)/VBAT(-30)/BOOT0(-20)，选VDD的通道y=-50
+必被VSS向下GND lead横穿；非镜像base的通道位于最外侧所以没有此冲突。 fixed-first不能凭空产生旗位。
+现采纳规则A：binder在**允许脚集合**内除“终端旗方向最外侧”外，还必须排除其水平host channel会切断
+宿主其余电源/地脚合法竖直旗带的脚；由真实pose、库旗lead/glyph和障碍计算，不写死VBAT或坐标。
+显式singleton/指定服务脚不可替换，若其通道无合法旗带应具名拒绝。独立测试须从几何推导合法脚，
+不能仅把旧最小y期望换成生产函数；补镜像正例和不可换脚负例。先验证此规则能否让现有composed
+channel合法，再决定fixed-first是否仍需要，不把两个变更同时当无条件答案。
+岳随后明确“拿着规则绘制新的图页”：保留agent-adjusted P42不动，真实64脚MCU的新页目标为
+test V4 **P43**；但必须先另批证明真实64脚输入的离线三关，ok=False不得落P43。P43真机授权不
+反向扩大本批文件域，也不把P42手改页当自动能力证据。
+
+**H/H2关闭读数**：最终 `drawcompiler=1fd35387…`、`placement=d52ea931…`。两份合同24 passed，
+原四文件79 passed，CH34+semantic islands 25 passed；主代理两项变异各3红后cp/SHA-256恢复并回到24。
+强制topology geometry `aa4dfa68…`，主代理亲看：本地结构可读，1处3V3×BOOT0正交无结点交叉。
+base digest变化仅为BOOT0同一线段点序反向，视觉未退化。证据 `evidence/548D/host-binding/h2-final.md`。
+
+### 43. 548D3D-H3：真实64脚MCU离线三关（2026-11-12）
+
+输入为已审计的 `evidence/548D/host-binding/live-reference/circuit_hostbound.json` 与
+`profiles_hostbound.json`（全部VDD/VSS分别接3V3/GND，PB8-BOOT0接BOOT0，其余未声明脚NC；
+实际C/R轮廓也来自本机回读）。不改这份电气归属，不删脚、不隐藏NC、不复制P42坐标或userLocks。
+
+当前 `_service_host_side` 在模板期要求同网脚只属一侧，真实U1的3V3/GND跨左右两侧，因而尚未进入
+几何选择就具名拒绝。H3只扩同一内部合同：**模板保存允许的(阅读侧,脚,支路pose/文字)事实集合，
+binder在当前真实pose上联合选侧选脚**，不得在模板期退回首侧/首脚。显式指定脚仍不可换；侧由所选脚
+实际出脚方向决定，不能为凑图指定相反侧。有限验证应覆盖全部允许(侧,脚)×既有档位，组合上限由这些
+真实候选数推导，不用固定2轮漏掉多脚器件，也不靠盲加搜索/排名/硬闸/页框。
+
+验收：真实64脚单岛生产compile至少1候选，readability/grammar/独立逐脚分区通过，所有VDD/VSS脚
+均被支路真实驱动或有合法本地旗，旗标0/180竖直且固定channel无绕行/重复；生成真实SVG/JSON供主代理
+视觉。补自包含的跨侧小夹具（左右各有同网电源/地脚），不依赖临时文件才能跑测试；同时用上述真实
+输入做集成证据。H2两份合同、原四文件与CH34负控保持，至少两项独立变异先红后cp+SHA-256恢复。
+若单岛draw plan仍有跨界标签桩问题，如实留到P43前处理，不能用删标签/手摆/放宽桩闸解决。
+只有本批离线三关和主代理视觉签字后，才可按单独真机合同创建P43；P42及其他页不动。
+
+### 44. 548D3D-H4–H6 / P1 / T1 / F1A 与 P43 automatic（2026-11-13，单岛与三岛闭环；整页仍 BLOCKED）
+
+**顺序与边界**：岳定「统一宿主脚绑定 → MCU 右侧端口列 → 强制 topology 三岛验收 → 真实整页」，
+547G 独立暂停。本批只关前三级与两个结构性缺口（真实 MCU 单岛真机、三岛强制 topology、同模块
+独立分压链族），**真实整页不关**，548E 不进入，P42 不动，零 git 写。B1前历史基线：
+`drawcompiler=058a30322202c7182888ed5789d5e41999ff96e9cd7d02ce616673b51a177f29`、
+`drawapply=f713895fe5e92688e0d84330e3ff30f0aa4dee7bda706f50a7493808ea8b5daf`、
+`placement=326d96e9ffa265077538fceb4ba385e0406f78927b904e33178440595da9c4a8`、
+`voltage_divider=2f67af658d5888748ccf5b25365ec26dbaf7161efa198ae1aa671b046bdac54c`。
+
+1. **H4 本件文字逃逸**（`tasks/548d_part_text_escape.md`）：本件位号/值行离开本件水平引脚逃逸带，
+   过 U1.48 的文字拒绝；主代理完成独立变异与恢复。
+2. **H5 旗位方向**（`tasks/548d_flag_orientation.md`）：648 次 `_flag_rotation_away` 在真实页 0 次翻转，
+   证明冲突不是字形翻转；0/180 由真实库字形、出线方向与净空决定，竖直阅读不被横放替代。
+3. **H6 相邻脚旗位独立备选**（`tasks/548d_flag_alternates.md`）：`_seat_first_seat_alternates` 把第一条
+   答案的整条 lead 当墙体，导致每组只返回一个候选；改为同组合法档独立枚举并核兄弟旗真实盒。
+   主代理完成独立变异与恢复。H6 机器全过的候选仍被主代理视觉拒收（KEY 文字压脚号、LED 名字错列），
+   这一步直接导向 P1。
+4. **P1 宿主端口列**（`tasks/548d_host_port_columns.md`，A/B/C 三轮）：触发最终定为
+   `localSeats:true` + `labelPolicy.stubMin>0` + 无 `panelGroups`；复用 `_local_label_candidate` /
+   `_local_label_carriers` / `_local_label_trial_box` 的真实盒尺，生成 脚点→可见短桩→`LayoutLabel`
+   的完整结果，同 `(host part, 出脚方向)` 整组共桩长/共阅读列，首选规格 `stubMin` 后沿既有梯级整组换档。
+   每档必须过 `_span_free`（真实导体跨度），carrier 并入 terminal 由 `_path_first_plan` 统一消费，
+   并回灌 `_seat_first_plans` 重新联合分配旗位。`_path_first_audit` 对缺段/零长/错锚点具名拒绝。
+   **能力边界**：P1 只让宿主岛框变大，不改善页级装箱；真实整页规格是 `serviceLayout={"pinGap":30}`
+   且**没有** `localSeats`，P1 在该页不进入。
+5. **T1 强制 topology 三岛**（`evidence/548D/host-binding/three-island/implementation/ACCEPTANCE.md`）：
+   `_variants`/`_widened_variants` 置空且 `_place_chain_and_shelf` 零调用，port-native 由真实
+   `placement.place` + topology 回放产图。coreless topology 投影复用 `_place_coreless_column`
+   （共同合法 pose、共同端共线、真实盒节距、从宽到窄选不压件/不出页档）；同网旗标预占与回放核兄弟旗
+   真实盒；port 模式独立拒绝普通信号与旗 lead/member path 内部交叉。读数：三岛 ok、逐脚空、页 hard 空、
+   模块 crossings=0、geometry `b3e86743…`，主代理逐岛视觉签收；主代理 **79 聚焦全绿**（7 T1 + 72 邻域），
+   实现者 CH34/seat-first 邻域 **171 passed**。有效变异：关闭 coreless 投影 → **3 failed**；放开同网重旗
+   预占 → **1 failed**（均 cp+SHA-256 恢复）。**「删除普通信号墙」实验仍 1 passed，是无效变异，不记成功。**
+   baseline 保留旧裸标签与 BOOT0 交叉，只记机器合同，不称视觉可交付；未写 `stubMin` 的旧行为未被改写。
+6. **F1/F1A 同模块独立分压链族**（`tasks/548d_divider_families.md`、
+   `evidence/548D/full-page/divider-families/README.md`）：F1 先以 `textPlacement=native-attr` +
+   `serviceLayout` 为门，实测该全局键让 `bmp280_optional` 与 `wifi` **各失全部候选**，随即撤回；
+   F1A 改为 **`serviceLayout` 存在且 `labelPolicy.stubMin>0` 且网为信号顶端**。族内各链须
+   **臂集合与抽头集合互不相交**，`in`/`gnd` 按 `(role, net)` 去重，每链独立 `direct-wire`/`visible-tap`，
+   同形兄弟链追加 `same-row`/`same-column`。真实 LED 岛：R2/D1 与 R3/D2 四件 rotation=270、同排、节距 55，
+   两个抽头各自向外 30 单位且互不穿越，GND 横轨 + 一枚旗共用，框 **236×216.5**（单链 276×241.5），
+   独立逐脚 **6/6**。测试 **14 passed**，邻域 **333 passed / 2 skipped**；两项变异（撤族门 **7 failed/7 passed**、
+   撤同排对齐 **2 failed/12 passed**）先红后 cp+SHA-256 恢复。残留 2 条 `LED1_K/LED2_K` 直接线 finding
+   属岛边界输入的固有形态，单链基线亦有同类，非回归。
+7. **P43 automatic 真实 64 脚 MCU 单岛真机**（`evidence/548D/host-binding/p43/ACCEPTANCE.md`）：
+   test V4 Board1 P43 `797f20b8a217b331`，U9=STM32G431RBT6/C431633、C24=100nF/C14663、R15=10k/C25804；
+   3 件 / 19 wire / 11 flag，39 写调用，`verify live ok · canvas ok`，3/3 值回读一致，`range.removed=[]`；
+   独立 `verify_netlist.py` **20/20 声明脚 + 48/48 未声明脚 NC**；`draw lint` 最终 **0 ERROR / 0 WARN / 0 INFO**；
+   仅对 `arch-nrst-closure` 一条 WARN 审查后 force，重复 apply 返回 `already_applied`。显式 `sch.doc.save`
+   返回 `saved:true`，但**持久化只记 `saved_unverified`**（未关闭重开）。**DRC 电气开放项照记**：
+   宿主 209 WARN / 0 ERROR，P43 相关 6 条 SHOWDANDLING、3 条 CHECKFLOATPIN、1 条跨页 ATTRMATCHCODE，
+   apply 另新增 NRST WARN（复位脚无真实闭合；模拟电源/未用脚保持 NC）——**lint=0 与 force 都不消除这些**。
+   主代理聚焦 **60 passed**（52 条 548D + 8 条 native carrier），两项变异（短桩 `_span_free` 关 → 1 failed、
+   native carrier cover 关 → 4 failed）先红后 cp+SHA-256 恢复。**这是 MCU 单岛教学切片，不是完整三岛、
+   不是整页、不可投板。**
+
+**整页真实状态（不关）**：10/10 岛各自可出候选，页级 `pack_frames` 两次真实调用均 **unsat**
+（内部展开节点 4399 / 3801），最小三列宽 **1211.5 > 1170**，差 **41.5**；mcu 584 与 keys 361 / wifi 200
+都不能同列上下叠。已实测排除：buzzer 独立岛（需第四列 ≥1371.5）、`partTexts`、`panelGroups` WiFi 上拉
+（7 变体全拒；columns=3 探测未结束，不宣称有解）、native-attr 作多链门、packer/页框/gap/max_nodes 调参。
+WiFi 50 节距来自 `_share_one_bay` 四边 GAP=20 加竖放 0603 体宽 10，非文字；`_place_coreless_column`
+要求无 chain 角色，WiFi 的 J2 是 core 不能复用。**下一步只做共享上拉/服务支路联合座位设计**，
+不得用调 pinGap、缩字、降 40、扩页框或放宽 near/reach/硬闸冒充。
+
+**回归**：最终全量 **10973 passed / 26 skipped / 1 xfailed / 1 failed / 1 warning**（唯一红仍为既有
+`tests/test_548d_panel_base.py::test_the_topology_search_spends_a_bounded_number_of_routes`，
+37 route calls > 32 上限），无新增失败，不称全绿。Connector **740**、DSH **137/1**、Rust **177/4** 均通过。
+证据索引：`host-binding/full-pytest-final.log`、`connector-final.log`、`dsh-final.log`、`rust-final.log`、
+`full-page/island-packing-review.md`、`full-page/BLOCKED.md`、`full-page/divider-families/`。
+
+### 45. 548J：serviceGroups合同通过；B1联合座位停止（2026-11-13）
+
+**A合同已完成**：顶层可选 `serviceGroups`（组 `id/branches`、支路 `part/from/to`）与页面切片落地，
+缺省/[]保持旧摘要。主代理201 passed/1 skipped；default与器件唯一两项变异分别3红/30过、1红/32过后
+cp+SHA-256恢复。当前 `presentationspec=10c2d12c…`、`pagecompiler=1110e626…`。
+
+**岳人工P44与符号事实可复用**：P44 `6fb7a1f1f245008e` 为agent-adjusted，6件/10线/5旗，
+同组共享短轨与本地旗、上拉底端齐平、开放TX/RX等长外向短端。IO0+IO2共同上拉，旧IO2=NC撤回；
+TX/RX为对端命名。真机ESP-01S为2×4，旧547单列profile未校准，校准件在 `evidence/548J/wifi-canvas/`。
+P44未做DRC/持久化验证，不能记automatic。
+
+**B1停止，未通过**：当前 `drawcompiler=11b2b3b9…`、`test_548j_joint_seats.py=5b004724…`，
+目标测试22 passed，交接组合 **233 passed / 1 skipped**；但 `evidence/548J/b1/synthetic.png` 的
+CFG_A/PWR大回环由主代理视觉拒收。直接令 `row_y=min(feet)`（不扣body/GAP）、去耦GND行等实验均因
+新拒因回退，当前仍为 `min(host_body, feet)-GAP`；障碍抽头也未形成组合正例。真实WiFi未消费，
+B1真机/独立变异/全量四线均未做。B1前基线为058a3032…，当前工作树
+混合未提交，禁git restore，清理或重设计由岳另裁。
+
+P44人工页/P42/P43/Board2不动，P45空白，daemon已停。**权威交接 `evidence/548J/HANDOFF.md`**。
+若重做，不再造第二套标准build/route/flag/page-anchor；先让组级计划供现有标准链消费并通过一个
+无回环小闭环，再接真实WiFi。548D自动整页/548E/547G均不因此关闭。
+
+### 46. 548K–548N2：名字桩带/直线走廊/轨旗聚簇/组座位（2026-11-14）
+
+**四个批次的结论一句话**：三条"谁先占位"的一致性修复落进标准链（全部默认关闭、逐字节可证），
+一条组座位缺陷修好并并入主仓；**校准 WiFi 页仍未过视觉闸**，差距收到唯一一处（`ESP_RST` 绕行）。
+
+**548K / 548K-R（名字桩带先预留）**：根因是编译期只承诺 `LABEL_LANE_STEPS`（10 单位）车道、
+交付侧按 `labelPolicy.stubMin`（该页 40）找桩。改成显式开关 `labelPolicy.stubLaneReserve`：
+声明后单脚标签网先预留名字桩带（长度取 `max(10, stubMin)`），旗位与宿主支路后取车道。
+第一版挂在 `stubMin` 上直接改行为，全量抓出 6 条老金标准红，才收成开关。最终
+`drawcompiler=B965AC…1F66`、`presentationspec=667475…9BC8`。
+
+**548L（直线走廊先预留）**：仍在同一开关下，把 `style=wire`、两脚、正交的网的那条直线在旗位之前
+`_take_lane` 预留；旗位不用改——`_flag_room` 在预留趟本来就拒绝压在别网通道上的旗盒。
+`ESP_EN`/`ESP_RST` 变回导线，`wired route not found` 三处归零，GND 旗从 `(320,680)` 让到 `(350,730)`。
+最终 `drawcompiler=AA86C1CE…FC5C2`。
+
+**548M / 548M2（轨旗聚簇）**：`railClustering: {"radius"}` 把 053E 的 GND 聚簇开到 power（声明时该网取
+`wire` 样式，053 sec.7 默认裁决未动；`gndClustering` 语义未动，两者都适用取大半径）。
+`3V3` 旗 6→3、GND 旗 1→2（`(350,730)`+`(180,730)`，y=795 底边 rail 消失），默认页 `8802d317cfae…` 仅指纹（不作验收；见 `docs/draw.md` §Baseline）。
+期间修掉两条本批回归（`PresentationSpec` 位置参数被挪位、假 budget 无新属性），并把 548J 的
+"追加字段"pin 顺延一格（追加是契约允许方向，证据写明未放宽）。最终 `drawcompiler=05139E85…5EA3E`、
+`presentationspec=F63B89AC…0BA60`。
+
+**548N / 548N2（组座位）**：548N 在独立 worktree `E:\boardwise-wt-548n`（分支 `drawing-548n`）试组级座位，
+**未达成、净改动为零**：① 三颗一组 → `the host feet ['IO0'] … do not all face right`（校准 profile 的 IO0 在左，
+岳 P44 本身也是 R18 靠左，正确形态是两组）；② 两组 + 去耦一组 → 座位压在 `ESP_TXD` 的预留 run 上；
+③ 组行改成员外延 → VCC 到 3V3 rail 无合法直线，且冻结用例 18 failed（已还原）。
+548N2 修好 ② 那个真缺陷：`_joint_seat_group` 用 `_reserve_open_ports` 的同一份端口房间当墙、
+命中沿宿主侧外退（≤8 档，全不退仍具名拒绝）；只对声明 `serviceGroups` 的页生效。
+**三组真实页仍 `ok=False`**，新一层是 `J2.GND has no clear upright hang`（座位/轨道/宿主旗三方争地）。
+
+**四线**：最后一轮 pytest **2 failed / 11070 passed / 22 skipped / 1 xfailed（26:55）**，两条红既既有
+（panel 路由次数、193 Windows 环境）；connector 740、dsh-plugin 137/1、Rust 全过。**不称全绿。**
+
+**下一层最小动作**（`evidence/548N2/README.md` §4）：把"宿主本地旗的挂旗房间"在座位之前也登记成预留，
+让组座位与 rail 规划一次看见它；再跑三组页。仍不新建 builder/planner，不调 GAP/页框/阈值。

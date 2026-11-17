@@ -629,6 +629,20 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   原理图的导出——"没读到"不是"干净板"，073 起不再退 `0`）。**`review --live` 同一档**（075）：
   在线拿到了模型但模型是空的（0 器件 0 网）也退 `3`，与 `checkup` 的 `coverage.modelEmpty`
   对齐——它与「根本没拿到模型」是两句话，两句话都不许读成通过。
+- **两个焊盘之间有没有走线铜**（550 起，离线只读，不写报告文件）：`boardwise pcb net-path FILE
+  --from CN3.1 --to U9.2 [--board TITLE_OR_UUID]`。`FILE` 只收 `.epro2` 归档或 `.eprj3` 文件夹工程；
+  KiCad、单个 `.epcb2`、在线 `pcb.readback` **按名拒绝**（退出码 `3`）——它不会悄悄借用 `review` 的
+  `.kicad_pcb` 能力去扩大承诺。**输出分两条路**：查询真的跑了 → stdout 一份 JSON
+  （`schema` = `boardwise.pcbNetPath/1`）；**前置拒绝**（文件不存在、容器名不对、文件夹没有
+  `.eprj3` 索引、容器里没有板、多板缺 `--board`、`--board` 匹配不到或匹配多块）→ **stderr 一行理由、
+  stdout 为空、退 `3`**，不会给你一个带 `verdict` 的 JSON 让你误以为查过了。三态：
+  `CONNECTED` 退 `0`（BFS 真走过一条 pad→track→via 的铜链，网名只用来选图元、**不是**连通证据）；
+  `NOT_PROVEN` 退 `2`（受支持图元里无路**且**没有 unknown 能翻案），它只说「本批图元没证明这条连线」，
+  **不是开路**——铺铜/PLANE/ARC 都不在图里，先看 `ignored[]` 和 `scope` 再引用否定结论；
+  `INDETERMINATE` 退 `3`（输入不成立，或任何可能改变否定结论的证据缺口）。多板必须给 `--board`
+  （title 或 board uuid，逐字匹配；缺省、重名、错名一律拒绝，**绝不取第一块**）。首版**没有**
+  `--through`/`--layer`/`--json`/`--project`，传了就是 argparse 用法错误（退 `2`），不会静默忽略。
+  DSH 工具面本批不跟：离线单点证据先由 CLI 验证，确有必要再立适配。
 - **`sch.readback` 的 value/mpn 是 087E 起的可选键，缺键才走归档**（pits #3）：**新 connector** 的每行
   可选带 `value` / `mpn` / `valueSource` / `mpnSource`（`value` ← `OtherProperty['Value']`，`mpn` 先
   `ManufacturerId`、空则回退 `OtherProperty` 的料号键，空白是 `null` 不是空串）——这两项能对上，

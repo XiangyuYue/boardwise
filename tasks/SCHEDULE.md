@@ -1,4 +1,4 @@
-# 排期（2026-11-08 更新；主代理维护，岳裁）
+# 排期（2026-11-13 更新；主代理维护，岳裁）
 
 > **2026-10-17 岳裁：v0.6.0 押后到 10 月底**。这段时间不发新版，打磨存量功能，
 > 主攻**原理图绘制质量**（目标：先把一个模块画好；布线和布局算法重写），
@@ -46,7 +46,35 @@
 | **0.6.0 后（独立方向）** | **AI 电路语义编译层**：网表 → 类型化、类 C 的可读语言，AI 读编译结果而非原始网表；调研任务 `tasks/038_v4_review_line_research.md` 只登记 V3/V4 共用语义边界，不实施编译器 | 先定义语义合同与可验证还原，再逐规则/逐视图小批接入；不与 V4 适配同批 | — |
 | 远景 | **R5 SPICE**：岳 10-17 裁——等**原理图绘制过关** + **041 跨板网络**搞定后再开 | 冻结 | 两个前置 |
 
-## 当前主攻（2026-10-31：**0.6.0 已收口，随后进入 0.6.x**）
+## 当前主攻（2026-11-17：548P138 机制通过/整图未通过；P139 规划、P140 整理在途）
+
+- **548P138 当前点（2026-11-17）**：3V3 联合座位经一次 cheapest 单脚 seed 反馈通过真实首次
+  plans（chain=5、expansions=6、聚焦 77 passed），完整候选首拒前移为 C3.2/BUZZ；**整图未通过**。
+  `drawcompiler=24f13da5…`、`placement=f550f6ea…`，HEAD `3d4a0d5e`，混合工作树保留。
+  证据 `evidence/548P138/README.md`。
+- **548P139 下一缺口（规划，未实施）**：只查 C3.2 固定地旗与 BUZZ channel 哪条生产关系先决定
+  冲突，给三种最小改动与预测；依赖 P138 恢复点、P125 电路/P126 规格/P59 库，P43/WiFi/
+  P126/P135/P137/P138 聚焦不得退化。禁止移动固定 terminal、扩 reach/GAP/预算/页框、恢复 P124
+  实验；只有真实 `ok=True` 才做逐脚/渲染/视觉。任务书 `tasks/548p139_ground_buzz_channel.md`。
+- **548P140 提交整理（在途，未授权 Git 写）**：此前全部未提交绘制批次按六批 C1–C6 整理
+  （P124 前历史→P126→P135→P137→P138→文档），每批先复核 cached diff、单独获得用户授权；
+  不 push、不移动/删除、不混入其他线 hunk；任务书 `tasks/548p140_draw_history_commits.md`。
+
+- **548J 当前停止点（2026-11-13）**：A `serviceGroups` 合同、页面切片与两项变异已验收；B1目标测试
+  22 passed、交接组合233 passed/1 skipped，但当前合成图有CFG_A/PWR大回环，主代理视觉拒收，独立builder
+  不再续写。最近脚端子行等实验未形成正例，真实WiFi未消费，B1真机/独立变异/全量四线未做。
+  当前 `drawcompiler=11b2b3b9…`（B1前058a3032…），工作树混合未提交；P44人工页/P42/P43/Board2不动，
+  P45空白，daemon已停。**下一批不是自动接续，先由岳裁保留人工页/批准清理/重设计**；权威交接
+  `evidence/548J/HANDOFF.md`，任务书 `tasks/548j_pullup_joint_seats.md`。
+- **已收口、不进后续清理或重设计批**：P43 automatic 单岛真机（`saved_unverified`，DRC开放项另记）、
+  T1强制topology三岛、F1A LED分压链族、H3–H6/P1宿主绑定与端口列。较早基线
+  `drawcompiler=058a3032…`、`drawapply=f713895f…`、`placement=326d96e9…`、`voltage_divider=2f67af65…`。
+- **另行排期（不夹带）**：①`pagepacking` unsat 分支回填 `nodes` 的报数口径修复（单文件、单批、
+  带负例，不动判据/gap/max_nodes）；②整页成立后才谈548E真机（单独真机合同，P43不代替）；
+  ③547G仍是**独立暂停**的agent-adjusted收口，不因P43/P44关闭。
+- **回归边界**：548D较早全量 **10973 passed / 26 skipped / 1 xfailed / 1 failed / 1 warning**
+  （唯一红为既有panel路由次数）；Connector 740、DSH 137/1、Rust 177/4 是当时的读数，**不是当前B1全量**。
+  当前只复跑交接组合233 passed/1 skipped，命令见 `evidence/548J/HANDOFF.md` §7。
 
 - **547S 098 scene08基线修复（2026-11-11）**：岳指出绘制线全量仅115/116两条failed；逐commit证明
   547S统一支路网尺的合法拒因变化，场景不产图、localSeats无影响。保留pre_547s旧版后依法重钉114基线
@@ -349,3 +377,21 @@
 200 批历史集成读数 **8540 passed / 25 skipped / 2 failed** 与失败原文仍见
 `outputs/200/acceptance.md`，不改写历史。当前 0.6.0 的最终全量、真机与发布件验收单独记录；
 功能门槛已收口不等于发布件已经签发。
+
+## 2026-11-14 绘制线四批（工作树未提交，未真机）
+
+| 批次 | 内容 | 状态 | 证据 |
+|---|---|---|---|
+| 548K/548K-R | 名字桩带先于旗位预留（`labelPolicy.stubLaneReserve`，默认关闭） | 已落工作树；校准件开关前 `f4f1c58c…` + plan 拒绝，开关后 `plan ok=True` | `evidence/548K/README.md` |
+| 548L | 两脚 wire 网直线走廊先预留（同一开关） | 已落；`wired route not found` 归零 | `evidence/548L/README.md` |
+| 548M/548M2 | `railClustering` 轨旗聚簇（power+gnd）；3V3 旗舰 6→3、GND 变成 2 枚本地旗 | 已落；默认页 `8802d317cfae…` 仅指纹（不作验收；见 `docs/draw.md` §Baseline） | `evidence/548M/README.md` |
+| 548N/548N2 | 组座位避开已预留开放端口房间 | N 未达成（净零）；N2 已并入主仓；三组真实页仍 `ok=False` | `evidence/548N/README.md`、`evidence/548N2/README.md` |
+
+- 全量 pytest 最后一轮 **2 failed / 11070 passed / 22 skipped / 1 xfailed（26:55）**，两条红均既有
+  （`test_548d_panel_base` 的 panel 路由次数、`test_193_secrecy_hooks` 的 Windows 环境）；connector 740、
+  dsh-plugin 137/1、Rust 全过。**不称全绿。**
+- 视觉：旗域已按岳 P44 判据同形，**仍未过视觉闸**（`ESP_RST` 绕行，根因是上拉离宿主脚 180/240/130 单位）。
+  逐项差距见 `evidence/548M/p44-comparison.md`。
+- 已裁（2026-11-14）：**选 (b)** —— 接受两组声明（R4/R5 右、R6 左、去耦另组），不解冻
+  `test_548j_joint_seats.py` 的"跨侧组 = 具名拒绝"；独立 worktree `E:\boardwise-wt-548n`
+  **保留为只读证据档案**（不是当前实现）。

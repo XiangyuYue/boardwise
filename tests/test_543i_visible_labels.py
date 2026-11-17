@@ -17,7 +17,11 @@ What this file pins:
   `U1` stubs untouched;
 * the pass is opt-in: the same document without `serviceLayout` keeps 053V's
   hidden duplicates and the 5-unit lead, byte for byte;
-* `_native_label_visibility` hides only a repeat on the **same** run.
+* `_native_label_visibility` hides only a repeat on the **same** run;
+* 548D3D-P1E: the repair is **not** a privilege of the split net — a visible
+  `native` row standing past its own single run is seated inside it (wire
+  untouched), and the plan's own downgrade sentence names what seats the row and
+  `attributeMoves`, never the reserved box's coordinates.
 
 `spec_h3b` is written inline — a test may not depend on an evidence directory.
 """
@@ -26,12 +30,13 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from boardwise.core.circuitspec import CircuitSpec
-from boardwise.core.layoutplan import LayoutLabel
+from boardwise.core.layoutplan import LayoutLabel, LayoutPlan
 from boardwise.core.presentationspec import PresentationSpec
 from boardwise.core.symbolprofile import SymbolProfile
 from boardwise.engines import drawapply
@@ -291,6 +296,126 @@ def test_the_gate_refuses_a_bare_long_run_and_an_off_carrier_row():
         PAGE_BOX,
     )
     assert _single and "is not on the x 200..205 run" in _single[0], _single
+
+
+def _covered(labels, wires, page_box=PAGE_BOX):
+    built = drawapply._Built()
+    built.wires.extend(wires)
+    problems = drawapply._native_carrier_cover(
+        built, LayoutPlan(labels=list(labels)), {}, {}, [], page_box,
+    )
+    return built, problems
+
+
+def test_a_single_run_seats_its_row_without_growing_the_wire():
+    """548D3D-P1E: the cover is not a privilege of the split net.
+
+    P43's six names each ride a run that is its net's **only** run, and the row
+    the layout reserved stands just past that run's far end (KEY1 at
+    ``(408, 470.5)-(439, 479.5)`` on the ``x 360..400`` run). Statement 1 has no
+    single-run exemption, so the repair may not have one either: the row moves
+    inside the existing 40-unit carrier, the wire keeps its two points, and the
+    gate then has nothing to say about it.
+    """
+    label = LayoutLabel(
+        net="KEY1", text="KEY1", bbox=(408.0, 470.5, 439.0, 479.5),
+        x=400.0, y=475.0, text_mode=dc.TEXT_MODE_NATIVE,
+    )
+    wire = _Wire("KEY1", [(360, 475), (400, 475)])
+
+    # The defect the cover has to answer: on its own the gate refuses the row.
+    before = drawapply.native_carrier_problems([label], [wire], PAGE_BOX)
+    assert before and "is not on the x 360..400 run" in before[0], before
+
+    built, problems = _covered([label], [wire])
+    assert problems == []
+    assert wire.points == [(360.0, 475.0), (400.0, 475.0)], wire.points
+    row = built.native_carrier_rows[id(label)]
+    assert 360.0 - 1e-9 <= row[0] and row[2] <= 400.0 + 1e-9, row
+    assert abs(row[1] - 470.5) <= 1e-9 and abs(row[3] - 479.5) <= 1e-9, row
+    assert drawapply.native_carrier_problems(
+        [label], [wire], PAGE_BOX, built.native_carrier_rows,
+    ) == []
+
+
+def test_the_cover_leaves_ordinary_and_seated_labels_alone():
+    """A name already inside its run, and a non-`native` label, keep their bytes.
+
+    Only Statement 1's repair widens here: a row that already prints on its
+    carrier is not moved (no entry is recorded), an ordinary label is not this
+    pass's subject, and a single run too short to hold the name is still a
+    named refusal rather than a silent pass.
+    """
+    seated = LayoutLabel(
+        net="LED1", text="LED1", bbox=(135.0, 570.5, 166.0, 579.5),
+        x=130.0, y=575.0, text_mode=dc.TEXT_MODE_NATIVE,
+    )
+    ordinary = _Label("LED2", 130, 565, (91, 560.5, 122, 569.5), "")
+    wires = [
+        _Wire("LED1", [(130, 575), (170, 575)]),
+        _Wire("LED2", [(130, 565), (170, 565)]),
+    ]
+    built, problems = _covered([seated, ordinary], wires)
+    assert problems == []
+    assert id(seated) not in built.native_carrier_rows
+    assert id(ordinary) not in built.native_carrier_rows
+    assert wires[0].points == [(130.0, 575.0), (170.0, 575.0)]
+    assert wires[1].points == [(130.0, 565.0), (170.0, 565.0)]
+
+    # A 20-unit run cannot hold the 31-unit row and the sheet ends at its own
+    # end: the short-run rule is unchanged, so this stays a problem by name.
+    short = LayoutLabel(
+        net="LED3", text="LED3", bbox=(8.0, 0.5, 39.0, 9.5),
+        x=0.0, y=5.0, text_mode=dc.TEXT_MODE_NATIVE,
+    )
+    built, problems = _covered(
+        [short], [_Wire("LED3", [(0, 5), (20, 5)])], (0.0, 0.0, 20.0, 100.0),
+    )
+    assert problems and "carrier" in problems[0], problems
+    assert id(short) not in built.native_carrier_rows
+
+
+def test_the_native_downgrade_names_the_seat_not_the_reserved_box():
+    """548D3D-P1E: the plan's own sentence may not print a coordinate it drops.
+
+    P43's plan seats six rows at `x = 384.5` while its downgrade still said the
+    name went to the reserved `(408, 470.5)-(439, 479.5)`. The sentence now names
+    what seats the row and points a reader at `attributeMoves`; the reservation
+    is called what it is. Deleting the clause instead would hide the statement,
+    so the row-on-the-wire claim has to stay — and the coordinates the plan
+    really states are checked here against the carriers they ride.
+    """
+    page, plan = _page_and_plan()
+    lines = [
+        line for line in plan.change.draw_downgrades
+        if "prints that attribute row on the wire itself" in line
+    ]
+    assert lines, plan.change.draw_downgrades
+    for line in lines:
+        assert "attributeMoves" in line, line
+        assert "carrier cover" in line, line
+        assert not re.search(r"label box \(-?\d", line), line
+        # A visible `native` row is text on the canvas, so the old carried
+        # closing ("the canvas shows the wire without a label text") contradicts
+        # the clause in front of it and may not appear on any of these lines.
+        assert "without a label text" not in line, line
+
+    wires = plan.change.draw_wires
+    moves = [
+        move for move in plan.change.attribute_moves
+        if move.owner_kind == "wire" and move.role == "net"
+        and getattr(move, "move_version", 1) == 1
+    ]
+    assert moves
+    for move in moves:
+        points = [
+            (float(point[0]), float(point[1]))
+            for point in wires[move.wire_index].points
+        ]
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        assert min(xs) - 1e-9 <= move.x <= max(xs) + 1e-9, (move, points)
+        assert min(ys) - 1e-9 <= move.y <= max(ys) + 1e-9, (move, points)
 
 
 def test_the_separate_run_rule_hides_only_a_repeat_on_one_run():

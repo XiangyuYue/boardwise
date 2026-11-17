@@ -1,7 +1,7 @@
 """Offline SVG preview of a compiled plan (053 stage B: "岳不开编辑器即可看布局质量").
 
 One function for the whole job — :func:`render_svg` — plus a writer that puts it
-where a reviewer can open it. Pure standard library (string building and
+where a reviewer can open it. Pure standard library (string building, XML and
 ``html.escape``): the point of the preview is that a compiled drawing can be
 *looked at* without a browser engine, a plotting library or the editor, and a new
 dependency would be the one thing this path cannot carry.
@@ -24,16 +24,20 @@ What the picture shows, and why each element is there:
   metrics — never a score (052 sec.6), just the numbers the ranking used.
 
 The transform is a pure map from canvas to SVG pixels: SVG's y grows down and the
-canvas' grows up (010c measured), so ``Y = top - y``; no transform attribute is
-used, so text renders the right way up.
+canvas' grows up (010c measured), so ``Y = top - y``. Diagnostic text uses that
+map directly. Optional native symbol art is already captured in SVG coordinates
+at its stated pose; only its outer origin and positive scale are transformed.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
+import math
 from pathlib import Path
+import re
 from typing import Mapping, Sequence
+from xml.etree import ElementTree as ET
 
 from boardwise.core.layoutplan import LayoutPlan
 from boardwise.core.symbolprofile import (
@@ -47,6 +51,7 @@ __all__ = [
     "PREVIEW_FONT_SIZE",
     "PREVIEW_KIND",
     "PREVIEW_MARGIN",
+    "NativeSymbolArt",
     "render_svg",
     "write_preview",
 ]
@@ -94,6 +99,23 @@ _COLOURS = {
 }
 
 
+@dataclass(frozen=True)
+class NativeSymbolArt:
+    """Self-contained symbol SVG, already captured at this exact pose.
+
+    ``svg`` uses local SVG coordinates (x right, y down). It contains body,
+    pin lines and pin text only; reference/value rows remain in the plan.
+    ``source`` identifies the measured extraction or an explicitly proved pose
+    equivalence. The renderer does not load paths or infer other poses.
+    """
+
+    symbol_ref: str
+    rotation: float
+    mirror: bool
+    svg: str
+    source: str
+
+
 def render_svg(
     layout_plan: LayoutPlan,
     profiles: Mapping[str, SymbolProfile] | Sequence[SymbolProfile],
@@ -103,6 +125,7 @@ def render_svg(
     frames: Sequence[tuple[str, Box]] = (),
     title: str = "",
     scale: float = 1.0,
+    native_art: Sequence[NativeSymbolArt] = (),
 ) -> str:
     """One compiled plan as an SVG document.
 
@@ -114,10 +137,23 @@ def render_svg(
     the named module frames of a *page* (056), drawn as outlines so a reviewer can
     see which group owns which part of the sheet; the parameter defaults to empty,
     and a single drawing's preview is byte-identical whether or not it is used.
+    ``native_art`` optionally replaces a part's diagnostic box/pin dots with
+    captured symbol art at the exact stated pose. Other drawing layers remain
+    diagnostic; this is not a native editor export.
     """
     if scale <= 0:
         raise ValueError(f"scale must be positive, got {scale!r}")
     book = _book(profiles)
+    art_by_pose: dict[tuple[str, float, bool], NativeSymbolArt] = {}
+    for art in native_art:
+        if not art.symbol_ref or not isinstance(art.source, str) or not art.source.strip():
+            raise ValueError(f"native art {art.symbol_ref!r}: a measured source is required")
+        if not math.isfinite(art.rotation) or not isinstance(art.mirror, bool):
+            raise ValueError(f"native art {art.symbol_ref!r}: invalid captured pose")
+        key = (art.symbol_ref, art.rotation, art.mirror)
+        if key in art_by_pose:
+            raise ValueError(f"native art {art.symbol_ref!r}: duplicate captured pose {key[1:]}")
+        art_by_pose[key] = art
     box = page_box if page_box is not None else _content_box(layout_plan, book)
     width = (box[2] - box[0]) * scale
     height = (box[3] - box[1]) * scale
@@ -142,6 +178,8 @@ def render_svg(
     #: everything from the sixth line down: the plan's own provenance footer, the
     #: geometry digest and the verdict included (100 #16).
     caption = _caption_lines(layout_plan, title, box, scale)
+    if native_art:
+        caption.append("Native symbol art only; wires, flags and planned text remain diagnostic.")
     strip = _caption_height(len(caption))
 
     parts: list[str] = [
@@ -197,6 +235,19 @@ def render_svg(
         )
 
     for part in layout_plan.parts:
+        art = art_by_pose.get((part.symbol_ref, part.rotation, part.mirror))
+        if art is not None:
+            fragment = _native_fragment(art, part.part_id)
+            fragment.set("transform", (
+                f"translate({x(part.x):.3f},{y(part.y):.3f}) scale({scale:g})"
+            ))
+            parts.append(ET.tostring(fragment, encoding="unicode"))
+            continue
+        if any(key[0] == part.symbol_ref for key in art_by_pose):
+            raise ValueError(
+                f"native art for {part.part_id} ({part.symbol_ref}): no captured pose "
+                f"rotation={part.rotation:g}, mirror={part.mirror}"
+            )
         profile = book.get(part.symbol_ref)
         pose = SymbolPose(rotation=int(part.rotation), mirror=part.mirror)
         origin = (part.x, part.y)
@@ -268,6 +319,83 @@ def write_preview(
 
 
 # ------------------------------------------------------------------- drawing
+
+
+def _native_fragment(art: NativeSymbolArt, part_id: str) -> ET.Element:
+    """Inline extracted geometry only, with per-instance IDs and scoped CSS."""
+    context = f"native art for {part_id} ({art.symbol_ref}, source {art.source!r})"
+    if "<!DOCTYPE" in art.svg.upper() or "<!ENTITY" in art.svg.upper():
+        raise ValueError(f"{context}: document declarations are not extracted art")
+    try:
+        root = ET.fromstring(art.svg)
+    except ET.ParseError as exc:
+        raise ValueError(f"{context}: invalid SVG ({exc})") from exc
+    allowed = {"svg", "g", "path", "line", "polyline", "polygon", "rect",
+               "circle", "ellipse", "text", "tspan", "style"}
+    prefix = "native-" + part_id.encode("utf-8").hex()
+    identifiers: dict[str, str] = {}
+
+    def validate(node: ET.Element, inside_pin: bool = False) -> None:
+        tag = node.tag.removeprefix("{http://www.w3.org/2000/svg}")
+        if tag not in allowed:
+            raise ValueError(f"{context}: unsupported SVG element {tag!r}")
+        node.tag = tag
+        if tag == "svg" and node is not root:
+            raise ValueError(f"{context}: nested SVG viewports are not extracted groups")
+        is_pin = inside_pin or node.get("c_partid") == "part_pin"
+        if (tag in {"text", "tspan"} or node.get("c_partid") == "part_attr") and not is_pin:
+            raise ValueError(f"{context}: non-pin ATTR/text must come from the plan")
+        for name, value in node.attrib.items():
+            local_name = name.rsplit("}", 1)[-1].lower()
+            if local_name.startswith("on") or local_name in {"href", "src"}:
+                raise ValueError(f"{context}: external or active attribute {name!r}")
+            if re.search(r"url\s*\(|javascript:|expression\s*\(", value, re.I):
+                raise ValueError(f"{context}: external or active SVG dependency")
+        identifier = node.get("id")
+        if identifier is not None:
+            if not identifier or identifier in identifiers:
+                raise ValueError(f"{context}: duplicate or empty SVG id {identifier!r}")
+            identifiers[identifier] = prefix + "-" + identifier.encode("utf-8").hex()
+        for child in node:
+            validate(child, is_pin)
+
+    validate(root)
+    if root.tag != "svg":
+        raise ValueError(f"{context}: expected a self-contained svg root")
+    for node in root.iter():
+        if node.get("id") is not None:
+            node.set("id", identifiers[node.get("id")])
+        if node.tag == "style":
+            css = node.text or ""
+            if re.search(r"@|url\s*\(|expression\s*\(|/\*|\\", css, re.I):
+                raise ValueError(f"{context}: external or unsupported CSS dependency")
+            blocks = list(re.finditer(r"([^{}]+)\{([^{}]*)\}", css))
+            if re.sub(r"([^{}]+)\{([^{}]*)\}", "", css).strip():
+                raise ValueError(f"{context}: unsupported CSS structure")
+
+            def rename_id(match: re.Match[str]) -> str:
+                identifier = match.group(1)
+                if identifier not in identifiers:
+                    raise ValueError(f"{context}: CSS refers to unknown id {identifier!r}")
+                return "#" + identifiers[identifier]
+
+            node.text = "".join(
+                ",".join(
+                    f"#{prefix} " + re.sub(r"#([\w-]+)", rename_id, selector.strip())
+                    for selector in block.group(1).split(",")
+                ) + "{" + block.group(2) + "}"
+                for block in blocks
+            )
+    group = ET.Element("g", {
+        "id": prefix, "data-native-part": part_id,
+        "data-native-symbol": art.symbol_ref, "data-native-source": art.source,
+    })
+    # Root viewport dimensions describe the extraction, not a new clipping box.
+    root.tag = "g"
+    for name in ("viewBox", "width", "height"):
+        root.attrib.pop(name, None)
+    group.append(root)
+    return group
 
 
 def _grid(box: Box, scale: float, x, y) -> list[str]:

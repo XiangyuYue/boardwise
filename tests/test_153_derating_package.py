@@ -364,9 +364,20 @@ def test_a_three_deep_string_is_found_and_a_cycle_is_not():
 
 
 def test_the_rule_is_registered_where_153_says_and_is_a_house_rule():
+    """153 closes the device block: derating comes right after the silk family.
+
+    器件检查 order is 封装一致 → 极性 → 丝印族 → 降额(物理层), so the anchor is
+    the **last** silk rule rather than ``pcb-silk-designator``: 038Y3B/038Y4's
+    ``pcb-silk-under-body`` / ``pcb-silk-on-foreign-pad`` sit between the
+    designator and this rule (task book order: ``SilkDesignator() →
+    SilkUnderBody() → SilkOnForeignPad()``). Anchoring on the family's tail keeps
+    the claim ("降额紧随丝印族之后") stable when another silk rule joins the
+    family; the offsets inside the family are pinned in the 038Y tests.
+    """
     ids = [rule.id for rule in BUILTIN_PCB_RULES]
     assert RULE_ID in ids
-    assert ids.index(RULE_ID) == ids.index("pcb-silk-designator") + 1
+    assert ids.index(RULE_ID) == ids.index("pcb-silk-on-foreign-pad") + 1
+    assert ids.index("pcb-silk-designator") < ids.index(RULE_ID)
     rule = next(rule for rule in BUILTIN_PCB_RULES if rule.id == RULE_ID)
     assert isinstance(rule, DeratingPackage)
     assert rule.level == "L2-facts"

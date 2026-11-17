@@ -131,8 +131,8 @@ from boardwise.core.layoutplan import (
 )
 from boardwise.core import textmetrics
 from boardwise.core.presentationspec import (
-    LABEL_LABEL, LABEL_STUB_STRAIGHT, TEXT_PLACEMENT_NATIVE, PresentationSpec,
-    main_path_wire,
+    LABEL_LABEL, LABEL_STUB_STRAIGHT, TEXT_PLACEMENT_NATIVE,
+    FlagShareGroups, PresentationSpec, main_path_wire,
 )
 #: 540B1: the isolation-domain word list now lives in the shared vocabulary
 #: (``core/netdomains.py``), so the drawing chain and the reviewer read one copy
@@ -392,6 +392,12 @@ LABEL_STRAIGHT_STANDOFF = 4.0
 #: served by one step still takes one step, and these longer rungs are only
 #: reached after every shorter one measured a row too close to its neighbour.
 LOCAL_LABEL_RUNGS = 12
+#: 548D3D-P1C: how many times the port columns, the flag seats and the signal
+#: pre-flight may be re-read against each other before the page is said not to
+#: settle. Three rounds is the measured size of the real 64-pin page's answer
+#: (names -> flag seats -> names); the bound exists so a page that oscillates is
+#: refused by name instead of looping.
+PORT_COLUMN_ROUNDS = 3
 
 #: Minimum gap between two boxes that must not touch.
 GAP = 20.0
@@ -627,6 +633,13 @@ class CompileBudget:
     #: the one that was there before 535 existed (byte for byte). A positive value
     #: is the document's own statement and is what the split reads.
     gnd_cluster_radius: float = 0.0
+    #: 548M: the radius a **rail's** (`power` net's) pads are grouped by. ``0`` —
+    #: the default, and what every document that states no `railClustering` gets —
+    #: leaves a rail on the per-pin path it has always taken: one flag per pad,
+    #: `_Expression.clusters` empty. A positive value is the document's own
+    #: statement and switches the **same** neighbourhood split 053f gave grounds
+    #: on (the drawing side never knew which class it was splitting).
+    rail_cluster_radius: float = 0.0
     #: Symbol refs for rail flags: the ground flag, and the prefix a rail's flag
     #: is looked up under (net ``VIN`` -> symbol ``PWR-VIN``). A flag the library
     #: does not carry is written as a net label instead — the same kind of name
@@ -1807,6 +1820,17 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
         )
     budget = budget or CompileBudget()
     _check_budget(budget)
+    # 548M: the document's own `railClustering.radius` travels into the budget
+    # **here**, at the entry every compile goes through. The page path already
+    # carries `gndClustering` module by module (pagecompiler), but the
+    # single-module path hands `compile` a bare budget, and a switch that a
+    # document stated must not go missing because of which entry it took. A
+    # caller that set the field itself keeps its value: this fills in the
+    # document's statement, it never overrides one.
+    if float(getattr(budget, "rail_cluster_radius", 0.0) or 0.0) <= 0.0:
+        stated_rail_radius = getattr(presentation_spec, "rail_cluster_radius", 0.0)
+        if isinstance(stated_rail_radius, (int, float)) and stated_rail_radius > 0.0:
+            budget = replace(budget, rail_cluster_radius=float(stated_rail_radius))
     book = _profile_book(profiles)
 
     result = CompileResult()
@@ -1836,6 +1860,21 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
         result.failures = panels
         return result
 
+    # 0c. 548J-B1: a declared joint seating is the same kind of statement about
+    #     the circuit — a host and the two-foot branches that serve it — so it is
+    #     checked here, by the same whole-document reader, before any geometry.
+    #     A document that declares none (or `[]`) comes back empty and keeps the
+    #     path it always took.
+    joints = validate_service_groups(circuit_spec, presentation_spec)
+    if joints:
+        result.failures = joints
+        return result
+
+    flag_groups = validate_flag_share_groups(circuit_spec, presentation_spec)
+    if flag_groups:
+        result.failures = flag_groups
+        return result
+
     # 1. the two documents must agree before any geometry is attempted.
     blockers = _reference_failures(circuit_spec, presentation_spec)
     if blockers:
@@ -1863,6 +1902,9 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     # 548D3X3C: a declared panel replaces its branches' side relations with one
     # "below the host" relation — the same wrapper the checker applies.
     binding = _with_panel_groups(binding, presentation_spec, circuit_spec)
+    # 548J-B1: a declared service group reads its branches against the host foot
+    # they actually serve, so the checker grades the side the seat was built on.
+    binding = _with_service_groups(binding, presentation_spec, circuit_spec, book)
     result.grammar = binding
     if not binding.ok:
         result.failures = list(binding.failures)
@@ -1987,6 +2029,11 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
         # reached with `result.ranked` empty.
         if not result.ranked:
             _topology_round(ctx, result)
+        if not result.ranked:
+            _try_local_flag_repair(
+                ctx, result, seen, circuit_spec, presentation_spec,
+                book, budget, intent,
+            )
 
     if not result.ranked:
         result.failures = _no_candidate_failures(result, budget)
@@ -2653,6 +2700,15 @@ class _Context:
     #: page that compiles today never takes that path and keeps its own bytes.
     #: The seat itself is :func:`_seat_branch_stack`.
     two_dimensional_seats: bool = False
+    #: Complete joint-service builds share one budget across ladder variants
+    #: and rescue rounds. Ordinary pages never read or change this counter.
+    service_build_attempts: int = 0
+    #: The first already-seated placement whose full build refused a local flag.
+    #: Captured without changing the original verdict; only compile's final
+    #: zero-candidate exit may consume it for one explicitly counted repair.
+    local_flag_repair_seed: Any = None
+    local_flag_repair_active: bool = False
+    local_flag_repair_attempts: int = 0
 
     def services(self):
         """The 543A relations, computed once per compilation (543B)."""
@@ -4220,6 +4276,14 @@ class _Placement:
     #: The bound service seats this placement carries (548D3S2). Empty on every
     #: page that declares no panelGroups, appended for the same reason.
     service_plans: tuple[placement.BoundPanelSeatPlan, ...] = ()
+    #: The joint seats this placement carries (548J-B1). Empty on every page
+    #: that declares no `serviceGroups` — appended so every positional
+    #: constructor of the pre-548J shape keeps its meaning.
+    service_group_plans: tuple["_JointSeatGroup", ...] = ()
+    #: The open signals' reserved runs and labels, decided **before** the seats
+    #: so the seats, the flags and the router all see them. Empty on every page
+    #: that declares no `serviceGroups`.
+    service_group_ports: tuple["_JointSeatPort", ...] = ()
 
 
 def _part_box(
@@ -4296,7 +4360,11 @@ def _text_walls(
 
 
 def _pin_walls(
-    profile: SymbolProfile, pose: SymbolPose, origin: tuple[float, float]
+    profile: SymbolProfile,
+    pose: SymbolPose,
+    origin: tuple[float, float],
+    *,
+    only: str | None = None,
 ) -> list[Box]:
     """Each pin's drawn lead as a thin box: the obstacle a wire may not run along.
 
@@ -4320,6 +4388,8 @@ def _pin_walls(
     half = PIN_TEXT_WALL / 2.0
     out: list[Box] = []
     for pin in profile.pins:
+        if only is not None and pin.number != only and pin.name != only:
+            continue
         if pin.length is None or pin.direction not in inward:
             continue
         dx, dy = inward[pin.direction]
@@ -4638,6 +4708,10 @@ def _topology_request(ctx: _Context) -> placement.PlacementInput:
         # 548D3C1: the same switch the base consumer reads, so the two rounds
         # cannot disagree about whether this page asked for the joint order.
         service_joint_order=_service_layout_page(ctx.presentation),
+        # 548D3D-H: the same page states who picks the host foot — the binder,
+        # from this candidate's own pose — so base and topology share one answer
+        # instead of each stating a foot the other may not.
+        service_host_choice=_service_layout_page(ctx.presentation),
         # 548D3B: the same label corridors the base consumer gets — one reading
         # of "which names this page prints and where they sit by default", so
         # the same arm cannot be legal in one consumer and illegal in the other.
@@ -4831,6 +4905,25 @@ def _topology_placement(ctx: _Context) -> _Placement | GrammarFailure:
         ctx.topology = answer
         return answer
     result = placement.place(request)
+    # 548D3D-T1: the search answers a **scatter** where the constructive round
+    # answers a column — four keys at 0/180/90 degrees, two rows, and a common
+    # return that no longer leaves along one direction. The projection below is
+    # the existing coreless rule applied to the search's own answer, before the
+    # lattice/anchor and before the flag replay prices anything, so the drawing
+    # that reaches the flag pass is still the search's (nothing here calls the
+    # constructive layout). A page with no stated column, or one the search
+    # already answered as a column, is not touched at all.
+    projected = _project_coreless_column(ctx, result.origins, result.poses)
+    if projected is not None:
+        projected_origins, projected_poses = projected
+        result.origins.update(projected_origins)
+        result.poses.update(projected_poses)
+        result.notes.append(
+            "548D3D-T1: the coreless bank's stated column was projected onto the "
+            "placement search's answer — one common pose, the common returns on "
+            "one line, one pitch between branches (the group is "
+            f"{', '.join(sorted(projected_origins))})"
+        )
     # 548D3B: a residual series hard, a refused plan or a plan that does not
     # match the search's own answer is a refusal, not a candidate. This check
     # runs before the page anchor because every series term is translation
@@ -4975,9 +5068,26 @@ def _topology_placement(ctx: _Context) -> _Placement | GrammarFailure:
         # the spread left. They are a separate list and never join panel_plans.
         service_plans: tuple[placement.BoundPanelSeatPlan, ...] = ()
         if _service_seats_stated(ctx.presentation):
-            service_plans = placement.bind_service_plans(
-                request, origins, result.poses, panel_plans)
-            placement.seat_service_plans(service_plans, origins, result.poses)
+
+            def _bind_service(origins, poses, offset, bans):
+                bound = placement.bind_service_plans(
+                    request, origins, poses, panel_plans, rung_offset=offset,
+                    host_bans=bans)
+                placement.seat_service_plans(bound, origins, poses)
+                return bound
+
+            service_plans, origins, result.poses = _service_seats_in_flag_room(
+                ctx,
+                _Placement(origins=origins, poses=dict(result.poses),
+                           residue=residue, series_plans=plans,
+                           panel_plans=panel_plans),
+                _bind_service,
+                feet=max(
+                    (len(template.cell.host_allowed
+                         or (template.cell.host_token,))
+                     for template in request.service_templates),
+                    default=1),
+            )
         else:
             service_plans = result.service_plans
         drifted = [
@@ -5538,37 +5648,44 @@ def _service_host_tokens(
     return tuple(out)
 
 
-def _service_host_choice(
-    ctx: _Context,
-    part_id: str,
-    net_id: str,
-    poses: Mapping[str, SymbolPose],
-    origins: Mapping[str, tuple[float, float]],
-    hang: float,
-) -> tuple[str, tuple[str, ...]]:
-    """The host foot whose side the branch's terminal points away from.
+def _service_host_sides(
+    ctx: _Context, part_id: str, tokens: Sequence[str],
+) -> tuple[str, ...]:
+    """Every reading side the admitted host feet state, in pin order (§43).
 
-    The terminal flag hangs on the branch's own far foot (:data:`FLAG_LEAD`
-    straight off it), so the host foot that leaves the shortest channel is the
-    outermost same-net foot in that vertical direction: the **lowest** when the
-    flag hangs down, the **highest** when it hangs up. The tips are the posed,
-    placed ones (``poses``/``origins``), never the symbol's unrotated geometry,
-    and ties break on the token so the choice is stable. Two feet at the same
-    height is not a guess: the token order decides, and the caller can refuse.
+    A real host's supply net may land on feet of both sides; the branch can then
+    be read on either one. The template carries a pose and text rows per side,
+    and the binder decides, so naming the sides here states a fact, not a
+    first-side answer.
     """
-    tokens = _service_host_tokens(ctx, part_id, net_id)
-    tips: list[tuple[str, tuple[float, float]]] = []
-    for token in tokens:
-        point = _pin_point(ctx, part_id, token, poses, origins)
-        if point is not None:
-            tips.append((token, (float(point[0]), float(point[1]))))
-    if not tips:
-        return "", tokens
-    if hang < 0.0:
-        tips.sort(key=lambda item: (item[1][1], item[0]))
-    else:
-        tips.sort(key=lambda item: (-item[1][1], item[0]))
-    return tips[0][0], tuple(token for token, _point in tips)
+    admitted = set(tokens)
+    sides: list[str] = []
+    for pin in ctx.profile(part_id).pins:
+        if (pin.number in admitted or pin.name in admitted) and (
+                pin.direction in ("left", "right")
+                and pin.direction not in sides):
+            sides.append(pin.direction)
+    return tuple(sides)
+
+
+def _service_host_side(
+    ctx: _Context, part_id: str, tokens: Sequence[str],
+) -> str:
+    """The one reading side every admitted host foot states (``""`` otherwise).
+
+    A service branch is read on the side its host foot faces, so a set of feet
+    that does not agree on one side states no answer this build can draw on. It
+    is a property of the admitted set, not of a chosen foot: choosing first and
+    then reading the side would be the very premature answer 548D3D-H removes.
+    """
+    admitted = set(tokens)
+    sides = {
+        pin.direction
+        for pin in ctx.profile(part_id).pins
+        if (pin.number in admitted or pin.name in admitted)
+        and pin.direction in ("left", "right")
+    }
+    return next(iter(sides)) if len(sides) == 1 else ""
 
 
 def _service_templates(
@@ -5577,6 +5694,7 @@ def _service_templates(
     part_ids: Sequence[str],
     poses: Mapping[str, SymbolPose] | None = None,
     origins: Mapping[str, tuple[float, float]] | None = None,
+    host_tokens: Mapping[str, str] | None = None,
 ) -> tuple[tuple[placement.ServiceSeatTemplate, ...], GrammarFailure | None]:
     """Every ordinary two-foot branch as one service seat beside its host (§35A).
 
@@ -5590,8 +5708,10 @@ def _service_templates(
     far end; the feet are :func:`_arm_token_on`; the host is the **unique** foot
     on the shared net outside the branch (:func:`_series_host_candidates`), and
     zero or several is a named refusal, never a guess — except on a page that
-    states ``serviceLayout`` alone, where the host may own several feet on that
-    net and the reader walks them all (:func:`_service_host_choice`); the reading side is the
+    states ``serviceLayout`` seats, where the host may own several feet on that
+    net: those feet are the cell's **admitted set**
+    (:attr:`placement.PanelCell.host_allowed`) and which one drives the branch is
+    the binder's answer, read off the host's real pose (548D3D-H); the reading side is the
     host pin's own symbol direction (left/right only); the pose is
     :func:`_arm_pose` along that side, so the feet run host → terminal; the rows
     are :func:`_line_boxes` on the **outer** side; and the terminal flag's room
@@ -5611,7 +5731,18 @@ def _service_templates(
     spot_name = "$.panelGroups" if groups else "$.serviceLayout"
     known = set(part_ids)
     templates: list[placement.ServiceSeatTemplate] = []
-    for part_id in sorted(ctx.slots):
+    # 548P126: on a `localSeats` page the module's own `branchOrder` is the
+    # service declaration order (the measured MCU states C1→C3→BZ1→C2→R1).
+    # Absent the statement — and on every page that is not a localSeats page —
+    # this is the historical `sorted(ctx.slots)` order, item for item: no
+    # permutation is added and no budget is read.
+    slots = sorted(ctx.slots)
+    if _service_layout_page(ctx.presentation):
+        stated = _stated_branch_order(ctx, set(ctx.slots))
+        slots = sorted(
+            ctx.slots,
+            key=lambda part_id: (stated.get(part_id, len(stated)), part_id))
+    for part_id in slots:
         slot = ctx.slots[part_id]
         if (
             slot.kind != "branch"
@@ -5641,34 +5772,65 @@ def _service_templates(
         # therefore never resolved by symbol order: zero or several candidates
         # left after the owner filter is a named refusal, not a guess.
         host_part = slot.owner
-        if (
-            _service_layout_page(ctx.presentation)
-            and poses is not None
-            and origins is not None
-        ):
-            # 548D3C1: a serviceLayout page reads **all** of the host's feet on
-            # the shared net and takes the one the branch's terminal points away
-            # from, so the channel ends on the outermost same-net pin instead of
-            # crossing a foreign one. The panel/arm contract is untouched.
-            host_token, host_tokens = _service_host_choice(
-                ctx, host_part, slot.shared_net, poses, origins, -1.0)
-            if not host_token:
+        host_allowed: tuple[str, ...] = ()
+        if _service_layout_page(ctx.presentation):
+            # 548D3D-H: the document states which branch hangs off which host and
+            # on which net — not which of the host's same-net feet drives it. The
+            # template therefore carries the **admitted set** and no answer; the
+            # binder picks one foot from the host's real pose, before any order,
+            # seat or lead. A replay that is handed the binder's own foot states
+            # it back as the whole set, so nothing below can pick a second time.
+            host_allowed = _service_host_tokens(
+                ctx, host_part, slot.shared_net)
+            if not host_allowed:
                 return (), _series_seat_refusal(
                     spot,
                     f"the branch {part_id!r} hangs off {host_part!r}, and that "
-                    f"owner states no placed foot on the shared net "
+                    f"owner states no foot on the shared net "
                     f"{slot.shared_net!r}",
                     "connect the host to the branch's shared net, or drop the "
                     "entry",
                 )
-            if not host_tokens:
+            bound = (host_tokens or {}).get(part_id, "")
+            if bound:
+                if bound not in host_allowed:
+                    return (), _series_seat_refusal(
+                        spot,
+                        f"the seat's host foot {bound!r} is not one of "
+                        f"{host_part!r}'s feet on {slot.shared_net!r} "
+                        f"({host_allowed!r})",
+                        "rebind the service seat against this answer, or drop "
+                        "the entry",
+                    )
+                host_allowed = (bound,)
+            # 548D3D-H3: the feet of one net may stand on both sides of the
+            # host. The template then carries **every** (side, branch pose, text
+            # rows) the branch can be read in, and the binder picks the side
+            # together with the foot on the host's real pose — the template
+            # never falls back to the first side or the first foot.
+            sides = _service_host_sides(ctx, host_part, host_allowed)
+            if not sides:
                 return (), _series_seat_refusal(
                     spot,
-                    f"the branch {part_id!r} has no placed host foot on "
-                    f"{slot.shared_net!r}",
-                    "connect the host to the branch's shared net, or drop the "
+                    f"the host feet {host_allowed!r} of {host_part!r} on "
+                    f"{slot.shared_net!r} state no left/right reading side, so "
+                    f"this build cannot tell which side {part_id!r} is read on",
+                    "give those library pins a left/right direction, or drop the "
                     "entry",
                 )
+            if bound:
+                sides = tuple(
+                    one for one in sides
+                    if one in _service_host_sides(ctx, host_part, (bound,)))
+                if not sides:
+                    return (), _series_seat_refusal(
+                        spot,
+                        f"the seat's host foot {bound!r} of {host_part!r} states "
+                        "no left/right reading side",
+                        "rebind the service seat against this answer, or drop "
+                        "the entry",
+                    )
+            host_token = bound
             host_candidates = None
         else:
             host_candidates = [
@@ -5688,35 +5850,22 @@ def _service_templates(
             )
         if host_candidates is not None:
             host_part, host_token = host_candidates[0]
-        host_pin = next(
-            (pin for pin in ctx.profile(host_part).pins
-             if pin.number == host_token or pin.name == host_token),
-            None,
-        )
-        direction = getattr(host_pin, "direction", "")
-        if direction not in ("left", "right"):
-            return (), _series_seat_refusal(
-                spot,
-                f"the host pin {host_part}.{host_token} of {part_id!r} states "
-                f"no horizontal reading side ({direction!r}), so this build "
-                "cannot tell which side the branch is read on",
-                "give that library pin a left/right direction, or drop the entry",
+            host_pin = next(
+                (pin for pin in ctx.profile(host_part).pins
+                 if pin.number == host_token or pin.name == host_token),
+                None,
             )
-        side = direction
-        along = (1.0, 0.0) if side == "right" else (-1.0, 0.0)
-        pose = _arm_pose(profile, from_token, to_token, along)
-        if pose is None:
-            return (), _series_seat_refusal(
-                spot,
-                f"{part_id!r} has no legal pose that runs its {from_token!r} "
-                f"foot towards its host and its {to_token!r} foot outwards",
-                "add the host-to-terminal pose to its legal poses, or drop the "
-                "entry",
-            )
-        relative = placement.part_box(profile, pose, (0.0, 0.0))
-        rows = _line_boxes(
-            relative, [text for _kind, text in _part_lines(ctx, part_id)], side,
-        )
+            direction = getattr(host_pin, "direction", "")
+            if direction not in ("left", "right"):
+                return (), _series_seat_refusal(
+                    spot,
+                    f"the host pin {host_part}.{host_token} of {part_id!r} "
+                    f"states no horizontal reading side ({direction!r}), so this "
+                    "build cannot tell which side the branch is read on",
+                    "give that library pin a left/right direction, or drop the "
+                    "entry",
+                )
+            side = direction
         flag_box = None
         flag_lead: tuple[tuple[float, float], ...] = ()
         to_net = ctx.circuit.net(slot.other_net)
@@ -5756,6 +5905,45 @@ def _service_templates(
                     max(box[2], 0.0), max(box[3] - FLAG_LEAD, 0.0),
                 )
             flag_lead = ((0.0, 0.0), (0.0, -FLAG_LEAD))
+        variants: list[tuple[str, placement.SymbolPose, tuple]] = []
+        line_texts = [text for _kind, text in _part_lines(ctx, part_id)]
+        to_pin = _pin_of_token(profile, to_token)
+        for one in (sides if _service_layout_page(ctx.presentation) else (side,)):
+            along = (1.0, 0.0) if one == "right" else (-1.0, 0.0)
+            one_pose = _arm_pose(profile, from_token, to_token, along)
+            if one_pose is None:
+                continue
+            box = placement.part_box(profile, one_pose, (0.0, 0.0))
+            one_rows = _line_boxes(box, line_texts, one)
+            if flag_box is not None and to_pin is not None:
+                tip = _posed_tip(to_pin, one_pose)
+                room = (
+                    flag_box[0] + tip[0], flag_box[1] + tip[1],
+                    flag_box[2] + tip[0], flag_box[3] + tip[1],
+                )
+                # The branch's own terminal flag hangs off its far foot, and the
+                # rows are printed beside the part: on the side that put the flag
+                # there, one row can land in the flag's room. The rows are pushed
+                # out one rung at a time (the compiler's own standoff ladder)
+                # until they clear it — the room is what the seat promised.
+                rung = 1
+                while rung < 4 and any(
+                        min(one_box[2], room[2]) - max(one_box[0], room[0]) > 0.0
+                        and min(one_box[3], room[3]) - max(one_box[1], room[1]) > 0.0
+                        for one_box in one_rows):
+                    rung += 1
+                    one_rows = _line_boxes(box, line_texts, one, rung)
+            variants.append((one, one_pose, tuple(one_rows)))
+        if not variants:
+            return (), _series_seat_refusal(
+                spot,
+                f"{part_id!r} has no legal pose that runs its {from_token!r} "
+                f"foot towards its host and its {to_token!r} foot outwards",
+                "add the host-to-terminal pose to its legal poses, or drop the "
+                "entry",
+            )
+        side, pose, rows = variants[0]
+        relative = placement.part_box(profile, pose, (0.0, 0.0))
         try:
             templates.append(placement.ServiceSeatTemplate(
                 group_id=f"service:{part_id}", host_part=host_part, side=side,
@@ -5763,10 +5951,12 @@ def _service_templates(
                     part_id=part_id, from_net=slot.shared_net,
                     to_net=slot.other_net, from_token=from_token,
                     to_token=to_token, host_token=host_token, pose=pose,
+                    host_allowed=host_allowed,
                     text_boxes=tuple(rows), flag_box=flag_box,
                     flag_lead=flag_lead,
                 ),
                 grid=ctx.budget.grid, lattice=residue,
+                side_variants=tuple(variants),
             ))
         except placement.PlacementError as exc:
             return (), _series_seat_refusal(
@@ -5775,6 +5965,157 @@ def _service_templates(
                 "correct the branch's host, pins or pose, or drop the entry",
             )
     return tuple(templates), None
+
+
+def _service_bound_hosts(placed) -> dict[str, str]:
+    """Each seated service branch's host foot, as the binder decided it (548D3D-H).
+
+    The two replay readers rebuild the page's service templates to read their
+    flag lead and their printed rows. Handing them this map states the binder's
+    foot back as the **whole** admitted set, so a replay cannot land on a
+    different foot than the one the seat, its host lead and its flag were bound
+    with — one selection, replayed, never a second one.
+    """
+    out: dict[str, str] = {}
+    for plan in getattr(placed, "service_plans", ()) or ():
+        for cell in plan.cells:
+            if cell.host_token:
+                out[cell.part_id] = cell.host_token
+    return out
+
+
+def _service_flag_room_ok(ctx: _Context, placed: "_Placement") -> bool:
+    """Are the host's remaining rail flags really seatable beside these seats?
+
+    The page's **own** seat-first allocation answers, measured on the drawing the
+    service seats produce: every rail group complete, no page refusal. Nothing is
+    pre-reserved and no blank is assumed good enough — a seat that leaves the
+    host's same-net feet with no real flag is measured by the allocator that will
+    draw those flags, and the flag's own glyph, lead and rows are its business.
+    """
+    # One channel/text answer, asked once: a page that fails here is refused
+    # before anything is routed, and a page that passes hands the **same** answer
+    # to the path-first terminal instead of being measured twice. Its plans and
+    # refusals are that answer's, unchanged.
+    base = _seat_first_channel_terminal(ctx, placed)
+    if not base.ok or base.refusals:
+        return False
+    if not base.terminal.plans or not all(
+            plan.complete for plan in base.terminal.plans):
+        return False
+    terminal = _seat_first_path_first_terminal(
+        ctx, placed, replay=False, base=base)
+    if not terminal.ok or terminal.refusals:
+        return False
+    plan, _notes, problem = _path_first_plan(ctx, placed, terminal)
+    if problem is not None:
+        return False
+    if _path_first_audit(ctx, placed, terminal, plan):
+        return False
+    return True
+
+
+def _service_plan_feet(plan) -> frozenset[str]:
+    """Every host foot this service plan **selected**, seated or refused (548P126).
+
+    A seated plan says it on its own cell; a refused plan has no cell, so it
+    carries the foot it chose in :attr:`placement.BoundPanelSeatPlan.tried_hosts`
+    (that is the whole reason the field exists). Reading both here is what lets
+    the next attempt retire the tried foot instead of choosing it again.
+    """
+    feet = {cell.host_token for cell in plan.cells if cell.host_token}
+    for _part, token in getattr(plan, "tried_hosts", ()):
+        if token:
+            feet.add(token)
+    return frozenset(feet)
+
+
+def _service_seats_in_flag_room(
+    ctx: _Context,
+    placed: "_Placement",
+    bind,
+    feet: int = 1,
+) -> tuple[
+    tuple[placement.BoundPanelSeatPlan, ...],
+    dict[str, tuple[float, float]],
+    dict[str, SymbolPose],
+]:
+    """The first service rung whose seats leave the host's rail flags a real seat.
+
+    ``bind(origins, poses, offset)`` binds and seats the page's service cells
+    ``offset`` rungs outwards and returns its plans; every existing rung is asked
+    in order and the first one whose answer passes
+    :func:`_service_flag_room_ok` is the page's. A page where no rung passes
+    keeps the **nearest** rung's answer, so what a reader sees downstream is the
+    allocation's own named refusal rather than a quietly kept layout. The loop is
+    bounded by the page's own part count — the same bound the seat ladder uses.
+    """
+    first = None
+    # A later host retirement can produce the first complete service answer even
+    # when the very first attempt refused a branch. Keep that complete answer for
+    # the no-passing-rung case: returning the earlier refusal would hide the real
+    # downstream flag-room failure behind a stale service-seat error.
+    complete = None
+    seen: set[tuple] = set()
+    bound = max(1, len(placed.origins))
+    # The finite cover is `every existing rung × every admitted foot`: a host
+    # whose rail lands on several feet (the 64-pin MCU's VBAT + four VDD) needs
+    # each of them asked at each rung, and a fixed pair of rounds would silently
+    # skip the rest (§43). The cap product is unchanged — this batch only fixes
+    # which of the two moves first: a rung is asked at every foot the page may
+    # still choose before the ladder steps outwards (548P126 — measured: the
+    # real MCU's C2 must take host 1 **at rung 0**, the rung its own 13 was
+    # measured on; retiring 13 and stepping to rung 1 measured a different page
+    # and never reached the foot that seats).
+    for offset in range(bound):
+        bans: dict[str, frozenset[str]] = {}
+        for _round in range(max(1, feet)):
+            origins = dict(placed.origins)
+            poses = dict(placed.poses)
+            plans = bind(origins, poses, offset, bans)
+            key = (
+                offset,
+                tuple(sorted(
+                    (plan.group_id, tuple(sorted(_service_plan_feet(plan))))
+                    for plan in plans)),
+            )
+            if first is None:
+                first = (plans, origins, poses)
+            if complete is None and all(plan.seated for plan in plans):
+                complete = (plans, origins, poses)
+            if key in seen:
+                break
+            seen.add(key)
+            failing: Sequence[placement.BoundPanelSeatPlan] = ()
+            if all(plan.seated for plan in plans):
+                trial = replace(
+                    placed, origins=origins, poses=poses, service_plans=plans)
+                if _service_flag_room_ok(ctx, trial):
+                    return plans, origins, poses
+                # The page never seated: that is the downstream flag room's
+                # business, and its answer retires the whole group (the
+                # historical rule).
+                failing = plans
+            else:
+                # 548P126: a seat that already failed says which branches
+                # failed. Only their feet are retired — a branch that did seat
+                # keeps both its seat and its foot, so the next attempt does not
+                # move it.
+                failing = tuple(plan for plan in plans if not plan.seated)
+            # Only a foot that was **asked for and chosen** is retired, and only
+            # after the page it produced failed the whole check above. A branch
+            # whose document states its foot keeps it: the binder answers the
+            # stated foot whatever the bans say, so the next attempt is a rung,
+            # not another foot.
+            retired = dict(bans)
+            for plan in failing:
+                retired[plan.group_id] = (
+                    bans.get(plan.group_id, frozenset())
+                    | _service_plan_feet(plan))
+            if retired == bans:
+                break
+            bans = retired
+    return complete or first
 
 
 def _series_placement_request(
@@ -5833,6 +6174,9 @@ def _series_placement_request(
         # states `panelGroups` (or nothing) keeps the declaration order byte for
         # byte; only a `serviceLayout` page lets the binder re-order.
         service_joint_order=_service_layout_page(ctx.presentation),
+        # 548D3D-H: the base round hands the host-foot choice to the binder too,
+        # so its seats and the topology round's are read off one rule.
+        service_host_choice=_service_layout_page(ctx.presentation),
         label_corridors=_label_corridors(ctx),
         progress=ctx.progress, lateral=ctx.lateral(),
         grid=ctx.budget.grid, near_limit=ctx.budget.near_limit,
@@ -6161,7 +6505,7 @@ def _seat_series_arms(ctx: _Context, placed: _Placement) -> GrammarFailure | Non
 
 
 def _place(
-    ctx: _Context, variant: _Variant
+    ctx: _Context, variant: _Variant, *, seat_service_groups: bool = True,
 ) -> tuple[_Placement | None, GrammarFailure | None]:
     """Where the parts go: the ladder's constructive layout, or the search (201B).
 
@@ -6175,8 +6519,22 @@ def _place(
         answer = _topology_placement(ctx)
         if isinstance(answer, GrammarFailure):
             return None, answer
-        return answer, None
-    return _place_chain_and_shelf(ctx, variant)
+        placed = answer
+    else:
+        placed, failure = _place_chain_and_shelf(ctx, variant)
+        if placed is None:
+            return None, failure
+    # 548J-B1: a declared joint seating is applied **once**, to the answer the
+    # source produced — the constructive ladder or the search, never both and
+    # never a second move later. The base consumer, the topology consumer and
+    # the final plan therefore read the same record; a group that cannot be
+    # seated refuses this answer by name instead of falling back to the loose
+    # seats the branches came with.
+    if seat_service_groups:
+        refusal = _seat_service_groups(ctx, placed)
+        if refusal is not None:
+            return None, refusal
+    return placed, None
 
 
 def _service_pin_gap(ctx: _Context, slot: _Slot) -> float | None:
@@ -6587,6 +6945,148 @@ def _place_coreless_column(
             line - common_x[part_id],
             top - boxes[part_id][3] - index * pitch,
         )
+
+
+def _coreless_return_tip(
+    ctx: _Context, part_id: str, common: str, pose: SymbolPose
+) -> tuple[float, float] | None:
+    """This part's pin on the common return, posed, relative to its origin."""
+    nets = _part_nets(ctx.circuit, part_id)
+    for pin in ctx.profile(part_id).pins:
+        if nets.get(pin.number) == common:
+            return _posed(pin.tip, pose, (0.0, 0.0))
+    return None
+
+
+def _coreless_column_holds(
+    ctx: _Context,
+    origins: Mapping[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+    common: str,
+    parts: frozenset[str],
+) -> bool:
+    """Is this group already drawn as the column :func:`_place_coreless_column` states?
+
+    One pose, the common ends on one line, one pitch between branches. A group
+    that already holds all three is left exactly where the placement search put
+    it — the projection below only answers a group the search left as a scatter.
+    """
+    ordered = sorted(parts)
+    pose = poses[ordered[0]]
+    if any(poses[part_id] != pose for part_id in ordered):
+        return False
+    tips = [_coreless_return_tip(ctx, part_id, common, pose) for part_id in ordered]
+    if any(tip is None for tip in tips):
+        return False
+    if max(tip[0] for tip in tips) - min(tip[0] for tip in tips) > 1e-6:
+        return False
+    ys = sorted(origins[part_id][1] for part_id in ordered)
+    gaps = {round(abs(b - a), 6) for a, b in zip(ys, ys[1:])}
+    return len(gaps) == 1 and min(gaps) > 0.0
+
+
+def _project_coreless_column(
+    ctx: _Context,
+    origins: Mapping[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+) -> tuple[dict[str, tuple[float, float]], dict[str, SymbolPose]] | None:
+    """Project the search's answer onto the column its own document states — 548D3D-T1.
+
+    The topology round answers a *scatter* where the constructive round answers a
+    column: the four keys come back at 0/180/90 degrees and on two rows, the
+    common returns no longer leave along one direction
+    (:func:`_coreless_group_flag_length` then has no single axis and answers
+    ``None``), and the flag pass falls back to its reservation replay, which is
+    where the duplicate anchors were measured.
+
+    The projection is the **existing** coreless rule, not a second solver: the
+    group `_coreless_return_column` declares is put on **one common legal pose**
+    and then through :func:`_place_coreless_column` itself, so the common ends
+    stand on one line and one pitch separates the branches — the same three facts
+    the constructive round keeps by construction. The column is then moved as one
+    block onto the centroid the search gave the group and snapped to the lattice,
+    rung by rung, so an answer that already fits keeps its neighbourhood. Nothing
+    else moves, and the base round never reaches this function.
+
+    ``None`` means "leave the answer alone": no stated column, a group the search
+    did not place, no pose every part accepts, or no rung whose column clears the
+    page and the other parts.
+    """
+    common, column = _coreless_return_column(ctx)
+    if len(column) < 2:
+        return None
+    ordered = sorted(column)
+    if any(part_id not in origins or part_id not in poses for part_id in ordered):
+        return None
+    # A part the document seats elsewhere (an arm, a panel cell) is not this
+    # group's to move: the projection would have to re-bind a declared seat.
+    stated = {
+        part
+        for branch in ctx.presentation.series_branches
+        for part in branch.parts
+    } | {
+        branch.part
+        for group in (getattr(ctx.presentation, "panel_groups", ()) or ())
+        for branch in group.branches
+    }
+    if stated & column:
+        return None
+    first = ctx.accepted.get(ordered[0], ())
+    shared: SymbolPose | None = None
+    for pose in first:
+        if all(pose in ctx.accepted.get(part_id, ()) for part_id in ordered) and all(
+            _coreless_return_tip(ctx, part_id, common, pose) is not None
+            for part_id in ordered
+        ):
+            shared = pose
+            break
+    if shared is None:
+        return None
+    if _coreless_column_holds(ctx, origins, poses, common, column):
+        return None
+    boxes = {part_id: _part_box(ctx.profile(part_id), shared) for part_id in ordered}
+    low = min(origins[part_id][1] + boxes[part_id][1] for part_id in ordered)
+    high = max(origins[part_id][1] + boxes[part_id][3] for part_id in ordered)
+    left = min(origins[part_id][0] + boxes[part_id][0] for part_id in ordered)
+    right = max(origins[part_id][0] + boxes[part_id][2] for part_id in ordered)
+    others = [
+        _part_box(ctx.profile(part_id), poses[part_id], origins[part_id])
+        for part_id in origins if part_id not in column
+    ]
+    page = ctx.budget.page_box
+    for scale in reversed(ctx.budget.spacing_ladder):
+        seat: dict[str, tuple[float, float]] = {}
+        _place_coreless_column(
+            ctx, seat, {part_id: shared for part_id in ordered}, boxes,
+            common, column, 0.0, _Variant("coreless-column", float(scale), -1),
+        )
+        if len(seat) != len(ordered):
+            continue
+        column_low = min(seat[part_id][1] + boxes[part_id][1] for part_id in ordered)
+        column_high = max(seat[part_id][1] + boxes[part_id][3] for part_id in ordered)
+        column_left = min(seat[part_id][0] + boxes[part_id][0] for part_id in ordered)
+        column_right = max(seat[part_id][0] + boxes[part_id][2] for part_id in ordered)
+        dx = _snap(((left + right) - (column_left + column_right)) / 2.0,
+                   ctx.budget.grid, 0.0)
+        dy = _snap(((low + high) - (column_low + column_high)) / 2.0,
+                   ctx.budget.grid, 0.0)
+        moved = {
+            part_id: (seat[part_id][0] + dx, seat[part_id][1] + dy)
+            for part_id in ordered
+        }
+        footprint = [
+            (moved[part_id][0] + boxes[part_id][0],
+             moved[part_id][1] + boxes[part_id][1],
+             moved[part_id][0] + boxes[part_id][2],
+             moved[part_id][1] + boxes[part_id][3])
+            for part_id in ordered
+        ]
+        if any(_overlaps(box, other) for box in footprint for other in others):
+            continue
+        if page is not None and any(not _inside(box, page) for box in footprint):
+            continue
+        return moved, {part_id: shared for part_id in ordered}
+    return None
 
 
 def _chain_and_shelf_layout(
@@ -7350,9 +7850,26 @@ def _place_chain_and_shelf(
             try:
                 service_request = _series_placement_request(
                     ctx, (), poses, service_templates=service_templates)
-                service_plans = placement.bind_service_plans(
-                    service_request, origins, poses, panel_plans)
-                placement.seat_service_plans(service_plans, origins, poses)
+
+                def _bind_service(origins, poses, offset, bans):
+                    bound = placement.bind_service_plans(
+                        service_request, origins, poses, panel_plans,
+                        rung_offset=offset, host_bans=bans)
+                    placement.seat_service_plans(bound, origins, poses)
+                    return bound
+
+                service_plans, origins, poses = _service_seats_in_flag_room(
+                    ctx,
+                    _Placement(origins=origins, poses=poses, residue=residue,
+                               series_plans=series_plans,
+                               panel_plans=panel_plans),
+                    _bind_service,
+                    feet=max(
+                        (len(template.cell.host_allowed
+                             or (template.cell.host_token,))
+                         for template in service_templates),
+                        default=1),
+                )
             except placement.PlacementError as exc:
                 return None, _series_seat_refusal(
                     _service_seat_spot(ctx.presentation),
@@ -7370,6 +7887,74 @@ def _place_chain_and_shelf(
                     "move the part the refusal names out of the cell's room, or "
                     "drop the branch",
                 )
+    aligned_parts: set[str] = set()
+    for relation in ctx.binding.constraints:
+        # Independent divider chains state their corresponding columns in the
+        # binding itself. Honour that declaration before the page anchor and
+        # the ordinary relation gate; do not rediscover it as a build failure.
+        if relation.kind != SAME_COLUMN or not relation.reason.startswith(
+                "548D3D-F1: two independent chains"):
+            continue
+        anchor = origins.get(relation.subject)
+        branch = origins.get(relation.object)
+        if anchor is not None and branch is not None:
+            origins[relation.object] = (anchor[0], branch[1])
+            aligned_parts.add(relation.object)
+    if aligned_parts:
+        # Equal columns may not mean coincident origins. Move the whole second
+        # chain to the nearest clear row, measured from real part extents and
+        # the existing GAP, so different nets do not share a pin or a carrier.
+        def collides(candidate: Mapping[str, tuple[float, float]]) -> bool:
+            for part_id in aligned_parts:
+                box = _part_box(
+                    ctx.profile(part_id), poses[part_id], candidate[part_id])
+                for other_id in origins:
+                    if other_id == part_id:
+                        continue
+                    other = _part_box(
+                        ctx.profile(other_id), poses[other_id], candidate[other_id])
+                    if _overlaps(box, other):
+                        return True
+            return False
+
+        max_height = max(
+            _part_box(ctx.profile(part_id), poses[part_id])[3]
+            - _part_box(ctx.profile(part_id), poses[part_id])[1]
+            for part_id in origins
+        )
+        delta = math.ceil(
+            (max_height + GAP) / ctx.budget.grid) * ctx.budget.grid
+        def text_clear(candidate: Mapping[str, tuple[float, float]]) -> bool:
+            other = _Placement(
+                origins=dict(candidate), poses=dict(poses), residue=residue)
+            occupied = list(ctx.budget.keepouts)
+            text_walls = list(ctx.budget.keepouts)
+            for part_id in sorted(candidate):
+                profile = ctx.profile(part_id)
+                pose = poses[part_id]
+                origin = candidate[part_id]
+                occupied.append(_part_box(profile, pose, origin))
+                text_walls.extend(_text_walls(profile, pose, origin))
+            _texts, refusal = _part_texts(ctx, other, occupied, text_walls)
+            return refusal is None
+
+        for direction in (1.0, -1.0):
+            for rung in range(1, 9):
+                candidate = {
+                    part_id: (
+                        origins[part_id][0],
+                        origins[part_id][1] + (
+                            direction * rung * delta
+                            if part_id in aligned_parts else 0.0),
+                    )
+                    for part_id in origins
+                }
+                if not collides(candidate) and text_clear(candidate):
+                    origins = candidate
+                    break
+            else:
+                continue
+            break
     probe = next(iter(origins)) if origins else None
     before = origins[probe] if probe is not None else None
     _anchor_to_page(ctx, origins, poses, residue)
@@ -7414,6 +7999,8 @@ def _anchor_to_page(
     origins: dict[str, tuple[float, float]],
     poses: Mapping[str, SymbolPose],
     residue: tuple[float, float],
+    *,
+    extra_boxes: Sequence[Box] = (),
 ) -> None:
     """Move the whole drawing to the page's top-left corner, in place.
 
@@ -7450,6 +8037,9 @@ def _anchor_to_page(
     Skipped when a part is locked, because a lock's coordinates are the
     engineer's: the drawing then stays exactly where the lock put it (053 sec.5
     scenario 12), and the page check reports an overflow if the lock is outside.
+    Already measured seat frames and ports may extend beyond the annotation
+    estimate. Their bounds tighten this same inward displacement; an empty
+    ``extra_boxes`` keeps the historical calculation unchanged.
     """
     page = ctx.budget.page_box
     if page is None or ctx.presentation.user_locks:
@@ -7463,6 +8053,9 @@ def _anchor_to_page(
     side, vertical = _annotation_allowance(ctx, placed)
     dx = page[0] + PAGE_MARGIN + side - min(box[0] for box in placed.values())
     dy = page[3] - PAGE_MARGIN - vertical - max(box[3] for box in placed.values())
+    if extra_boxes:
+        dx = max(dx, page[0] + PAGE_MARGIN - min(box[0] for box in extra_boxes))
+        dy = min(dy, page[3] - PAGE_MARGIN - max(box[3] for box in extra_boxes))
     # `dx` is anchored on the drawing's left edge and `dy` on its top edge, so a
     # *larger* dx moves the drawing right (inwards) and a *smaller* dy moves it
     # down (inwards) — see :func:`_snap_inside` for the other two edges.
@@ -10157,6 +10750,26 @@ def _pin_direction(
 # ------------------------------------------------------ relation verification
 
 
+def _points_on_one_run(a, b, points) -> bool:
+    """Do both points lie on one straight leg of this drawn run?"""
+    def on_leg(point, start, end) -> bool:
+        if abs(start[0] - end[0]) <= 1e-9:
+            return (abs(point[0] - start[0]) <= 1e-9
+                    and min(start[1], end[1]) - 1e-9 <= point[1]
+                    <= max(start[1], end[1]) + 1e-9)
+        if abs(start[1] - end[1]) <= 1e-9:
+            return (abs(point[1] - start[1]) <= 1e-9
+                    and min(start[0], end[0]) - 1e-9 <= point[0]
+                    <= max(start[0], end[0]) + 1e-9)
+        return False
+
+    run = tuple((float(p[0]), float(p[1])) for p in points)
+    for start, end in zip(run, run[1:]):
+        if on_leg(tuple(a), start, end) and on_leg(tuple(b), start, end):
+            return True
+    return False
+
+
 def _relation_failures(ctx: _Context, placed: _Placement) -> list[GrammarFailure]:
     """Relations the placement could not keep — a lock's doing, or the symbol's shape.
 
@@ -10176,6 +10789,26 @@ def _relation_failures(ctx: _Context, placed: _Placement) -> list[GrammarFailure
     preferences or use another symbol" is then an answer the reader can act on.
     """
     out: list[GrammarFailure] = []
+
+    def _service_pair(item, points, circuit_spec):
+        """A seated service branch is near the foot its own channel leaves."""
+        if item.kind != "near":
+            return None
+        nets_a = _part_nets(circuit_spec, item.subject)
+        nets_b = _part_nets(circuit_spec, item.object)
+        shared = set(nets_a.values()) & set(nets_b.values())
+        for plan in getattr(placed, "service_plans", ()) or ():
+            if not plan.seated or not plan.cells or not plan.host_paths:
+                continue
+            cell = plan.cells[0]
+            if cell.from_seat is None or cell.from_net not in shared:
+                continue
+            if plan.host_part == item.object and cell.part_id == item.subject:
+                return (cell.from_seat, plan.host_paths[0][0])
+            if plan.host_part == item.subject and cell.part_id == item.object:
+                return (plan.host_paths[0][0], cell.from_seat)
+        return None
+
     for item, points in _relation_violations(
         ctx.circuit, ctx.binding,
         origin_of=lambda part_id: placed.origins.get(part_id),
@@ -10189,6 +10822,7 @@ def _relation_failures(ctx: _Context, placed: _Placement) -> list[GrammarFailure
         frame_of=lambda part_id, token: _pin_escape(
             ctx.profile(part_id), token, SymbolPose(0.0, False)),
         pair_reading=_pair_bands(ctx),
+        point_override=_service_pair,
     ):
         locked = sorted(
             part_id for part_id in (item.subject, item.object)
@@ -10416,6 +11050,36 @@ def _one_conductor_nets(
     return out
 
 
+def _cluster_radius_for(budget: CompileBudget, net_cls: str) -> float:
+    """The clustering radius this net class is grouped by, or ``0`` (548M).
+
+    ``gndClustering`` (053f) is a ground's statement and stays one: it never
+    reaches a `power` net. ``railClustering`` (548M) is stated for a rail **and**
+    for a ground, because the page it was written for needs both readings at one
+    reach (岳's P44 page: the decoupling pair shares one ground flag while the
+    host pad keeps its own, near flag — `RULES.md` §1's (220,645) and (320,695)),
+    and one switch that says "a flag may gather the pads within N" is one
+    statement, not one per class.
+
+    A ground both keys apply to is grouped by the **larger** radius: two
+    statements about one net are two statements about how far a flag may reach,
+    and the wider one is the one the document asked for last (the narrower would
+    quietly discard it). A page that states neither — the ordinary case — is
+    ``0``, which keeps 535's machinery off and the drawing byte for byte as it
+    was; a page that states only `gndClustering` keeps 053f's reading exactly.
+    """
+    radii: list[float] = []
+    # A stand-in budget (a namespace built by a unit test) predates this key, so
+    # the read is tolerant: a missing field means "the document stated none".
+    rail = float(getattr(budget, "rail_cluster_radius", 0.0) or 0.0)
+    ground = float(getattr(budget, "gnd_cluster_radius", 0.0) or 0.0)
+    if net_cls in ("power", "gnd") and rail > 0.0:
+        radii.append(rail)
+    if net_cls == "gnd" and ground > 0.0:
+        radii.append(ground)
+    return max(radii) if radii else 0.0
+
+
 def _expressions(ctx: _Context, placed: _Placement) -> dict[str, _Expression]:
     """Every net's expression, decided before anything is drawn."""
     obligated = _obligation_nets(ctx)
@@ -10441,14 +11105,18 @@ def _expressions(ctx: _Context, placed: _Placement) -> dict[str, _Expression]:
         # rail **per neighbourhood**, each with its own flag, and no wire between
         # them. One neighbourhood (the ordinary case, and the only case a page
         # with no split has) leaves this empty so the expression is untouched.
+        # 548M: the same split serves a **rail** when the document states
+        # `railClustering` — the two classes are one kind of statement, so the
+        # branch below asks one helper which radius applies rather than naming a
+        # class of its own.
         clusters: tuple[tuple[tuple[str, tuple[float, float]], ...], ...] = ()
+        cluster_radius = _cluster_radius_for(ctx.budget, net.cls)
         if (
             style == "wire"
-            and net.cls == "gnd"
-            and ctx.budget.gnd_cluster_radius > 0.0
+            and cluster_radius > 0.0
             and not _flag_grouping(ctx)
         ):
-            grouped = _gnd_clusters(points, ctx.budget.gnd_cluster_radius)
+            grouped = _gnd_clusters(points, cluster_radius)
             if len(grouped) > 1:
                 clusters = grouped
         out[net.id] = _Expression(
@@ -10568,6 +11236,8 @@ def _flag_grouping(ctx: Any) -> bool:
     flags, all of it untouched.
     """
     presentation = getattr(ctx, "presentation", None)
+    if getattr(presentation, "flag_share_groups", ()) or ():
+        return True
     if getattr(presentation, "panel_groups", ()) or ():
         # 548D3X3C §34-2h: an explicit `panelGroups` declaration opts this page
         # into the same grouping — the panel's supply feet are one statement.
@@ -10590,6 +11260,91 @@ def _flag_group_reach(ctx: _Context) -> float:
     if ctx.budget.gnd_cluster_radius > 0.0:
         return ctx.budget.gnd_cluster_radius
     return GND_LOCAL_RADIUS
+
+
+def _flag_share_members(ctx: _Context, net_id: str) -> dict[str, int]:
+    """The explicit flag-group index for each member of one stated net."""
+    for declaration in (
+            getattr(ctx.presentation, "flag_share_groups", ()) or ()):
+        if declaration.net == net_id:
+            return {
+                member: group_index
+                for group_index, group in enumerate(declaration.groups)
+                for member in group
+            }
+    return {}
+
+
+def _flag_share_group_failure(
+    ctx: _Context,
+    net_id: str,
+    groups: Sequence[Sequence[tuple[str, tuple[float, float]]]],
+) -> GrammarFailure | None:
+    """Refuse an actual grouping that changes the stated pin partition."""
+    declaration = next((
+        item for item in (
+            getattr(ctx.presentation, "flag_share_groups", ()) or ())
+        if item.net == net_id
+    ), None)
+    if declaration is None:
+        return None
+
+    actual_group_for = {
+        member: group_index
+        for group_index, group in enumerate(groups)
+        for member, _point in group
+    }
+    expected_group_for = {
+        member: group_index
+        for group_index, group in enumerate(declaration.groups)
+        for member in group
+    }
+    for expected_group in declaration.groups:
+        actual_groups = {
+            actual_group_for.get(member)
+            for member in expected_group
+        }
+        if len(actual_groups) == 1 and None not in actual_groups:
+            continue
+        return GrammarFailure(
+            category=FAILURE_LAYOUT_UNSAT,
+            subject=f"$.flagShareGroups[{net_id}]",
+            detail=(
+                f"the stated flag group ({', '.join(expected_group)}) on "
+                f"{net_id!r} cannot stay together under the existing legal "
+                "route ruler and reach; its members fall into separate groups "
+                "or are missing from the actual grouping"
+            ),
+            action=(
+                "move the parts or clear the routed corridor so the stated pins "
+                "can share one local flag"
+            ),
+        )
+    for actual_group in groups:
+        stated_groups = {
+            expected_group_for[member]
+            for member, _point in actual_group
+            if member in expected_group_for
+        }
+        if len(stated_groups) <= 1:
+            continue
+        merged_members = sorted(
+            member for member, _point in actual_group
+            if member in expected_group_for
+        )
+        return GrammarFailure(
+            category=FAILURE_LAYOUT_UNSAT,
+            subject=f"$.flagShareGroups[{net_id}]",
+            detail=(
+                f"pins from different stated flag groups on {net_id!r} "
+                f"share one actual group: {', '.join(merged_members)}"
+            ),
+            action=(
+                "keep the stated groups separate; move parts or clear the "
+                "routed corridor if the existing route ruler merged them"
+            ),
+        )
+    return None
 
 
 def _flag_share_keys(
@@ -10637,7 +11392,11 @@ def _flag_share_keys(
         triple = (slot.owner, slot.shared_net, slot.other_net)
         parallel[triple] = parallel.get(triple, 0) + 1
     out: dict[str, str] = {}
+    stated_groups = _flag_share_members(ctx, net_id)
     for member, _point in points:
+        if member in stated_groups:
+            out[member] = f"flag-share:{net_id}:{stated_groups[member]}"
+            continue
         part_id = member.partition(".")[0]
         if counts.get(part_id, 0) > 1:
             out[member] = flaggroups.share_part(part_id)
@@ -10817,6 +11576,11 @@ def _flag_groups(
         candidates, ruler, _flag_group_reach(ctx),
     )
     if len(groups) <= 1:
+        if _flag_share_members(ctx, expression.net):
+            return tuple(
+                tuple((candidate.member, candidate.point) for candidate in group)
+                for group in groups
+            )
         # A single wired group is the old expression **unless** there are
         # detached pads to keep apart from it: then the wired pads are the group
         # and each detached pad is its own, so the rail is the wired set.
@@ -10835,7 +11599,8 @@ def _apply_flag_groups(
     order: Sequence[str],
     *,
     only: set[str] | None = None,
-) -> None:
+    placed: _Placement | None = None,
+) -> GrammarFailure | None:
     """Decide every group **before** the seats are reserved (543I-2).
 
     The seat pass reserves a flag per group (``seat_key``), so the grouping has
@@ -10865,10 +11630,24 @@ def _apply_flag_groups(
         wired = tuple(
             item for item in expression.points if item[0] not in detached
         )
-        groups = _flag_groups(
-            ctx, expression, cls, router,
-            points=wired if detached else None,
+        previous_blocked = router.blocked
+        if placed is not None:
+            # The initial ruler must obey the same foreign-pin connection
+            # boundary as the final audit. No wire has been drawn yet.
+            router.blocked = _blocked_points(ctx, placed, net_id, [], [], [])
+        try:
+            groups = _flag_groups(
+                ctx, expression, cls, router,
+                points=wired if detached else None,
+            )
+        finally:
+            router.blocked = previous_blocked
+        stated_groups = groups or (wired or expression.points,)
+        share_failure = _flag_share_group_failure(
+            ctx, net_id, stated_groups,
         )
+        if share_failure is not None:
+            return share_failure
         if groups:
             expressions[net_id] = replace_expression(expression, clusters=groups)
         elif detached:
@@ -10876,6 +11655,7 @@ def _apply_flag_groups(
                 expression,
                 clusters=(wired,) if len(wired) > 1 else (),
             )
+    return None
 
 
 def replace_expression(
@@ -10940,6 +11720,11 @@ def _flag_group_audit(
             ctx, whole, cls, router,
             ruler=_flag_ruler(ctx, router, net_id),
         )
+        share_failure = _flag_share_group_failure(
+            ctx, net_id, again or (whole.points,),
+        )
+        if share_failure is not None:
+            return share_failure
         applied = flaggroups.partition_signature(
             tuple(
                 tuple(flaggroups.FlagCandidate(member, point) for member, point in group)
@@ -10996,6 +11781,28 @@ SEAT_FIRST_PANEL = "panel-terminal"
 SEAT_FIRST_SERVICE = "service-terminal"
 #: :attr:`_SeatFirstSeat.source` for a seat this pass found on a real pin.
 SEAT_FIRST_AUTO = "auto"
+
+
+def _flag_rotation_away(profile, anchor, lead, rotation: float) -> float:
+    """The same flag, turned so its glyph hangs **away** from its pad.
+
+    A flag's box is stated away from the pin it names, and which compass number
+    that is depends on the family's own offset — not on the direction the lead
+    happens to run. The library's glyph box answers it: of the two rotations,
+    the one whose box stands farther from the lead's pad is the one drawn, and
+    a seat whose lead already runs that way keeps its own number unchanged.
+    """
+    first = tuple(lead[0])
+    best = None
+    for candidate in (float(rotation) % 360.0,
+                      (float(rotation) + 180.0) % 360.0):
+        one = flag_glyph_box(profile, rotation=candidate, anchor=anchor)
+        if one is None:
+            continue
+        far = abs((one[1] + one[3]) / 2.0 - first[1])
+        if best is None or far > best[0] + 1e-9:
+            best = (far, candidate)
+    return float(rotation) if best is None else best[1]
 
 
 def _seat_first_refusal(
@@ -11193,6 +12000,43 @@ def _seat_first_foreign_tips(
     return tuple(tips)
 
 
+def _seat_first_lead_on_own_glyph(
+    net_id: str,
+    profile: SymbolProfile,
+    anchor: tuple[float, float],
+    rotation: float,
+    lead: Sequence[tuple[float, float]],
+) -> bool:
+    """Does this candidate's **own** lead thread the glyph it just placed?
+
+    A seat stands on the page only if the reader sees the flag off its own wire.
+    :func:`_flag_wire_ruler` asks the gate's own question about the wires already
+    drawn, but a candidate's own lead is not drawn yet: it arrives here as the
+    lead the ladder would draw, and chained with the joint selection's cost it is
+    the difference between the two shapes :func:`_flag_anchor` offers.
+
+    Measured on the P43 replay (548P124): the flat rung stops at the corner, so
+    the glyph hangs across its own horizontal lead and
+    ``readability._flag_body_offence`` reports it at 0 units — three GND flags,
+    three `flag-body-on-wire` hard violations, zero candidates. The legal bent
+    rung (a 25-unit tail, the shape P43 was accepted with) is *longer*, so a cost
+    that cannot see this defect always prefers the flat one.
+
+    The lead exemption is the gate's own (``_flag_body_offence`` grants it): an
+    endpoint on the anchor heading away from the glyph passes here unchanged.
+    This is the same ruler, not a second one — and nothing else about the rung is
+    relaxed.
+    """
+    glyph = flag_glyph_box(profile, rotation=rotation, anchor=anchor)
+    if glyph is None:
+        return False
+    return any(
+        readability._flag_body_offence(net_id, anchor, [start, end], glyph)
+        is not None
+        for start, end in zip(lead, lead[1:])
+    )
+
+
 def _seat_first_seat_alternates(
     ctx: _Context,
     placed: _Placement,
@@ -11211,18 +12055,25 @@ def _seat_first_seat_alternates(
     """Every real grade :func:`_rail_flag_seat` would take for this pad, in order.
 
     The ladder's own alternates, never a second shape family: after each answer,
-    that answer's anchor node, its lead nodes and its glyph box are added to the
-    walls, and the **same** function is asked again — so the next answer is the
-    next rung the compiler itself would have drawn (the straight vertical run at
-    its several reaches, then the short stub with a vertical run, each in the
-    ladder's own order). The walk stops when the ladder answers nothing or
-    repeats a seat, and it is bounded by the same 64-rung cap
-    :func:`_flag_alternates` already uses for this very ladder: the reach × hang
-    × direction space is the same finite one.
+    that answer's **glyph box** is excluded and the **same** function is asked
+    again — so the next answer is the next rung the compiler itself would have
+    drawn (the straight vertical run at its several reaches, then the short stub
+    with a vertical run, each in the ladder's own order). The walk stops when the
+    ladder answers nothing or repeats a seat, and it is bounded by the same
+    64-rung cap :func:`_flag_alternates` already uses for this very ladder: the
+    reach × hang × direction space is the same finite one.
+
+    Every rung is legal **on the page**, not merely "not the previous rung": the
+    earlier answer stands only in the exclusion list that stops the ladder from
+    repeating it (548D3D-H6). Handing its lead back as a scene obstacle made the
+    walk self-locking — each longer reach crossed the answer before it, so a
+    group kept one candidate and two adjacent feet could not separate.
 
     The first entry is exactly the seat the single call produced before, so a
     page without a conflict keeps the drawing it had; the later entries exist
-    only to give the joint selection a second real answer.
+    only to give the joint selection a second real answer, and whether two of
+    them collide with each other is that selection's question (it reads their
+    occupancy/lanes), never this walk's.
     """
     if not _service_layout_page(ctx.presentation):
         anchor, rotation, lead, failure = _rail_flag_seat(
@@ -11235,12 +12086,19 @@ def _seat_first_seat_alternates(
 
     out: list[tuple[tuple[float, float], float, tuple[tuple[float, float], ...]]] = []
     seen: set[tuple] = set()
-    blocked_now = set(blocked)
-    walls: list[Box] = list(solids)
+    #: The glyph boxes of the answers already taken — the **only** thing an
+    #: earlier answer contributes to the next ask (548D3D-H6). They make the
+    #: ladder move on instead of repeating a seat; they are not page obstacles.
+    #: Handing the earlier answer's *lead* back as the scene did two things the
+    #: page never asked for: a longer reach was refused because its run crossed
+    #: the previous answer's own turn, so every group on the real 64-pin host
+    #: kept exactly one candidate; and two adjacent power/ground feet, whose
+    #: short vertical stubs share a column, then had nowhere to go.
+    excluded: list[Box] = []
     while len(out) <= 64:
         anchor, rotation, lead, _failure = _rail_flag_seat(
             ctx, placed, net_id, member, point, profile, router,
-            blocked_now, walls, bodies,
+            blocked, [*solids, *excluded], bodies,
         )
         if lead is None:
             return tuple(out), _failure
@@ -11249,25 +12107,22 @@ def _seat_first_seat_alternates(
             break
         seen.add(key)
         glyph = _flag_box(profile, rotation, anchor, net_id)
-        # A rung the page cannot draw is not a candidate: the same box/lead
-        # readers the rest of the allocation uses grade it against the walls this
-        # owner was given (bodies, text and the fixed channels alike). It still
-        # takes its room as a wall, so the ladder moves on instead of repeating.
+        # Every rung is graded against the **page this owner was given** — the
+        # scene's own walls and blocked points, never an earlier answer's lead.
+        # Two candidates of one group are alternatives, so whether they would
+        # collide with each other is the joint selection's question: it reads
+        # their occupancy/lanes and picks one per group page-wide.
         if not (
-            _seat_first_box_problem(glyph, walls)
-            or _seat_first_lead_problem(lead, walls, blocked)
+            _seat_first_box_problem(glyph, solids)
+            or _seat_first_lead_problem(lead, solids, blocked)
+            # 548P124: a rung whose **own** lead threads its own glyph is not a
+            # seat the gate will accept — and the flat rung is the cheap one, so
+            # the joint selection has to be told. Same ruler, own lead.
+            or _seat_first_lead_on_own_glyph(
+                net_id, profile, anchor, float(rotation), lead)
         ):
             out.append((anchor, float(rotation), tuple(lead)))
-        blocked_now |= {_key(item) for item in lead}
-        blocked_now |= _nodes_in_box(router, glyph)
-        boxes: list[Box] = [glyph]
-        for start, end in zip(lead, lead[1:]):
-            blocked_now |= _lattice_nodes(router, start, end)
-            boxes.append((
-                min(start[0], end[0]) - 1.0, min(start[1], end[1]) - 1.0,
-                max(start[0], end[0]) + 1.0, max(start[1], end[1]) + 1.0,
-            ))
-        walls = [*solids, *boxes]
+        excluded.append(glyph)
     return tuple(out), None
 
 
@@ -11381,6 +12236,15 @@ def _seat_first_groups(
 
     where = {member: point for member, point in points if point is not None}
     tips = _seat_first_foreign_tips(ctx, placed, net_id)
+    host_bodies: dict[str, Box] = {}
+    if placed is not None:
+        for member in where:
+            part_id = member.split(".")[0]
+            if part_id in host_bodies or part_id not in placed.origins:
+                continue
+            host_bodies[part_id] = _part_box(
+                ctx.profile(part_id), placed.poses[part_id],
+                placed.origins[part_id])
     for label in order:
         listed = members[label]
         for index, left in enumerate(listed):
@@ -11388,15 +12252,34 @@ def _seat_first_groups(
                 a, b = where.get(left), where.get(right)
                 # A straight span cut by another net's pin cannot be a merged
                 # flag: the pair is two local flags (VDD 70 / VSS 60 / VBAT 50).
-                if (a is not None and b is not None and tips
-                        and left.split(".")[0] == right.split(".")[0]
-                        and (abs(a[0] - b[0]) <= 1e-9 or abs(a[1] - b[1]) <= 1e-9)
-                        and _seat_first_span_blocked(a, b, tips)):
+                same_part = left.split(".")[0] == right.split(".")[0]
+                body = host_bodies.get(left.split(".")[0]) if same_part else None
+                if a is None or b is None or not same_part:
+                    parent[root(right)] = root(left)
                     continue
+                aligned = (abs(a[0] - b[0]) <= 1e-9
+                           or abs(a[1] - b[1]) <= 1e-9)
+                # One flag serves one straight span. A pair of one part's feet
+                # that does not share a line has no span to serve, and treating
+                # it as a merge edge is what silently joined a 64-pin host's
+                # whole supply column into one flag through the diagonal pairs:
+                # the blocked pairs above were split, the diagonal ones re-joined
+                # them, and the union came out as one group again.
+                if not aligned:
+                    continue
+                if tips and (
+                        _seat_first_span_blocked(a, b, tips)
+                        or (body is not None
+                            and _segment_hits_box(a, b, body))):
+                    continue
+                parent[root(right)] = root(left)
                 parent[root(right)] = root(left)
     # A fixed service channel is itself a connection: its two members are one
     # group even when the grammar keys them as a branch chain and a host part.
+    stated_groups = _flag_share_members(ctx, net_id)
     for left, right in _seat_first_channel_pairs(ctx, placed, net_id, points):
+        if stated_groups and stated_groups.get(left) != stated_groups.get(right):
+            continue
         if left in parent and right in parent:
             parent[root(right)] = root(left)
     components: dict[str, list[str]] = {}
@@ -11669,6 +12552,63 @@ def _seat_first_clash(
     return None
 
 
+def _service_channel_runs(
+    ctx: _Context, placed: _Placement, net_id: str,
+) -> tuple[tuple[tuple[float, float], ...], ...]:
+    """The fixed service channels this net already carries (548D3D-H2).
+
+    A seated service branch's host lead is a conductor the BoundPlan promised on
+    the branch's shared net: the host foot and the branch's near foot are joined
+    before any wire exists. The allocator may therefore *travel* it instead of
+    routing a second, longer way round — which is what made the promised channel
+    and the drawn conductor disagree. Read from the plan itself, never rebuilt.
+    """
+    if not _service_layout_page(ctx.presentation):
+        return ()
+    out: list[tuple[tuple[float, float], ...]] = []
+    for plan in getattr(placed, "service_plans", ()):
+        if not plan.seated:
+            continue
+        host_nets = _part_nets(ctx.circuit, plan.host_part)
+        for cell in plan.cells:
+            if host_nets.get(cell.host_token) != net_id:
+                continue
+            run = tuple((float(point[0]), float(point[1]))
+                        for point in cell.host_path)
+            if len(run) >= 2:
+                out.append(run)
+    return tuple(out)
+
+
+def _service_composed_run(
+    router: "_Router",
+    point: tuple[float, float],
+    target: tuple[float, float],
+    channels: Sequence[tuple[tuple[float, float], ...]],
+) -> tuple[tuple[float, float], ...] | None:
+    """A member's run that starts on the fixed channel it stands on.
+
+    When the member is one end of a channel on its own net, the channel segment
+    plus a legal run from the other end is **one** complete path: the promised
+    segment is drawn as the conductor it is, and no second parallel wire is
+    invented beside it. ``None`` — no channel end at this point, or no legal run
+    from the far end — leaves the caller with its ordinary route.
+    """
+    for run in channels:
+        for near, far in ((run[0], run[-1]), (run[-1], run[0])):
+            if (abs(point[0] - near[0]) > 1e-9
+                    or abs(point[1] - near[1]) > 1e-9):
+                continue
+            tail = router.route(far, target)
+            if tail is None:
+                continue
+            # The path starts on **this** member's own pin: the channel is the
+            # same conductor whichever end the member stands on.
+            leg = tuple(run) if near == run[0] else tuple(reversed(run))
+            return leg + tuple(tail)[1:]
+    return None
+
+
 def _seat_first_paths(
     ctx: _Context,
     placed: _Placement,
@@ -11682,6 +12622,8 @@ def _seat_first_paths(
     taken: Mapping[tuple[float, float], tuple[str, str]],
     labels: Sequence[LayoutLabel] = (),
     foreign: Sequence[LayoutSegment] = (),
+    fixed_nodes: frozenset[tuple[float, float]] = frozenset(),
+    router_blocked: frozenset[tuple[float, float]] = frozenset(),
 ) -> tuple[
     tuple[tuple[str, tuple[tuple[float, float], ...]], ...],
     frozenset[tuple[float, float]],
@@ -11704,10 +12646,11 @@ def _seat_first_paths(
     # a member that can only reach the seat across a neighbour's lane has no
     # legal run, and saying so is the honest answer (the neighbour was decided
     # earlier and is not re-routed from here).
-    router.blocked = router.blocked | {
+    router.blocked = router.blocked | router_blocked | {
         node for node, owner in taken.items()
         if owner != (net_id, seat.owner)
     }
+    channels = _service_channel_runs(ctx, placed, net_id)
     out: list[tuple[str, tuple[tuple[float, float], ...]]] = []
     lanes: set[tuple[float, float]] = set()
     for member in members:
@@ -11725,7 +12668,10 @@ def _seat_first_paths(
                 router, tuple(zip(seat.lead, tuple(seat.lead)[1:])),
             )
         else:
-            run = router.route(point, seat.lead[0])
+            composed = _service_composed_run(
+                router, point, seat.lead[0], channels)
+            run = composed if composed is not None else router.route(
+                point, seat.lead[0])
             if run is None:
                 return (), frozenset(), (
                     f"the member {member!r} at {_point_text(point)} has no legal "
@@ -11734,6 +12680,26 @@ def _seat_first_paths(
                 )
             path = tuple(_rounded(point) for point in run)
             nodes = _seat_first_run_nodes(router, tuple(zip(path, path[1:])))
+            if composed is not None and _seat_first_clash(
+                nodes,
+                {node: owner for node, owner in taken.items()
+                 if not (node in fixed_nodes
+                         and owner[1] == "another group's candidate seat")},
+                ignore=(net_id, seat.owner),
+            ) is not None:
+                # The promised channel cannot carry this member on this page —
+                # its own walls say so — and a member is never left without its
+                # run because a fixed segment was preferred: route it as before.
+                run = router.route(point, seat.lead[0])
+                if run is None:
+                    return (), frozenset(), (
+                        f"the member {member!r} at {_point_text(point)} has no "
+                        f"legal orthogonal run to the seat at "
+                        f"{_point_text(seat.lead[0])} owned by {seat.owner!r}"
+                    )
+                path = tuple(_rounded(point) for point in run)
+                nodes = _seat_first_run_nodes(
+                    router, tuple(zip(path, path[1:])))
         clash = _seat_first_clash(
             nodes, taken, ignore=(net_id, seat.owner),
         )
@@ -11799,7 +12765,9 @@ def _seat_first_candidate_seats(
         usable = tuple(
             (member, point)
             for member, point in points
-            if point is not None and member not in detached
+            if point is not None and (
+                member not in detached
+                or _service_layout_page(ctx.presentation))
         )
         if not usable:
             continue
@@ -11864,6 +12832,54 @@ def _seat_first_pool_blocked(
     }
 
 
+def _service_channel_claim(
+    ctx: _Context,
+    placed: _Placement,
+    net_id: str,
+    groups: Sequence[tuple[str, str, tuple[str, ...]]],
+    present: Mapping[str, tuple[float, float]],
+) -> tuple[dict[str, frozenset[tuple[float, float]]], frozenset[tuple[float, float]]]:
+    """The nodes a fixed service channel owns on this net, per semantic group.
+
+    The BoundPlan's channel is stated **before** any flag seat is imagined: the
+    nodes of the promised run belong to the group that serves the two feet it
+    joins, so that group's candidate lanes carry them and every other group's
+    candidate is measured against them by the joint selection. The claim is the
+    order the page decides in, never a licence to overlap: a real overlap left
+    over is still refused by the joint choice.
+    """
+    runs = _service_channel_runs(ctx, placed, net_id)
+    if not runs:
+        return {}, frozenset()
+    router = _Router(
+        grid=ctx.budget.grid, residue=placed.residue, boxes=[],
+        bounds=_search_bounds(
+            ctx, (), [point for run in runs for point in run]),
+    )
+    owner_of: dict[str, str] = {}
+    for _share, group, members in groups:
+        for member in members:
+            owner_of.setdefault(member, group)
+    claim: dict[str, set[tuple[float, float]]] = {}
+    every: set[tuple[float, float]] = set()
+    for run in runs:
+        nodes = _seat_first_run_nodes(router, tuple(zip(run, run[1:])))
+        served = {
+            owner_of[member] for member, point in present.items()
+            if member in owner_of and point is not None
+            and ((abs(point[0] - run[0][0]) <= 1e-9
+                  and abs(point[1] - run[0][1]) <= 1e-9)
+                 or (abs(point[0] - run[-1][0]) <= 1e-9
+                     and abs(point[1] - run[-1][1]) <= 1e-9))
+        }
+        if not served:
+            continue
+        every.update(nodes)
+        for group in served:
+            claim.setdefault(group, set()).update(nodes)
+    return {group: frozenset(nodes) for group, nodes in claim.items()}, frozenset(every)
+
+
 def _seat_first_net_jobs(
     ctx: _Context,
     placed: _Placement,
@@ -11879,6 +12895,7 @@ def _seat_first_net_jobs(
     pool: Mapping[tuple[float, float], frozenset[tuple[str, str]]] | None = None,
     labels: Sequence[LayoutLabel] = (),
     foreign: Sequence[LayoutSegment] = (),
+    seat_blocked: Mapping[str, frozenset[tuple[float, float]]] | None = None,
 ) -> _SeatFirstEnumeration:
     """Enumerate one rail's groups; choose nothing (§34D-A2).
 
@@ -11895,12 +12912,13 @@ def _seat_first_net_jobs(
     net = ctx.circuit.net(net_id)
     cls = net.cls if net is not None else "gnd"
     pool = {} if pool is None else pool
+    seat_blocked = {} if seat_blocked is None else seat_blocked
     legs = _seat_first_channel_legs(ctx, placed)
     refusals: list[GrammarFailure] = []
     evidence: list[_SeatFirstCandidate] = []
     fixed_assignments: list[_SeatFirstAssignment] = []
     jobs: list[_SeatFirstJob] = []
-    excluded = tuple(
+    excluded = () if _service_layout_page(ctx.presentation) else tuple(
         (
             member,
             "069 sec.2: this pad is drawn with its own local flag by the "
@@ -11911,10 +12929,17 @@ def _seat_first_net_jobs(
         for member, _point in points
         if member in detached
     )
+    # A detached pad is drawn by the limit branch as its own local flag, and on
+    # a service page that branch does not run: the allocator is the only author
+    # of the flags here, so the pad is seated as its own group instead of being
+    # left with nothing (measured: U1.VDD on 3V3 disappeared, and the net then
+    # existed as two nodes on the page while the spec says one).
     usable = tuple(
         (member, point)
         for member, point in points
-        if point is not None and member not in detached
+        if point is not None and (
+            member not in detached
+            or _service_layout_page(ctx.presentation))
     )
     for member, point in points:
         if point is None:
@@ -11938,8 +12963,13 @@ def _seat_first_net_jobs(
         return _SeatFirstEnumeration(
             net_id, cls, (), (), (), tuple(refusals), excluded,
         )
-    for share, group, members in _seat_first_groups(
-            ctx, net_id, usable, placed=placed):
+    group_entries = tuple(_seat_first_groups(
+        ctx, net_id, usable, placed=placed))
+    channel_claim, _channel_all = _service_channel_claim(
+        ctx, placed, net_id, group_entries, present)
+    for share, group, members in group_entries:
+        owned_nodes = channel_claim.get(group, frozenset())
+        reserved = seat_blocked.get(group, frozenset())
         lost = [member for member in members if member in fixed_refused]
         if lost:
             refusals.append(_seat_first_refusal(
@@ -11970,6 +13000,7 @@ def _seat_first_net_jobs(
                 solids, bodies, walls,
                 {**_seat_first_pool_blocked(pool, (net_id, group)), **taken},
                 labels, foreign,
+                fixed_nodes=owned_nodes,
             )
             if problem:
                 refusals.append(_seat_first_refusal(
@@ -12009,6 +13040,13 @@ def _seat_first_net_jobs(
                 tuple((member, present[member]) for member in members),
                 labels,
             )
+            if reserved:
+                # A post-joint feedback wall belongs to this one semantic group:
+                # it constrains the same seat ladder as well as the member paths.
+                # Merely adding these nodes to `taken` is the old F1 hole — the
+                # flag lead can still stand on the seed and no route changes.
+                router.blocked = set(router.blocked) | reserved
+                blocked = set(blocked) | reserved
             answers, seat_stop = _seat_first_seat_alternates(
                 ctx, placed, net_id, owner, point, profile, router, blocked,
                 owner_solids, bodies,
@@ -12037,6 +13075,7 @@ def _seat_first_net_jobs(
                 ))
                 continue
             for anchor, rotation, lead in answers:
+                rotation = _flag_rotation_away(profile, anchor, lead, rotation)
                 glyph = _flag_box(profile, rotation, anchor, net_id)
                 seat = _SeatFirstSeat(
                     net=net_id, owner=owner, anchor=anchor, rotation=rotation,
@@ -12049,6 +13088,7 @@ def _seat_first_net_jobs(
                     solids, bodies, walls,
                     {**_seat_first_pool_blocked(pool, (net_id, group)), **taken},
                     labels, foreign,
+                    fixed_nodes=owned_nodes, router_blocked=reserved,
                 )
                 if problem:
                     evidence.append(_SeatFirstCandidate(
@@ -12276,6 +13316,7 @@ def _seat_first_plans(
             continue
         lead = tuple(tuple(point) for point in lead)
         rotation = _flag_rotation((0.0, hang), flag_glyph_kind(profile))
+        rotation = _flag_rotation_away(profile, anchor, lead, rotation)
         glyph = _flag_box(profile, rotation, anchor, net_id)
         router, blocked = _seat_first_router(
             ctx, placed, net_id, [*solids, *walls], points_of.get(net_id, ()),
@@ -12329,21 +13370,70 @@ def _seat_first_plans(
         fixed_refused, detached_of, walls,
     )
     enumerations: list[_SeatFirstEnumeration] = []
+    requests: dict[str, dict] = {}
     for net_id in rails:
+        request = dict(
+            points=points_of[net_id], solids=solids, bodies=bodies,
+            fixed={member: seat for (net, member), seat in fixed_seats.items()
+                   if net == net_id},
+            fixed_refused=fixed_refused.get(net_id, {}),
+            detached=detached_of[net_id], taken=taken, walls=walls, pool=pool,
+            labels=scene.labels if scene is not None else (), foreign=foreign,
+        )
+        requests[net_id] = request
         enumerations.append(_seat_first_net_jobs(
-            ctx, placed, net_id, points_of[net_id], solids, bodies,
-            {member: seat for (net, member), seat in fixed_seats.items()
-             if net == net_id},
-            fixed_refused.get(net_id, {}),
-            detached_of[net_id],
-            taken, walls, pool,
-            scene.labels if scene is not None else (),
-            foreign,
+            ctx, placed, net_id, **request,
         ))
     jobs = tuple(
         job for enumeration in enumerations for job in enumeration.jobs
     )
     ok, chosen, limit_hit, _expansions = _seat_first_joint(jobs, taken)
+    # 548P138: the static candidate table can be pairwise exhausted even though
+    # the same router has a legal answer around one concrete sibling seat. Give
+    # the largest group **one** feedback re-enumeration, using the cheapest seat
+    # of every single-foot sibling as its own wall. Both the seat ladder and the
+    # member paths see those nodes; the old F1 only walled the paths and left the
+    # flag lead on the seed. The second joint shares the original expansion
+    # budget, and only a complete success replaces the first enumeration.
+    if not ok and not limit_hit and jobs:
+        target = max(jobs, key=lambda job: (
+            len(job.candidates), job.net, job.group))
+        seed: dict[tuple[float, float], tuple[str, str]] = {}
+        for job in jobs:
+            if job is target or len(job.members) != 1 or not job.candidates:
+                continue
+            cheapest = min(job.candidates, key=lambda item: (item.cost, item.owner))
+            for node in _seat_first_candidate_nodes(cheapest):
+                seed[node] = (job.net, job.group)
+        if len(target.members) > 1 and target.candidates and seed:
+            retry = dict(requests[target.net])
+            retry["seat_blocked"] = {target.group: frozenset(seed)}
+            enumeration = _seat_first_net_jobs(
+                ctx, placed, target.net, **retry)
+            replacement = next(
+                (job for job in enumeration.jobs if job.group == target.group),
+                None,
+            )
+            if replacement is not None and replacement.candidates:
+                new_jobs = tuple(
+                    replacement if job is target else job for job in jobs)
+                new_ok, new_chosen, new_limit, new_expansions = _seat_first_joint(
+                    new_jobs, taken,
+                    limit=max(0, SEAT_FIRST_EXPANSIONS - _expansions),
+                )
+                if new_ok:
+                    ok, chosen, limit_hit, _expansions = (
+                        new_ok, new_chosen, new_limit, new_expansions)
+                    jobs = new_jobs
+                    enumerations = [
+                        replace(
+                            one,
+                            jobs=tuple(
+                                replacement if job.group == target.group else job
+                                for job in one.jobs),
+                        ) if one.net == target.net else one
+                        for one in enumerations
+                    ]
     joint_refusals: dict[tuple[str, str], GrammarFailure] = {}
     if not ok:
         names = ", ".join(
@@ -12578,6 +13668,7 @@ def _seat_first_text_plan(
     plans, page = _seat_first_plans(ctx, placed, scene=scene, order=order)
     refusals: list[GrammarFailure] = [page] if page is not None else []
     gaps: list[tuple[str, str, tuple[str, ...]]] = []
+    collided: list[tuple[str, str, _SeatFirstSeat]] = []
     for plan in plans:
         present = tuple(
             (member, point)
@@ -12593,10 +13684,40 @@ def _seat_first_text_plan(
             if share != flaggroups.SHARE_ALONE or len(members) != 1:
                 continue
             gaps.append((plan.net, group, members))
-    if not gaps:
+    # A seat that stands on its own owner's printed row is the same defect from
+    # the other side: the row was laid out before this flag existed. It is
+    # repaired by the one text re-layout below, with the flag's own room as the
+    # wall — the seat does not move, the row does (548D3D-H3).
+    for plan in plans:
+        for item in plan.assignments:
+            owner = item.seat.owner.split(".")[0]
+            if not any(
+                    min(item.seat.glyph[2], text.bbox[2])
+                    - max(item.seat.glyph[0], text.bbox[0]) > 0.0
+                    and min(item.seat.glyph[3], text.bbox[3])
+                    - max(item.seat.glyph[1], text.bbox[1]) > 0.0
+                    for text in scene.texts
+                    if getattr(text, "part_id", "") == owner):
+                continue
+            entry = (plan.net, item.group, item.members)
+            if entry not in gaps:
+                gaps.append(entry)
+            collided.append((plan.net, item.group, item.seat))
+    if not gaps and not collided:
         return _SeatFirstTextPlan(plans, scene, (), tuple(refusals))
     hypothetical: list[tuple[str, str, _SeatFirstSeat]] = []
+    # A seat that already exists keeps its own anchor and lead: the wall the one
+    # re-layout gets is **that** glyph, so the row moves off the flag the seat
+    # already stated instead of the seat jumping to a new place.
+    seen_groups: set[tuple[str, str]] = set()
+    for net_id, group, seat in collided:
+        if (net_id, group) in seen_groups:
+            continue
+        seen_groups.add((net_id, group))
+        hypothetical.append((net_id, group, seat))
     for net_id, group, members in gaps:
+        if (net_id, group) in seen_groups:
+            continue
         seat, problem = _seat_first_hypothetical_seat(
             ctx, placed, scene, net_id, members[0],
         )
@@ -13355,6 +14476,11 @@ def _seat_first_signal_preflight(
     fixed: list[LayoutSegment] = [
         item for net_id in sorted(channels) for item in channels[net_id]
     ]
+    # A fixed service channel is a conductor of its own net before this pass
+    # runs: other signal nets see it as a foreign edge, and the net it belongs
+    # to is routed **through** it (pinned), never around it.
+    fixed.extend(
+        item for net_id in sorted(pinned) for item in pinned[net_id])
     channel_nets = set(channels)
     segments: list[tuple[str, tuple[LayoutSegment, ...]]] = []
     walls: list[Box] = []
@@ -13430,8 +14556,19 @@ def _seat_first_signal_failures(
     scene: _SeatFirstScene,
     labels: Sequence[tuple[str, tuple[float, float], LayoutLabel]],
     plans: Sequence[_SeatFirstPlan],
+    *,
+    spans: bool = False,
 ) -> list[GrammarFailure]:
-    """No printed row, name, seat or run may stand on a pre-flighted signal run."""
+    """No printed row, name, seat or run may stand on a pre-flighted signal run.
+
+    ``spans`` is the **port-carrier** page's question (548D3D-T1B): there the
+    ordinary signals and the port plans are two halves of one picture, and a
+    signal run that **crosses** a flag lead or a member path (interior crossing,
+    not just a shared vertex) is the defect the machine gate does not measure —
+    measured on the forced three-island page, where `BOOT0`'s run cut both
+    service leads at (170,635) and (140,635). A page that states no `stubMin`
+    keeps the historical vertex-only question, byte for byte.
+    """
     failures: list[GrammarFailure] = []
     for net_id, runs in signals.segments:
         for item in runs:
@@ -13480,7 +14617,49 @@ def _seat_first_signal_failures(
                         f"pre-flighted signal {hit!r} at {_point_text(point)}",
                     ))
                     break
+    if spans:
+        # 548D3D-T1B: an interior crossing is not a vertex on a run, so the test
+        # above cannot see it. The port page states both halves, so it refuses
+        # the picture: a signal of one net may not be cut by a seat's lead or a
+        # member path of another.
+        for net_id, runs in signals.segments:
+            for run in runs:
+                for start, end in zip(run.points, run.points[1:]):
+                    hit = _seat_first_span_crossing(plans, net_id, start, end)
+                    if hit is None:
+                        continue
+                    failures.append(_seat_first_refusal(
+                        net_id,
+                        f"the pre-flighted run {_point_text(start)} -> "
+                        f"{_point_text(end)} of {net_id!r} crosses the "
+                        f"{hit}",
+                    ))
+                    break
     return failures
+
+
+def _seat_first_span_crossing(
+    plans: Sequence[_SeatFirstPlan],
+    net_id: str,
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> str | None:
+    """The first seat run (lead or member path) another net's leg cuts, named."""
+    for plan in plans:
+        if plan.net == net_id:
+            continue
+        for item in plan.assignments:
+            runs = [("lead", item.seat.lead)] + [
+                (member, path) for member, path in item.paths if len(path) > 1
+            ]
+            for name, path in runs:
+                for other_start, other_end in zip(path, path[1:]):
+                    point = _proper_crossing(start, end, other_start, other_end)
+                    if point is not None:
+                        return (
+                            f"{name} of {item.group!r} ({plan.net}) at "
+                            f"{_point_text(point)}")
+    return None
 
 
 def _seat_first_label_terminal(
@@ -14021,6 +15200,11 @@ class _SeatFirstPathFirstTerminal:
     labels: tuple[tuple[str, tuple[float, float], LayoutLabel], ...]
     path_walls: tuple[tuple[tuple[str, str], tuple[Box, ...]], ...]
     refusals: tuple[GrammarFailure, ...]
+    #: 548D3D-P1: the carriers of every declared port group, as real conductors
+    #: (pin -> far end). The names of those nets sit at the far ends, so
+    #: ``labels`` keys them by the original pin while ``carriers`` is the ink
+    #: that makes the name mean something.
+    carriers: tuple[LayoutSegment, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -14053,6 +15237,7 @@ def _seat_first_path_first_terminal(
     obstacles: Sequence[Box] = (),
     order: Sequence[str] | None = None,
     replay: bool = True,
+    base: "_SeatFirstChannelTerminal | None" = None,
 ) -> _SeatFirstPathFirstTerminal:
     """The B0 page with its member paths held as walls for the signals (§35F).
 
@@ -14072,8 +15257,9 @@ def _seat_first_path_first_terminal(
     validator silent — and the whole answer made twice, the same both times.
     """
     empty_signals = _SeatFirstSignals((), (), ())
-    base = _seat_first_channel_terminal(
-        ctx, placed, obstacles=obstacles, order=order)
+    if base is None:
+        base = _seat_first_channel_terminal(
+            ctx, placed, obstacles=obstacles, order=order)
     if not base.ok:
         return _SeatFirstPathFirstTerminal(
             (), base.terminal.scene, empty_signals, (), (), (),
@@ -14089,14 +15275,146 @@ def _seat_first_path_first_terminal(
     scene = base.terminal.scene
     path_walls = _seat_first_path_walls(plans)
     flat = tuple(box for _key_, boxes in path_walls for box in boxes)
+    service_channels, _service_problem = (
+        _panel_channels(ctx, placed, texts=list(scene.texts), service_only=True)
+        if _service_layout_page(ctx.presentation) else ({}, None))
+    pinned_signal: dict[str, list[LayoutSegment]] = {}
+    for net_id, items in service_channels.items():
+        pinned_signal.setdefault(net_id, []).extend(items)
     signals = _seat_first_signal_preflight(
-        ctx, placed, scene, dict(base.channels), obstacles=flat)
+        ctx, placed, scene, dict(base.channels),
+        pinned={net: tuple(items) for net, items in pinned_signal.items()},
+        obstacles=flat)
     fallbacks = tuple(signals.fallbacks)
     walls = (*base.walls, *flat)
     label_arg = tuple(net for net, _reason in fallbacks)
-    labels = _seat_first_label_map(
+    base_labels = _seat_first_label_map(
         ctx, placed, scene, walls, (), label_arg)
+    labels, carriers, column_failure = _seat_first_port_columns(
+        ctx, placed, scene, walls, base_labels, label_arg)
+    #: The page the names were seated on: the replay check at the end asks the
+    #: **same** scene again, never the re-allocated one below.
+    label_scene, label_walls = scene, walls
     refusals: list[GrammarFailure] = list(signals.refusals)
+    if column_failure is not None:
+        refusals.append(column_failure)
+    if carriers:
+        # 548D3D-P1C: a carrier is ink on the page, so the flags are allocated
+        # **again** on the page that carries it -- and the names are then seated
+        # again on the page those flags produced. The seats decided on the bare
+        # label scene were measured without the stubs, and a box that only
+        # reached its column because a flag had already been placed elsewhere is
+        # a picture whose two halves never saw each other (measured: LED2's box
+        # pushed a whole rung out by a rail flag's glyph that the re-allocation
+        # then moved away).
+        #
+        # The round is: carriers -> their real spans as walls -> the joint flag
+        # enumeration -> the signals pre-flighted on that plan -> the names
+        # seated once more against **those** flags. The loop stops when a round
+        # changes neither the names nor the carriers, so the final scene, plans,
+        # path walls, signals and carriers are all read off one picture. A page
+        # that never settles is a named refusal, never a silently kept mixture.
+        settled = False
+        for _round in range(PORT_COLUMN_ROUNDS):
+            carrier_walls = _seat_first_channel_walls({
+                net: [item for item in carriers if item.net == net]
+                for net in sorted({item.net for item in carriers})
+            })
+            port_scene = _seat_first_scene_of(
+                ctx, placed, scene.texts,
+                # 548D3D-T1B: the ordinary signals the **previous** round
+                # pre-flighted are ink on this page too. A flag seat that
+                # ignores them is the measured BOOT0 crossing: the flags were
+                # re-allocated against the carriers only, and their leads rose
+                # straight through the ordinary signal run beside them.
+                [*obstacles, *base.walls, *carrier_walls, *signals.walls],
+                tuple(item for _net, _point, item in labels),
+            )
+            # ... and the signals are pre-flighted on the **other** scene, the one
+            # without their own previous spans: a run that avoids the run it is
+            # replacing can never settle (the same rule the names follow below).
+            signal_scene = _seat_first_scene_of(
+                ctx, placed, scene.texts,
+                [*obstacles, *base.walls, *carrier_walls],
+                tuple(item for _net, _point, item in labels),
+            )
+            port_plans, port_page = _seat_first_plans(
+                ctx, placed, scene=port_scene, order=order)
+            port_walls = _seat_first_path_walls(port_plans)
+            port_flat = tuple(box for _key_, boxes in port_walls for box in boxes)
+            port_service, _port_problem = (
+                _panel_channels(ctx, placed, texts=list(port_scene.texts),
+                                service_only=True)
+                if _service_layout_page(ctx.presentation) else ({}, None))
+            port_pinned: dict[str, list[LayoutSegment]] = {}
+            for net_id, items in port_service.items():
+                port_pinned.setdefault(net_id, []).extend(items)
+            port_signals = _seat_first_signal_preflight(
+                ctx, placed, signal_scene, dict(base.channels),
+                pinned={net: tuple(items) for net, items in port_pinned.items()},
+                obstacles=port_flat)
+            port_walls_all = (*base.walls, *port_flat)
+            # The names are seated against the flags and rows -- never against
+            # their own previous carriers: a carrier's own span is a wall for the
+            # flags, and re-reading it as an obstacle to itself refused every
+            # rung on the real page (measured: LED1 had "no legal end").
+            # The previous round's own name boxes are **not** obstacles to this
+            # round's: a box that avoids the box it occupied last time can never
+            # settle (measured: LED's box and the carriers' rungs flipped between
+            # rounds). The names are seated against the page -- parts, rows,
+            # flags -- and against each other through the pass's own occupancy.
+            names_scene = _seat_first_scene_of(
+                ctx, placed, scene.texts,
+                [*obstacles, *base.walls],
+            )
+            next_labels, next_carriers, next_failure = _seat_first_port_columns(
+                ctx, placed, names_scene, port_walls_all, base_labels, label_arg)
+            if port_page is not None:
+                refusals.append(port_page)
+            if next_failure is not None:
+                refusals.append(next_failure)
+                break
+            moved = (
+                {net for net, _why in signals.fallbacks}
+                ^ {net for net, _why in port_signals.fallbacks}
+            )
+            if moved:
+                refusals.append(_seat_first_refusal(
+                    sorted(moved)[0],
+                    "the port carriers changed the page's generic fallbacks: "
+                    + ", ".join(sorted(moved))
+                    + " moved in or out of the fallback set when the flags were "
+                    "allocated again on the scene that carries the carriers",
+                ))
+                break
+            # 548D3D-T1B: the signals this round started from, kept for the
+            # settle test below (the round's own answer replaces `signals`).
+            stable_signals = signals.segment_map()
+            scene, plans, path_walls, flat = (
+                port_scene, port_plans, port_walls, port_flat)
+            signals = port_signals
+            walls = port_walls_all
+            # 548D3D-T1B: the names and the carriers are not the whole picture —
+            # the ordinary signals are ink too, and a round that moved them is
+            # not the round this scene was measured on. The spans are compared,
+            # not just their count: two different routes of one net are two
+            # different drawings.
+            stable = (
+                next_labels == labels and next_carriers == carriers
+                and port_signals.segment_map() == stable_signals)
+            labels, carriers = next_labels, next_carriers
+            if stable:
+                settled = True
+                break
+        if not settled and carriers:
+            refusals.append(_seat_first_refusal(
+                "",
+                "the port columns and the flag seats do not settle on this "
+                f"page: {PORT_COLUMN_ROUNDS} rounds of "
+                "carriers -> seats -> signals -> names still changed the "
+                "drawing, so no round's scene, plans and names are one picture",
+            ))
+
     final_channels, problem = _panel_channels(
         ctx, placed, texts=list(scene.texts))
     if problem is not None:
@@ -14105,7 +15423,8 @@ def _seat_first_path_first_terminal(
         drift = _seat_first_channel_drift(base.channels, final_channels)
         if drift is not None:
             refusals.append(drift)
-    refusals.extend(_seat_first_signal_failures(signals, scene, labels, plans))
+    refusals.extend(_seat_first_signal_failures(
+        signals, scene, labels, plans, spans=bool(carriers)))
     refusals.extend(_seat_first_label_failures(scene, labels, walls, plans))
     refusals.extend(_seat_first_channel_text_failures(scene, base.walls))
     refusals.extend(_seat_first_channel_seat_failures(plans, base.walls))
@@ -14120,8 +15439,8 @@ def _seat_first_path_first_terminal(
             + "; ".join(item.detail for item in plan.refusals),
         ))
     again_labels = _seat_first_label_map(
-        ctx, placed, scene, walls, (), label_arg)
-    if again_labels != labels:
+        ctx, placed, label_scene, label_walls, (), label_arg)
+    if again_labels != base_labels:
         refusals.append(_seat_first_refusal(
             "",
             "the generic fallback names are not replayable: the same pins on the "
@@ -14133,6 +15452,7 @@ def _seat_first_path_first_terminal(
         if (
             again.plans != plans or again.signals != signals
             or again.labels != labels or again.fallbacks != fallbacks
+            or again.carriers != carriers
         ):
             refusals.append(_seat_first_refusal(
                 "",
@@ -14141,7 +15461,241 @@ def _seat_first_path_first_terminal(
             ))
     return _SeatFirstPathFirstTerminal(
         plans, scene, signals, fallbacks, labels, path_walls, tuple(refusals),
+        tuple(carriers),
     )
+
+
+def _seat_first_port_columns(
+    ctx: _Context,
+    placed: _Placement,
+    scene: _SeatFirstScene,
+    walls: Sequence[Box],
+    labels: Sequence[tuple[str, tuple[float, float], LayoutLabel]],
+    fallback_nets: Sequence[str],
+) -> tuple[
+    tuple[tuple[str, tuple[float, float], LayoutLabel], ...],
+    tuple[LayoutSegment, ...],
+    GrammarFailure | None,
+]:
+    """The port columns a service page states with ``labelPolicy.stubMin`` (P1A).
+
+    A page that states ``stubMin`` is asking for a **visible port**: every net the
+    compiler already names with a label gets a real conductor from the original
+    pin out to its far end, and the name's anchor **and box** move to that far
+    end. The bare label the ladder leaves on the pin names nothing on a service
+    page (a name with no conductor under it), which is the picture 548D3D-H6 was
+    refused for: no stub, KEY's name pressed into the printed pin numbers, LED's
+    name in the wrong column.
+
+    Trigger: a service-layout page whose ``labelPolicy.stubMin`` is positive. The
+    set is the compiler's own label map minus its generic fallbacks -- a fallback
+    net keeps the at-pin rule exactly as before, and a wire-style net (a service
+    channel) is not in the map at all. No net name, part name or coordinate is
+    read; the preference is the document's stated length, the fallback ladder is
+    the compiler's (:data:`LOCAL_LABEL_RUNGS` x grid).
+
+    **One reach per group.** The pins are grouped by ``(part, the direction the
+    pin actually escapes)``: one part's port row is read as one column, so every
+    pin of a group takes the same stub length, and a group whose length does not
+    fit moves to the next length **whole** -- never pin by pin.
+
+    Every measurement is the compiler's own: one router per pin (built once for
+    the whole ladder, so a page that states the key does not pay a page-wide
+    search per rung), :func:`_local_label_candidate` for the run, its name row and
+    the lane, and :func:`_local_label_carriers` for the boxes, handed the lanes
+    chosen here as its ``preplan``: the run reserved is the run drawn.
+
+    A group with no legal length is a named refusal -- the document asked for the
+    run and the page cannot draw it. A page that states no ``stubMin`` is not
+    touched at all (byte for byte, 43 focused tests' reading).
+    """
+    policy = getattr(ctx.presentation, "label_policy", None)
+    stated = float(getattr(policy, "stub_min", 0.0) or 0.0) if policy else 0.0
+    if stated <= 0.0 or not _service_layout_page(ctx.presentation):
+        return tuple(labels), (), None
+    fallbacks = frozenset(fallback_nets)
+    expressions = _expressions(ctx, placed)
+    moves: list[tuple[str, str, tuple[float, float], LayoutLabel]] = []
+    for net_id, point_key, label in labels:
+        if net_id in fallbacks:
+            continue
+        expression = expressions.get(net_id)
+        if expression is None or expression.style != "label":
+            continue
+        member = next(
+            (item for item, tip in expression.points
+             if tip is not None and _key(tip) == point_key), "",
+        )
+        if not member:
+            continue
+        moves.append((net_id, member, (float(label.x), float(label.y)), label))
+    if not moves:
+        return tuple(labels), (), None
+
+    tips: set[tuple[float, float]] = set()
+    for part_id in placed.origins:
+        for pin in ctx.profile(part_id).pins:
+            tip = _pin_point(ctx, part_id, pin.number, placed.poses, placed.origins)
+            if tip is not None:
+                tips.add(_key(tip))
+
+    groups: dict[tuple[str, tuple[float, float]], list[int]] = {}
+    for index, (_net, member, _point, _label) in enumerate(moves):
+        part_id, _, token = member.partition(".")
+        direction = _pin_direction(ctx, part_id, token, placed.poses) or ctx.lateral()
+        groups.setdefault(
+            (part_id, (float(direction[0]), float(direction[1]))),
+            []).append(index)
+
+    grid = float(ctx.budget.grid)
+    #: The stated length first, then the ladder **around it**: every shorter rung
+    #: from the nearest down (a column retreats before it reaches further), then
+    #: every longer one. 548D3D-P1B measured why the order matters: walking the
+    #: ladder from its shortest end put a group that could not use 40 onto the
+    #: five-unit rung, so its names sat back on the pins the pass exists to move
+    #: them off. The choice is still the group's own first legal rung.
+    lengths: list[float] = [stated]
+    for rung in range(LOCAL_LABEL_RUNGS, 0, -1):
+        reach = round(rung * grid, 6)
+        if reach < stated - 1e-9 and all(
+                abs(reach - item) > 1e-9 for item in lengths):
+            lengths.append(reach)
+    for rung in range(1, LOCAL_LABEL_RUNGS + 1):
+        reach = round(rung * grid, 6)
+        if reach > stated + 1e-9 and all(
+                abs(reach - item) > 1e-9 for item in lengths):
+            lengths.append(reach)
+
+    solids = list(scene.solids)
+    seek = [*solids, *walls]
+    name_boxes = [item for _net, _point, item in labels]
+    taken: dict[tuple[float, float], str] = {}
+    rows_by_net: dict[str, list[Box]] = {}
+    running: list[LayoutSegment] = []
+    plan: dict[tuple[str, tuple[float, float]],
+                tuple[tuple[float, float], tuple[float, float],
+                      list[tuple[float, float]]]] = {}
+    blocked_of: dict[tuple[str, tuple[float, float]], set[tuple[float, float]]] = {}
+    for group_key in sorted(groups):
+        members = groups[group_key]
+        direction = group_key[1]
+        # One router per pin for the **whole** ladder: the obstacles, the blocked
+        # points and the bounds do not change with the rung, only the far end
+        # does. Building them inside the rung loop cost the real 64-pin page
+        # 16.68 s instead of 1.27 s (measured on the previous attempt).
+        routers: dict[int, tuple[_Router, set[tuple[float, float]]]] = {}
+        for index in members:
+            net_id, member, point, _label = moves[index]
+            routers[index] = _seat_first_router(
+                ctx, placed, net_id, seek, [(member, point)],
+                labels=name_boxes, foreign=list(running),
+            )
+        picked: list[tuple[int, tuple[float, float],
+                            list[tuple[float, float]], Box]] = []
+        chosen = False
+        reasons: list[str] = []
+        for reach in lengths:
+            picked = []
+            reasons = []
+            held: list[tuple[int, tuple[float, float],
+                              list[tuple[float, float]], Box]] = []
+            added: list[tuple[tuple[float, float], str]] = []
+            legal = True
+            for index in members:
+                net_id, member, point, _label = moves[index]
+                far = _rounded((
+                    point[0] + direction[0] * reach,
+                    point[1] + direction[1] * reach,
+                ))
+                path = [point, far]
+                owner_router, owner_blocked = routers[index]
+                # 548D3D-P1B: a straight stub is a conductor like any other, so
+                # it is graded on the **page** it would be drawn on: the scene's
+                # solids, the terminal's own walls (flag glyphs and their leads,
+                # the path-first plan's runs) and every point no wire of this net
+                # may touch. The candidate's own lattice test cannot see a wall
+                # it does not route around -- measured on the real 64-pin page,
+                # where LED1/LED2's 40-unit stubs crossed two rail leads and the
+                # machine gate still passed them.
+                if not _span_free(owner_router, point, far, owner_blocked):
+                    reasons.append(
+                        f"{member}: the run to {_point_text(far)} crosses a part "
+                        "body, a printed row, a flag's own lead or a run already "
+                        "on the page")
+                    legal = False
+                    break
+                entry, reason = _local_label_candidate(
+                    ctx, net_id, point, direction, path, owner_router,
+                    tips, taken, rows_by_net.get(net_id, []),
+                )
+                if entry is None:
+                    reasons.append(f"{member}: {reason}")
+                    legal = False
+                    break
+                _d, _far, _path, row, cells = entry
+                if not _take_lane(taken, cells, tips, {_key(point)}, net_id):
+                    reasons.append(
+                        f"{member}: the lane to {_point_text(far)} could not be "
+                        "reserved")
+                    legal = False
+                    break
+                added.extend((cell, net_id) for cell in cells)
+                held.append((index, far, path, row))
+            if legal:
+                picked = held
+                chosen = True
+                break
+            for cell, owner in added:
+                if taken.get(cell) == owner:
+                    taken.pop(cell, None)
+        if not chosen:
+            net_id, member, point, _label = moves[members[0]]
+            return tuple(labels), (), _local_label_failure(
+                net_id, member, point, reasons)
+        for index, far, path, row in picked:
+            net_id, _member, point, _label = moves[index]
+            plan[(net_id, _key(point))] = (direction, far, list(path))
+            blocked_of[(net_id, _key(point))] = set(routers[index][1])
+            rows_by_net.setdefault(net_id, []).append(row)
+            running.append(LayoutSegment(net=net_id, points=list(path)))
+
+    segments: list[LayoutSegment] = []
+    label_list = [item for _net, _point, item in labels]
+    occupied = [*solids, *walls, *(item.bbox for item in label_list)]
+    router = _Router(
+        grid=ctx.budget.grid,
+        residue=placed.residue,
+        boxes=list(seek),
+        bounds=_search_bounds(
+            ctx, seek, [point for _net, _member, point, _label in moves]),
+    )
+    failure = _local_label_carriers(
+        ctx, placed, router, segments, label_list, [], occupied, list(solids),
+        moves, plan, blocked_of=blocked_of,
+    )
+    if failure is not None:
+        return tuple(labels), (), failure
+    tail = label_list[-len(moves):]
+    for index, label in enumerate(tail):
+        net_id, _member, point, _label = moves[index]
+        _direction, far, _path = plan[(net_id, _key(point))]
+        # 548D3D-P1: the label states the run this pass **drew**, not the page's
+        # first preference. On a page where the whole group had to give way to a
+        # conductor (P1B measured it retreating from 40 to 25) a label still
+        # saying 40 would tell the apply layer to leave a 40-unit stub from a box
+        # standing 25 units out. Where the preferred length was drawn, this is
+        # the preferred length; where the group moved, it is the length drawn.
+        label.stub_min = round(
+            abs(float(far[0]) - point[0]) + abs(float(far[1]) - point[1]), 6)
+        label.row_model = getattr(policy, "row_model", label.row_model)
+    replaced = {
+        (moves[index][0], _key(moves[index][2])): tail[index]
+        for index in range(len(moves))
+    }
+    out = tuple(
+        (net_id, point_key, replaced.get((net_id, point_key), label))
+        for net_id, point_key, label in labels)
+    return out, tuple(segments), None
 
 
 def _seat_first_validate(
@@ -14185,7 +15739,9 @@ def _seat_first_validate(
         present = tuple(
             (member, point)
             for member, point in _seat_first_points(ctx, placed, plan.net)
-            if point is not None and member not in detached
+            if point is not None and (
+                member not in detached
+                or _service_layout_page(ctx.presentation))
         )
         groups_of[plan.net] = {
             group: (share, members)
@@ -14194,12 +15750,19 @@ def _seat_first_validate(
         }
     owner: dict[str, tuple[str, str]] = {}
     for plan in plans:
+        service_page = _service_layout_page(ctx.presentation)
         expected = tuple(
             member for member, point in _seat_first_points(ctx, placed, plan.net)
-            if point is not None and member not in detached_of[plan.net]
+            if point is not None and (
+                member not in detached_of[plan.net] or service_page)
         )
+        # On a service page the allocator is the only author of the flags, so a
+        # detached pad is seated here and nothing is excluded; the page's own
+        # local-flag branch never runs.
+        want_detached = frozenset() if service_page else frozenset(
+            detached_of[plan.net])
         excluded = {member for member, _why in plan.excluded}
-        if excluded != set(detached_of[plan.net]):
+        if excluded != set(want_detached):
             failures.append(_seat_first_refusal(
                 plan.net,
                 f"the plan excludes {sorted(excluded)} from the seat-first "
@@ -14233,7 +15796,12 @@ def _seat_first_validate(
                     "assignment is incomplete",
                 ))
         for member in seen:
-            if member in detached_of[plan.net]:
+            if member in detached_of[plan.net] and not service_page:
+                # The local-flag branch above is the **only** other author of a
+                # detached pad's flag, and a service page has no such branch:
+                # there the allocator is the author, so its assignment is the
+                # flag the page draws (measured: without it the pad had none and
+                # the net came out as two nodes).
                 failures.append(_seat_first_refusal(
                     plan.net,
                     f"the member {member!r} is 069 sec.2's detached pad and the "
@@ -14742,6 +16310,18 @@ def _module_local_series_rail(ctx: _Context, net_id: str, count: int) -> bool:
     return False
 
 
+def _declared_input_wire(ctx: _Context, net_id: str, count: int) -> bool:
+    """A single exposed signal input whose grammar promises visible wiring."""
+    if count != 1 or _net_class(ctx, net_id) != "signal":
+        return False
+    if net_id not in _obligation_nets(ctx):
+        return False
+    return ctx.presentation.port_roles.get(net_id) in ("input", "source") or any(
+        item.net == net_id and item.direction in ("input", "source")
+        for item in ctx.circuit.open_interfaces
+    )
+
+
 def _expression_style(
     ctx: _Context, net_id: str, cls: str, count: int, obligated: set[str],
     local_labels: set[str] = frozenset(),
@@ -14757,6 +16337,8 @@ def _expression_style(
     modules = _net_modules(ctx, net_id)
     policy = ctx.presentation.label_policy
     if count == 1:
+        if cls == "signal" and net_id in obligated and _declared_input_wire(ctx, net_id, count):
+            return "label", "a declared signal input is named on its reserved wire carrier"
         if cls in ("power", "gnd") or net_id in obligated:
             return (
                 "flag",
@@ -14789,6 +16371,20 @@ def _expression_style(
             "saying where this net meets reference ground",
         )
     if cls == "power":
+        # 548M: a document that declares `railClustering` has said how this rail
+        # is drawn — one short rail per neighbourhood, one flag in each — so the
+        # per-pin answer below (053 sec.7's default for a bus) is not the one it
+        # asked for. This is a **declared** change, never an override: a page
+        # that states no such key reaches the branch below unchanged.
+        if float(getattr(ctx.budget, "rail_cluster_radius", 0.0) or 0.0) > 0.0 and count >= 2:
+            return (
+                "wire",
+                "548M: this document declares `railClustering`, so this rail is "
+                "drawn as one short rail per neighbourhood and stated by one flag "
+                "in each (`_rail_flag`'s per-cluster pass) — a declared split, not "
+                "a change of the 053 sec.7 default: a page that states no such key "
+                "keeps the per-pin answer below, byte for byte",
+            )
         if _module_local_series_rail(ctx, net_id, count):
             return (
                 "wire",
@@ -15788,6 +17384,7 @@ def _panel_text_map(
     services, failure = _service_templates(
         ctx, getattr(placed, "residue", (0.0, 0.0)), tuple(sorted(placed.origins)),
         poses=placed.poses, origins=placed.origins,
+        host_tokens=_service_bound_hosts(placed),
     )
     if failure is not None:
         return {}, failure
@@ -15887,6 +17484,95 @@ def _service_located_walls(
     return walls
 
 
+def _own_escape_bands(
+    profile: SymbolProfile, pose: SymbolPose, origin: tuple[float, float]
+) -> list[Box]:
+    """The corridor each of this part's own **horizontal** pins escapes by.
+
+    548D3D-H4: a flag seats on a horizontal pad by running out
+    :data:`FLAG_LEAD` **first** and turning :data:`FLAG_JOG` after the run
+    (:func:`_flag_anchor`, 069 sec.10). A text row printed across that first run
+    therefore costs the pad **every** rung of its ladder — measured on the real
+    64-pin MCU, whose own ``U1``/``STM32G431`` rows sat in the right column's
+    escape band and refused pin 48's 3V3 group (the first red under U1.48). The
+    band is the run itself, :data:`FLAG_CLEARANCE` either side: the same margin a
+    flag's own box keeps from anything else, so a row this close to the corridor
+    is already the crowding the constant exists to forbid.
+
+    Direction and pose come from the placed part (:func:`_pin_escape` on the
+    profile's stated direction and the pose the placement chose), never from a
+    page gradient, and the length is the ladder's own :data:`FLAG_LEAD` — one
+    number for "the first segment a flag can use", not a second model of it.
+    Vertical pins are left out: their first segment leaves the body the way the
+    text sides do not travel, so a row there is not in a flag's way.
+    """
+    out: list[Box] = []
+    for pin in profile.pins:
+        direction = _pin_escape(profile, pin.number, pose)
+        if direction is None or direction[0] == 0.0:
+            continue
+        tip = _posed(pin.tip, pose, origin)
+        far = tip[0] + direction[0] * FLAG_LEAD
+        out.append((
+            min(tip[0], far), tip[1] - FLAG_CLEARANCE,
+            max(tip[0], far), tip[1] + FLAG_CLEARANCE,
+        ))
+    return out
+
+
+def _input_chain_s20_parts(ctx: _Context) -> set[str]:
+    """Unmeasured input-chain arms eligible for the existing S-20 text rows.
+
+    The ordered grammar obligation supplies the chain; the document must also
+    promise its private middle as one conductor. This does not infer a chain
+    from nearby parts or supersede an explicit series/panel reading statement.
+    """
+    if not _pair_reading(ctx.presentation) or ctx.presentation.panel_groups:
+        return set()
+    conductors = _one_conductor_nets(ctx.presentation, ctx.circuit)
+    series_parts = {
+        part for branch in ctx.presentation.series_branches for part in branch.parts
+    }
+    inputs = {item.part_id for item in ctx.binding.bindings if item.role == "in"}
+    eligible: set[str] = set()
+    for obligation in ctx.binding.obligations:
+        if obligation.kind != DIRECT_WIRE or len(obligation.nets) != 3:
+            continue
+        head, middle, tail = obligation.nets
+        if (
+            len(set(obligation.nets)) != 3
+            or head not in inputs
+            or _net_class(ctx, head) != "signal"
+            or _net_class(ctx, tail) != "gnd"
+            or middle not in conductors
+        ):
+            continue
+        declarations = {
+            ctx.presentation.port_roles.get(head, ""),
+            *(item.direction for item in ctx.circuit.open_interfaces if item.net == head),
+        } - {""}
+        if declarations != {"input"}:
+            continue
+        arms = []
+        for role, endpoints in (
+            ("upper_arm", {head, middle}), ("lower_arm", {middle, tail}),
+        ):
+            matches = [
+                part_id for part_id, slot in ctx.slots.items()
+                if slot.kind == "chain" and slot.role == role
+                and part_id not in series_parts
+                and len(ctx.profile(part_id).pins) == 2
+                and len(_part_nets(ctx.circuit, part_id)) == 2
+                and set(_part_nets(ctx.circuit, part_id).values()) == endpoints
+            ]
+            if len(matches) != 1:
+                break
+            arms.append(matches[0])
+        if len(arms) == 2 and len(set(arms)) == 2:
+            eligible.update(arms)
+    return eligible
+
+
 def _part_texts(
     ctx: _Context, placed: _Placement, occupied: list[Box], walls: list[Box]
 ) -> tuple[list[LayoutText], GrammarFailure | None]:
@@ -15925,6 +17611,13 @@ def _part_texts(
     extent keeps the old strictness for its own text, which is the reason the
     tips were put in `occupied` at all ("so a value never prints across its own
     pins").
+
+    **On a `localSeats` page the part's own rows also keep out of its own
+    horizontal pins' first escape run** (548D3D-H4, :func:`_own_escape_bands`):
+    a flag needs that run to leave the pad at all, and a row printed across it
+    refuses every rung of the pad's ladder. The band is read per part and added
+    to that part's own `blocked` only — a page-wide reserve regressed 26 pages
+    (h3 §6). Without `localSeats`, or on a `panelGroups` page, nothing changes.
     """
     panel_rows, panel_failure = _panel_text_map(ctx, placed)
     if panel_failure is not None:
@@ -15941,6 +17634,11 @@ def _part_texts(
         walls = [*walls, *_service_located_walls(
             placed, service_channels=_service_layout_page(ctx.presentation))]
     out: list[LayoutText] = []
+    # 548D3D-H4: only the `localSeats` page with no `panelGroups` reads a part's
+    # own pin escape bands (see `_own_escape_bands`); every other page keeps the
+    # obstacle list it always read.
+    own_escapes = _service_layout_page(ctx.presentation)
+    input_chain_parts = _input_chain_s20_parts(ctx)
     pair_groups = _paired_text_groups(ctx, placed)
     pair_done: set[str] = set()
     arm_groups = _series_arm_text_groups(ctx, placed)
@@ -16000,6 +17698,15 @@ def _part_texts(
             continue
         lines = list(_part_lines(ctx, part_id))
         blocked = [*walls, box]
+        if own_escapes:
+            # This part's own rows keep out of its own pins' first escape run —
+            # the run its flags need. The band stays **local**: putting it in the
+            # page-wide `occupied` let it shove other pages' texts around (26
+            # regressions, h3 §6), and it is this part's text against this part's
+            # pins, not a page reserve.
+            blocked.extend(_own_escape_bands(
+                profile, placed.poses[part_id], placed.origins[part_id]
+            ))
         chosen = None
         # 548D3 §24B: members of one **declared** arm kind are seated together,
         # once, at the first of them the page reaches — before the derived 543K
@@ -16069,6 +17776,45 @@ def _part_texts(
                 continue
         if part_id in pair_done:
             continue
+        # 548P38/P94: unmeasured service cores and explicitly wired input
+        # chains use the same S-20 rows. Measured anchors, stated sides and the
+        # declared group paths above retain their precedence and metrics.
+        service_core = (
+            ctx.presentation.service_groups
+            and _native_text_placement(ctx)
+            and any(module.core == part_id for module in ctx.presentation.modules)
+        )
+        if (service_core or part_id in input_chain_parts) and not declared and not stated_side:
+            subject = "service core" if service_core else "part"
+            body = _body_box(profile, placed.poses[part_id], placed.origins[part_id])
+            if body is None:
+                return out, _joint_refusal(
+                    part_id, f"the {subject} has no drawn body for its S-20 rows",
+                    ("provide the core's measured body before placing its text"
+                     if service_core else "provide the part's measured body before placing its text"),
+                )
+            for rung in range(1, TEXT_ESCALATION_STEPS + 1):
+                boxes = []
+                for kind, text in lines:
+                    side = "above" if kind == "reference" else "below"
+                    row = _line_boxes(body, [text], side, rung)[0]
+                    boxes.append((
+                        body[0], row[1], body[0] + row[2] - row[0], row[3],
+                    ))
+                if all(
+                    not _overlaps(candidate, other)
+                    for candidate in boxes for other in blocked
+                ):
+                    chosen = boxes
+                    break
+            if chosen is None:
+                return out, _joint_refusal(
+                    part_id,
+                    f"the {subject}'s S-20 reference above and value below "
+                    f"are blocked within {TEXT_ESCALATION_STEPS} text rungs",
+                    ("leave room above and below the core for its visible text rows"
+                     if service_core else "leave room above and below the part for its visible text rows"),
+                )
         # 053d: a side the document states for this part is tried **first**, at
         # every rung, with the same collision test as the ladder below — on a
         # crowded IC it is where the two rows must go to leave the pin-side
@@ -16157,6 +17903,40 @@ def _label_stub_policy(ctx: Any) -> str:
     """The stub shape this label carries into the plan: ``auto`` or ``straight``."""
     policy = getattr(getattr(ctx, "presentation", None), "label_policy", None)
     return policy.stub if policy is not None else "auto"
+
+
+def _stated_stub_floor(presentation: Any) -> float:
+    """The shortest name stub the document states, or ``0`` when it states none.
+
+    548K: ``labelPolicy.stubMin`` is the length the **delivery side** requires
+    (:attr:`~boardwise.core.layoutplan.LayoutLabel.stub_min`, read by
+    ``drawapply._label_stub_candidates``). It is a floor, never a shape: the
+    reservation (:func:`_reserve_label_stubs`) uses it only to promise a lane
+    long enough for the stub that floor will demand. A document that states the
+    key nowhere — every page written before 053f — keeps the historical
+    :data:`LABEL_LANE_STEPS`, so its drawing cannot move by one unit.
+    """
+    policy = getattr(presentation, "label_policy", None)
+    stated = float(getattr(policy, "stub_min", 0.0) or 0.0) if policy else 0.0
+    return stated if stated > 0.0 and math.isfinite(stated) else 0.0
+
+
+def _stub_lane_reserved(presentation: Any) -> bool:
+    """Does the document ask for the **name-stub lane** to be promised first?
+
+    548K: the explicit switch is ``labelPolicy.stubLaneReserve``, and it is off
+    when the key is absent (or ``false``). Off means the two 548K behaviours —
+    the reservation in :func:`_reserve_label_stubs` being as long as
+    :func:`_stated_stub_floor` and the single-foot label nets being moved into
+    the first pass of :func:`_lead_lane_reservations` — do not run, so every
+    page written before this key keeps the order it always had and its pinned
+    geometry byte for byte. On means the lane is promised before the flag leads
+    and the host branches, with ``labelPolicy.stubMin`` as its length floor.
+    """
+    policy = getattr(presentation, "label_policy", None)
+    if policy is None:
+        return False
+    return bool(getattr(policy, "stub_lane_reserve", False))
 
 
 def _label_for(
@@ -16847,6 +18627,110 @@ def _topology_round(ctx: _Context, result: CompileResult) -> None:
     )
 
 
+def _try_local_flag_repair(
+    ctx: _Context,
+    result: CompileResult,
+    seen: set[str],
+    circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
+    book: Mapping[str, SymbolProfile],
+    budget: CompileBudget,
+    intent: Any,
+) -> None:
+    """Try one deterministic repair after every original search round failed.
+
+    This never enumerates another variant or changes ``service_build_attempts``.
+    The separate counter and result note make the one extra build explicit.
+    """
+    seed = ctx.local_flag_repair_seed
+    if seed is None:
+        return
+    variant, placed, fallbacks = seed
+    ctx.local_flag_repair_attempts += 1
+    ctx.local_flag_repair_active = True
+    try:
+        built, failure, _violations = _build_one_variant(
+            ctx,
+            variant,
+            list(fallbacks),
+            placement_override=replace(
+                placed,
+                origins=dict(placed.origins),
+                poses=dict(placed.poses),
+            ),
+        )
+    finally:
+        ctx.local_flag_repair_active = False
+    if built is None:
+        detail = failure.detail if failure is not None else "no legal layout"
+        result.notes.append(
+            f"local_flag_repair_attempts=1; the post-search repair refused: {detail}"
+        )
+        return
+    _record_built_candidate(
+        ctx, result, seen, variant, built, list(fallbacks),
+        circuit_spec, presentation_spec, book, budget, intent,
+    )
+    result.notes.append(
+        "local_flag_repair_attempts=1; one already-seated placement was rebuilt "
+        "after every original search round refused"
+    )
+
+
+def _record_built_candidate(
+    ctx: _Context,
+    result: CompileResult,
+    seen: set[str],
+    variant: _Variant,
+    built: _Built,
+    fallbacks: list[LabelFallback],
+    circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
+    book: Mapping[str, SymbolProfile],
+    budget: CompileBudget,
+    intent: Any,
+) -> None:
+    """Register one already-built plan through the compiler's only ranking path."""
+    plan = built.plan
+    digest = plan.geometry_sha256()
+    if digest in seen:
+        # Two variants with the same geometry are one drawing: a symbol whose
+        # legal poses produce identical pins has only one picture, and the plan's
+        # own geometry digest is what says so (052 sec.4).
+        result.rejected.append(RejectedCandidate(
+            variant=variant.label,
+            reason="the same geometry as an earlier variant",
+            label_fallbacks=list(fallbacks),
+        ))
+        return
+    seen.add(digest)
+    findings = check_grammar(
+        plan, circuit_spec, presentation_spec, book, budget=budget, intent=intent
+    )
+    tolerance_lines = island_gate_tolerance_notes(list(built.tolerated))
+    plan.evidence = LayoutEvidence(
+        checker=CHECKER_NAME,
+        # A plan delivered WITH tolerated rows names them in notes, not in
+        # hard_violations — the island page's contract, applied to the
+        # single-module path's one tolerated kind (pin-text-press).
+        hard_violations=[] if built.tolerated else [
+            item.render() for item in built.checked.hard_violations
+        ],
+        grammar_findings=[item.render() for item in findings],
+        soft_metrics=dict(built.checked.soft_metrics),
+        soft_reasons={
+            key: " | ".join(value)
+            for key, value in built.checked.soft_reasons.items()
+        },
+        notes=[
+            f"candidate from {COMPILER_NAME} variant {variant.label}",
+            *built.series_trials,
+            *tolerance_lines,
+        ],
+    )
+    result.ranked.append(_measure(plan, findings, ctx, fallbacks))
+
+
 def _try_variants(
     ctx: _Context,
     variants: Sequence[_Variant],
@@ -16901,47 +18785,12 @@ def _try_variants(
                 label_fallbacks=list(fallbacks),
             ))
             continue
-        plan = built.plan
-        digest = plan.geometry_sha256()
-        if digest in seen:
-            # Two variants with the same geometry are one drawing: a symbol whose
-            # legal poses produce identical pins has only one picture, and the
-            # plan's own geometry digest is what says so (052 sec.4).
+        if built.plan.geometry_sha256() in seen:
             this_rung[variant.pose_index] = ("same-geometry",)
-            result.rejected.append(RejectedCandidate(
-                variant=variant.label,
-                reason="the same geometry as an earlier variant",
-                label_fallbacks=list(fallbacks),
-            ))
-            continue
-        seen.add(digest)
-        findings = check_grammar(
-            plan, circuit_spec, presentation_spec, book, budget=budget, intent=intent
+        _record_built_candidate(
+            ctx, result, seen, variant, built, fallbacks,
+            circuit_spec, presentation_spec, book, budget, intent,
         )
-        tolerance_lines = island_gate_tolerance_notes(list(built.tolerated))
-        plan.evidence = LayoutEvidence(
-            checker=CHECKER_NAME,
-            # A plan delivered WITH tolerated rows names them in notes, not in
-            # hard_violations — the island page's contract (a delivered page
-            # whose own evidence reads fail is a contradiction), applied to the
-            # single-module path's one tolerated kind (pin-text-press, the
-            # symbol's own artwork — see single_module_gate_violations).
-            hard_violations=[] if built.tolerated else [
-                item.render() for item in built.checked.hard_violations
-            ],
-            grammar_findings=[item.render() for item in findings],
-            soft_metrics=dict(built.checked.soft_metrics),
-            soft_reasons={
-                key: " | ".join(value)
-                for key, value in built.checked.soft_reasons.items()
-            },
-            notes=[
-                f"candidate from {COMPILER_NAME} variant {variant.label}",
-                *built.series_trials,
-                *tolerance_lines,
-            ],
-        )
-        result.ranked.append(_measure(plan, findings, ctx, fallbacks))
 
 
 # ------------------------------------------------- the island page's delivery policy
@@ -18797,6 +20646,7 @@ def _service_terminal_seats(
         ctx, getattr(placed, "residue", (0.0, 0.0)),
         tuple(sorted(placed.origins)),
         poses=placed.poses, origins=placed.origins,
+        host_tokens=_service_bound_hosts(placed),
     )
     if failure is not None:
         return {}, failure
@@ -19599,23 +21449,143 @@ def _build_candidate(
     independent readability check — is the candidate. A refusal is the input to
     the next plan, never a reason to weaken a check, and the plans that failed
     are recorded on the delivered candidate (`_Built.series_trials`). A page
-    with no arm, or with one, builds exactly once, as it always did.
+    with no arm, or with one, and no service groups builds exactly once. A
+    declared joint service seat keeps those historical attempts first, then
+    offers its real host-foot rows to this same complete build chain only after
+    refusal. Joint service builds share one context budget across variants and
+    rescue rounds; seating refusals spend no complete build.
     """
     fallbacks = label_fallbacks if label_fallbacks is not None else []
-    if len(ctx.presentation.series_branches) < 2:
+    has_service_groups = bool(ctx.presentation.service_groups)
+    if has_service_groups and ctx.service_build_attempts >= ctx.budget.max_candidates:
+        return None, _joint_refusal(
+            "$.serviceGroups", "the complete service build budget is exhausted",
+            "keep the measured refusals; no legal page was found in the budget"), []
+    if len(ctx.presentation.series_branches) < 2 and not has_service_groups:
         built, failure, violations = _build_one_variant(ctx, variant, fallbacks)
         return built, _refusal_after_downgrade(failure, fallbacks), violations
-    placed, placement_failure = _place(ctx, variant)
+    placed, placement_failure = _place(
+        ctx, variant, seat_service_groups=not has_service_groups)
     if placed is None:
         return None, _refusal_after_downgrade(placement_failure, fallbacks), []
-    attempts = _series_candidate_placements(ctx, placed)
+    service_seed = placed if has_service_groups else None
+    preferred_rows = (
+        _preferred_service_group_rows(ctx, service_seed)
+        if service_seed is not None else [])
+    if service_seed is not None:
+        placed = replace(
+            service_seed, origins=dict(service_seed.origins),
+            poses=dict(service_seed.poses))
+        placement_failure = _seat_service_groups(ctx, placed)
+        if placement_failure is not None and not preferred_rows:
+            return None, _refusal_after_downgrade(placement_failure, fallbacks), []
+    attempts = (
+        _series_candidate_placements(ctx, placed)
+        if placement_failure is None else [])
+    initial_attempts = [*attempts, ("the binder's own seat", placed)]
+
+    def candidates():
+        # Explicit near/far intent is tested on natural host-foot rows before
+        # a historical success can return. Exhaust that row's existing columns
+        # first: a ground flag refusal is feedback for the same row, not a
+        # reason to discard the stated reading and accept another one.
+        for offsets in preferred_rows:
+            columns = [
+                (group, (0.0, GAP)) for group in offsets
+            ]
+            column_count = math.prod(len(lanes) for _group, lanes in columns)
+            for outward in (None, *_joint_lane_combinations(columns, column_count)):
+                if ctx.service_build_attempts >= ctx.budget.max_candidates:
+                    return
+                attempt = replace(
+                    service_seed, origins=dict(service_seed.origins),
+                    poses=dict(service_seed.poses),
+                    service_group_plans=(), service_group_ports=())
+                refusal = _seat_service_groups(
+                    ctx, attempt, row_offsets=offsets, column_offsets=outward)
+                label = "ordered service rows " + ", ".join(
+                    f"{group} {offset:+g}" for group, offset in offsets.items())
+                if outward is not None:
+                    label += "; columns " + ", ".join(
+                        f"{group} {offset:+g}" for group, offset in outward.items())
+                yield label, attempt if refusal is None else None, refusal
+        if placement_failure is not None:
+            yield "the binder's own seat", None, placement_failure
+            return
+        # Keep every historical attempt first. The generator is resumed only
+        # after its caller's complete build refused the previous placement.
+        for label, attempt in initial_attempts:
+            yield label, attempt, None
+        if service_seed is None or ctx.service_build_attempts >= ctx.budget.max_candidates:
+            return
+        choices = _service_group_row_choices(ctx, service_seed)
+        # The enumerator's limit also cuts each lane list before dropping its
+        # seed. Give it the finite seat range, not the remaining full builds:
+        # a refused seat has not spent a build and must not hide a later row.
+        combinations = math.prod(len(lanes) for _group, lanes in choices)
+        row_alternatives = _joint_lane_combinations(choices, combinations)
+
+        def service_offsets():
+            # Preserve all historical rows before adding the existing outward
+            # column rung. The complete-build caller resumes only on refusal.
+            for offsets in row_alternatives:
+                yield offsets, None
+            columns = [
+                (group.id, (0.0, GAP))
+                for group in ctx.presentation.service_groups
+            ]
+            column_count = math.prod(len(lanes) for _group, lanes in columns)
+            for outward in _joint_lane_combinations(columns, column_count):
+                for offsets in ({}, *row_alternatives):
+                    yield offsets, outward
+
+        for offsets, outward in service_offsets():
+            if ctx.service_build_attempts >= ctx.budget.max_candidates:
+                return
+            attempt = replace(
+                service_seed, origins=dict(service_seed.origins),
+                poses=dict(service_seed.poses),
+                service_group_plans=(), service_group_ports=())
+            refusal = _seat_service_groups(
+                ctx, attempt, row_offsets=offsets, column_offsets=outward)
+            label = "service rows " + ", ".join(
+                f"{group} {offset:+g}" for group, offset in offsets.items())
+            if outward is not None:
+                label += "; columns " + ", ".join(
+                    f"{group} {offset:+g}" for group, offset in outward.items())
+            yield label, attempt if refusal is None else None, refusal
+
     trials: list[str] = []
     first: GrammarFailure | None = None
     first_violations: list[str] = []
-    for label, attempt in [*attempts, ("the binder's own seat", placed)]:
-        built, failure, violations = _build_one_variant(
-            ctx, variant, fallbacks, placement_override=attempt,
-        )
+    for label, attempt, seating_failure in candidates():
+        if seating_failure is None:
+            if has_service_groups:
+                if ctx.service_build_attempts >= ctx.budget.max_candidates:
+                    break
+                ctx.service_build_attempts += 1
+            built, failure, violations = _build_one_variant(
+                ctx, variant, fallbacks, placement_override=attempt,
+            )
+        else:
+            built, failure, violations = None, seating_failure, []
+        if (
+            seating_failure is None
+            and built is None
+            and has_service_groups
+            and failure is not None
+            and "has no clear upright hang" in failure.detail
+            and ctx.local_flag_repair_seed is None
+        ):
+            ctx.local_flag_repair_seed = (
+                variant,
+                replace(
+                    attempt,
+                    origins=dict(attempt.origins),
+                    poses=dict(attempt.poses),
+                ),
+                tuple(fallbacks),
+            )
         if built is not None:
             built.series_trials = tuple(trials)
             return built, None, violations
@@ -19625,7 +21595,7 @@ def _build_candidate(
         )
         if first is None:
             first, first_violations = failure, violations
-    if first is not None and attempts:
+    if first is not None and len(trials) > 1:
         first = GrammarFailure(
             category=first.category, subject=first.subject,
             detail=(
@@ -19837,6 +21807,24 @@ def _conductor_covered(
     return False
 
 
+def _legs_carried(points, runs) -> bool:
+    """Is every orthogonal leg of this run carried by one conductor of the net?
+
+    A seat's lead is one run of copper, but its pad leg may be carried by the
+    channel or member path it stands on: the drawing then holds the lead's
+    remaining legs and the channel holds the first. This asks the same question
+    leg by leg — no leg missing, no leg on another line, each leg inside a run
+    that is really drawn. A run that is only partly covered fails, as before.
+    """
+    run = tuple((float(p[0]), float(p[1])) for p in points)
+    if len(run) < 2:
+        return False
+    for start, end in zip(run, run[1:]):
+        if not _conductor_covered((start, end), runs):
+            return False
+    return True
+
+
 def _conductor_key(
     points: Sequence[Sequence[float]],
 ) -> tuple[tuple[float, float], ...]:
@@ -19881,13 +21869,77 @@ def _path_first_plan(
 
     new_page = _service_layout_page(ctx.presentation)
 
+    # The copper a seat's lead may lean on: every channel and every member path
+    # of the same net, known before the first lead is added. A lead's pad leg
+    # that this copper already carries is not drawn twice; channels and member
+    # paths themselves are never trimmed.
+    lean: dict[str, list[tuple[tuple[float, float], ...]]] = {}
+    for net_id, runs in channels.items():
+        for run in runs:
+            lean.setdefault(net_id, []).append(
+                tuple((float(p[0]), float(p[1])) for p in run.points))
+    for plan in terminal.plans:
+        for item in plan.assignments:
+            for _member, path in item.paths:
+                if len(path) > 1:
+                    lean.setdefault(plan.net, []).append(
+                        tuple((float(p[0]), float(p[1])) for p in path))
+
     def covered(net: str, points) -> bool:
         return new_page and _conductor_covered(points, drawn_runs.get(net, ()))
 
-    def add(net: str, points) -> None:
+    def trim_lead(net: str, points):
+        """A lead's end legs that the net's own copper already carries.
+
+        Only a leg wholly inside one straight run of that copper is dropped, and
+        only from the ends: the lead keeps every bend of its own, and its first
+        remaining point still lies on the copper it leans on. Anything that
+        cannot be proven that way is left exactly as it is — a lead is never
+        shortened into a flag that hangs on nothing.
+        """
+        runs = lean.get(net, ())
+        run = [(float(p[0]), float(p[1])) for p in points]
+        while len(run) > 2:
+            if _conductor_covered((run[0], run[1]), runs):
+                run.pop(0)
+            elif _conductor_covered((run[-2], run[-1]), runs):
+                run.pop()
+            else:
+                break
+        if len(run) < 2:
+            return None
+
+        def on_copper(point) -> bool:
+            for one in runs:
+                for start, end in zip(one, one[1:]):
+                    if (abs(start[0] - end[0]) <= 1e-9
+                            and abs(point[0] - start[0]) <= 1e-9
+                            and min(start[1], end[1]) - 1e-9 <= point[1]
+                            <= max(start[1], end[1]) + 1e-9):
+                        return True
+                    if (abs(start[1] - end[1]) <= 1e-9
+                            and abs(point[1] - start[1]) <= 1e-9
+                            and min(start[0], end[0]) - 1e-9 <= point[0]
+                            <= max(start[0], end[0]) + 1e-9):
+                        return True
+            return False
+
+        pad = (float(points[0][0]), float(points[0][1]))
+        # A trimmed lead must still stand on the copper that carried its leg;
+        # one that would hang on nothing is kept whole and refused elsewhere.
+        if tuple(run[0]) != pad and not on_copper(tuple(run[0])):
+            return None
+        return tuple(run)
+
+    def add(net: str, points, lead: bool = False) -> None:
         key = (net, _conductor_key(points))
         if key in seen or covered(net, points):
             return
+        if lead:
+            trimmed = trim_lead(net, points)
+            if trimmed is None:
+                return
+            points = trimmed
         seen.add(key)
         run = tuple((float(item[0]), float(item[1])) for item in points)
         drawn_runs.setdefault(net, []).append(run)
@@ -19901,10 +21953,12 @@ def _path_first_plan(
     for plan in terminal.plans:
         for item in plan.assignments:
             if len(item.seat.lead) > 1:
-                add(plan.net, item.seat.lead)
+                add(plan.net, item.seat.lead, lead=True)
             for _member, path in item.paths:
                 if len(path) > 1:
                     add(plan.net, path)
+    for carrier in terminal.carriers:
+        add(carrier.net, carrier.points)
     for _net, runs in terminal.signals.segments:
         for run in runs:
             add(run.net, run.points)
@@ -19943,6 +21997,20 @@ def _path_first_plan(
             f"net {net_id}: the path-first pre-flight found no free run, so the "
             "generic fallback names it at every pin (the same carrier and reason "
             "the compiler always states — not a direct wire)")
+    # 548D3D-P1D: under `textPlacement: native-attr` the host prints a name with
+    # its attribute API at the label's own box, so the compiler has to say which
+    # box carries it -- that is the `text_mode` mark, and the old build sets it
+    # right before the plan is assembled (:func:`_native_label_dedupe`). The
+    # path-first plan is assembled here, after that pass, so it never saw the
+    # mark: a CLI `draw plan` from this page stated six names and no label text.
+    # The same pass is asked here, on the same label list and the same
+    # conductors: one name per **continuous** run, each independent carrier
+    # keeping its own, and a flag-stated net untouched.
+    if _native_text_placement(ctx):
+        note = _native_label_dedupe(
+            labels, segments, {item.net for item in symbols})
+        if note:
+            notes.append(note)
     return LayoutPlan(
         source=LayoutSource(
             circuit_sha256=ctx.circuit.sha256(),
@@ -19989,17 +22057,25 @@ def _path_first_audit(
     # that single join is what a channel is for. Every other run that reaches two
     # assignments is still a named refusal.
     channel_keys: set[tuple[str, tuple[tuple[float, float], ...]]] = set()
+
+    def _conductor(points) -> tuple[tuple[float, float], ...]:
+        """The run as the drawing states it: the plan compresses a service
+        page's circuits, so both sides are read through the same ruler."""
+        run = tuple(points)
+        return _conductor_key(
+            _compress_run(run) if _service_layout_page(ctx.presentation) else run)
+
     channels, _channel_problem = _panel_channels(
         ctx, placed,
 )
     for net_id, items in channels.items():
         for segment in items:
             points = tuple((float(p[0]), float(p[1])) for p in segment.points)
-            channel_keys.add((net_id, _conductor_key(points)))
+            channel_keys.add((net_id, _conductor(points)))
     # every seat lead and member path is a conductor of its own net, point for
     # point — or a straight run the plan already carries on the same line (a
     # channel and the member path to it are one conductor, drawn once).
-    drawn = {(item.net, _conductor_key(item.points)) for item in plan.segments}
+    drawn = {(item.net, _conductor(item.points)) for item in plan.segments}
     drawn_runs: dict[str, list[tuple[tuple[float, float], ...]]] = {}
     for item in plan.segments:
         drawn_runs.setdefault(item.net, []).append(
@@ -20014,11 +22090,15 @@ def _path_first_audit(
                 if len(points) <= 1:
                     continue
                 if (
-                    (rail.net, _conductor_key(points)) not in drawn
+                    (rail.net, _conductor(points)) not in drawn
                     and not (
                         _service_layout_page(ctx.presentation)
-                        and _conductor_covered(
-                            points, drawn_runs.get(rail.net, ()))
+                        and (
+                            _conductor_covered(
+                                points, drawn_runs.get(rail.net, ()))
+                            or _legs_carried(
+                                points, drawn_runs.get(rail.net, ()))
+                        )
                     )
                 ):
                     failures.append(_seat_first_refusal(
@@ -20081,6 +22161,69 @@ def _path_first_audit(
                 f"the generic fallback of {net_id!r} is not named at every pin: "
                 f"pins {sorted(pins)} vs names {sorted(named)}",
             ))
+    failures.extend(_path_first_carrier_failures(ctx, placed, terminal, plan))
+    return failures
+
+
+def _path_first_carrier_failures(
+    ctx: _Context,
+    placed: _Placement,
+    terminal: _SeatFirstPathFirstTerminal,
+    plan: LayoutPlan,
+) -> list[GrammarFailure]:
+    """Every port name stands on a real run from its own pin (548D3D-P1A).
+
+    The trigger is the page's own statement -- a service-layout page whose
+    ``labelPolicy.stubMin`` is positive asks for visible ports -- and the set is
+    the compiler's label map minus its generic fallbacks, which is the map the
+    drawing really carries. Each of those names must stand on a conductor from
+    the **original pin** to the name's anchor: a missing run, a zero-length run,
+    a run from another pin or to another anchor is refused by name, because a
+    label with no conductor under it names nothing.
+    """
+    policy = getattr(ctx.presentation, "label_policy", None)
+    stated = float(getattr(policy, "stub_min", 0.0) or 0.0) if policy else 0.0
+    if stated <= 0.0 or not _service_layout_page(ctx.presentation):
+        return []
+    fallbacks = {net for net, _reason in terminal.fallbacks}
+    names = {net for net, _point, _label in terminal.labels} - fallbacks
+    if not names:
+        return []
+    expressions = _expressions(ctx, placed)
+    legs: dict[str, list[tuple[tuple[float, float], tuple[float, float]]]] = {}
+    for item in plan.segments:
+        for start, end in zip(item.points, item.points[1:]):
+            legs.setdefault(item.net, []).append(
+                ((float(start[0]), float(start[1])),
+                 (float(end[0]), float(end[1]))))
+    failures: list[GrammarFailure] = []
+    for net_id, _point, label in terminal.labels:
+        if net_id not in names:
+            continue
+        expression = expressions.get(net_id)
+        if expression is None or expression.style != "label":
+            continue
+        pins = {_key(point) for _member, point in expression.points
+                if point is not None}
+        anchor = _key((float(label.x), float(label.y)))
+        carried = False
+        for start, end in legs.get(net_id, ()):
+            head, tail = _key(start), _key(end)
+            if abs(start[0] - end[0]) + abs(start[1] - end[1]) <= 1e-9:
+                continue
+            if anchor in (head, tail) and ({head, tail} - {anchor}) & pins:
+                carried = True
+                break
+        if carried:
+            continue
+        failures.append(_seat_first_refusal(
+            net_id,
+            f"the declared port name {label.text!r} at "
+            f"{_point_text((label.x, label.y))} has no carrier from its own pin: "
+            f"the plan draws {len(legs.get(net_id, ()))} run(s) of this net and "
+            "none of them joins a pin of the net to the name's anchor — a name "
+            "with no conductor under it names nothing",
+        ))
     return failures
 
 
@@ -20285,6 +22428,12 @@ def _build_one_variant(
     refusal = _yield_panel_foreign_parts(ctx, placed)
     if refusal is not None:
         return None, refusal, []
+    if getattr(placed, "service_group_plans", ()):
+        # 548J-B1: a page that stated a joint seating is drawn from that group's
+        # own complete result — poses, common terminal row, host paths, shared
+        # rails with one local flag each, text and open-port columns. Every
+        # other page keeps the historical build below, byte for byte.
+        return _build_service_group_variant(ctx, variant, placed)
     if getattr(placed, "service_plans", ()):
         # 548D3B3 §36: a page whose placement seated service cells is drawn from
         # the path-first terminal — its texts, its fixed flags, its member paths
@@ -20440,6 +22589,17 @@ def _build_one_variant(
     #: A label-only net is therefore a net with **no conductor on the canvas**.
     flag_downgraded: set[str] = set()
     order = _net_order(ctx, expressions)
+    label_seats: (
+        dict[tuple[str, tuple[float, float]], LayoutLabel] | None
+    ) = {} if label_replay else None
+    # 548P64: singleton name stubs are known before grouping. Reserve them
+    # with the existing label primitive, then carry that exact state into the
+    # flag-seat pass; the two passes must not choose or clear these lanes twice.
+    pre_group_lanes, pre_group_failure = _pre_group_label_lanes(
+        ctx, placed, expressions, order, router, occupied, label_seats,
+    )
+    if pre_group_failure is not None:
+        return None, pre_group_failure, []
     # 543I-2: the one flag grouping (ground and power alike), decided **before**
     # the seats are reserved and long before the first wire. It is the same
     # explicit path 543I-1's visible labels use; every other page keeps 535's
@@ -20450,7 +22610,12 @@ def _build_one_variant(
             panel_seats, _panel_failure = _panel_terminal_seats(ctx, placed)
             if panel_seats:
                 panel_nets = {net for net, _member in panel_seats}
-        _apply_flag_groups(ctx, router, expressions, order, only=panel_nets)
+        grouping_geometry = {} if pre_group_lanes is None else {"placed": placed}
+        grouping_failure = _apply_flag_groups(
+            ctx, router, expressions, order, only=panel_nets, **grouping_geometry,
+        )
+        if grouping_failure is not None:
+            return None, grouping_failure, []
         # 543I-2D: a branch's own host corridor is a keep-out for **flags** only,
         # decided once the groups are known (only a corridor a wire will actually
         # be drawn on is protected) and before any seat is taken.
@@ -20477,14 +22642,13 @@ def _build_one_variant(
     #: a measured label conflict. Off by default: an ordinary build passes `None`,
     #: so the reservation does not wall its trial boxes and the net loop places its
     #: labels exactly as before.
-    label_seats: (
-        dict[tuple[str, tuple[float, float]], LayoutLabel] | None
-    ) = {} if label_replay else None
     #: The map is keyword-only and handed over **only** when the replay build
     #: carries one: an ordinary build then calls this pass with the same nine
     #: arguments it always did, so a wrapper written before the map existed
     #: still sees exactly those.
     extra_seats = {} if label_seats is None else {"label_seats": label_seats}
+    if pre_group_lanes is not None:
+        extra_seats["pre_group_lanes"] = pre_group_lanes
     # 548D3X3C (§34-2, order fix): a panel's host leads are runs of their own
     # nets. They are validated and injected **before** the label/lead reservations
     # run, so every label placed afterwards can see them as existing segments
@@ -20869,7 +23033,9 @@ def _build_one_variant(
                     occupied.append(label.bbox)
                 labels.append(label)
                 solids.append(label.bbox)
-                if net_id in local_label_nets(ctx.presentation):
+                if net_id in local_label_nets(ctx.presentation) or _declared_input_wire(
+                    ctx, net_id, len(expression.points)
+                ):
                     # 534: this label is the net's name and it is anchored on the
                     # pin itself — a name with no conductor under it. It stays
                     # here for now because every pass below reads `labels`;
@@ -22050,13 +24216,11 @@ def _flag_anchor(
                 # endpoint it deliberately did not ask about.
                 continue
             if _close(length, 0.0):
-                # 069 sec.8's last resort is "no lead at all" — but 175/B-2's
-                # preference must not be what pushes a flag off the page: a rung it
-                # only *crowded* is the answer the ladder owed before 175, so it is
-                # returned here rather than falling through to the refusal.
-                if fallback is not None:
-                    return fallback
-                return corner, None, natural
+                # Zero is the whole ladder's fallback, not this round's: the
+                # horizontal unturned shapes must be tried after the bent ones.
+                # The final return preserves the first crowded legal shape, or
+                # no lead when every nonzero shape was refused.
+                continue
             for hang in hangs:
                 for jog in jogs:
                     anchor = corner if _close(jog, 0.0) else _rounded(
@@ -23324,60 +25488,26 @@ def _joint_flag_corridor_seats(
     return planned
 
 
-def _lead_lane_reservations(
+@dataclass
+class _LeadLaneState:
+    """One reservation picture shared by initial grouping and later flag seats."""
+
+    tips: set[tuple[float, float]]
+    taken: dict[tuple[float, float], str]
+    service_walls: list[Box]
+    reserved_labels: set[str] = field(default_factory=set)
+    label_plan: dict[tuple[str, tuple[float, float]],
+                     tuple[tuple[float, float], tuple[float, float],
+                           list[tuple[float, float]]]] = field(default_factory=dict)
+
+
+def _start_lead_lanes(
     ctx: _Context,
     placed: _Placement,
     expressions: Mapping[str, _Expression],
-    net_order: Sequence[str],
     router: _Router,
-    occupied: Sequence[Box],
-    solids: list[Box],
-    bodies: Sequence[Box] | None,
-    ordinary_seats: set[tuple[str, str]] | None = None,
-    *,
-    label_seats: dict[tuple[str, tuple[float, float]], "LayoutLabel"] | None = None,
-) -> list[Box]:
-    """145a T3: promise every **lead the plan will draw** its lane, before any wire.
-
-    The wall this answers was measured on 144's flyback page: the wires are drawn
-    first and the flags last, so by the time a ground pad asks for its flag the
-    lane it would hang on is already taken. `T1.6`'s lead had to cut `SEC_12V`'s
-    trunk and `R8.2`'s had seventeen refusals; refusing the page was the honest
-    answer to a question that should never have been asked — the compiler knows
-    which pins are going to be flagged *before* it routes anything.
-
-    Three kinds of lead are reserved, and they are the same kind of thing: a run
-    the finished drawing will carry, which the wiring must not take first.
-
-    * a **flag's lead** — asked of :func:`_flag_pin_lead`, the *same* function the
-      placement calls, so the lane promised here is the lane drawn there. The
-      answer's nodes — the lead and the flag's own box (glyph, name text, 069
-      sec.8's clearance) — are reserved.
-    * a **label's name stub** (:func:`_label_stub_lane`) — the compiler already
-      decides the label's box side (:func:`_label_at`), and the page layer draws
-      the stub out that side (057/099d). Reserving its first rung keeps a wire
-      from taking it: measured on the CH340 page, where `V3`'s wire had to move
-      off the flag it used to cut and landed in the row `D+`'s stub leaves on,
-      which pushed that stub 5 units *into* the symbol — the shape 099e measured
-      as unreadable.
-    * since 148, a **wire-style net's own flag** — 069 sec.7's rail flag and
-      088b's ground outlet, whose seats are decided and reserved here by
-      :func:`_seat_wire_flags`, because the rails they hang off are exactly what
-      this pass runs before (:func:`_wire_flag_seats`).
-
-    Everything goes into ``router.reserved`` against the net that owns it, and
-    every wire of another net then treats those nodes as walls
-    (``_Router._wall``, :func:`_span_free`, :func:`_vertex_clear`). A reservation
-    that would stand on some part's pin tip, or that another net has already
-    spoken for, is **not** taken: the lead is then drawn exactly as it was before
-    this pass existed, and refused with 074's measurement if it truly does not
-    fit. Nothing is taken away — the lane only ever adds room.
-
-    Fills ``router.flag_walls``, which the caller folds into ``router.boxes``: the
-    whole extent of every flag seated here, the box no wire of **any** net may
-    enter. A reservation keeps *other* nets off a lane; this keeps a flag's own
-    rail off its pennant too, which is the half 147 measured on `test/P1`.
-    """
+) -> _LeadLaneState:
+    """Initialize the original reservation pass once, before either reader."""
     # Every pin tip on the page. A reserved node that is one of them would wall
     # off a connection some wire has to make, which is worse than the crowded
     # flag this pass exists to avoid.
@@ -23403,6 +25533,138 @@ def _lead_lane_reservations(
     #: another net (measured: +5V) off the shunt's own return pad, which is what
     #: turned "route around the text" into a GND/+5V short.
     _reserve_service_returns(ctx, placed, router, taken, tips)
+    # 548L: a **straight two-foot wire net's own corridor** is the fourth kind of
+    # lead promised here, and it is promised **before** the flag seats and the
+    # label stubs (the same order 145a/534 r15/548K established). A flag that
+    # would be planted "next to its own pad" is then brought out on another rung
+    # by the existing strict seat question (`_flag_room` reads `router.reserved`).
+    # The switch is the same `labelPolicy.stubLaneReserve` 548K uses, and a
+    # service page keeps its own port-column mechanism.
+    if _stub_lane_reserved(ctx.presentation) and not _service_layout_page(
+        ctx.presentation
+    ):
+        _reserve_pending_runs(ctx, expressions, router, taken, tips)
+    return _LeadLaneState(tips, taken, service_walls)
+
+
+def _pre_group_label_lanes(
+    ctx: _Context,
+    placed: _Placement,
+    expressions: Mapping[str, _Expression],
+    net_order: Sequence[str],
+    router: _Router,
+    occupied: Sequence[Box],
+    label_seats: dict[tuple[str, tuple[float, float]], LayoutLabel] | None,
+) -> tuple[_LeadLaneState | None, GrammarFailure | None]:
+    """Expose known singleton stubs to the original walking-distance ruler.
+
+    Local/paired carriers and panel channels keep their existing seat order.
+    Only the ordinary singleton-label path has no dependency on flag groups.
+    Its original primitive chooses the lanes once; the later pass consumes the
+    same map and skips exactly those label decisions.
+    """
+    if (
+        not _flag_grouping(ctx)
+        or not _stub_lane_reserved(ctx.presentation)
+        or _service_layout_page(ctx.presentation)
+        or getattr(placed, "panel_plans", ())
+        or local_label_nets(ctx.presentation)
+        or _local_label_partner_nets(ctx.presentation, list(net_order))
+    ):
+        return None, None
+    singleton_labels = [
+        net_id for net_id in net_order
+        if expressions[net_id].style == "label"
+        and len(expressions[net_id].points) == 1
+    ]
+    if not singleton_labels:
+        return None, None
+    state = _start_lead_lanes(ctx, placed, expressions, router)
+    for net_id in singleton_labels:
+        plan, failure = _reserve_label_stubs(
+            ctx, placed, net_id, expressions[net_id], router, occupied,
+            state.tips, state.taken, state.service_walls, seats=label_seats,
+        )
+        if failure is not None:
+            return state, failure
+        state.label_plan.update(plan)
+        state.reserved_labels.add(net_id)
+    router.reserved_exempt = ""
+    return state, None
+
+
+def _lead_lane_reservations(
+    ctx: _Context,
+    placed: _Placement,
+    expressions: Mapping[str, _Expression],
+    net_order: Sequence[str],
+    router: _Router,
+    occupied: Sequence[Box],
+    solids: list[Box],
+    bodies: Sequence[Box] | None,
+    ordinary_seats: set[tuple[str, str]] | None = None,
+    *,
+    label_seats: dict[tuple[str, tuple[float, float]], "LayoutLabel"] | None = None,
+    pre_group_lanes: _LeadLaneState | None = None,
+) -> list[Box]:
+    """145a T3: promise every **lead the plan will draw** its lane, before any wire.
+
+    The wall this answers was measured on 144's flyback page: the wires are drawn
+    first and the flags last, so by the time a ground pad asks for its flag the
+    lane it would hang on is already taken. `T1.6`'s lead had to cut `SEC_12V`'s
+    trunk and `R8.2`'s had seventeen refusals; refusing the page was the honest
+    answer to a question that should never have been asked — the compiler knows
+    which pins are going to be flagged *before* it routes anything.
+
+    Four kinds of lead are reserved, and they are the same kind of thing: a run
+    the finished drawing will carry, which the wiring must not take first.
+
+    * a **flag's lead** — asked of :func:`_flag_pin_lead`, the *same* function the
+      placement calls, so the lane promised here is the lane drawn there. The
+      answer's nodes — the lead and the flag's own box (glyph, name text, 069
+      sec.8's clearance) — are reserved.
+    * a **label's name stub** (:func:`_label_stub_lane`) — the compiler already
+      decides the label's box side (:func:`_label_at`), and the page layer draws
+      the stub out that side (057/099d). Reserving its first rung keeps a wire
+      from taking it: measured on the CH340 page, where `V3`'s wire had to move
+      off the flag it used to cut and landed in the row `D+`'s stub leaves on,
+      which pushed that stub 5 units *into* the symbol — the shape 099e measured
+      as unreadable.
+    * since 148, a **wire-style net's own flag** — 069 sec.7's rail flag and
+      088b's ground outlet, whose seats are decided and reserved here by
+      :func:`_seat_wire_flags`, because the rails they hang off are exactly what
+      this pass runs before (:func:`_wire_flag_seats`).
+    * since 548L, a **straight two-foot wire net's own run** — the conductor the
+      wiring pass will draw between its two pads, promised by
+      :func:`_reserve_pending_runs`. A flag planted "next to its own pad" can
+      otherwise land exactly on that corridor: measured on 548J's WiFi canvas
+      (evidence/548J/wifi-canvas §14–§17), a decoupling pad's ground flag stood
+      25 units from its pad with its glyph box and lead cutting both straight
+      signal runs, so the wiring pass found no route and named the two nets with
+      two stubs each. The reservation is taken **before** the flag seats, so the
+      existing seat search (:func:`_flag_room`'s fourth, strict question, which
+      reads ``router.reserved``) brings the flag out on another rung instead of
+      on the corridor. Only a page that states ``labelPolicy.stubLaneReserve``
+      gets it (:func:`_stub_lane_reserved`); a service page keeps its own port
+      columns and is not reserved here.
+
+    Everything goes into ``router.reserved`` against the net that owns it, and
+    every wire of another net then treats those nodes as walls
+    (``_Router._wall``, :func:`_span_free`, :func:`_vertex_clear`). A reservation
+    that would stand on some part's pin tip, or that another net has already
+    spoken for, is **not** taken: the lead is then drawn exactly as it was before
+    this pass existed, and refused with 074's measurement if it truly does not
+    fit. Nothing is taken away — the lane only ever adds room.
+
+    Fills ``router.flag_walls``, which the caller folds into ``router.boxes``: the
+    whole extent of every flag seated here, the box no wire of **any** net may
+    enter. A reservation keeps *other* nets off a lane; this keeps a flag's own
+    rail off its pennant too, which is the half 147 measured on `test/P1`.
+    """
+    state = pre_group_lanes or _start_lead_lanes(
+        ctx, placed, expressions, router,
+    )
+    tips, taken, service_walls = state.tips, state.taken, state.service_walls
     #: The strict question: while the lanes are being decided, a flag's box may
     #: not swallow a lane another flag already holds (`_flag_room`). Cleared
     #: again below, so the placement asks the original question.
@@ -23412,7 +25674,7 @@ def _lead_lane_reservations(
     #: :func:`_local_label_carriers`, so the two passes cannot choose differently.
     plan: dict[tuple[str, tuple[float, float]],
                tuple[tuple[float, float], tuple[float, float],
-                     list[tuple[float, float]]]] = {}
+                     list[tuple[float, float]]]] = dict(state.label_plan)
     # 534 r15: the local-label carriers are promised their lanes **first**. The
     # document says these pins are named by a short carrier before any flag is
     # placed, and a flag lead reserved earlier owns the very bands those rows need
@@ -23420,6 +25682,26 @@ def _lead_lane_reservations(
     # shape at all. A document with no `localLabelObligations` keeps the single
     # pass in the order it always had, so its drawing does not move by one unit.
     local_first = local_label_nets(ctx.presentation)
+    #: 548K: a page that states ``labelPolicy.stubMin`` is asking for a **visible
+    #: name stub** on the nets it leaves unnamed (:func:`_label_at`'s own reading,
+    #: and the floor `drawapply._label_stub_candidates` honours). Such a stub is a
+    #: lead the finished drawing must carry, so its band is promised **before** the
+    #: flag lanes and before any conductor — the same reason 534 r15 promises a
+    #: declared local carrier first. Without this the flag leads and the host
+    #: branches took the band, and the delivery side then refused with "no free
+    #: name stub" while the compiler had already called the candidate legal
+    #: (evidence/548J/wifi-canvas §14–§17: the module's right pin column at x=250,
+    #: `3V3`'s lead on that column, the host branch vertical at x=255).
+    #: Only the **single-foot** label nets are moved up: a net with a conductor is
+    #: named by the wire it rides. The switch is `labelPolicy.stubLaneReserve`,
+    #: default off: a page that does not state it (and a page that states no
+    #: ``stubMin``) keeps the order it always had, so its drawing does not move by
+    #: one unit.
+    if _stub_lane_reserved(ctx.presentation):
+        local_first = local_first | {
+            net for net in net_order
+            if expressions[net].style == "label" and len(expressions[net].points) == 1
+        }
     passes = [list(net_order)]
     if local_first:
         passes = [[net for net in net_order if net in local_first],
@@ -23432,6 +25714,13 @@ def _lead_lane_reservations(
                           list[tuple[float, float]], Box]] = {}
     rows_by_net: dict[str, list[Box]] = {}
     partner_nets = _local_label_partner_nets(ctx.presentation, list(net_order))
+    #: 548D3D-T1: the real flag boxes this pass has already promised **to this
+    #: net**. A lane exemption for one's own net serves wire connectivity
+    #: (:func:`_take_lane`) — it is not a licence for two sibling flags to stand
+    #: in one another's glyph. A reservation that would overlap one of these is
+    #: dropped, and the pin keeps the ordinary ladder (which does see the
+    #: sibling's box through `solids`).
+    sibling_flags: dict[str, list[Box]] = {}
     #: 548D3G: the pads whose flags press on each other as first grades are
     #: seated **jointly** here, before any lane is taken — the ladder's own
     #: alternates, chosen once, in pad order. A page with no such pair gets
@@ -23452,6 +25741,8 @@ def _lead_lane_reservations(
       for net_id in ordered:
         expression = expressions[net_id]
         if expression.style == "label":
+            if net_id in state.reserved_labels:
+                continue
             group = partner_nets.get(net_id)
             if group is not None and any(
                 expressions[net].style != "label" for net in group
@@ -23503,13 +25794,21 @@ def _lead_lane_reservations(
             for start, end in zip(lead, lead[1:]):
                 cells |= _lattice_nodes(router, start, end)
             cells.add(_key(anchor))
-            cells |= _nodes_in_box(
-                router,
-                _flag_box(
-                    profile, _flag_rotation((0.0, hang), family), anchor, net_id
-                ),
+            flag_box = _flag_box(
+                profile, _flag_rotation((0.0, hang), family), anchor, net_id
             )
-            taken_ok = _take_lane(taken, cells, tips, own, net_id)
+            cells |= _nodes_in_box(router, flag_box)
+            # 548D3D-T1: two sibling flags of one net may share a **lane** (the
+            # same-net exemption in `_take_lane` exists for wire connectivity)
+            # but never a glyph: a box that overlaps one this pass already
+            # promised is refused, exactly like a foreign lane, and the pin
+            # keeps the ordinary ladder.
+            taken_ok = _take_lane(taken, cells, tips, own, net_id) and not any(
+                _overlaps(flag_box, other)
+                for other in sibling_flags.get(net_id, ())
+            )
+            if taken_ok:
+                sibling_flags.setdefault(net_id, []).append(flag_box)
             _remember_lead(router, net_id, family, lead)
             if taken_ok:
                 # 534 fix r3: the lane promised here is the lead the flag will be
@@ -23679,6 +25978,55 @@ def _reserve_service_returns(
         _take_lane(taken, cells, tips, {_key(return_point)}, net)
 
 
+def _reserve_pending_runs(
+    _ctx: _Context,
+    expressions: Mapping[str, _Expression],
+    router: _Router,
+    taken: dict[tuple[float, float], str],
+    tips: set[tuple[float, float]],
+) -> None:
+    """548L: promise a straight two-foot ``wire`` net the corridor it will draw.
+
+    The fourth kind of lead this pass knows about is the wiring pass's own
+    conductor. A two-pad net the document promises as a wire has exactly one
+    honest shape when its pads are aligned: the straight run between them. But
+    the flag seats are decided before that run is routed, and a flag planted
+    "next to its own pad" can stand right on the corridor — measured on 548J's
+    WiFi canvas (evidence/548J/wifi-canvas §14–§17): a decoupling cap's ground
+    flag, 25 units from its pad, had its glyph box `(310,680)-(330,699)` and its
+    lead `(320,705)-(320,680)` cutting both horizontal runs. The wiring pass then
+    answered ``wired route not found; labelled instead`` and the two nets were
+    printed as two named stubs each, while the geometry was "legal".
+
+    The corridor is booked into ``taken`` (= ``router.reserved``) against the
+    net that owns it, so a **foreign** flag box or conductor treats it as a wall
+    (`_flag_room`'s strict fourth question, `_take_lane`'s own-net exemption).
+    The net's own two pads are allowed to sit on their own corridor; any foreign
+    pin tip or a cell another net already holds refuses the whole reservation,
+    and the drawing keeps the shape it had before this function existed — a
+    reservation only ever adds room, it never takes it away.
+
+    Only ``style == "wire"`` nets with exactly two pads are considered, and only
+    when :func:`_rounded` puts the pads on one axis; anything else is left to
+    the router rather than guessed at. The caller gates the call on
+    ``labelPolicy.stubLaneReserve`` and keeps service pages on their own
+    port-column mechanism.
+    """
+    for net_id, expression in expressions.items():
+        if expression.style != "wire" or len(expression.points) != 2:
+            continue
+        start = _rounded(expression.points[0][1])
+        end = _rounded(expression.points[1][1])
+        if abs(start[0] - end[0]) > 1e-6 and abs(start[1] - end[1]) > 1e-6:
+            # Two pads on neither axis: the run has a bend, and which one is the
+            # router's decision, not something this pass may invent.
+            continue
+        _take_lane(
+            taken, _lattice_nodes(router, start, end), tips,
+            {_key(start), _key(end)}, net_id,
+        )
+
+
 def _service_label_avoid(
     ctx: _Context, symbols: Sequence[LayoutPowerSymbol], router: _Router
 ) -> list[Box]:
@@ -23781,6 +26129,41 @@ def _local_label_candidate(
             f"{min(g for g, _ in close):g} units from another row of net {net_id}"
         )
     return (direction, far, list(path), row, cells | row_cells), None
+
+
+def _same_net_row_gap(
+    row: Box,
+    far: tuple[float, float],
+    row_of: Sequence[Box | None],
+    nets: Sequence[str],
+    index: int,
+) -> str | None:
+    """The earlier name **of this same net** that is closer than drawlint's gap (548P135).
+
+    This is the ruler :func:`_local_label_candidate` uses, read the way that pass
+    reads it: two names of one net closer than ``L5_DUPLICATE_NET_GAP`` are one
+    unreadable row and are refused; a row of **another** net is not a duplicate at
+    all (`drawlint` names the rule *duplicate net* gap), and a neighbouring net's
+    row beside this one is an ordinary picture the box phase already measures for
+    text collision.
+
+    Only rows **already printed for this net** count (``row_of[:index]``): a later
+    carrier's row does not exist yet when this run is re-selected, and a row the
+    same net will print elsewhere cannot refuse the run that fills it.
+    """
+    from .drawlint import L5_DUPLICATE_NET_GAP
+
+    net_id = nets[index]
+    for other_index, other in enumerate(row_of[:index]):
+        if other is None or nets[other_index] != net_id:
+            continue
+        gap = _row_gap(row, other)
+        if gap < L5_DUPLICATE_NET_GAP:
+            return (
+                f"the name at {_point_text(far)} would print {gap:g} units "
+                f"from another row of net {net_id}"
+            )
+    return None
 
 
 def _local_label_pin_pairs(
@@ -24004,11 +26387,29 @@ def _reserve_label_stubs(
     ``committed`` so its own call replays it instead of choosing a second length.
     """
     router.reserved_exempt = net_id
+    #: 548K: the lane a label is promised is as long as the name stub the
+    #: **delivery side** will be required to draw. ``drawapply._label_stub_candidates``
+    #: honours ``labelPolicy.stubMin`` as its floor (40 units on the page that
+    #: measured this), while this pass promised ``LABEL_LANE_STEPS`` (10) — so the
+    #: wiring was free to take the 30 units between them and ``draw plan`` then
+    #: refused with "no free name stub" on a candidate the compiler had already
+    #: called legal (evidence/548J/wifi-canvas §14–§17, measured: the pin at
+    #: x=250, the neighbouring net's wire at x=255). A document states **one**
+    #: length; both readers now read the same key. Pages whose service ports
+    #: already consume it (:func:`_seat_first_port_columns`) keep their own
+    #: pass. This is behind the explicit switch `labelPolicy.stubLaneReserve`
+    #: (default off): a page that does not state it keeps ``LABEL_LANE_STEPS``
+    #: and does not move by one unit.
     reach = LABEL_LANE_STEPS * router.grid
+    if _stub_lane_reserved(ctx.presentation) and not _service_layout_page(
+        ctx.presentation
+    ):
+        reach = max(reach, _stated_stub_floor(ctx.presentation))
     plan: dict[tuple[str, tuple[float, float]],
                tuple[tuple[float, float], tuple[float, float],
                      list[tuple[float, float]]]] = {}
-    local = net_id in local_label_nets(ctx.presentation)
+    input_wire = _declared_input_wire(ctx, net_id, len(expression.points))
+    local = net_id in local_label_nets(ctx.presentation) or input_wire
     rows: list[Box] = (
         rows_by_net.setdefault(net_id, []) if rows_by_net is not None else []
     )
@@ -24082,9 +26483,17 @@ def _reserve_label_stubs(
             )
         else:
             paths = _local_label_paths(point, direction, router.grid)
-            if native:
+            if native or (input_wire and _label_stub_policy(ctx) == LABEL_STUB_STRAIGHT):
                 paths = [item for item in paths if len(item[1]) == 2]
             for candidate_direction, path in paths:
+                if input_wire:
+                    length = sum(math.dist(start, stop) for start, stop in zip(path, path[1:]))
+                    if length < _stated_stub_floor(ctx.presentation):
+                        continue
+                    if not all(_span_free(router, start, stop, tips - {_key(point)})
+                               for start, stop in zip(path, path[1:])):
+                        reasons.append(f"the reserved input carrier to {_point_text(path[-1])} is blocked")
+                        continue
                 entry, reason = _local_label_candidate(
                     ctx, net_id, point, candidate_direction, path, router,
                     tips, taken, rows,
@@ -24424,6 +26833,13 @@ def _flag_pins_seats(
         ctx, placed, net_id, profile, members, router, blocked, solids, bodies,
         stub=stub,
     )
+    #: 548D3D-T1: what this **call** has already drawn (the sibling flags of
+    #: this net, appended by `_place_flag`). The replay used to check its seat
+    #: against `router.boxes` only, so two siblings could be promised one room
+    #: by the lane pass and both land in it — the duplicate anchors measured on
+    #: the forced three-island page. A seat that overlaps one is dropped here.
+    drawn_from = len(occupied)
+    solids_from = len(solids)
     for member, point in members:
         seat = router.flag_seats.get((net_id, member))
         ordinary = (net_id, member) in ordinary_seats
@@ -24463,7 +26879,11 @@ def _flag_pins_seats(
                 if not _vertex_clear(router, vertex):
                     why.append(f"its vertex {_point_text(vertex)} is no longer clear")
             box = _flag_box(profile, rotation, anchor, net_id)
-            for other in router.boxes:
+            # 548D3D-T1: the picture this seat is replayed against includes the
+            # **siblings this call already drew** — they live in `occupied` /
+            # `solids`, not in `router.boxes`, and a replay that cannot see them
+            # is how two flags came to stand in one room.
+            for other in (*router.boxes, *occupied[drawn_from:], *solids[solids_from:]):
                 if _overlaps(box, other):
                     why.append(
                         "its flag box "
@@ -24756,6 +27176,8 @@ def _local_label_carriers(
     preplan: dict[tuple[str, tuple[float, float]],
                   tuple[tuple[float, float], tuple[float, float],
                         list[tuple[float, float]]]] | None = None,
+    blocked_of: Mapping[tuple[str, tuple[float, float]],
+                        set[tuple[float, float]]] | None = None,
 ) -> GrammarFailure | None:
     """534: the short run each pin of a `localLabelObligations` net is named on.
 
@@ -24820,25 +27242,56 @@ def _local_label_carriers(
     fars: list[tuple[tuple[float, float], tuple[float, float]]] = []
     paths: list[list[tuple[float, float]]] = []
     measured: list[list[str]] = []
+    #: 548P135: a run promised by `_lead_lane_reservations` was measured before
+    #: the flags were seated and before the other carriers were laid, so its name
+    #: box can be taken here by an obstacle that did not exist then. Those runs —
+    #: and only those — are re-examined in phase two (`_reselect_promised_run`).
+    reserved_flags: list[bool] = []
+    input_wire_flags: list[bool] = []
+    promised_segments: list[LayoutSegment | None] = []
     for net_id, member, point, original in moves:
         reserved = preplan.get((net_id, point)) if preplan else None
+        input_wire = _declared_input_wire(ctx, net_id, len(own_points[net_id]))
+        if input_wire:
+            if reserved is None:
+                return _local_label_failure(
+                    net_id, member, point, ["the reserved input carrier is missing"],
+                )
+            _direction, far, path = reserved
+            router.reserved_exempt = net_id
+            _set_foreign_edges(router, segments, net_id)
+            blocked = _blocked_points(ctx, placed, net_id, labels, symbols, segments)
+            length = sum(math.dist(start, stop) for start, stop in zip(path, path[1:]))
+            if (not path or path[0] != point or path[-1] != far or length <= 0.0
+                    or length < _stated_stub_floor(ctx.presentation)
+                    or (_label_stub_policy(ctx) == LABEL_STUB_STRAIGHT and len(path) != 2)
+                    or not all(_span_free(router, start, stop, blocked - {_key(point)})
+                               for start, stop in zip(path, path[1:]))):
+                return _local_label_failure(
+                    net_id, member, point, ["the reserved input carrier is no longer a legal visible wire"],
+                )
         if reserved is not None:
             # 534 r15: this carrier's lane was promised by `_lead_lane_reservations`
             # -- the run and its name row are the same ones. The segment is drawn
             # here, once, from that decision; nothing new is reserved.
             direction, far, path = reserved
             pick = (direction, far)
-            segments.append(LayoutSegment(net=net_id,
-                                          points=[tuple(p) for p in path]))
+            promised = LayoutSegment(net=net_id,
+                                     points=[tuple(p) for p in path])
+            segments.append(promised)
             dedicated.add(_key(far))
             nets.append(net_id)
             members.append(member)
             points.append(point)
             parts.append(original.part_id)
-            blocks.append(set())
+            blocks.append(
+                set(blocked_of.get((net_id, point), ())) if blocked_of else set())
             fars.append(pick)
             paths.append([tuple(p) for p in path])
             measured.append([])
+            reserved_flags.append(True)
+            input_wire_flags.append(bool(input_wire))
+            promised_segments.append(promised)
             continue
         lane = _label_stub_lane(original, point)
         if lane[0] == 0.0:
@@ -24911,12 +27364,17 @@ def _local_label_carriers(
         fars.append(pick)
         paths.append([point, pick[1]])
         measured.append(reasons)
+        reserved_flags.append(False)
+        input_wire_flags.append(False)
+        promised_segments.append(None)
 
     # 2) Every far end — and so every row the host will print — is known before
     #    the first box is measured.
     rows: list[Box] = []
+    row_of: list[Box | None] = []
     for index in range(len(nets)):
         row = textmetrics.wire_name_box([list(p) for p in paths[index]], nets[index])
+        row_of.append(row)
         if row is not None:
             rows.append(row)
 
@@ -24932,6 +27390,114 @@ def _local_label_carriers(
             )
             if trial is not None:
                 break
+        if trial is None and reserved_flags[index]:
+            # 548P135: this far end was **promised before this picture existed**.
+            # `_lead_lane_reservations` walked its ladder before the flags were
+            # seated, before the other carriers were laid and before the host
+            # channels were drawn, so a run it called legal can have no free name
+            # box here. Measured on the real MCU sheet: LCD_SCK's 10-unit run is
+            # blocked by a host channel wall that exists only at this point, while
+            # its 35/40 rungs have a free box; the same shape covers LED1_K and
+            # LED2_K. The promise is therefore re-examined where the picture is
+            # complete, with the same rungs the promise used: the refused run and
+            # its row are lifted, the foreign edges are rebuilt without it, and
+            # the first rung legal for the conductor *and* its name box wins.
+            #
+            # Nothing is loosened, and one ruler is deliberately **not** copied
+            # from `_local_label_candidate`: that pass may only ever be handed the
+            # rows of the net it names, while here the whole picture is in view.
+            # The duplicate-net gap is therefore filtered to this net's own
+            # earlier rows (`_same_net_row_gap`) — a neighbouring net's name is a
+            # foreign row, not a duplicate of this one, and refusing on it made
+            # every candidate of LCD_SCK/LED1_K/LED2_K illegal (548P133's 34/34).
+            refused_row = row_of[index]
+            refused_row_position = (
+                rows.index(refused_row) if refused_row is not None else -1
+            )
+            if refused_row is not None:
+                rows[:] = [item for item in rows if item != refused_row]
+            own_segment = promised_segments[index]
+            own_segment_position = (
+                segments.index(own_segment)
+                if own_segment is not None and own_segment in segments else -1
+            )
+            if own_segment is not None and own_segment in segments:
+                segments.remove(own_segment)
+            _set_foreign_edges(router, segments, nets[index])
+            blocked_now = set(blocks[index]) or (
+                _blocked_points(ctx, placed, nets[index], labels, symbols, segments)
+                - own_points.get(nets[index], set())
+            )
+            avoid_now = [*occupied, *flag_boxes, *rows,
+                         *(item.bbox for item in placed)]
+            chosen_run = None
+            refusals: list[str] = []
+            layer_direction = fars[index][0]
+            for candidate_direction, path in _local_label_paths(
+                points[index], layer_direction, router.grid,
+            ):
+                end = path[-1]
+                # A declared input wire keeps its stated floor and its straight
+                # shape: re-selecting may only move it within that contract.
+                if input_wire_flags[index] and (
+                    len(path) != 2
+                    or sum(math.dist(a, b) for a, b in zip(path, path[1:]))
+                    < _stated_stub_floor(ctx.presentation)
+                ):
+                    continue
+                if _key(end) in dedicated:
+                    continue
+                if _carrier_name_reason(path, nets[index]) is not None:
+                    continue
+                if not _label_fits(ctx, nets[index], end):
+                    continue
+                if not all(
+                    _span_free(router, start, stop, blocked_now)
+                    for start, stop in zip(path, path[1:])
+                ):
+                    continue
+                row = textmetrics.wire_name_box([list(p) for p in path], nets[index])
+                if row is None:
+                    continue
+                duplicate = _same_net_row_gap(row, end, row_of, nets, index)
+                if duplicate is not None:
+                    refusals.append(duplicate)
+                    continue
+                for box_rung in range(1, TEXT_ESCALATION_STEPS + 1):
+                    candidate_box = _local_label_trial_box(
+                        nets[index], end, candidate_direction, box_rung,
+                        avoid_now, segments, blocked_now, parts[index],
+                    )
+                    if candidate_box is not None:
+                        chosen_run = (candidate_direction, end, list(path),
+                                      row, candidate_box)
+                        break
+                if chosen_run is not None:
+                    break
+                refusals.append(
+                    f"the run to {_point_text(end)} has no free name box")
+            if chosen_run is not None:
+                candidate_direction, end, path, row, trial = chosen_run
+                fars[index] = (candidate_direction, end)
+                paths[index] = path
+                direction = candidate_direction
+                row_of[index] = row
+                rows.append(row)
+                segments.append(
+                    LayoutSegment(net=nets[index], points=[tuple(p) for p in path])
+                )
+                dedicated.add(_key(end))
+                measured[index].append(
+                    "the promised run was re-selected against the final picture"
+                )
+            else:
+                # Nothing legal now: keep the promise exactly as it was and let
+                # the named refusal below speak — the page is still refused.
+                if refused_row is not None:
+                    rows.insert(refused_row_position, refused_row)
+                if own_segment is not None:
+                    segments.insert(own_segment_position, own_segment)
+                measured[index].extend(refusals[:4])
         if trial is None:
             measured[index].append(
                 f"no free name box for the run to {_point_text(far)}"
@@ -24940,6 +27506,9 @@ def _local_label_carriers(
                 nets[index], members[index], points[index], measured[index],
             )
         trial.stub = _label_stub_policy(ctx)
+        if _declared_input_wire(ctx, nets[index], len(own_points[nets[index]])):
+            trial.stub_min = _stated_stub_floor(ctx.presentation)
+            trial.row_model = ctx.presentation.label_policy.row_model
         placed.append(trial)
 
     for index in range(len(nets)):
@@ -25668,6 +28237,10 @@ def check_grammar(
     # 548D3X3C: the checker re-binds and applies the same panel replacement, so a
     # cell that is not below its host is reported by the layer that owns it.
     binding = _with_panel_groups(binding, presentation_spec, circuit_spec)
+    # 548J-B1: the checker re-binds and applies the same service replacement, so
+    # a joint-seated branch is graded against the host side it was seated on.
+    binding = _with_service_groups(
+        binding, presentation_spec, circuit_spec, _checker_book(profiles))
     if not binding.ok:
         return [GrammarFinding(
             kind=KIND_BINDING_UNPLACED,
@@ -25707,6 +28280,43 @@ def check_grammar(
     axis = _axis(binding)
     progress = _progress(presentation_spec, axis)
     settings = budget or CompileBudget()
+
+    def _drawn_pair(item, points, circuit_spec):
+        """Measure a `near` between the feet one **drawn conductor** joins.
+
+        The plan's own runs answer which pair of pins the page connected: the
+        branch's foot and the host foot its channel leaves are the two ends of
+        one run on a net they share. A plan that drew no such run keeps the old
+        reading, so nothing here can invent a pair the drawing does not carry.
+        """
+        if item.kind != "near":
+            return None
+        nets_a = _part_nets(circuit_spec, item.subject)
+        nets_b = _part_nets(circuit_spec, item.object)
+        shared = set(nets_a.values()) & set(nets_b.values())
+        for net_id in sorted(shared):
+            runs = [
+                segment.points for segment in layout_plan.segments
+                if segment.net == net_id
+            ]
+            if not runs:
+                continue
+            for tag_a in sorted(nets_a):
+                if nets_a[tag_a] != net_id:
+                    continue
+                a = _plan_pin(layout_plan, book, item.subject, tag_a)
+                if a is None:
+                    continue
+                for tag_b in sorted(nets_b):
+                    if nets_b[tag_b] != net_id:
+                        continue
+                    b = _plan_pin(layout_plan, book, item.object, tag_b)
+                    if b is None:
+                        continue
+                    if any(_points_on_one_run(a, b, run) for run in runs):
+                        return (a, b)
+        return None
+
     for item, points in _relation_violations(
         circuit_spec, binding,
         origin_of=lambda part_id: _plan_origin(layout_plan, part_id),
@@ -25720,6 +28330,7 @@ def check_grammar(
             layout_plan, book, part_id, token
         ),
         pair_reading=_pair_reading(presentation_spec),
+        point_override=_drawn_pair,
     ):
         out.append(GrammarFinding(
             kind=KIND_RELATION_BROKEN,
@@ -25869,6 +28480,7 @@ def _relation_violations(
     escape_of: Any = None,
     frame_of: Any = None,
     pair_reading: bool = False,
+    point_override: Any = None,
 ) -> list[tuple[Any, tuple[tuple[float, float], tuple[float, float]]]]:
     """Every relation the given points do not keep.
 
@@ -25891,6 +28503,15 @@ def _relation_violations(
         points = _points_for_relation(
             circuit_spec, item, origin_of=origin_of, pin_of=pin_of,
         )
+        # 548D3D-H3: a service branch's relation is measured between the feet the
+        # page really drew — the seat the BoundPlan chose and the host foot its
+        # channel leaves — not between "the first pin on the shared net", which
+        # is a second choice the drawing never made. The override answers only
+        # for the relations it states; every other one keeps the old reading.
+        if point_override is not None:
+            stated = point_override(item, points, circuit_spec)
+            if stated is not None:
+                points = stated
         if points is None:
             continue
         kind = item.kind
@@ -26459,3 +29080,2513 @@ def _gnd_outlet_finding(
             "088b sec.1 (岳 2026-10-02: 「底轨要有一个、且只要一个出处符号」)"
         ),
     )
+
+
+
+# --------------------------------------------------- 548J-B1: joint seats
+#
+# A `serviceGroups` entry is a statement about the **circuit**: these two-foot
+# branches serve one host and one terminal rail per family, and the reader takes
+# them in as one seating. The parser owns the closed shape
+# (`presentationspec.ServiceGroup`); this section owns the three things a parser
+# cannot: whether the circuit really says that, whether the binding reads the
+# branches on the host side they serve, and the one joint seat the page draws.
+#
+# Nothing here is enabled by a default. Every function returns immediately for a
+# document that states no group, so a pre-548J page keeps its bytes, its digest
+# and its drawing.
+
+
+@dataclass(frozen=True)
+class _JointSeatCell:
+    """One branch of a joint seat, after the host's real pose decided it."""
+
+    part_id: str
+    from_net: str
+    to_net: str
+    from_token: str
+    to_token: str
+    origin: tuple[float, float]
+    pose: SymbolPose
+    from_seat: tuple[float, float]
+    to_seat: tuple[float, float]
+    #: The host feet this branch's signal net lands on, lowest first.
+    host_tokens: tuple[str, ...]
+    #: The signal runs from those feet to the branch's own foot.
+    host_paths: tuple[tuple[tuple[float, float], ...], ...]
+    #: ``(kind, text, box)`` — the part's own printed rows, in page coordinates.
+    text_boxes: tuple[tuple[str, str, Box], ...]
+
+
+@dataclass(frozen=True)
+class _JointSeatRail:
+    """One terminal rail of a joint seat: copper, lead, flag."""
+
+    net: str
+    cls: str
+    symbol_ref: str
+    symbol_hash: str
+    runs: tuple[tuple[tuple[float, float], ...], ...]
+    lead: tuple[tuple[float, float], ...]
+    anchor: tuple[float, float]
+    rotation: float
+    flag_box: Box
+
+
+@dataclass(frozen=True)
+class _JointSeatGroup:
+    """The complete result of one declared group: seats, rails, text, frame."""
+
+    group_id: str
+    host_part: str
+    side: str
+    kind: str
+    cells: tuple[_JointSeatCell, ...]
+    rails: tuple[_JointSeatRail, ...]
+    #: Every branch's signal runs, flattened: the group's own host copper.
+    host_paths: tuple[tuple[tuple[float, float], ...], ...]
+    #: Every box the group's complete drawing occupies — parts, text, host
+    #: paths, rails and flags — measured from the result, never guessed.
+    frame: Box
+    notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _JointSeatPort:
+    """One open signal's reserved run and label, decided before the seats.
+
+    A page that declares `serviceGroups` reserves every single-foot signal the
+    way the seat itself will be drawn: the run, its label and the box the label
+    occupies are one record, made once, so the seats, the flags, the router and
+    the frame all see the same port and the builder never places it again.
+    """
+
+    net: str
+    part_id: str
+    run: tuple[tuple[float, float], ...]
+    label: LayoutLabel
+
+
+def _service_group_parts(presentation_spec: PresentationSpec) -> frozenset[str]:
+    """Every part a `serviceGroups` entry seats (empty when none is stated)."""
+    return frozenset(
+        branch.part
+        for group in (getattr(presentation_spec, "service_groups", ()) or ())
+        for branch in group.branches
+    )
+
+
+def _service_group_net_class(circuit_spec: CircuitSpec, net_id: str) -> str:
+    net = circuit_spec.net(net_id)
+    return net.cls if net is not None else ""
+
+
+def _service_group_kind(from_cls: str, to_cls: str) -> str:
+    """The one reading a declared branch's two ends can have, or ``""``.
+
+    ``from`` is the signal the host serves and ``to`` the rail/ground it is
+    served from — a pull-up or a pull-down. Both ends being rails of different
+    classes is the decoupling reading: the branch sits between the supply and
+    its return. Anything else gets no guessed answer.
+    """
+    if from_cls == "signal" and to_cls in ("power", "gnd"):
+        return "pull"
+    if from_cls in ("power", "gnd") and to_cls in ("power", "gnd") and (
+            from_cls != to_cls):
+        return "decoupling"
+    return ""
+
+
+def _service_group_host(
+    circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
+    group,
+) -> tuple[str, str, str]:
+    """``(host part, kind, detail)`` for one declared group, or a name.
+
+    The host is a **circuit fact**, never a designator guess:
+
+    * a pull branch's ``from`` net names the signal it serves, and the one part
+      outside the branch with a foot on it (inside the branch's own module) is
+      the host — several feet of that one part are the shared boot pins, which
+      is a legal host; several parts are not;
+    * a decoupling branch has no signal end, so the host is the one part inside
+      the module with feet on **both** rails. Zero or several is a refusal.
+
+    The kind is the group's: a group that mixes a pull-up and a decoupling pair
+    is two statements sharing an id.
+    """
+    parts = _series_pin_nets(circuit_spec)
+    modules: dict[str, list[str]] = {}
+    for module in presentation_spec.modules:
+        for part_id in module.parts:
+            modules.setdefault(part_id, []).append(module.id)
+    branch_parts = {branch.part for branch in group.branches}
+    kind = ""
+    host = ""
+    module_id = ""
+    for branch in group.branches:
+        part = circuit_spec.part(branch.part)
+        if part is None:
+            return "", "", (
+                f"the branch part {branch.part!r} is not in the circuit, so its "
+                "two feet cannot be read")
+        pins = parts.get(branch.part, {})
+        if len(pins) != 2:
+            return "", "", (
+                f"{branch.part!r} has {len(pins)} foot/foot(s) on the circuit "
+                f"({_series_pin_table(branch.part, pins)}); a joint service "
+                "branch is a two-foot part")
+        from_cls = _service_group_net_class(circuit_spec, branch.from_net)
+        to_cls = _service_group_net_class(circuit_spec, branch.to_net)
+        if not from_cls or not to_cls:
+            return "", "", (
+                f"{branch.part!r} names net(s) the circuit does not carry")
+        branch_kind = _service_group_kind(from_cls, to_cls)
+        if not branch_kind:
+            return "", "", (
+                f"{branch.part!r} runs from {branch.from_net!r} ({from_cls}) to "
+                f"{branch.to_net!r} ({to_cls}); a service branch is signal-to-rail "
+                "(a pull) or rail-to-rail of two classes (a decoupling pair)")
+        if kind and branch_kind != kind:
+            return "", "", (
+                f"the group mixes a {kind!r} branch with a {branch_kind!r} one "
+                f"({branch.part!r}); one joint seat is one kind of branch")
+        kind = branch_kind
+        owners = modules.get(branch.part, [])
+        if len(owners) != 1:
+            return "", "", (
+                f"{branch.part!r} belongs to {len(owners)} module(s) "
+                f"({owners or 'none'}); a joint seat is one host's neighbourhood")
+        if module_id and owners[0] != module_id:
+            return "", "", (
+                f"the group spans two modules ({module_id!r} and {owners[0]!r})")
+        module_id = owners[0]
+        if kind == "pull":
+            net = circuit_spec.net(branch.from_net)
+            candidates = sorted({
+                member.partition(".")[0] for member in (
+                    net.members if net is not None else ())
+                if member.partition(".")[0] != branch.part
+                and module_id in modules.get(member.partition(".")[0], ())
+            })
+        else:
+            candidates = []
+            for owner in sorted(modules):
+                if owner == branch.part or owner in branch_parts:
+                    continue
+                if module_id not in modules[owner]:
+                    continue
+                owner_nets = set(parts.get(owner, {}).values())
+                if branch.from_net in owner_nets and branch.to_net in owner_nets:
+                    candidates.append(owner)
+        if len(candidates) != 1:
+            return "", "", (
+                f"the {kind} branch {branch.part!r} resolves to {len(candidates)} "
+                f"host part(s) on its {'signal' if kind == 'pull' else 'rail'} "
+                f"net(s): {candidates or 'none'}; one host is what a joint seat "
+                "can serve")
+        if host and candidates[0] != host:
+            return "", "", (
+                f"the group names two hosts ({host!r} and {candidates[0]!r}); a "
+                "joint seat is one host's neighbourhood")
+        host = candidates[0]
+        if host in branch_parts:
+            return "", "", (
+                f"the host {host!r} is itself a declared service branch of the "
+                "group")
+    return host, kind, ""
+
+
+def _service_group_side_tokens_in(
+    book: Mapping[str, SymbolProfile],
+    circuit_spec: CircuitSpec,
+    host: str,
+    net_id: str,
+) -> tuple[str, ...]:
+    """Every profile token of the host that sits on ``net_id``, in pin order."""
+    part = circuit_spec.part(host)
+    profile = book.get(part.symbol_ref) if part is not None else None
+    if profile is None:
+        return ()
+    nets = _part_nets(circuit_spec, host)
+    out: list[str] = []
+    for pin in profile.pins:
+        for token in (pin.number, pin.name):
+            if token and token not in out and nets.get(token) == net_id:
+                out.append(token)
+    return tuple(out)
+
+
+def _service_group_side_tokens(
+    ctx: _Context, host: str, net_id: str,
+) -> tuple[str, ...]:
+    return _service_group_side_tokens_in(
+        ctx.book, ctx.circuit, host, net_id)
+
+
+def _service_group_hosts(
+    circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
+) -> dict[str, tuple[str, str, str]]:
+    """``branch part -> (host, kind, side net)`` for every group that resolves.
+
+    The side net is the net whose host feet state the reading side: the served
+    signal for a pull, the return rail for a decoupling pair.
+    """
+    out: dict[str, tuple[str, str, str]] = {}
+    for group in (getattr(presentation_spec, "service_groups", ()) or ()):
+        host, kind, _detail = _service_group_host(
+            circuit_spec, presentation_spec, group)
+        if not host:
+            continue
+        for branch in group.branches:
+            if kind == "pull":
+                side_net = branch.from_net
+            else:
+                side_net = (
+                    branch.to_net
+                    if _service_group_net_class(circuit_spec, branch.to_net) == "gnd"
+                    else branch.from_net)
+            out[branch.part] = (host, kind, side_net)
+    return out
+
+
+def validate_flag_share_groups(
+    circuit_spec: CircuitSpec, presentation_spec: PresentationSpec
+) -> list[GrammarFailure]:
+    """Validate declared pin groups against their circuit net and modules."""
+    declarations = getattr(presentation_spec, "flag_share_groups", ()) or ()
+    if not declarations:
+        return []
+
+    declared_parts = {part.id for part in circuit_spec.parts}
+    module_owners: dict[str, set[str]] = {}
+    for module in presentation_spec.modules:
+        for part_id in module.parts:
+            module_owners.setdefault(part_id, set()).add(module.id)
+
+    failures: list[GrammarFailure] = []
+    seen_nets: set[str] = set()
+    seen_members: set[str] = set()
+    for index, declaration in enumerate(declarations):
+        spot = f"$.flagShareGroups[{index}]"
+        net_id = declaration.net
+        if net_id in seen_nets:
+            failures.append(GrammarFailure(
+                category=FAILURE_PRESENTATION_POOR,
+                subject=spot,
+                detail=f"net {net_id!r} has more than one flag partition",
+                action="keep one complete partition for the net",
+            ))
+            continue
+        seen_nets.add(net_id)
+        net = circuit_spec.net(net_id)
+        if net is None:
+            failures.append(GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=f"{spot}.net",
+                detail=f"the circuit does not declare net {net_id!r}",
+                action="name a circuit net carried by the drawing",
+            ))
+            continue
+        if net.cls not in ("gnd", "power"):
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=f"{spot}.net",
+                detail=(
+                    f"net {net_id!r} has class {net.cls!r}; explicit flag-share "
+                    "partitions apply only to ground or power nets"),
+                action="name a ground or power net, or remove the declaration",
+            ))
+            continue
+
+        members = [member for group in declaration.groups for member in group]
+        duplicate_members = sorted(
+            member for member in set(members)
+            if members.count(member) > 1 or member in seen_members
+        )
+        if duplicate_members:
+            failures.append(GrammarFailure(
+                category=FAILURE_PRESENTATION_POOR,
+                subject=spot,
+                detail=(
+                    "a pin belongs to more than one stated flag group: "
+                    + ", ".join(duplicate_members)),
+                action="list each circuit pin exactly once in the partition",
+            ))
+            continue
+        seen_members.update(members)
+
+        unknown_parts = sorted({
+            member.partition(".")[0]
+            for member in members
+            if member.partition(".")[0] not in declared_parts
+        })
+        if unknown_parts:
+            failures.append(GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=spot,
+                detail=(
+                    "the partition names part(s) absent from the circuit: "
+                    + ", ".join(unknown_parts)),
+                action="name the circuit's full PART.PIN members",
+            ))
+            continue
+
+        actual = set(net.members)
+        stated = set(members)
+        extra = sorted(stated - actual)
+        if extra:
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=spot,
+                detail=(
+                    f"net {net_id!r} does not contain declared pin(s): "
+                    + ", ".join(extra)),
+                action="name only circuit pins that belong to the named net",
+            ))
+            continue
+
+        if not presentation_spec.modules:
+            continue
+        for group_index, group in enumerate(declaration.groups):
+            owners = {
+                owner
+                for member in group
+                for owner in module_owners.get(member.partition(".")[0], ())
+            }
+            unowned = sorted({
+                member.partition(".")[0]
+                for member in group
+                if not module_owners.get(member.partition(".")[0])
+            })
+            if unowned or len(owners) != 1:
+                detail = (
+                    "the pins in one shareable flag group must belong to one "
+                    "presentation module"
+                )
+                if unowned:
+                    detail += "; unowned part(s): " + ", ".join(unowned)
+                elif owners:
+                    detail += "; modules: " + ", ".join(sorted(owners))
+                failures.append(GrammarFailure(
+                    category=FAILURE_PRESENTATION_POOR,
+                    subject=f"{spot}.groups[{group_index}]",
+                    detail=detail,
+                    action="keep each shareable flag group within one module",
+                ))
+    return failures
+
+
+def validate_service_groups(
+    circuit_spec: CircuitSpec, presentation_spec: PresentationSpec
+) -> list[GrammarFailure]:
+    """A declared joint seat against the circuit it claims, or say why not.
+
+    The same questions the panel validator asks, plus the one a panel does not
+    need: the two ends of a branch must say *what kind of service* it is. Every
+    refusal names the group and the branch; a document that states none gets an
+    empty list, which is every pre-548J page.
+    """
+    groups = getattr(presentation_spec, "service_groups", ()) or ()
+    if not groups:
+        return []
+    parts = _series_pin_nets(circuit_spec)
+    out: list[GrammarFailure] = []
+    for index, group in enumerate(groups):
+        spot = f"$.serviceGroups[{index}]"
+        host, _kind, detail = _service_group_host(
+            circuit_spec, presentation_spec, group)
+        if not host:
+            out.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=spot,
+                detail=f"the group {group.id!r} cannot be read: {detail}",
+                action=(
+                    "wire each branch between the host signal and the rail it "
+                    "serves, or drop the entry"),
+            ))
+            continue
+        for branch in group.branches:
+            pins = parts.get(branch.part, {})
+            got_from = [pin for pin, net in pins.items()
+                        if net == branch.from_net]
+            got_to = [pin for pin, net in pins.items()
+                      if net == branch.to_net]
+            if len(got_from) != 1 or len(got_to) != 1:
+                out.append(GrammarFailure(
+                    category=FAILURE_CIRCUIT_INVALID,
+                    subject=f"{spot}.branches[{branch.part}]",
+                    detail=(
+                        f"{branch.part!r} puts {len(got_from)} foot/foot(s) on "
+                        f"{branch.from_net!r} and {len(got_to)} on "
+                        f"{branch.to_net!r} "
+                        f"({_series_pin_table(branch.part, pins)}); the declared "
+                        "branch names one foot on each end"),
+                    action=(
+                        "name the branch's real two nets, or drop the branch"),
+                ))
+    return out
+
+
+def _service_group_side(
+    host_profile: SymbolProfile, tokens: Sequence[str],
+) -> str:
+    """The one left/right side every host foot in ``tokens`` points to (``""``)."""
+    sides = set()
+    for token in tokens:
+        pin = _pin_of_token(host_profile, token)
+        if pin is None or pin.direction not in ("left", "right"):
+            return ""
+        sides.add(pin.direction)
+    return next(iter(sides)) if len(sides) == 1 else ""
+
+
+def _with_service_groups(
+    binding,
+    presentation_spec: PresentationSpec,
+    circuit_spec: CircuitSpec,
+    book: Mapping[str, SymbolProfile],
+) -> Any:
+    """548J-B1: a joint-seated branch is read against the host foot it serves.
+
+    A grammar binds a branch to the side its own pin leaves by. A declared joint
+    seat states the host foot (through the circuit) and the profile states which
+    side that foot faces, so that one relation is *replaced* for the branch/host
+    pair and the automatic ``near`` heuristic is dropped — the seat record is the
+    stronger statement. A document that states no group gets its binding back
+    unchanged.
+    """
+    hosts = _service_group_hosts(circuit_spec, presentation_spec)
+    if not hosts:
+        return binding
+    kinds: dict[str, str] = {}
+    reasons: dict[str, str] = {}
+    for group in (getattr(presentation_spec, "service_groups", ()) or ()):
+        for branch in group.branches:
+            found = hosts.get(branch.part)
+            if found is None:
+                continue
+            host, _kind, side_net = found
+            part = circuit_spec.part(host)
+            profile = book.get(part.symbol_ref) if part is not None else None
+            if profile is None:
+                continue
+            tokens = _service_group_side_tokens_in(
+                book, circuit_spec, host, side_net)
+            side = _service_group_side(profile, tokens)
+            if side not in ("left", "right"):
+                continue
+            kinds[branch.part] = LEFT_OF if side == "left" else RIGHT_OF
+            reasons[branch.part] = (
+                f"548J: {branch.part} serves {host}.{side_net} and the host foot "
+                f"faces {side}, so the branch is read {side} of its host "
+                f"(the declared group {group.id!r})")
+    if not kinds:
+        return binding
+    constraints: list[RelativeConstraint] = []
+    for item in binding.constraints:
+        pair = {item.subject, item.object}
+        cell = next((name for name in pair if name in kinds), None)
+        if cell is None or len(pair) != 2:
+            constraints.append(item)
+            continue
+        host = next(name for name in pair if name != cell)
+        if hosts[cell][0] != host:
+            constraints.append(item)
+            continue
+        if item.kind in _PANEL_SIDE_KINDS:
+            constraints.append(RelativeConstraint(
+                kind=kinds[cell], subject=cell, object=host,
+                reason=reasons[cell],
+            ))
+            continue
+        if item.kind == NEAR:
+            continue
+        constraints.append(item)
+    return replace(binding, constraints=tuple(constraints))
+
+
+def _joint_refusal(spot: str, detail: str, action: str) -> GrammarFailure:
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT, subject=spot, detail=detail, action=action)
+
+
+def _reserve_open_ports(
+    ctx: _Context, placed: _Placement
+) -> tuple[_JointSeatPort, ...] | GrammarFailure:
+    """Reserve every open signal before the seats are decided (548J-B1).
+
+    A one-foot signal is drawn as a visible stub of at least the document's
+    `stubMin`, with its name at the far end. The shortest existing rung whose
+    **host-printed** name row clears the page is kept; a clear stated length is
+    therefore preserved verbatim, while a row that would land on a body moves to
+    the next existing grid rung. On a page that declares a joint seat that
+    decision cannot wait until the plan is built: the seats, their flags and the
+    router would already be drawn without it and the stub would then have
+    nowhere to go. So the run and its label are decided here, against the page
+    as it stands (bodies, pin leads, keep-outs), and every later step treats
+    them as walls. Nothing is hidden, shortened or re-picked later.
+    """
+    occupied: list[Box] = list(ctx.budget.keepouts)
+    solids: list[Box] = list(ctx.budget.keepouts)
+    drawn_bodies: list[Box] = []
+    for part_id in sorted(placed.origins):
+        profile = ctx.profile(part_id)
+        pose = placed.poses[part_id]
+        origin = placed.origins[part_id]
+        occupied.append(_part_box(profile, pose, origin))
+        body = _body_box(profile, pose, origin)
+        if body is not None:
+            solids.append(body)
+            drawn_bodies.append(body)
+        solids.extend(_pin_walls(profile, pose, origin))
+    policy = getattr(ctx.presentation, "label_policy", None)
+    standoff = _label_standoff(ctx)
+    out: list[_JointSeatPort] = []
+    for net in ctx.circuit.nets:
+        if net.cls != "signal" or len(net.members) != 1:
+            continue
+        part_id, _, token = net.members[0].partition(".")
+        if part_id not in placed.origins or not token:
+            continue
+        point = _pin_point(ctx, part_id, token, placed.poses, placed.origins)
+        direction = _pin_direction(ctx, part_id, token, placed.poses)
+        if point is None or direction is None:
+            return _joint_refusal(
+                "$.serviceGroups",
+                f"the open signal {net.id!r} has no placed pin to carry it",
+                "place the part, or drop the open net")
+        stated = float(getattr(policy, "stub_min", 0.0) or 0.0)
+        length = stated if stated > 0.0 else 2.0 * ctx.budget.grid
+        if (
+            _native_text_placement(ctx)
+            and ctx.presentation.service_layout is not None
+            and text_width(net.id) > length
+        ):
+            # Reserve the room the existing apply pass needs to seat this name
+            # inside its conductor, keeping the original far-end label.
+            length = max(length, math.ceil(
+                (text_width(net.id) + 2.0 * (TEXT_GAP + standoff))
+                / ctx.budget.grid
+            ) * ctx.budget.grid)
+        run = None
+        tried: list[str] = []
+        basis = length
+        for rung in range(LOCAL_LABEL_RUNGS):
+            reach = basis + rung * ctx.budget.grid
+            candidate = _joint_open_far(
+                ctx, point, direction, reach, solids, [])
+            if candidate is None:
+                tried.append(f"{reach:g}: no clear run from the pin")
+                continue
+            row = textmetrics.wire_name_box(
+                [list(p) for p in candidate], net.id)
+            if row is not None:
+                walls = [
+                    box for box in (*ctx.budget.keepouts, *drawn_bodies)
+                    if _overlaps(row, box)]
+                if walls:
+                    tried.append(
+                        f"{reach:g}: its name row would print on "
+                        f"{_point_text((row[0], row[1]))}.."
+                        f"{_point_text((row[2], row[3]))} over a body")
+                    continue
+                if _box_hits_foreign_run(
+                    row, [LayoutSegment(net=port.net,
+                                        points=[_point(p) for p in port.run])
+                          for port in out]
+                ):
+                    tried.append(
+                        f"{reach:g}: its name row would print across an "
+                        "earlier open port's run")
+                    continue
+            run = candidate
+            break
+        if run is None:
+            return _joint_refusal(
+                "$.serviceGroups",
+                f"the open port {net.id!r} has no clear {basis:g}-unit run "
+                f"whose printed name row also stays clear: {'; '.join(tried)}",
+                "give the page room beside that port, or drop the joint seat")
+        segment = LayoutSegment(net=net.id, points=[_point(p) for p in run])
+        label = _label_at(
+            net.id, run[-1], direction, occupied, part_id=part_id,
+            segments=[segment], standoff=standoff,
+            stub=_label_stub_policy(ctx),
+            stub_min=stated if stated > 0.0 else 0.0,
+            row_model=getattr(policy, "row_model", "anchored"),
+        )
+        occupied.append(label.bbox)
+        out.append(_JointSeatPort(
+            net=net.id, part_id=part_id,
+            run=tuple(_point(p) for p in run), label=label))
+    return tuple(out)
+
+
+def _service_group_row_choices(
+    ctx: _Context, placed: _Placement,
+) -> list[tuple[str, Sequence[float]]]:
+    """Relative rows from the host's real served feet, never page coordinates.
+
+    The zero lane is the historical row. Min/max foot rows are only proposals:
+    the ordinary seat, router, flag/text ladders and final gate still judge them.
+    Relative travel lets the existing joint enumerator order the combinations
+    independently of where the host happens to stand on the sheet.
+    """
+    choices: list[tuple[str, Sequence[float]]] = []
+    for group in ctx.presentation.service_groups:
+        host, kind, _detail = _service_group_host(
+            ctx.circuit, ctx.presentation, group)
+        if not host or kind != "pull":
+            continue
+        profile = ctx.profile(host)
+        body = _body_box(profile, placed.poses[host], placed.origins[host])
+        if body is None:
+            body = _part_box(profile, placed.poses[host], placed.origins[host])
+        foot_rows = [
+            point[1]
+            for branch in group.branches
+            for token in _service_group_side_tokens(ctx, host, branch.from_net)
+            if (point := _pin_point(
+                ctx, host, token, placed.poses, placed.origins)) is not None
+        ]
+        if not foot_rows:
+            continue
+        old_row = min(body[1], *foot_rows) - GAP
+        offsets = [0.0]
+        for row in (min(foot_rows), max(foot_rows)):
+            offset = row - old_row
+            if offset not in offsets:
+                offsets.append(offset)
+        choices.append((group.id, tuple(offsets)))
+    return choices
+
+
+def _preferred_service_group_rows(
+    ctx: _Context, placed: _Placement,
+) -> list[dict[str, float]]:
+    """Existing real rows whose natural nesting honours a stated pull-up order.
+
+    A module's order states near/far, never above/below. Only real foot rows
+    whose distance order already agrees qualify. Pull-ups serving one host and
+    one terminal rail use their common real rows; unrelated hosts/rails and
+    pull-downs keep their historical candidate chain.
+    """
+    if not any(
+        len(_stated_branch_order(ctx, [branch.part for branch in group.branches])) >= 2
+        for group in ctx.presentation.service_groups
+    ):
+        return []
+    row_choices = dict(_service_group_row_choices(ctx, placed))
+    cohorts: dict[tuple[str, str], list[tuple]] = {}
+    for group in ctx.presentation.service_groups:
+        host, kind, _detail = _service_group_host(
+            ctx.circuit, ctx.presentation, group)
+        terminal = {branch.to_net for branch in group.branches}
+        if (not host or kind != "pull" or len(terminal) != 1
+                or _service_group_net_class(ctx.circuit, next(iter(terminal))) != "power"
+                or group.id not in row_choices):
+            continue
+        feet = {
+            branch.part: [
+                point[1]
+                for token in _service_group_side_tokens(ctx, host, branch.from_net)
+                if (point := _pin_point(
+                    ctx, host, token, placed.poses, placed.origins)) is not None
+            ]
+            for branch in group.branches
+        }
+        if not all(feet.values()):
+            continue
+        body = _body_box(ctx.profile(host), placed.poses[host], placed.origins[host])
+        if body is None:
+            body = _part_box(ctx.profile(host), placed.poses[host], placed.origins[host])
+        old_row = min(body[1], *(row for rows in feet.values() for row in rows)) - GAP
+        stated = _stated_branch_order(ctx, feet)
+        declared = sorted(stated, key=stated.get)
+        rows = {}
+        for offset in row_choices[group.id][1:]:
+            row = old_row + offset
+            natural = sorted(feet, key=lambda part: (
+                min(abs(foot - row) for foot in feet[part]), part))
+            if len(declared) < 2 or [part for part in natural if part in stated] == declared:
+                rows[row] = offset
+        cohorts.setdefault((host, next(iter(terminal))), []).append(
+            (group.id, rows, len(declared) >= 2))
+
+    choices = []
+    shared = []
+    for members in cohorts.values():
+        if not any(ordered for _group, _rows, ordered in members):
+            continue
+        common = set.intersection(*(set(rows) for _group, rows, _ordered in members))
+        if not common:
+            continue
+        shared.append({group: rows for group, rows, _ordered in members})
+        choices.extend((group, (0.0, *(rows[row] for row in sorted(common))))
+                       for group, rows, _ordered in members)
+    if not choices:
+        return []
+    count = math.prod(len(lanes) for _group, lanes in choices)
+    def shares_real_rows(offsets: Mapping[str, float]) -> bool:
+        for members in shared:
+            selected = set()
+            for group, rows in members.items():
+                selected.add(next(
+                    row for row, offset in rows.items() if offset == offsets[group]))
+            if len(selected) != 1:
+                return False
+        return True
+
+    return [
+        offsets for offsets in _joint_lane_combinations(choices, count)
+        if all(offsets[group] != 0.0 for group, _lanes in choices)
+        and shares_real_rows(offsets)
+    ]
+
+
+def _seat_service_groups(
+    ctx: _Context, placed: _Placement, *,
+    row_offsets: Mapping[str, float] | None = None,
+    column_offsets: Mapping[str, float] | None = None,
+) -> GrammarFailure | None:
+    """Seat every declared group as one joint seat on this answer, or refuse.
+
+    Runs exactly once per placement, on the answer the base ladder or the search
+    produced. It writes the branch origins and poses and stores the complete
+    group result on the placement, so the final plan replays that geometry
+    instead of moving it a second time.
+    """
+    groups = getattr(ctx.presentation, "service_groups", ()) or ()
+    if not groups:
+        return None
+    ports = _reserve_open_ports(ctx, placed)
+    if isinstance(ports, GrammarFailure):
+        return ports
+    placed.service_group_ports = ports
+    group_parts = {
+        branch.part for group in groups for branch in group.branches}
+    records: list[_JointSeatGroup] = []
+    for group in groups:
+        spot = f"$.serviceGroups[{group.id!r}]"
+        host, kind, detail = _service_group_host(
+            ctx.circuit, ctx.presentation, group)
+        if not host:
+            return _joint_refusal(
+                spot, f"the group cannot be seated: {detail}",
+                "correct the circuit or the entry")
+        if host not in placed.origins or host not in placed.poses:
+            return _joint_refusal(
+                spot, f"the host {host!r} is not placed by this layout",
+                "place the host on the page, or drop the group")
+        missing = sorted(
+            branch.part for branch in group.branches
+            if branch.part not in placed.origins
+            or branch.part not in placed.poses)
+        if missing:
+            return _joint_refusal(
+                spot, f"the branch part(s) {missing} are not placed by this layout",
+                "place the branches on the page, or drop the group")
+        if kind == "pull":
+            side_net = group.branches[0].from_net
+        else:
+            side_net = next(
+                (branch.to_net if _service_group_net_class(
+                    ctx.circuit, branch.to_net) == "gnd" else branch.from_net
+                 for branch in group.branches), "")
+        host_tokens = _service_group_side_tokens(ctx, host, side_net)
+        if not host_tokens:
+            return _joint_refusal(
+                spot, f"the host {host!r} states no foot on {side_net!r}",
+                "wire the host to the group's rail, or drop the group")
+        side = _service_group_side(ctx.profile(host), host_tokens)
+        if side not in ("left", "right"):
+            return _joint_refusal(
+                spot,
+                f"the host feet {host_tokens!r} on {side_net!r} state "
+                f"{side or 'no single left/right'} reading side",
+                "give those library pins a left/right direction, or drop the group")
+        start_x = None
+        row_below = None
+        same_side = [item for item in records if item.side == side]
+        if same_side:
+            # 548N2: a second group on the same host side stands beyond the one
+            # already seated there — the frame is the seat's own measured
+            # extent, so the column pitch between groups is real geometry, not
+            # a global gap. A decoupling pair keeps the extra step below the
+            # earlier rows it always had; a pull group's row stays its feet's.
+            start_x = (
+                max(item.frame[2] for item in same_side) if side == "right"
+                else min(item.frame[0] for item in same_side))
+            if kind == "decoupling":
+                row_below = min(item.frame[1] for item in same_side)
+        record = _joint_seat_group(
+            ctx, placed, group, host, kind, side, spot,
+            start_x=start_x, row_below=row_below, earlier=tuple(records),
+            ports=ports, row_offset=(row_offsets or {}).get(group.id, 0.0),
+            column_offset=(column_offsets or {}).get(group.id, 0.0))
+        if isinstance(record, GrammarFailure):
+            return replace(
+                record,
+                detail=(
+                    f"the group {group.id!r} cannot be seated: {record.detail}"),
+            )
+        for cell in record.cells:
+            placed.origins[cell.part_id] = cell.origin
+            placed.poses[cell.part_id] = cell.pose
+        records.append(record)
+    placed.service_group_plans = tuple(records)
+    _anchor_seats_to_page(ctx, placed)
+    return None
+
+
+def _seat_note(record: _JointSeatGroup) -> str:
+    """The one printable line a seat record carries, in its own coordinates."""
+    return (
+        f"548J joint seat {record.group_id!r}: {len(record.cells)} branch(es) "
+        f"on the host's {record.side} side, one {record.kind} reading, "
+        f"{len(record.rails)} terminal rail(s), frame {record.frame}"
+    )
+
+
+def _shift_seats(
+    records: Sequence[_JointSeatGroup], dx: float, dy: float
+) -> tuple[_JointSeatGroup, ...]:
+    """Every coordinate a seat record holds, moved by one page displacement.
+
+    A record is the plan's own source, so it moves as a whole: part origins and
+    poses, both seats, every host path, every text box, every rail run, lead,
+    anchor and flag box, and the measured frame. Half a move would draw the seat
+    where it used to be.
+    """
+    def moved(point) -> tuple[float, float]:
+        return (float(point[0]) + dx, float(point[1]) + dy)
+
+    def moved_run(run):
+        return tuple(moved(point) for point in run)
+
+    def moved_box(box: Box) -> Box:
+        return (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
+
+    out: list[_JointSeatGroup] = []
+    for record in records:
+        cells = tuple(
+            replace(
+                cell,
+                origin=moved(cell.origin),
+                from_seat=moved(cell.from_seat),
+                to_seat=moved(cell.to_seat),
+                host_paths=tuple(moved_run(path) for path in cell.host_paths),
+                text_boxes=tuple(
+                    (kind, text, moved_box(box))
+                    for kind, text, box in cell.text_boxes
+                ),
+            )
+            for cell in record.cells
+        )
+        rails = tuple(
+            replace(
+                rail,
+                runs=tuple(moved_run(run) for run in rail.runs),
+                lead=moved_run(rail.lead),
+                anchor=moved(rail.anchor),
+                flag_box=moved_box(rail.flag_box),
+            )
+            for rail in record.rails
+        )
+        shifted = replace(
+            record, cells=cells, rails=rails,
+            host_paths=tuple(path for cell in cells for path in cell.host_paths),
+            frame=moved_box(record.frame),
+        )
+        out.append(replace(shifted, notes=(_seat_note(shifted),)))
+    return tuple(out)
+
+
+def _shift_ports(
+    ports: Sequence[_JointSeatPort], dx: float, dy: float
+) -> tuple[_JointSeatPort, ...]:
+    """Move a reserved port's run and label by the page's one displacement."""
+    if not ports:
+        return tuple(ports)
+    out: list[_JointSeatPort] = []
+    for port in ports:
+        label = port.label
+        out.append(_JointSeatPort(
+            net=port.net,
+            part_id=port.part_id,
+            run=tuple((float(p[0]) + dx, float(p[1]) + dy) for p in port.run),
+            label=replace(
+                label, x=label.x + dx, y=label.y + dy,
+                bbox=(label.bbox[0] + dx, label.bbox[1] + dy,
+                      label.bbox[2] + dx, label.bbox[3] + dy)),
+        ))
+    return tuple(out)
+
+
+def _anchor_seats_to_page(ctx: _Context, placed: _Placement) -> None:
+    """Anchor the seated page — the origins and the seat records alike.
+
+    The ladder anchored the parts *before* the seating moved them, so a seat can
+    hang off the page's edge: a drawing no reader sees and the checker refuses.
+    The finished answer is anchored once, with `_anchor_to_page`'s own
+    displacement applied to every coordinate the records carry as well. Its
+    measured frames include the rail's printed name and clearance; reserved
+    port runs and label boxes join them in the anchor's actual outer bounds.
+    An origin
+    without its record, or a record without its origin, would draw the seat
+    somewhere the plan does not agree with — the plan replays the record, so the
+    two are one move.
+    """
+    if ctx.budget.page_box is None or ctx.presentation.user_locks:
+        return
+    probe = next(iter(placed.origins), None)
+    if probe is None:
+        return
+    before = placed.origins[probe]
+    extra_boxes = [record.frame for record in placed.service_group_plans]
+    extra_boxes.extend(
+        box for port in placed.service_group_ports
+        for box in (*_run_boxes(port.run), port.label.bbox))
+    _anchor_to_page(ctx, placed.origins, placed.poses, placed.residue,
+                    extra_boxes=extra_boxes)
+    dx = placed.origins[probe][0] - before[0]
+    dy = placed.origins[probe][1] - before[1]
+    if dx == 0.0 and dy == 0.0:
+        return
+    placed.service_group_plans = _shift_seats(
+        placed.service_group_plans, dx, dy)
+    placed.service_group_ports = _shift_ports(
+        placed.service_group_ports, dx, dy)
+
+
+def _joint_branch_poses(
+    profile: SymbolProfile,
+    from_token: str,
+    to_token: str,
+    *,
+    upper: str,
+) -> list[SymbolPose]:
+    """Every legal pose that puts the rail end on its own side of the branch.
+
+    The group's reading is one: the power terminal sits **above** the signal end
+    of a pull-up (and the ground end below a pull-down), so the rail's flag hangs
+    further along the same direction, away from the body. The candidates come
+    from the symbol's own legal poses and its real pin offsets — never a fixed
+    rotation — and the first one returned is the pose the ordinary arm rule would
+    have chosen, so a page that already had a legal pose keeps it.
+    """
+    near = _pin_of_token(profile, from_token)
+    far = _pin_of_token(profile, to_token)
+    if near is None or far is None:
+        return []
+    preferred = _arm_pose(profile, from_token, to_token, (0.0, 1.0))
+    out: list[SymbolPose] = []
+    if preferred is not None:
+        out.append(preferred)
+    for pose in profile.poses:
+        if pose in out:
+            continue
+        first = _posed_tip(near, pose)
+        second = _posed_tip(far, pose)
+        if upper == "power":
+            ok = second[1] > first[1]
+        elif upper == "gnd":
+            ok = second[1] < first[1]
+        else:
+            ok = abs(second[1] - first[1]) > 1e-6
+        if ok:
+            out.append(pose)
+    return out
+
+
+def _joint_seat_group(
+    ctx: _Context,
+    placed: _Placement,
+    group,
+    host: str,
+    kind: str,
+    side: str,
+    spot: str,
+    *,
+    start_x: float | None = None,
+    row_below: float | None = None,
+    earlier: Sequence[_JointSeatGroup] = (),
+    ports: Sequence[_JointSeatPort] = (),
+    row_offset: float = 0.0,
+    column_offset: float = 0.0,
+) -> _JointSeatGroup | GrammarFailure:
+    """The one geometry a group can take on this host pose — or its refusal.
+
+    The row is one common terminal line (all branches share one pose, so their
+    terminal feet share one y). Column order is the host's own pin order: the
+    foot nearest the row takes the column nearest the host, so no host run
+    crosses another branch's. The pitch is measured from the real body and the
+    real printed rows — it is never a global gap.
+    """
+    # Routing and collision checks must see the proposed branch geometry, but
+    # a refused seat must not leave those proposed origins in the caller's page.
+    # Only the successful record below commits its branches to that page.
+    target = placed
+    placed = replace(placed, origins=dict(placed.origins), poses=dict(placed.poses))
+    sign = 1.0 if side == "right" else -1.0
+    text_side = "right" if side == "right" else "left"
+    host_profile = ctx.profile(host)
+    host_body = _body_box(
+        host_profile, placed.poses[host], placed.origins[host])
+    if host_body is None:
+        host_body = _part_box(
+            host_profile, placed.poses[host], placed.origins[host])
+    host_edge = host_body[2] if sign > 0 else host_body[0]
+
+    prepared: list[dict[str, Any]] = []
+    for branch in group.branches:
+        profile = ctx.profile(branch.part)
+        nets = _part_nets(ctx.circuit, branch.part)
+        from_token = _arm_token_on(nets, branch.from_net)
+        to_token = _arm_token_on(nets, branch.to_net)
+        if not from_token or not to_token:
+            return _joint_refusal(
+                f"{spot}.branches[{branch.part!r}]",
+                f"the branch needs one foot on {branch.from_net!r} and one on "
+                f"{branch.to_net!r}",
+                "correct the branch's nets, or drop the branch")
+        if kind == "pull":
+            upper = (
+                "gnd"
+                if _service_group_net_class(ctx.circuit, branch.to_net) == "gnd"
+                else "power")
+            poses = _joint_branch_poses(
+                profile, from_token, to_token, upper=upper)
+        else:
+            gnd_token, power_token = (
+                (from_token, to_token)
+                if _service_group_net_class(ctx.circuit, branch.from_net) == "gnd"
+                else (to_token, from_token))
+            poses = _joint_branch_poses(
+                profile, gnd_token, power_token, upper="power")
+        pose = poses[0] if poses else None
+        if pose is None:
+            return _joint_refusal(
+                f"{spot}.branches[{branch.part!r}]",
+                f"{branch.part!r} has no legal pose that stands its "
+                f"{'ground' if upper == 'gnd' else 'power'} end on the rail "
+                "side of its signal end (candidates: "
+                f"{[p.label() for p in profile.poses]})",
+                "add a pose that runs the branch the other way, or drop the "
+                "branch")
+        from_pin = _pin_of_token(profile, from_token)
+        to_pin = _pin_of_token(profile, to_token)
+        assert from_pin is not None and to_pin is not None
+        rel = _part_box(profile, pose, (0.0, 0.0))
+        from_rel = _posed_tip(from_pin, pose)
+        to_rel = _posed_tip(to_pin, pose)
+        half = (rel[2] - rel[0]) / 2.0
+        # `_part_lines` states each row as ``(kind, text)`` — the reference and
+        # the value, in that order. The boxes are measured on the texts; the kind
+        # is what the finished plan prints them as.
+        pairs = _part_lines(ctx, branch.part)
+        lines = [text for _part_kind, text in pairs]
+        rows = _line_boxes(rel, lines, text_side)
+        text_width_max = max((box[2] - box[0] for box in rows), default=0.0)
+        tokens: tuple[str, ...] = ()
+        feet: list[tuple[str, tuple[float, float]]] = []
+        if kind == "pull":
+            tokens = _service_group_side_tokens(ctx, host, branch.from_net)
+            if not tokens:
+                return _joint_refusal(
+                    f"{spot}.branches[{branch.part!r}]",
+                    f"the served signal {branch.from_net!r} has no host foot",
+                    "wire the host to the branch's signal, or drop the branch")
+            for token in tokens:
+                point = _pin_point(
+                    ctx, host, token, placed.poses, placed.origins)
+                if point is not None:
+                    feet.append((token, point))
+            if len(feet) != len(tokens):
+                return _joint_refusal(
+                    f"{spot}.branches[{branch.part!r}]",
+                    f"a host foot on {branch.from_net!r} has no placed tip",
+                    "place the host's pins, or drop the branch")
+            if _service_group_side(
+                    host_profile, [token for token, _p in feet]) != side:
+                return _joint_refusal(
+                    f"{spot}.branches[{branch.part!r}]",
+                    f"the host feet {[token for token, _p in feet]!r} of "
+                    f"{branch.from_net!r} do not all face {side}",
+                    "put the served feet on one side, or drop the group")
+            xs = {round(point[0], 6) for _token, point in feet}
+            if len(xs) != 1:
+                return _joint_refusal(
+                    f"{spot}.branches[{branch.part!r}]",
+                    f"the host feet of {branch.from_net!r} end at different x "
+                    f"({sorted(xs)}), so a straight shared-pin run would not close",
+                    "give the served feet one pin length, or drop the branch")
+        prepared.append({
+            "branch": branch, "profile": profile, "pose": pose, "rel": rel,
+            "from_rel": from_rel, "to_rel": to_rel, "half": half,
+            "text_width": text_width_max, "rows": rows, "lines": lines,
+            "pairs": pairs,
+            "from_token": from_token, "to_token": to_token,
+            "tokens": tokens, "feet": feet,
+        })
+    row_y = min(
+        [host_body[1]]
+        + [point[1] for item in prepared for _t, point in item["feet"]],
+    ) - GAP
+    if row_below is not None:
+        row_y = min(row_y, row_below - GAP)
+    row_y += row_offset
+    if kind == "pull":
+        # A different real pin row reverses which branch is nearest. Keep the
+        # whole shared-foot set: a BOOT branch may serve more than one host pin.
+        prepared.sort(key=lambda item: (
+            min(abs(point[1] - row_y) for _token, point in item["feet"]),
+            item["branch"].part))
+    else:
+        prepared.sort(key=lambda item: item["branch"].part)
+    if kind == "pull" and all(
+        _service_group_net_class(ctx.circuit, item["branch"].to_net) == "power"
+        for item in prepared
+    ):
+        stated = _stated_branch_order(ctx, [item["branch"].part for item in prepared])
+        natural = [item["branch"].part for item in prepared
+                   if item["branch"].part in stated]
+        if len(stated) >= 2 and natural != sorted(stated, key=stated.get):
+            return _joint_refusal(
+                spot,
+                f"the natural branch order {natural} on this real row does not "
+                f"honour module.branchOrder {sorted(stated, key=stated.get)}",
+                "try another real host-foot row that honours the stated near/far order")
+    first_x = (host_edge if start_x is None else start_x) + sign * column_offset
+
+    def column_centres(rung: int) -> list[tuple[dict[str, Any], float]]:
+        """The seat's columns one outward rung at a time, in host-foot order."""
+        x = first_x + sign * (GAP + prepared[0]["half"] + rung * GAP)
+        out: list[tuple[dict[str, Any], float]] = [(prepared[0], x)]
+        for index in range(1, len(prepared)):
+            previous = prepared[index - 1]
+            item = prepared[index]
+            x += sign * (
+                previous["half"] + GAP + previous["text_width"] + GAP
+                + item["half"])
+            out.append((item, x))
+        return out
+
+    def seat_origin(item: dict[str, Any], x: float) -> tuple[float, float]:
+        return (
+            float(_snap(x - item["from_rel"][0], ctx.budget.grid, placed.residue[0])),
+            float(_snap(row_y - item["from_rel"][1], ctx.budget.grid, placed.residue[1])),
+        )
+
+    # 548N2: an already reserved open-port room is a wall of this page, not a
+    # conflict to report after the seat is committed. `_reserve_open_ports` has
+    # already decided every open signal's run and label, and hands them here as
+    # `ports`; a candidate seat that would stand on one is stepped outward one
+    # existing GAP at a time until every branch body **and printed row** clears.
+    # The reserved set is that same record — no second room table is made. When
+    # no rung clears, the last one is kept, so the ordinary collision check still
+    # refuses this group by name instead of dropping back to the loose seats.
+    port_walls = [
+        box for port in ports
+        for box in (*_run_boxes(port.run), port.label.bbox)]
+
+    def branch_rooms(item: dict[str, Any], x: float) -> list[Box]:
+        origin = seat_origin(item, x)
+        rooms = [_part_box(item["profile"], item["pose"], origin)]
+        rooms.extend(
+            (box[0] + origin[0], box[1] + origin[1],
+             box[2] + origin[0], box[3] + origin[1])
+            for box in item["rows"]
+        )
+        return rooms
+
+    columns = column_centres(0)
+    for rung in range(1, 9):
+        clear = all(
+            not any(
+                _overlaps(room, wall)
+                for room in branch_rooms(item, x)
+                for wall in port_walls)
+            for item, x in columns)
+        if clear:
+            break
+        columns = column_centres(rung)
+    for item, x in columns:
+        item["x"] = x
+        origin = seat_origin(item, x)
+        item["origin"] = origin
+        item["from_seat"] = (
+            float(origin[0] + item["from_rel"][0]),
+            float(origin[1] + item["from_rel"][1]),
+        )
+        item["to_seat"] = (
+            float(origin[0] + item["to_rel"][0]),
+            float(origin[1] + item["to_rel"][1]),
+        )
+        item["rows_abs"] = tuple(
+            (box[0] + origin[0], box[1] + origin[1],
+             box[2] + origin[0], box[3] + origin[1])
+            for box in item["rows"])
+
+    cells: list[_JointSeatCell] = []
+    for item in prepared:
+        branch = item["branch"]
+        cells.append(_JointSeatCell(
+            part_id=branch.part,
+            from_net=branch.from_net,
+            to_net=branch.to_net,
+            from_token=item["from_token"],
+            to_token=item["to_token"],
+            origin=item["origin"],
+            pose=item["pose"],
+            from_seat=item["from_seat"],
+            to_seat=item["to_seat"],
+            host_tokens=tuple(token for token, _p in item["feet"]),
+            host_paths=(),
+            text_boxes=tuple(
+                (item["pairs"][index][0], item["pairs"][index][1], box)
+                for index, box in enumerate(item["rows_abs"])
+            ),
+        ))
+
+    # The page this group routes on is the page it seats: the branch bodies and
+    # their pin leads have to stand where the seat puts them before a single run
+    # is searched. `_seat_service_groups` writes the same values once the record
+    # exists, so this is the one seating, seen by the router, the collision check
+    # and the checker alike — not a second move.
+    for cell in cells:
+        placed.origins[cell.part_id] = cell.origin
+        placed.poses[cell.part_id] = cell.pose
+
+    rail_nets: dict[str, list[dict[str, Any]]] = {}
+    for item in prepared:
+        rail_nets.setdefault(item["branch"].to_net, []).append(item)
+        if kind == "decoupling":
+            rail_nets.setdefault(item["branch"].from_net, []).append(item)
+    gate_occupied: list[Box] = list(ctx.budget.keepouts)
+    gate_solids: list[Box] = list(ctx.budget.keepouts)
+    for part_id in sorted(placed.origins):
+        profile = ctx.profile(part_id)
+        pose = placed.poses[part_id]
+        origin = placed.origins[part_id]
+        gate_occupied.append(_part_box(profile, pose, origin))
+        body = _body_box(profile, pose, origin)
+        if body is not None:
+            gate_solids.append(body)
+        gate_solids.extend(_pin_walls(profile, pose, origin))
+    gate_texts: list[Box] = []
+    for cell in cells:
+        for _kind, _text, box in cell.text_boxes:
+            gate_occupied.append(box)
+            gate_solids.append(box)
+            gate_texts.append(box)
+    gate_segments: list[LayoutSegment] = []
+    gate_symbols: list[LayoutPowerSymbol] = []
+    for port in ports:
+        # A reserved open port is on this page before the first seat: its run is
+        # copper the group may not cross and its label is a printed row.
+        gate_segments.append(LayoutSegment(
+            net=port.net, points=[_point(p) for p in port.run]))
+        gate_occupied.append(port.label.bbox)
+        gate_solids.append(port.label.bbox)
+        gate_texts.append(port.label.bbox)
+        gate_solids.extend(_run_boxes(port.run))
+    for record in earlier:
+        for cell in record.cells:
+            for path in cell.host_paths:
+                gate_segments.append(LayoutSegment(
+                    net=cell.from_net, points=[_point(p) for p in path]))
+        for rail in record.rails:
+            for run in rail.runs:
+                gate_segments.append(LayoutSegment(
+                    net=rail.net, points=[_point(p) for p in run]))
+            gate_symbols.append(LayoutPowerSymbol(
+                symbol_ref=rail.symbol_ref, symbol_hash=rail.symbol_hash,
+                net=rail.net, x=rail.anchor[0], y=rail.anchor[1],
+                rotation=rail.rotation))
+    rails: list[_JointSeatRail] = []
+    for net_id, items in rail_nets.items():
+        net = ctx.circuit.net(net_id)
+        if net is None:
+            continue
+        rail = _joint_rail(
+            ctx, spot, net_id, net.cls, items, host, placed, sign, kind,
+            gate_occupied, gate_solids, gate_segments, gate_symbols,
+            gate_texts)
+        if isinstance(rail, GrammarFailure):
+            return rail
+        rails.append(rail)
+        # The seat just taken is an obstacle for the next flag, and its copper is
+        # what the group's own routing has to see (the router runs after this).
+        gate_solids.append(rail.flag_box)
+        gate_symbols.append(LayoutPowerSymbol(
+            symbol_ref=rail.symbol_ref, symbol_hash=rail.symbol_hash,
+            net=rail.net, x=rail.anchor[0], y=rail.anchor[1],
+            rotation=rail.rotation))
+        for run in rail.runs:
+            gate_segments.append(LayoutSegment(
+                net=rail.net, points=[_point(p) for p in run]))
+
+    # Standing on a foreign part or a page keep-out is a property of the seat
+    # itself, not of the runs it would need: ask it before the router, so the
+    # refusal names the keep-out instead of the first run that could not be
+    # found through it.
+    refusal = _joint_collisions(
+        ctx, group.id, spot, host, cells, rails, placed,
+        _service_group_parts(ctx.presentation), ports)
+    if refusal is not None:
+        return refusal
+
+    routed = _joint_route_group(
+        ctx, spot, prepared, cells, rails, host, placed, sign, kind, ports)
+    if isinstance(routed, GrammarFailure):
+        return routed
+    cells, rails = routed
+
+    frame = _joint_frame(ctx, cells, rails, host, placed)
+    record = _JointSeatGroup(
+        group_id=group.id, host_part=host, side=side, kind=kind,
+        cells=tuple(cells), rails=tuple(rails),
+        host_paths=tuple(path for cell in cells for path in cell.host_paths),
+        frame=frame)
+    for cell in record.cells:
+        target.origins[cell.part_id] = cell.origin
+        target.poses[cell.part_id] = cell.pose
+    return replace(record, notes=(_seat_note(record),))
+
+
+def _joint_rail_taps(
+    ctx: _Context,
+    placed: _Placement,
+    start: tuple[float, float],
+    sign: float,
+    cls: str,
+    occupied: Sequence[Box],
+    solids: Sequence[Box],
+    texts: Sequence[Box],
+    segments: Sequence[LayoutSegment],
+) -> list[float]:
+    """Lattice x's a crowded rail may extend its tap to, nearest first.
+
+    Nothing here is a constant: every candidate is derived from an object that
+    is really on the page — a printed row, a part's own box, a flag, a reserved
+    port's run — at the height the flag's lead would occupy, pushed clear of its
+    edge by one lattice step and `FLAG_CLEARANCE`. The rail keeps its **row** and
+    its reach; only the tap it hangs the flag from moves out, along the row, as
+    far as the nearest real edge allows. No obstacle in the band means no
+    candidate, and the drawing is the one it always was.
+    """
+    grid = ctx.budget.grid
+    if cls == "power":
+        band_low, band_high = start[1], start[1] + FLAG_LEAD_LIMIT
+    else:
+        band_low, band_high = start[1] - FLAG_LEAD_LIMIT, start[1]
+    boxes: list[Box] = list(texts) + list(occupied) + list(solids)
+    for segment in segments:
+        boxes.extend(_run_boxes(segment.points))
+    edges: list[float] = []
+    for box in boxes:
+        if box[3] < band_low - 1e-6 or box[1] > band_high + 1e-6:
+            continue
+        if sign < 0:
+            edge = box[0] - (grid + FLAG_CLEARANCE)
+            if edge < start[0] - 1e-6:
+                edges.append(edge)
+        else:
+            edge = box[2] + (grid + FLAG_CLEARANCE)
+            if edge > start[0] + 1e-6:
+                edges.append(edge)
+    out: list[float] = []
+    for edge in sorted(edges, key=lambda value: abs(value - start[0])):
+        if sign < 0:
+            snapped = _snap(edge, grid, placed.residue[0])
+            while snapped > edge:
+                snapped = _snap(snapped - grid, grid, placed.residue[0])
+        else:
+            snapped = _snap(edge, grid, placed.residue[0])
+            while snapped < edge:
+                snapped = _snap(snapped + grid, grid, placed.residue[0])
+        if snapped not in out and abs(snapped - start[0]) > 1e-6:
+            out.append(snapped)
+    return out
+
+
+def _joint_rail(
+    ctx: _Context,
+    spot: str,
+    net_id: str,
+    cls: str,
+    items: Sequence[dict[str, Any]],
+    host: str,
+    placed: _Placement,
+    sign: float,
+    kind: str,
+    occupied: Sequence[Box],
+    solids: Sequence[Box],
+    segments: Sequence[LayoutSegment],
+    symbols: Sequence[LayoutPowerSymbol],
+    texts: Sequence[Box],
+) -> _JointSeatRail | GrammarFailure:
+    """One shared terminal rail: copper, its short host run, and one local flag."""
+    profile_flag, ref = _flag_plan(ctx, net_id, cls)
+    if profile_flag is None:
+        return _joint_refusal(
+            spot,
+            f"the terminal net {net_id!r} is a bus and the library carries no "
+            f"flag symbol {ref!r}, so the group's local flag has no symbol",
+            f"add {ref!r} to the library, or drop the group")
+    pads = []
+    for item in items:
+        if net_id == item["branch"].to_net:
+            pads.append(item["to_seat"])
+        else:
+            pads.append(item["from_seat"])
+    y = pads[0][1]
+    if any(abs(pad[1] - y) > 1e-6 for pad in pads):
+        return _joint_refusal(
+            spot,
+            f"the pads of {net_id!r} do not share one terminal row "
+            f"({[pad[1] for pad in pads]}), so the group's rail is not one line",
+            "correct the branches' symbols, or drop the group")
+    xs = sorted(pad[0] for pad in pads)
+    runs: list[tuple[tuple[float, float], ...]] = [
+        ((xs[0], y), (xs[-1], y)),
+    ]
+    outer = xs[-1] if sign > 0 else xs[0]
+    start = (float(outer), float(y))
+    # The pad the trunk ends on is the one pin wall the flag may touch: its lead
+    # begins at that tip and a vertical hang brushes it.
+    exempt: list[Box] = []
+    for part_id in placed.origins:
+        for pin in ctx.profile(part_id).pins:
+            tip = _pin_point(
+                ctx, part_id, pin.number, placed.poses, placed.origins)
+            if (tip is not None and abs(tip[0] - start[0]) <= 1e-6
+                    and abs(tip[1] - start[1]) <= 1e-6):
+                exempt = _pin_walls(
+                    ctx.profile(part_id), placed.poses[part_id],
+                    placed.origins[part_id], only=pin.number)
+    seat = _joint_flag_seat(
+        ctx, net_id, cls, start, (sign, 0.0), profile_flag, placed,
+        occupied, solids, segments, symbols, texts, exempt, rail_cls=cls)
+    tap: float | None = None
+    if seat is None:
+        # The rail keeps its row. When its own end cannot hang a flag, the tap
+        # moves out along the row to the first lattice x clear of a **real**
+        # obstacle edge, and the flag is hung from there on the same 30/40/50/60
+        # rungs; the extension is part of the trunk and of the frame.
+        for candidate in _joint_rail_taps(
+                ctx, placed, start, sign, cls, occupied, solids, texts,
+                segments):
+            attempt = _joint_flag_seat(
+                ctx, net_id, cls, (float(candidate), float(start[1])),
+                (sign, 0.0), profile_flag, placed, occupied, solids, segments,
+                symbols, texts, exempt, rail_cls=cls, prefix=(start,))
+            if attempt is not None:
+                seat = attempt
+                tap = candidate
+                break
+    if seat is None:
+        return _joint_refusal(
+            spot,
+            f"the {net_id!r} rail's outer end {start} has no legal flag seat on "
+            "069's rungs: every candidate stands on a body, a pin lead, a "
+            "printed row, a keep-out, a foreign run, a foreign foot's clearance "
+            "or an earlier flag, and no tap clear of those edges holds one",
+            "give the group's rail room at its outer end, or drop the group")
+    anchor, lead, box, rotation = seat
+    if tap is not None:
+        if sign < 0:
+            runs[0] = ((float(tap), float(y)), (float(xs[-1]), float(y)))
+        else:
+            runs[0] = ((float(xs[0]), float(y)), (float(tap), float(y)))
+    runs.append(lead)
+    return _JointSeatRail(
+        net=net_id, cls=cls,
+        symbol_ref=profile_flag.symbol_ref,
+        symbol_hash=profile_flag.geometry_hash(),
+        runs=tuple(runs), lead=lead, anchor=anchor, rotation=rotation,
+        flag_box=box,
+    )
+
+
+def _joint_route_group(
+    ctx: _Context,
+    spot: str,
+    prepared: Sequence[dict[str, Any]],
+    cells: Sequence[_JointSeatCell],
+    rails: Sequence[_JointSeatRail],
+    host: str,
+    placed: _Placement,
+    sign: float,
+    kind: str,
+    ports: Sequence[_JointSeatPort] = (),
+):
+    """Route each host foot to its branch and each rail foot to its trunk.
+
+    The compiler's own router is the ruler: the seat states the foot and the
+    rail, and the run between them is a real orthogonal path that avoids every
+    body, printed row, flag and earlier run. A foot with no legal run refuses
+    the group by name — no hand-drawn channel and no second placement.
+    """
+    boxes: list[Box] = list(ctx.budget.keepouts)
+    points: list[tuple[float, float]] = []
+    for part_id in placed.origins:
+        profile = ctx.profile(part_id)
+        pose = placed.poses[part_id]
+        origin = placed.origins[part_id]
+        body = _body_box(profile, pose, origin)
+        if body is not None:
+            boxes.append(body)
+        # A pin's own drawn lead is a wall, exactly as in the ordinary build: a
+        # run may reach the tip from outside or cross the lead, never double back
+        # over it (`_pin_walls` and `readability`'s `wire-on-pin-line` are one
+        # ruler).
+        boxes.extend(_pin_walls(profile, pose, origin))
+    for item in prepared:
+        boxes.extend(item["rows_abs"])
+        points.append(item["from_seat"])
+        points.extend(point for _token, point in item["feet"])
+    for rail in rails:
+        boxes.append(rail.flag_box)
+        for run in rail.runs:
+            points.extend(run)
+    for port in ports:
+        # A reserved port is drawn before the seat: its copper and its label are
+        # this group's walls, and the seat may neither cross nor stand on them.
+        boxes.extend(_run_boxes(port.run))
+        boxes.append(port.label.bbox)
+    def terminal_walls(net_id: str) -> list[Box]:
+        """Keep foreign host paths off a pull terminal's immediate pin room.
+
+        The placement search already uses two lattice steps for foreign pin
+        clearance. A joint route must keep that same air around the terminal pad:
+        a vertex one grid step away is not an electrical join, but it reads as a
+        short against the pad and its flag lead (548P117's R4/R6 near misses).
+        """
+        if kind != "pull":
+            return []
+        half = ctx.budget.grid * placement.PIN_CLEARANCE_GRID / 2.0
+        walls: list[Box] = []
+        for item in prepared:
+            terminal_net = item["branch"].to_net
+            if terminal_net == net_id or _service_group_net_class(
+                    ctx.circuit, terminal_net) not in ("power", "gnd"):
+                continue
+            point = item["to_seat"]
+            walls.append((
+                point[0] - half, point[1] - half,
+                point[0] + half, point[1] + half,
+            ))
+        return walls
+
+    router = _Router(
+        grid=ctx.budget.grid, residue=placed.residue, boxes=list(boxes),
+        bounds=_search_bounds(ctx, boxes, points),
+    )
+    # Every run this group has already decided lives in one list of
+    # `LayoutSegment`s, so each later route sees the page as it will be drawn:
+    # `_set_foreign_edges` makes another net's copper a wall it may not run along
+    # or turn on (a perpendicular crossing stays legal, as in the editor), while
+    # this net's own copper stays a target. `_blocked_points` is the production
+    # list of join points — foreign pin tips, foreign flags and foreign vertices
+    # — and it exempts exactly the members of the net being routed, never every
+    # rail point as a blanket.
+    written: list[LayoutSegment] = [
+        LayoutSegment(net=port.net, points=[_point(point) for point in port.run])
+        for port in ports
+    ] + [
+        LayoutSegment(net=rail.net, points=[_point(point) for point in run])
+        for rail in rails
+        for run in rail.runs
+    ]
+
+    def rewall(net_id: str) -> None:
+        _set_foreign_edges(router, written, net_id)
+        router.blocked = _blocked_points(ctx, placed, net_id, (), (), written)
+
+    # The rails' terminal copper and their flags come first: a rail is one short
+    # run from the host's own foot to the terminal row, and it owns the lane
+    # nearest the host. Their **host runs** are routed last, after the branches,
+    # so every run on this seat is decided with the others on the page: a
+    # perpendicular crossing of two different nets reads as a join, and no run
+    # here is drawn through one that was already taken.
+    new_rails: list[_JointSeatRail] = [
+        replace(rail, runs=tuple(rail.runs)) for rail in rails
+    ]
+    paths: dict[str, list[tuple[tuple[float, float], ...]]] = {}
+    siblings: list[LayoutSegment] = []
+    for cell, item in zip(cells, prepared):
+        mine: list[tuple[tuple[float, float], ...]] = []
+        # Feet of one net are routed and recorded one at a time, so a shared
+        # boot foot's sibling can still reach the same foot: they are one net, so
+        # neither run is a wall to the other.
+        for token, foot in sorted(item["feet"], key=lambda pair: pair[1][1]):
+            rewall(cell.from_net)
+            router.boxes = list(boxes) + terminal_walls(cell.from_net) + [
+                box
+                for segment in siblings
+                if segment.net != cell.from_net
+                for box in _run_boxes(segment.points)
+            ]
+            route = router.route(foot, cell.from_seat)
+            if route is None:
+                return _joint_refusal(
+                    spot,
+                    f"the host foot {token!r} has no crossing-free orthogonal "
+                    f"run to {cell.part_id!r}'s signal foot ({foot} -> "
+                    f"{cell.from_seat}) that avoids its sibling branches",
+                    "give the group room between the host and its row, or drop "
+                    "the group")
+            run = tuple(_point(point) for point in _compress(route))
+            mine.append(run)
+            written.append(LayoutSegment(net=cell.from_net, points=list(run)))
+            siblings.append(LayoutSegment(net=cell.from_net, points=list(run)))
+        paths[cell.part_id] = mine
+    routed_rails: list[_JointSeatRail] = []
+    for rail in new_rails:
+        if kind == "pull" and rail.cls in ("power", "gnd"):
+            rail = _joint_host_rail(
+                ctx, spot, rail, host, placed, sign, router, boxes, written)
+            if isinstance(rail, GrammarFailure):
+                return rail
+        routed_rails.append(rail)
+    new_cells = tuple(
+        replace(cell, host_paths=tuple(paths.get(cell.part_id, ())))
+        for cell in cells
+    )
+    return new_cells, tuple(routed_rails)
+
+
+def _joint_rail_feet(ctx: _Context, host: str, net: str, placed: _Placement, sign: float):
+    """The actual host feet that the existing side's rail must reach."""
+    for token in _service_group_side_tokens(ctx, host, net):
+        pin = _pin_of_token(ctx.profile(host), token)
+        if pin is None or pin.direction != ("right" if sign > 0 else "left"):
+            continue
+        foot = _pin_point(ctx, host, token, placed.poses, placed.origins)
+        if foot is not None:
+            yield token, foot
+
+
+def _joint_host_rail(
+    ctx: _Context, spot: str, rail: _JointSeatRail, host: str,
+    placed: _Placement, sign: float, router: _Router, boxes: Sequence[Box],
+    written: list[LayoutSegment], labels: Sequence[LayoutLabel] = (),
+    symbols: Sequence[LayoutPowerSymbol] = (),
+) -> _JointSeatRail | GrammarFailure:
+    """One host-to-rail consumer for the provisional and final geometry alike."""
+    runs = list(rail.runs)
+    trunk = runs[0]
+    entry = trunk[0] if sign > 0 else trunk[1]
+    outer = trunk[-1] if sign > 0 else trunk[0]
+    entries = (entry,) if entry == outer else (entry, outer)
+    for token, foot in _joint_rail_feet(ctx, host, rail.net, placed, sign):
+        _set_foreign_edges(router, written, rail.net)
+        router.blocked = _blocked_points(ctx, placed, rail.net, labels, symbols, written)
+        router.boxes = list(boxes) + [
+            box for segment in written if segment.net != rail.net
+            for box in _run_boxes(segment.points)]
+        route = None
+        for target in entries:
+            route = router.route(foot, target)
+            if route is not None:
+                break
+        if route is None:
+            return _joint_refusal(
+                spot,
+                f"the host foot {token!r} has no crossing-free orthogonal run "
+                f"to the {rail.net!r} terminal rail ({foot} -> {entry}) that "
+                "avoids the group's branches",
+                "give the group's rail room beside its host, or drop the group")
+        run = tuple(_point(point) for point in _compress(route))
+        runs.append(run)
+        written.append(LayoutSegment(net=rail.net, points=list(run)))
+    return replace(rail, runs=tuple(runs))
+
+
+def _replaceable_host_runs(
+    ctx: _Context,
+    record: _JointSeatGroup,
+    rail: _JointSeatRail,
+    placed: _Placement,
+) -> frozenset[tuple[tuple[float, float], ...]]:
+    """The old host-to-rail runs that the final rail pass will replace."""
+    if record.kind != "pull" or rail.cls not in ("power", "gnd"):
+        return frozenset()
+    sign = 1.0 if record.side == "right" else -1.0
+    feet = {
+        foot
+        for _token, foot in _joint_rail_feet(
+            ctx, record.host_part, rail.net, placed, sign
+        )
+    }
+    trunk = rail.runs[0]
+    return frozenset(
+        run
+        for run in rail.runs[1:]
+        if run[0] in feet and run[-1] in (trunk[0], trunk[-1])
+    )
+
+
+def _final_joint_rails(
+    ctx: _Context, placed: _Placement, plan: LayoutPlan, solids: Sequence[Box],
+) -> tuple[tuple[_JointSeatGroup, ...] | None, GrammarFailure | None]:
+    """Replace only recorded host runs after every seat and printed row is final.
+
+    Work on local records and the local plan. The caller commits these records
+    only after the same complete readability gate accepts the new drawing.
+    """
+    boxes = [*solids, *(label.bbox for label in plan.labels),
+             *(box for _name, box, _owner, _net in readability._named_wire_rows(plan))]
+    points = [point for segment in plan.segments for point in segment.points]
+    router = _Router(
+        grid=ctx.budget.grid, residue=placed.residue, boxes=list(boxes),
+        bounds=_search_bounds(ctx, boxes, points))
+    written = list(plan.segments)
+    records: list[_JointSeatGroup] = []
+    for record in placed.service_group_plans:
+        rails: list[_JointSeatRail] = []
+        sign = 1.0 if record.side == "right" else -1.0
+        for rail in record.rails:
+            if record.kind == "pull" and rail.cls in ("power", "gnd"):
+                old_runs = _replaceable_host_runs(ctx, record, rail, placed)
+                written = [segment for segment in written
+                           if not (segment.net == rail.net
+                                   and tuple(segment.points) in old_runs)]
+                seed = replace(rail, runs=tuple(run for run in rail.runs if run not in old_runs))
+                rail = _joint_host_rail(
+                    ctx, f"$.serviceGroups[{record.group_id!r}]", seed,
+                    record.host_part, placed, sign, router, boxes, written,
+                    plan.labels, plan.power_symbols)
+                if isinstance(rail, GrammarFailure):
+                    return None, rail
+            rails.append(rail)
+        updated = replace(record, rails=tuple(rails), frame=_joint_frame(
+            ctx, record.cells, rails, record.host_part, placed))
+        records.append(replace(updated, notes=(_seat_note(updated),)))
+    plan.segments = written
+    plan.junctions = _junctions(written)
+    return tuple(records), None
+
+
+def _run_boxes(run) -> list[Box]:
+    """One drawn leg as a thin box, so the next run cannot cross it."""
+    out: list[Box] = []
+    for start, stop in zip(run, run[1:]):
+        out.append((
+            min(start[0], stop[0]) - 0.5, min(start[1], stop[1]) - 0.5,
+            max(start[0], stop[0]) + 0.5, max(start[1], stop[1]) + 0.5,
+        ))
+    return out
+
+
+def _joint_collisions(
+    ctx: _Context,
+    group_id: str,
+    spot: str,
+    host: str,
+    cells: Sequence[_JointSeatCell],
+    rails: Sequence[_JointSeatRail],
+    placed: _Placement,
+    group_parts: frozenset[str],
+    ports: Sequence[_JointSeatPort] = (),
+) -> GrammarFailure | None:
+    """Every group body, row and flag against the page it is joining.
+
+    A joint seat that would stand on a part outside the group (548J's measured
+    C8 conflict), on the host body, or on another cell's row or flag is a named
+    refusal of this group. It is never repaired by moving the foreign part or by
+    dropping back to the scatter the branches came with.
+    """
+    boxes: list[tuple[str, Box]] = []
+    for cell in cells:
+        boxes.append((
+            f"branch {cell.part_id!r}",
+            _part_box(ctx.profile(cell.part_id), cell.pose, cell.origin)))
+        boxes.extend(
+            (f"text of {cell.part_id!r}", box)
+            for _kind, _text, box in cell.text_boxes)
+    boxes.extend((f"flag of {rail.net!r}", rail.flag_box) for rail in rails)
+    host_box = _part_box(
+        ctx.profile(host), placed.poses[host], placed.origins[host])
+    foreign = [
+        (f"part {part_id!r}",
+         _part_box(ctx.profile(part_id), placed.poses[part_id],
+                   placed.origins[part_id]))
+        for part_id in sorted(placed.origins)
+        if part_id not in group_parts and part_id != host
+    ]
+    # A page keep-out is the same kind of wall as a foreign part: a seat that
+    # would stand on one is refused by name, never drawn over it.
+    foreign.extend(
+        (f"page keep-out {box}", box) for box in ctx.budget.keepouts)
+    for port in ports:
+        foreign.append((f"reserved port {port.net!r}", port.label.bbox))
+        foreign.extend(
+            (f"reserved port {port.net!r} run", box)
+            for box in _run_boxes(port.run))
+    for index, (left_name, left) in enumerate(boxes):
+        for right_name, right in boxes[index + 1:]:
+            if _overlaps(left, right):
+                return _joint_refusal(
+                    spot,
+                    f"{left_name} {left} overlaps {right_name} {right} inside "
+                    f"the joint seat {group_id!r}",
+                    "give the group more room on the page, or drop the group")
+        for name, box in foreign:
+            if _overlaps(left, box):
+                return _joint_refusal(
+                    spot,
+                    f"{left_name} {left} stands on {name} {box}; the group's "
+                    "joint seat is not taken from another part",
+                    "move the foreign part out of the group's rows, or drop the "
+                    "group")
+        if _overlaps(left, host_box):
+            return _joint_refusal(
+                spot,
+                f"{left_name} {left} stands on the host {host!r} {host_box}",
+                "give the group room beside its host, or drop the group")
+    return None
+
+
+def _joint_frame(
+    ctx: _Context,
+    cells: Sequence[_JointSeatCell],
+    rails: Sequence[_JointSeatRail],
+    host: str,
+    placed: _Placement,
+) -> Box:
+    """The group's complete frame, measured from its own finished geometry."""
+    xs: list[float] = []
+    ys: list[float] = []
+    for cell in cells:
+        box = _part_box(ctx.profile(cell.part_id), cell.pose, cell.origin)
+        xs.extend((box[0], box[2]))
+        ys.extend((box[1], box[3]))
+        for _kind, _text, text_box in cell.text_boxes:
+            xs.extend((text_box[0], text_box[2]))
+            ys.extend((text_box[1], text_box[3]))
+        for path in cell.host_paths:
+            for point in path:
+                xs.append(point[0])
+                ys.append(point[1])
+    for rail in rails:
+        xs.extend((rail.flag_box[0], rail.flag_box[2]))
+        ys.extend((rail.flag_box[1], rail.flag_box[3]))
+        for run in rail.runs:
+            for point in run:
+                xs.append(point[0])
+                ys.append(point[1])
+    xs.append(placed.origins[host][0])
+    ys.append(placed.origins[host][1])
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _point(point) -> tuple[float, float]:
+    return (float(point[0]), float(point[1]))
+
+
+def _build_service_group_variant(
+    ctx: _Context, variant: _Variant, placed: _Placement,
+) -> tuple[_Built | None, GrammarFailure | None, list[str]]:
+    """The production build of a page that stated a joint seat (548J-B1).
+
+    Everything the page draws is the placement's own record: each group's poses,
+    terminal row, host paths, shared rails with one local flag each, its text
+    rows and the open-port columns. The rest of the page (the host, any part
+    outside a group) is drawn with the compiler's own text and router. The
+    independent readability gate grades the result; a page that cannot be drawn
+    this way refuses by name instead of falling back to the loose seats.
+    """
+    records = placed.service_group_plans
+    if not records:
+        return None, _joint_refusal(
+            "$.serviceGroups", "the placement carries no joint seat",
+            "drop the group, or seat it"), []
+    group_parts = frozenset(
+        cell.part_id for record in records for cell in record.cells)
+    parts: list[LayoutPart] = []
+    occupied: list[Box] = list(ctx.budget.keepouts)
+    solids: list[Box] = list(ctx.budget.keepouts)
+    text_walls: list[Box] = list(ctx.budget.keepouts)
+    for part_id in sorted(placed.origins):
+        profile = ctx.profile(part_id)
+        pose = placed.poses[part_id]
+        origin = placed.origins[part_id]
+        parts.append(LayoutPart(
+            part_id=part_id,
+            symbol_ref=profile.symbol_ref,
+            symbol_hash=profile.geometry_hash(),
+            x=origin[0], y=origin[1],
+            rotation=float(pose.rotation), mirror=pose.mirror,
+            reference=part_id,
+        ))
+        occupied.append(_part_box(profile, pose, origin))
+        text_walls.extend(_text_walls(profile, pose, origin))
+        body = _body_box(profile, pose, origin)
+        if body is not None:
+            solids.append(body)
+        solids.extend(_pin_walls(profile, pose, origin))
+
+    texts: list[LayoutText] = []
+    for record in records:
+        for cell in record.cells:
+            for kind, text, box in cell.text_boxes:
+                texts.append(LayoutText(
+                    kind=kind, text=text, bbox=box, part_id=cell.part_id))
+                occupied.append(box)
+                text_walls.append(box)
+    others = _Placement(
+        origins={part: placed.origins[part] for part in placed.origins
+                 if part not in group_parts},
+        poses={part: placed.poses[part] for part in placed.poses
+               if part not in group_parts},
+        residue=placed.residue,
+    )
+    if ctx.local_flag_repair_active:
+        # Only the post-search repair re-seats free text against copper that the
+        # joint record already fixed. The ordinary build keeps its historical
+        # text search and its historical attempts byte-for-byte.
+        for record in records:
+            for cell in record.cells:
+                for path in cell.host_paths:
+                    text_walls.extend(_run_boxes(path))
+            for rail in record.rails:
+                for run in rail.runs:
+                    text_walls.extend(_run_boxes(run))
+                text_walls.append(rail.flag_box)
+    other_texts, refusal = _part_texts(ctx, others, occupied, text_walls)
+    if refusal is not None:
+        return None, refusal, []
+    texts.extend(other_texts)
+    for text in texts:
+        solids.append(text.bbox)
+
+    segments: list[LayoutSegment] = []
+    symbols: list[LayoutPowerSymbol] = []
+    notes: list[str] = []
+    for record in records:
+        notes.extend(record.notes)
+        for cell in record.cells:
+            for path in cell.host_paths:
+                segments.append(LayoutSegment(
+                    net=cell.from_net, points=[_point(p) for p in path]))
+        for rail in record.rails:
+            solids.append(rail.flag_box)
+            # A flag's glyph and its name row are one box (`_flag_box`): the open
+            # ports placed below have to see it, or a label lands on the name.
+            occupied.append(rail.flag_box)
+            for run in rail.runs:
+                if len(_compress(run)) < 2:
+                    continue
+                segments.append(LayoutSegment(
+                    net=rail.net, points=[_point(p) for p in run]))
+            symbols.append(LayoutPowerSymbol(
+                symbol_ref=rail.symbol_ref,
+                symbol_hash=rail.symbol_hash,
+                net=rail.net, x=rail.anchor[0], y=rail.anchor[1],
+                rotation=rail.rotation,
+            ))
+
+    labels: list[LayoutLabel] = []
+    # The open ports were reserved before the seats (the placement's own
+    # `service_group_ports`): the builder draws that record and never picks a
+    # second path, length or label for it.
+    for port in getattr(placed, "service_group_ports", ()):
+        segments.append(LayoutSegment(
+            net=port.net, points=[_point(p) for p in port.run]))
+        labels.append(replace(port.label))
+        occupied.append(port.label.bbox)
+    for net in ctx.circuit.nets:
+        if net.cls != "signal":
+            continue
+        if any(item.net == net.id for item in segments):
+            continue
+        if len(net.members) == 1:
+            return None, _joint_refusal(
+                "$.serviceGroups",
+                f"the open signal {net.id!r} was not reserved before the seat",
+                "reserve it with the page's other open ports"), []
+        refusal = _joint_route_net(
+            ctx, net.id, placed, solids, segments, occupied, labels, symbols)
+        if refusal is not None:
+            return None, refusal, []
+
+    # A member of a rail net that no group rail and no run reaches yet gets its
+    # own nearby flag: the host's GND beside its own group, never a page bus.
+    replaceable: set[tuple[str, tuple[tuple[float, float], ...]]] = set()
+    if ctx.local_flag_repair_active:
+        for record in records:
+            for rail in record.rails:
+                replaceable.update(
+                    (rail.net, run)
+                    for run in _replaceable_host_runs(ctx, record, rail, placed)
+                )
+    for net in ctx.circuit.nets:
+        if net.cls not in ("power", "gnd"):
+            continue
+        runs_by_net = [
+            item.points for item in segments if item.net == net.id]
+        for member in net.members:
+            part_id, _, token = member.partition(".")
+            if part_id not in placed.origins or not token:
+                continue
+            point = _pin_point(ctx, part_id, token, placed.poses, placed.origins)
+            if point is None:
+                continue
+            if any(_on_polyline(point, run) for run in runs_by_net):
+                continue
+            seat_segments = [
+                item
+                for item in segments
+                if (item.net, tuple(item.points)) not in replaceable
+            ]
+            flag, problem = _joint_local_flag(
+                ctx, net.id, net.cls, part_id, token, point, placed,
+                occupied, solids, seat_segments, symbols,
+                tuple(text.bbox for text in texts),
+                page_box=(ctx.budget.page_box
+                          if ctx.local_flag_repair_active else None))
+            if problem is not None:
+                return None, problem, []
+            segments.append(LayoutSegment(
+                net=net.id, points=[_point(p) for p in flag[1]]))
+            glyph = _flag_box(
+                ctx.book[flag[0].symbol_ref], flag[0].rotation,
+                (flag[0].x, flag[0].y), net.id)
+            occupied.append(glyph)
+            solids.append(glyph)
+            solids.extend(_run_boxes(flag[1]))
+            symbols.append(flag[0])
+            runs_by_net.append([_point(p) for p in flag[1]])
+
+    # The joint-seat builder assembles its own plan, so it must consume the
+    # ordinary builder's native-label finishing passes before the same gate.
+    # The reserved label boxes then describe the names the ATTR plan prints.
+    if _native_text_placement(ctx):
+        note = _native_label_dedupe(
+            labels, segments, {item.net for item in symbols},
+        )
+        if note:
+            notes.append(note)
+        note = _native_label_visibility(
+            labels, segments, {item.net for item in symbols},
+            sides=_native_label_sides(ctx),
+            separate_runs=ctx.presentation.service_layout is not None,
+        )
+        if note:
+            notes.append(note)
+        riding = _riding_label_failure(ctx, labels)
+        if riding is not None:
+            return None, riding, []
+
+    plan = LayoutPlan(
+        source=LayoutSource(
+            circuit_sha256=ctx.circuit.sha256(),
+            presentation_sha256=ctx.presentation.sha256(),
+        ),
+        parts=parts,
+        segments=[item for item in segments if len(item.points) > 1],
+        junctions=_junctions([item for item in segments if len(item.points) > 1]),
+        labels=labels,
+        power_symbols=symbols,
+        texts=texts,
+        notes=[f"compiled by {COMPILER_NAME}: the joint service seat", *notes],
+    )
+    final_records, refusal = _final_joint_rails(ctx, placed, plan, solids)
+    if refusal is not None:
+        return None, refusal, []
+    record_notes = {old.notes[0]: new.notes[0]
+                    for old, new in zip(records, final_records)
+                    if old.notes and new.notes}
+    notes = [record_notes.get(note, note) for note in notes]
+    plan.notes = [record_notes.get(note, note) for note in plan.notes]
+    checked = readability.check(
+        plan,
+        ctx.circuit,
+        ctx.presentation,
+        ctx.book,
+        grammar_checker=partial(check_grammar, intent=ctx.intent),
+        page_box=ctx.budget.page_box,
+        keepouts=ctx.budget.keepouts,
+        grid=ctx.budget.grid,
+    )
+    if checked.hard_violations:
+        return (
+            None,
+            _gate_failure(ctx, variant, checked.hard_violations),
+            [item.render() for item in checked.hard_violations],
+        )
+    placed.service_group_plans = final_records
+    return _Built(plan=plan, checked=checked), None, notes
+
+
+def _joint_flag_clear(
+    lead: Sequence[tuple[float, float]],
+    box: Box,
+    occupied: Sequence[Box],
+    solids: Sequence[Box],
+    foreign: Sequence[tuple[str, tuple[float, float], tuple[float, float]]],
+    blocked: set[tuple[float, float]],
+    texts: Sequence[Box] = (),
+) -> bool:
+    """Does one flag — glyph, name room and the **whole** lead — stand clear?
+
+    `occupied` is what text must avoid and `solids` what copper must avoid
+    (bodies, pin leads, printed rows, keep-outs, earlier flags), so the glyph is
+    checked against both and every leg of the lead against both. The lead is also
+    measured against every foreign run: it may not run along one, turn on one or
+    cut one. A lead is a stub, not a wire — a stub laid across a trunk reads as a
+    join, which is the defect this replaces. Points that a wire vertex would join
+    are walls for the same reason. A flag accepted here is an obstacle for the
+    next one (the caller feeds it back).
+    """
+    if any(_overlaps(box, other) for other in occupied):
+        return False
+    if any(_overlaps(box, other) for other in solids):
+        return False
+    # 069 sec.8's `FLAG_CLEARANCE`: the glyph and the name row print with the
+    # symbol's own margin, and that margin is what keeps them off a foreign foot
+    # or another part's printed row. The box already carries it around its own
+    # contents; the same distance is required again to anything foreign, which is
+    # the gap a reader sees between the pennant and the pin it is *not* on.
+    padded = (
+        box[0] - FLAG_CLEARANCE, box[1] - FLAG_CLEARANCE,
+        box[2] + FLAG_CLEARANCE, box[3] + FLAG_CLEARANCE,
+    )
+    for point in blocked:
+        if padded[0] <= point[0] <= padded[2] and padded[1] <= point[1] <= padded[3]:
+            return False
+    for other in texts:
+        if _overlaps(padded, other):
+            return False
+    for point in blocked:
+        if box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]:
+            return False
+    for _net, start, stop in foreign:
+        if _segment_hits_box(start, stop, box):
+            return False
+    for first, second in zip(lead, lead[1:]):
+        for other in (*occupied, *solids):
+            if _segment_hits_box(first, second, other):
+                return False
+        for _net, start, stop in foreign:
+            if _collinear_overlap(first, second, start, stop):
+                return False
+            if _proper_crossing(first, second, start, stop) is not None:
+                return False
+            if (_strictly_on_segment(first, start, stop)
+                    or _strictly_on_segment(second, start, stop)):
+                return False
+        for point in (first, second):
+            if _key(point) in blocked:
+                return False
+    return True
+
+
+def _joint_flag_seat(
+    ctx: _Context,
+    net_id: str,
+    cls: str,
+    start: tuple[float, float],
+    escape: tuple[float, float] | None,
+    profile: SymbolProfile,
+    placed: _Placement,
+    occupied: Sequence[Box],
+    solids: Sequence[Box],
+    segments: Sequence[LayoutSegment],
+    symbols: Sequence[LayoutPowerSymbol],
+    texts: Sequence[Box] = (),
+    exempt: Sequence[Box] = (),
+    rail_cls: str = "",
+    prefix: Sequence[tuple[float, float]] = (),
+    page_box: Box | None = None,
+):
+    """The first legal upright flag seat from `start`, or ``None``.
+
+    One ladder for every flag this page puts down — a pin's own local flag and a
+    shared terminal rail's flag alike. The near reach on the start's own escape
+    comes first, then the sideways steps, and on each of them 069's reach band
+    (30 / 40 / 50 / 60). Every candidate is the whole object: anchor, glyph, the
+    name row `_flag_box` carries, and every leg of the lead, measured by
+    `_joint_flag_clear` against this page's bodies, pin leads, printed rows,
+    keep-outs, foreign copper, earlier flags and the five-unit clearance to a
+    foreign foot or row. The caller makes the refusal by name when nothing fits;
+    nothing here moves a fixed coordinate or drops a check.
+    """
+    kind = flag_glyph_kind(profile)
+    walls = [box for box in solids if box not in exempt]
+    foreign = [
+        (segment.net, first, second)
+        for segment in segments
+        if segment.net != net_id
+        for first, second in zip(segment.points, segment.points[1:])
+    ]
+    blocked = _blocked_points(ctx, placed, net_id, (), symbols, segments)
+    seats: list[tuple] = []
+    steps = [0.0]
+    if escape is not None and (escape[0] or escape[1]):
+        steps.extend((GAP, 2.0 * GAP))
+    reaches: list[float] = []
+    for value in (FLAG_LEAD, FLAG_LEAD + GAP / 2.0, SIBLING_LEAD,
+                  FLAG_LEAD_LIMIT):
+        if value not in reaches:
+            reaches.append(value)
+    for step in steps:
+        base = (
+            float(start[0] + (escape[0] * step if escape else 0.0)),
+            float(start[1] + (escape[1] * step if escape else 0.0)),
+        )
+        if rail_cls == "power":
+            # A shared terminal rail's flag is not free to choose a side: the
+            # supply points up off its row and the return points down off it.
+            directions = ((0.0, 1.0),)
+        elif rail_cls == "gnd":
+            directions = ((0.0, -1.0),)
+        else:
+            directions = ((0.0, 1.0), (0.0, -1.0))
+        for direction in directions:
+            for reach in reaches:
+                anchor = (
+                    float(base[0] + direction[0] * reach),
+                    float(base[1] + direction[1] * reach),
+                )
+                rotation = _flag_rotation(direction, kind)
+                box = _flag_box(profile, rotation, anchor, net_id)
+                lead = (
+                    ((float(start[0]), float(start[1])), anchor)
+                    if not step else
+                    ((float(start[0]), float(start[1])), base, anchor)
+                )
+                if prefix:
+                    lead = tuple(prefix) + lead
+                if page_box is not None:
+                    if (
+                        box[0] < page_box[0] or box[1] < page_box[1]
+                        or box[2] > page_box[2] or box[3] > page_box[3]
+                    ):
+                        continue
+                    if any(
+                        point[0] < page_box[0] or point[0] > page_box[2]
+                        or point[1] < page_box[1] or point[1] > page_box[3]
+                        for point in lead
+                    ):
+                        continue
+                if not _joint_flag_clear(
+                        lead, box, occupied, walls, foreign, blocked, texts):
+                    continue
+                # Every rung here is legal; the one taken is the one that stands
+                # furthest from a foreign join point, so a shared rail's flag
+                # does not park itself in the escape lane of a neighbouring pin
+                # when a roomier rung of the same band exists. A preference
+                # between legal seats, never a relaxation of the checks.
+                room = min(
+                    (max(abs(point[0] - box[0]), abs(point[0] - box[2]),
+                         abs(point[1] - box[1]), abs(point[1] - box[3]))
+                     for point in blocked),
+                    default=float("inf"),
+                )
+                seats.append((room, len(seats), anchor, lead, box, rotation))
+    if not seats:
+        return None
+    return max(seats, key=lambda item: (item[0], -item[1]))[2:]
+
+
+def _joint_local_flag(
+    ctx: _Context,
+    net_id: str,
+    cls: str,
+    part_id: str,
+    token: str,
+    point: tuple[float, float],
+    placed: _Placement,
+    occupied: Sequence[Box],
+    solids: Sequence[Box],
+    segments: Sequence[LayoutSegment],
+    symbols: Sequence[LayoutPowerSymbol],
+    texts: Sequence[Box] = (),
+    page_box: Box | None = None,
+):
+    """One pin's own local flag, on the first lead that stands clear.
+
+    Returns ``(symbol, lead)`` or ``(None, refusal)``. The seat itself is
+    `_joint_flag_seat`'s, so a pin flag and a rail flag answer to one ruler. The
+    pin the flag hangs on is the one wall it may touch: its own drawn lead starts
+    at the tip, and every upright hang brushes that lead's end box. The other
+    pins' leads stay walls (a hang laid across a neighbouring foot is the defect
+    this replaces), and the readability gate still refuses a lead that doubles
+    back over its own pin's line.
+    """
+    profile, ref = _flag_plan(ctx, net_id, cls)
+    if profile is None:
+        return None, _joint_refusal(
+            "$.serviceGroups",
+            f"the net {net_id!r} is a bus and the library carries no flag "
+            f"symbol {ref!r}",
+            f"add {ref!r} to the library, or drop the page's joint seat")
+    escape = _pin_direction(ctx, part_id, token, placed.poses)
+    own_wall = _pin_walls(
+        ctx.profile(part_id), placed.poses[part_id],
+        placed.origins[part_id], only=token)
+    seat = _joint_flag_seat(
+        ctx, net_id, cls, (float(point[0]), float(point[1])), escape,
+        profile, placed, occupied, solids, segments, symbols, texts, own_wall,
+        page_box=page_box)
+    tap = None
+    if seat is None and escape is not None and abs(escape[0]) > 0.5:
+        # The same tap rule as a crowded rail: the flag's lead leaves the pin
+        # along the pin's own escape, so when the near column is taken the tap
+        # walks out to the first lattice x clear of a real obstacle edge.
+        for candidate in _joint_rail_taps(
+                ctx, placed, (float(point[0]), float(point[1])),
+                1.0 if escape[0] > 0 else -1.0, cls, occupied, solids, texts,
+                segments):
+            attempt = _joint_flag_seat(
+                ctx, net_id, cls, (float(candidate), float(point[1])),
+                escape, profile, placed, occupied, solids, segments, symbols,
+                texts, own_wall, prefix=(
+                    (float(point[0]), float(point[1])),), page_box=page_box)
+            if attempt is not None:
+                seat = attempt
+                tap = candidate
+                break
+    if seat is None:
+        return None, _joint_refusal(
+            "$.serviceGroups",
+            f"the pin {part_id}.{token} has no clear upright hang for its "
+            f"{net_id!r} flag: every candidate stands on a body, a printed row, "
+            "a pin lead, a keep-out, a foreign run, a foreign foot's clearance "
+            "or an earlier flag",
+            "give the page room beside that pin, or drop the joint seat")
+    anchor, lead, _box, rotation = seat
+    return (
+        LayoutPowerSymbol(
+            symbol_ref=profile.symbol_ref,
+            symbol_hash=profile.geometry_hash(),
+            net=net_id, x=anchor[0], y=anchor[1], rotation=rotation,
+        ),
+        lead,
+    ), None
+
+
+def _joint_open_far(
+    ctx: _Context,
+    point: tuple[float, float],
+    direction: tuple[float, float],
+    length: float,
+    solids: Sequence[Box],
+    segments: Sequence[LayoutSegment],
+) -> list[tuple[float, float]] | None:
+    """A clear run of exactly ``length`` from an open pin, in some direction.
+
+    The port's reach is the document's stated stub length, so the target set is
+    every lattice point at that Manhattan distance from the pin. The compiler's
+    own router picks the cheapest legal orthogonal path to one of them, around
+    bodies, printed rows, flags and every conductor already drawn. The pin's own
+    escape is preferred by ordering the targets; a pin whose row is crowded (a
+    host pin beside another pin's lead) can leave by a bend and still keep the
+    same reach, which is what makes two open ports read as one column.
+    """
+    grid = ctx.budget.grid
+    if not direction or not (direction[0] or direction[1]):
+        direction = (0.0, 1.0)
+    boxes: list[Box] = list(solids)
+    for item in segments:
+        for a, b in zip(item.points, item.points[1:]):
+            boxes.extend(_run_boxes(((a[0], a[1]), (b[0], b[1]))))
+    targets: list[tuple[float, float]] = []
+    steps = int(round(length / grid))
+    if steps < 1:
+        return None
+    for along in range(steps + 1):
+        rest = steps - along
+        for horizontal, vertical in ((along, rest), (rest, along)):
+            for sign_x, sign_y in (
+                    (1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)):
+                target = (
+                    float(point[0] + sign_x * horizontal * grid),
+                    float(point[1] + sign_y * vertical * grid),
+                )
+                if target in targets:
+                    continue
+                targets.append(target)
+    targets.sort(key=lambda item: (
+        0 if (item[0] - point[0]) * direction[0]
+        + (item[1] - point[1]) * direction[1] > 0 else 1,
+        abs(item[1] - point[1]), abs(item[0] - point[0])))
+    if not targets:
+        return None
+    router = _Router(
+        grid=grid, residue=(0.0, 0.0), boxes=boxes,
+        bounds=_search_bounds(ctx, boxes, [point, *targets]),
+    )
+    route = router.route(point, targets[0], targets=targets)
+    if route is None:
+        return None
+    run = [tuple(_point(p)) for p in route]
+    total = sum(
+        abs(b[0] - a[0]) + abs(b[1] - a[1]) for a, b in zip(run, run[1:]))
+    if abs(total - length) > 1e-6:
+        return None
+    if _native_text_placement(ctx) and ctx.presentation.service_layout is not None:
+        # Native carrier seating measures straight runs between vertices.
+        # Keep the router's bends and reach, without treating grid steps as ends.
+        return _compress(run)
+    return run
+
+
+def _joint_route_net(
+    ctx: _Context,
+    net_id: str,
+    placed: _Placement,
+    solids: Sequence[Box],
+    segments: list[LayoutSegment],
+    occupied: Sequence[Box],
+    labels: Sequence[LayoutLabel] = (),
+    symbols: Sequence[LayoutPowerSymbol] = (),
+) -> GrammarFailure | None:
+    """Route every member of an ordinary signal net with the compiler's router.
+
+    The router is the same one `_joint_route_group` uses, and it is given the
+    same walls: every run already on the page goes through `_set_foreign_edges`
+    for the net being drawn, so another net's copper may be crossed but never run
+    along or turned on, and `_blocked_points` walls off the foreign pin tips,
+    flags and vertices a wire vertex would join. Each run this call adds is fed
+    back into that list, so the next member sees it too.
+    """
+    net = ctx.circuit.net(net_id)
+    if net is None:
+        return None
+    points: list[tuple[float, float]] = []
+    for member in net.members:
+        part_id, _, token = member.partition(".")
+        point = _pin_point(ctx, part_id, token, placed.poses, placed.origins)
+        if point is not None:
+            points.append(point)
+    if len(points) < 2:
+        return None
+    router = _Router(
+        grid=ctx.budget.grid, residue=placed.residue, boxes=list(solids),
+        bounds=_search_bounds(ctx, list(occupied), points),
+    )
+    current = points[0]
+    for target in points[1:]:
+        _set_foreign_edges(router, segments, net_id)
+        router.blocked = _blocked_points(
+            ctx, placed, net_id, labels, symbols, segments)
+        route = router.route(current, target)
+        if route is None:
+            return _joint_refusal(
+                "$.serviceGroups",
+                f"the signal {net_id!r} has no free orthogonal run from "
+                f"{current} to {target}",
+                "give the page room for that signal, or drop the joint seat")
+        segments.append(LayoutSegment(
+            net=net_id,
+            points=[_point(point) for point in _compress(route)]))
+        current = target
+    return None

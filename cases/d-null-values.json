@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.device-library-sample/1",
+ "name": "d-null-values",
+ "text": "{\"type\": \"DOCHEAD\"}||{\"docType\": \"DEVICE\", \"uuid\": \"dn\"}|\n{\"type\": \"META\"}||{\"title\": \"  \", \"attributes\": {\"Supplier Part\": null, \"Manufacturer Part\": \"null\", \"Manufacturer\": \" \", \"Name\": \" null \", \"Symbol\": \"null\", \"Type\": \"null\", \"Designator\": \"  \"}}|"
+}

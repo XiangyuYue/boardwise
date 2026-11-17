@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.device-library-sample/1",
+ "name": "d-attr-nest",
+ "text": "{\"type\": \"DOCHEAD\"}||{\"docType\": \"DEVICE\", \"uuid\": \"d-nest\"}|\n{\"type\": \"META\"}||{\"title\": \"T\", \"attributes\": {\"a\": 1}}|"
+}

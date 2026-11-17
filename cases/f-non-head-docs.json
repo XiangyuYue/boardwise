@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.footprint-library-sample/1",
+ "name": "f-non-head-docs",
+ "text": "{\"type\":\"META\"}||{\"title\":\"Orphan\"}|\n{\"type\":\"DOCHEAD\"}||{\"docType\":\"PAD\",\"uuid\":\"p\"}|\n{\"type\":\"META\"}||{\"title\":\"Pad\"}|\n{\"type\":\"DOCHEAD\"}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"f11\"}|\n{\"type\":\"META\"}||{\"title\":\"Real\"}|"
+}

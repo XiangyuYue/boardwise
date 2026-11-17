@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.footprint-library-sample/1",
+ "name": "f-title-scalars",
+ "text": "{\"type\": \"DOCHEAD\"}||{\"docType\": \"FOOTPRINT\", \"uuid\": \"f5\"}|\n{\"type\": \"META\"}||{\"title\": \"null\"}|\n{\"type\": \"DOCHEAD\"}||{\"docType\": \"FOOTPRINT\", \"uuid\": \"f6\"}|\n{\"type\": \"META\"}||{\"title\": 42}|\n{\"type\": \"DOCHEAD\"}||{\"docType\": \"FOOTPRINT\", \"uuid\": \"f7\"}|\n{\"type\": \"META\"}||{\"title\": true}|\n{\"type\": \"DOCHEAD\"}||{\"docType\": \"FOOTPRINT\", \"uuid\": \"f8\"}|\n{\"type\": \"META\"}||{\"title\": null}|\n{\"type\": \"DOCHEAD\"}||{\"docType\": \"FOOTPRINT\", \"uuid\": \"f9\"}|\n{\"type\": \"META\"}||{}|\n{\"type\": \"DOCHEAD\"}||{\"docType\": \"FOOTPRINT\", \"uuid\": \"f10\"}|\n{\"type\": \"META\"}||{\"title\": \"  　\"}|"
+}

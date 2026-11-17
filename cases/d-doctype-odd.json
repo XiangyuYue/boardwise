@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.device-library-sample/1",
+ "name": "d-doctype-odd",
+ "text": "{\"type\":\"DOCHEAD\"}||{\"docType\":\" DEVICE\",\"uuid\":\"loose\"}|\n{\"type\":\"META\"}||{\"title\":\"NotRead\",\"attributes\":{\"Designator\":\"R?\"}}|\n{\"type\":\"DOCHEAD\"}||{\"docType\":[\"DEVICE\"],\"uuid\":\"arr\"}|\n{\"type\":\"META\"}||{\"title\":\"NotRead2\",\"attributes\":{\"Designator\":\"R?\"}}|"
+}

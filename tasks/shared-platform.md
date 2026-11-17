@@ -547,3 +547,32 @@ build、Rust 150/4+fmt/clippy。最终总开关变异6红后cp恢复15 passed，
 证据 `mcu-local/final-c1.md`、`compat-local-seats.md`、`full-final-compare.md`。后续115/116两条
 按547S合法拒因演进重钉（`evidence/548D/scene08-baseline-repair.md`），最终全量
 **10775 passed / 26 skipped / 1 xfailed / 0 failed / 0 errors**，两条均消失。
+
+## 19. 548D3D-H：宿主脚候选集合与BoundPlan同源回放集成锁（2026-11-12）
+
+岳裁定先统一宿主脚绑定，再做右侧端口列、强制topology三岛与真实整页。根因与验收合同见
+`tasks/548_drawing_capability_ladder.md` §41。本锁只允许 `engines/placement.py` 的内部服务模板/
+binder/BoundPlan、必要的 `engines/drawcompiler.py` 接点、548D专测和本批证据；不改公共输入schema、
+CircuitSpec、ChangePlan、CLI/DSH/connector/Rust，不改其它线工作树文件，不进入548E或git写。
+
+模板保留允许宿主脚集合，binder在当前真实pose/origin上、支路排序与座位之前一次选脚；base/topology及
+最终文字/旗标/host path回放消费同一BoundPlan，缺位姿不得退回首脚。显式服务脚不可被同网其它脚替换。
+host path起点须审计为选定脚的真实pin tip且属于shared net。默认空模板、旧panelGroups、未开启
+localSeats的页面与CH34轨迹不变；新能力仍只属 `serviceLayout.localSeats:true`。
+
+验收必须覆盖同位姿base/topology一致、平移/合法换姿/pin顺序扰动、当前MCU禁止base兜底的真实候选、
+逐脚/grammar/readability/视觉和CH34；不能以binder测试代替整图。至少两项独立变异先红并cp+SHA-256恢复。
+如果当前MCU强制topology仍失败，交具体首个真实障碍，不能调near/reach/排名/硬闸或退回base冒充完成。
+
+## 20. 548D3D-H3：跨侧宿主脚的内部选侧集成锁（2026-11-12）
+
+H2已关闭15脚MCU的宿主绑定与强制topology（tasks §42最终读数）。真实64脚输入的同一电源网跨左右侧，
+需在同一 `placement.py` / `drawcompiler.py` 内部服务模板和binder中增加“阅读侧+脚”的联合选择；
+合同见tasks §43。只允许这两生产文件、548D专测与新证据；不改公共PresentationSpec/CircuitSpec/
+ChangePlan/CLI/DSH/connector/Rust，不进入真机或git写。
+
+模板不得退回首侧/首脚，显式脚归属仍优先；支路pose/文字随binder选定侧同源生成并进入BoundPlan回放。
+所有允许(侧,脚)与既有档位的有限组合都由真实候选数界定，完整旗位/导体判据不放宽。真实64脚全部
+VDD/VSS必须被驱动或有本地旗，禁止删脚/隐藏NC/P42坐标/userLocks。旧panelGroups、未开localSeats、
+15脚H2与CH34轨迹不变。跨侧负例、真实64脚compile/逐脚/视觉、两项主代理变异与邻域通过后才关闭；
+单岛标签桩/P43真机另批。

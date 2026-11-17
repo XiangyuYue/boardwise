@@ -983,6 +983,48 @@ class TrackSegment:
 
 
 @dataclass
+class ArcGeometry:
+    """One PCB ``ARC`` record, kept **verbatim and uninterpreted** (550A).
+
+    The record is two endpoints plus ``angle``; the official format
+    (``.ref/easyeda-pro-format-skill/primitives/PCB/arc.md``) says 「圆弧角，
+    逆时针正，顺时针负」 and states **no unit**. The repository's only real
+    sample (archived PCB1, ``angle = 2.1761``) reads as either 2.18°
+    (R ≈ 888.7 mil, sagitta 0.16 mil) or 124.68° (R ≈ 19.05 mil,
+    sagitta 10.2 mil) — a 10-mil difference on the board, so the unit cannot be
+    guessed. See ``tasks/550a_arc_copper.md``.
+
+    What that costs this class: **no centre, no radius, no tangent, no length,
+    no intersection and no containment**, and no geometry method of any kind.
+    It is deliberately **not** a :class:`TrackSegment`, because every copper
+    measurement in :mod:`boardwise.core.measure` would then silently read a
+    two-degree interpretation of a 124° arc. ``NetGeometry.element_count`` /
+    ``track_length`` / ``bbox`` and ``BoardGeometry.bbox`` exclude arcs on
+    purpose (550A keeps the old aggregate readings), and a copper-path search
+    may only report 「a same-net ARC exists and could not be measured」.
+
+    ``arc_type`` is the record's ``arcType`` verbatim — ``EArcType`` spelling
+    ``"DOT"`` (two-point arc) or ``"CENT"`` (centre arc); no ``CENT`` sample
+    has been seen, so it is carried and never read. ``locked`` / ``z_index``
+    are carried because the record states them; neither is geometry.
+    """
+
+    id: str
+    net: str | None = None
+    layer_id: int | None = None
+    start: Point = Point(0.0, 0.0)
+    end: Point = Point(0.0, 0.0)
+    #: ``ARC.angle`` verbatim. **Unit unverified** — never convert, never
+    #: build a centre or a radius from it (see the class docstring).
+    angle: float = 0.0
+    width: float = 0.0
+    #: ``ARC.arcType`` verbatim: ``"DOT"`` / ``"CENT"`` / ``""`` when absent.
+    arc_type: str = ""
+    locked: bool | None = None
+    z_index: int | None = None
+
+
+@dataclass
 class ViaGeometry:
     """One via (``VIA`` record)."""
 
@@ -1320,6 +1362,13 @@ class NetGeometry:
     tracks: list[TrackSegment] = field(default_factory=list)
     vias: list[ViaGeometry] = field(default_factory=list)
     pours: list[PourShape] = field(default_factory=list)
+    #: 550A: this net's ``ARC`` records, grouped by net name — **data only**.
+    #: They are not tracks, contribute to no count or length here, and
+    #: :func:`boardwise.core.measure._net_shape_records` never sees them; the
+    #: one reader is the copper-path search, which uses their presence to say
+    #: 「this net has an arc that could not be measured」 (see
+    #: :class:`ArcGeometry`).
+    arcs: list[ArcGeometry] = field(default_factory=list)
 
     @property
     def is_ground(self) -> bool:
@@ -1341,6 +1390,11 @@ class NetGeometry:
     @property
     def pour_count(self) -> int:
         return len(self.pours)
+
+    @property
+    def arc_count(self) -> int:
+        """How many ``ARC`` records this net holds (550A: data only, no geometry)."""
+        return len(self.arcs)
 
     @property
     def element_count(self) -> int:
@@ -1572,6 +1626,13 @@ class BoardGeometry:
     #: Every net-indexed consumer reads this list, so the index and the summary
     #: now agree on what a pour is.
     pours: list[PourShape] = field(default_factory=list)
+    #: 550A: every ``ARC`` record of the board's PCB document, in file order,
+    #: **verbatim and uninterpreted** (see :class:`ArcGeometry`). Deliberately
+    #: outside every copper aggregate: :meth:`bbox` ignores them,
+    #: :meth:`summary` counts them only when there are any, and no measurement
+    #: reads them. A project with no ARC records keeps an empty list, so the
+    #: per-container readers and every pre-550A fixture read exactly as before.
+    arcs: list[ArcGeometry] = field(default_factory=list)
     #: 162b: the board's **non-copper** area polygons — the ones a review of
     #: copper must not mistake for copper. Same records and shape as
     #: :attr:`pours`, so a consumer that wants "was there a polygon here at all"
@@ -1659,7 +1720,9 @@ class BoardGeometry:
         # Nets are derived from the flat lists, so a caller can build a
         # BoardGeometry by hand and still get a working net index.
         if not self.nets:
-            self.nets = index_by_net(self.pads, self.tracks, self.vias, self.pours)
+            self.nets = index_by_net(
+                self.pads, self.tracks, self.vias, self.pours, self.arcs
+            )
 
     # -- net queries -----------------------------------------------------
 
@@ -1768,6 +1831,9 @@ class BoardGeometry:
             "tracks": len(self.tracks),
             "vias": len(self.vias),
             "pours": len(self.pours),
+            # 550A: a key appears only when the board actually has arcs — a
+            # zero here would be a new fact on every pre-550A board's summary.
+            **({"arcs": len(self.arcs)} if self.arcs else {}),
             "non_copper_shapes": len(self.non_copper_shapes),
             "prohibit_regions": len(self.prohibit_regions),
             "silk_shapes": len(self.silk_shapes),
@@ -1783,8 +1849,16 @@ def index_by_net(
     tracks: Sequence[TrackSegment] = (),
     vias: Sequence[ViaGeometry] = (),
     pours: Sequence[PourShape] = (),
+    arcs: Sequence[ArcGeometry] = (),
 ) -> dict[str, NetGeometry]:
-    """Group copper elements by net name, skipping elements without a net."""
+    """Group copper elements by net name, skipping elements without a net.
+
+    550A appends ``arcs`` as an **optional** last parameter: every existing
+    caller keeps its meaning, and an :class:`ArcGeometry` is filed under its
+    net like the other elements while staying out of every copper aggregate
+    (``NetGeometry.element_count`` / ``track_length`` / ``bbox``). An arc
+    without a net is not grouped at all, the same rule as a netless track.
+    """
     nets: dict[str, NetGeometry] = {}
     for pad in pads:
         if pad.net:
@@ -1798,4 +1872,7 @@ def index_by_net(
     for pour in pours:
         if pour.net:
             nets.setdefault(pour.net, NetGeometry(name=pour.net)).pours.append(pour)
+    for arc in arcs:
+        if arc.net:
+            nets.setdefault(arc.net, NetGeometry(name=arc.net)).arcs.append(arc)
     return nets

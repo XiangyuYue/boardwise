@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.device-library-sample/1",
+ "name": "d-unicode-ws",
+ "text": "{\"type\":\"DOCHEAD\"}||{\"docType\":\"DEVICE\",\"uuid\":\"du\"}|\n{\"type\": \"META\"}||{\"title\": \" \\tX　\", \"attributes\": {\"Supplier Part\": \" C1 \", \"Designator\": \"\\u001cR?\\u001f\", \"Name\": \"{{Value}}\"}}|"
+}

@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 _readme_raw = (REPO / "README.md").read_text(encoding="utf-8")
 #: 声明钉按整句找——README 的换行是排版不是语义，先把空白归一再对拍。
@@ -1270,6 +1272,180 @@ def test_the_general_sop_and_the_agents_route_still_lead_to_the_draw_skill():
     )
 
 
+def test_joint_service_seating_claims_keep_their_scope_and_behavior_test_references():
+    """护 548P54/P55 文案边界与行为用例指针，不拿文案钉替算法验收。
+
+    失效时的样子：把 module.branchOrder 偷换成 branches 数组序/固定上下，
+    把合成链的绿写成真实 WiFi/整页/真机完成，或留下已不存在的测试名作证。
+    本钉只验声明及引用仍在；算法因果仍由被引用用例和独立变异验证。
+    """
+    draw = (REPO / "docs/draw.md").read_text(encoding="utf-8")
+    section = draw.split("### Joint service groups (", 1)[1].split("\n### ", 1)[0]
+    flat = _squash(section)
+    for claim in (
+        "Historical 548J-A/B1 status",
+        "the later bounded capabilities below",
+        "one column an existing `GAP` farther outward",
+        "Rows, columns and variants share the original complete-build budget",
+        "an unsuccessful attempt cannot move the next attempt's seed",
+        "`modules[].branchOrder` names at least two members of a power-pull group",
+        "real host **from-pin rows**",
+        "natural near-to-far foot-distance order matches that declaration",
+        "same host and terminal net align only on a common real from-pin row",
+        "no common row means no invented coordinate",
+        "contradicts the declaration cannot be accepted",
+        "the compiler refuses by name",
+        "not the `serviceGroups[].branches` array order",
+        "promises no fixed upper/lower coordinate",
+        "No declaration keeps the original path",
+        "pull-downs are outside this new preference",
+        "no claim that all pull-down geometry is correct",
+        "not acceptance of an automatic real WiFi drawing, the complete page or a live editor result",
+        "they do not replace the algorithm tests",
+    ):
+        assert claim in flat, f"joint service seating lost its boundary: {claim!r}"
+
+    references = re.findall(r"`(tests/test_548p(?:54|55)_[a-z_]+\.py)::(test_[a-z_]+)`", section)
+    expected = {
+        "tests/test_548p54_service_columns.py": {
+            "test_one_outward_column_reaches_the_complete_builder",
+            "test_complete_build_budget_can_stop_before_the_new_column",
+            "test_refused_complete_build_cannot_move_the_next_columns_seed",
+        },
+        "tests/test_548p55_service_order.py": {
+            "test_stated_near_order_and_shared_rail_reach_the_real_row",
+            "test_reversing_intent_selects_the_other_natural_pin_row",
+            "test_reversed_intent_is_drawn_when_its_natural_row_is_physically_reachable",
+            "test_no_common_real_row_does_not_invent_a_shared_coordinate",
+            "test_branch_array_order_cannot_change_the_stated_reading",
+            "test_no_statement_keeps_the_preexisting_success_byte_for_byte",
+            "test_a_pull_on_another_terminal_is_not_aligned_by_its_neighbour",
+            "test_pull_down_order_does_not_enable_the_pull_up_preference",
+        },
+    }
+    assert len(references) == 11, "the bounded seating claims lost a behavior test reference"
+    assert set(references) == {
+        (relative, name) for relative, names in expected.items() for name in names
+    }, "the bounded seating claims cite a different behavior case"
+    for relative, name in references:
+        source = (REPO / relative).read_text(encoding="utf-8")
+        assert re.search(rf"^def {re.escape(name)}\(", source, re.MULTILINE), (
+            f"docs/draw.md cites a behavior test that does not exist: {relative}::{name}"
+        )
+
+
+def test_the_subagent_dispatch_rule_keeps_all_six_sections_and_the_incident():
+    """护 `AGENTS.md` 的派单六节（岳 2026-11-14 定）。
+
+    失效时的样子：有人把六节表删成一句"派单要写清范围"，于是派单又变成短派单，
+    子代理只能猜上下文；本次事故（548K）就是这么来的——三条用例全钉在改动前就恒成
+    立的值上，把因果 hunk 变异成 `if False:` 之后仍然 3 passed，真缺口一条都没覆盖。
+    所以六节标题与事故记录都必须留在文件里，删掉任何一节即红。
+    """
+    agents = _squash((REPO / "AGENTS.md").read_text(encoding="utf-8"))
+    for section in ("前因后果", "当前树状态", "文件域与禁触清单",
+                    "交付物与验收", "纪律与红线", "预算与交卷格式"):
+        assert section in agents, (
+            f"AGENTS.md 的派单六节少了「{section}」——短派单会让子代理产出空转的绿"
+        )
+    assert "派单必须写全六节" in agents, (
+        "AGENTS.md lost the headline rule that a dispatch must carry all six sections"
+    )
+    assert "在变异下仍然绿" in agents and "548K" in agents, (
+        "AGENTS.md lost the 548K incident record that a green suite is not coverage"
+    )
+
+
+# ============================ 548O：基准口径（2026-11-14）
+
+
+def test_the_draw_baseline_rule_demotes_the_retired_fingerprint():
+    """护 `docs/draw.md` §Baseline 与 `tasks/draw-line.md` §4 的基准口径（548O 复盘）。
+
+    失效时的样子：下一任又把 `geometry_sha256` 逐字节不变当成通过，于是又拿一张**已判废**
+    的图当质量基准——548M/548N2/548O 就是这么连着三批报绿的。`8802d317cfae…` 是 **548L
+    自己**的候选（`evidence/548L/renders/cand1.layout.json:581`），当时已被视觉闸判废，却被
+    写成"默认页逐字节不变"的验收线；它连"默认页"都不是（该 spec 带 `stubLaneReserve: true`，
+    开关全关是 `81557467…`）。所以作废声明、P44 四条目标与"指纹≠基准"这句都必须留在文件里，
+    删掉任一项即红。
+    """
+    draw = _squash((REPO / "docs/draw.md").read_text(encoding="utf-8"))
+    line = _squash((REPO / "tasks/draw-line.md").read_text(encoding="utf-8"))
+    for text in (
+        "a fingerprint is not a quality reference",
+        "It never proves the drawing is readable",
+        "is not a pass",
+        "8802d317cfae",
+        "81557467",
+        "diagnostics, not universal acceptance thresholds",
+    ):
+        assert text in draw, (
+            f"docs/draw.md 的 §Baseline 少了 {text!r}——少了它，「逐字节不变」又会变成通过")
+    assert "指纹" in line, (
+        "tasks/draw-line.md §4 lost the word that byte pins are fingerprints")
+    assert "不得把「逐字节不变」写成通过" in line, (
+        "tasks/draw-line.md §4 lost the rule that byte-identity is never a pass")
+    assert "8802d317cfae" in line and "勘误" in line, (
+        "tasks/draw-line.md lost the errata that retires 548L's own candidate")
+
+
+def _assert_p44_functional_metrics(draw: str) -> None:
+    """护 P44 本身会违反的旧 P1/P4 门槛，不能只加一句勘误却保留错误表格。"""
+    p1 = _table_row(draw, "P1")
+    p4 = _table_row(draw, "P4")
+    assert "functional host-pin groups" in p1, (
+        "P1 must inspect host-pin groups rather than impose one branch distance")
+    assert "50 / 95 / 70 / 205 / 165" in p1, (
+        "P1 must disclose P44's actual branch distances, including decoupling")
+    assert "functional subgroup relationships" in p4, (
+        "P4 must inspect subgroup relationships rather than impose origin span")
+    assert "265 × 25" in p4, "P4 must disclose the human reference's actual span"
+    for row in (p1, p4):
+        assert "diagnostic only" in row, (
+            "P1/P4 numerical readings must remain diagnostic in the table itself")
+
+
+def test_the_draw_baseline_uses_p44_functional_relationships():
+    """岳授权按 P44 功能关系纠正机械指标；25/205/165 不能再把人工样例判废。"""
+    draw = (REPO / "docs/draw.md").read_text(encoding="utf-8")
+    line = _squash((REPO / "tasks/draw-line.md").read_text(encoding="utf-8"))
+    _assert_p44_functional_metrics(draw)
+    assert "以 P44 样例为准，按功能关系修正机械指标" in draw
+    assert "无必要绕行仍是拒因" in line
+    assert "均只作诊断，不设成新阈值" in line
+
+
+@pytest.mark.parametrize("property_,old_rule", [
+    ("P1", "a pull-up / decoupling body sits 30–65 units from its own host pin"),
+    ("P4", "the island is two-dimensional; origin y-span must be at least 60"),
+])
+def test_the_draw_baseline_rejects_restored_mechanical_gates(property_, old_rule):
+    """负对照：仅在内存恢复错误表格行，即使勘误和指纹声明仍在也必须红。"""
+    draw = (REPO / "docs/draw.md").read_text(encoding="utf-8")
+    mutated = draw.replace(_table_row(draw, property_),
+                           f"| {property_} | {old_rule} | fixed gate | fails |")
+    assert "diagnostics, not universal acceptance thresholds" in _squash(mutated)
+    assert "8802d317cfae" in mutated and "is not a pass" in mutated
+    with pytest.raises(AssertionError, match="must inspect"):
+        _assert_p44_functional_metrics(mutated)
+
+
+def test_the_draw_skill_keeps_the_acceptance_independence_rule():
+    """护 `boardwise-draw` §5B「验收独立性」（2026-11-14 问责后立，548O 事故）。
+
+    失效时的样子：实现者给自己的图签字，主代理看一眼"两条读数一致"就放行——548O 就是
+    把"拒因搬家"当成了进展，连续两轮没修好同一张页。四条都必须留在**两份同步副本**里，
+    删任一条即红。
+    """
+    for path in (".agents/skills/boardwise-draw/SKILL.md",
+                 ".kimi-code/skills/boardwise-draw/SKILL.md"):
+        doc = _squash((REPO / path).read_text(encoding="utf-8"))
+        assert "验收独立性" in doc, f"{path} lost the section title"
+        for text in ("不拿实现者的推理", "试图推翻", "能否证伪",
+                     "先侦察再实现", "P1–P4"):
+            assert text in doc, f"{path} lost {text!r}"
+
+
 # ============================ 543O：roadmap 稳定层与任务账同步（2026-11-06）
 #: 543 的权威验收账（两拓扑真机读数）与总索引（543/201x 状态）。路线图是稳定层，
 #: 它对 543 的每句话都必须能在这两处源头里找到同一句——否则稳定层就成了二手转述。
@@ -1573,8 +1749,10 @@ def test_cli_tree_sees_pcb_gate_as_a_subcommand():
     not end in `_sub` (`gate_commands = pcb.add_subparsers(...)`) makes the whole
     `pcb` branch invisible here — the tree would show `pcb` with no subcommands and
     every mention check below would pass without ever looking at `gate`. Asserted
-    on the extraction itself, not through any document's readability.
+    on the extraction itself, not through any document's readability. 550 adds
+    `net-path` beside `gate`, so the pinned set is the pair: the same extraction
+    has to see both, and a third subcommand must come here deliberately.
     """
     tops, tree = _cli_commands()
     assert "pcb" in tops, sorted(tops)
-    assert tree["pcb"] == {"gate"}, tree["pcb"]
+    assert tree["pcb"] == {"gate", "net-path"}, tree["pcb"]

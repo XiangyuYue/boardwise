@@ -142,3 +142,6 @@ owner=审查线；绘制线独立开发、互不改文件，主仓及绘制线�
   GREEN PCB，成熟产品也可能存在若干问题；天然 GREEN 不再列为本机必做，不为凑通过放宽规则。
   GREEN 正向编排继续由既有 fake/合成测试支撑，真实 RED/INCOMPLETE 如实保留。身边设备均为
   V4，V3 宿主验收转为等待其他用户反馈，仍不宣称 V3 已验证。
+
+
+- **550 离线 PCB 铜路径（工作树实现与验收完成，未提交）**：`boardwise pcb net-path FILE --from REF.PAD --to REF.PAD [--board]` 只读 `.epro2/.eprj3`，输出 `boardwise.pcbNetPath/1`，三态 CONNECTED/NOT_PROVEN/INDETERMINATE；只用 pad/直线 track/via，pour/PLANE 排除，ARC、未知几何、netless 铜与 via-in-pad 不制造证据，多板必须选板。核心与 CLI 最终聚焦 **371 passed**、卫生 **4 passed**，真实归档三种判定和两组主代理变异均核过；未跑全量。任务书 `tasks/550_pcb_net_path.md`，公开说明 `docs/review-sop.md` §3.2。在线、ARC 建模、through/layer、真实非空多板与 via-in-pad 宿主语义仍未覆盖。550A P1 已完成原始 ARC 数据与同网降级，最终组合 **726 passed / 1 skipped**；角度单位仍未证实，P3 几何禁止，ROBOT 不转绿。P2 与静态在线探针已做，test/ROBOT 均 active=null，未强行切页。下一项是独立的 `pcb.net_class.list` 只读证据；sch replace/rebind 与 PCB 同步各自独立成批，不在本批夹带。

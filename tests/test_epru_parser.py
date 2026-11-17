@@ -113,7 +113,10 @@ def test_board_level_counts(board):
     assert len(board.components) == 47
     assert len(board.pads) == 117
     # Everything the extractor consumes is absent from unconsumed_types.
-    for consumed in ("VIA", "LINE", "POLY", "FILL", "COMPONENT", "ATTR", "PAD_NET", "LAYER"):
+    # 550A: ARC is consumed as **data** (BoardGeometry.arcs) and must stop
+    # being reported as 「known but unread」; this board carries none, so the
+    # claim holds by absence here and by field in test_550a_arc_copper.py.
+    for consumed in ("VIA", "LINE", "ARC", "POLY", "FILL", "COMPONENT", "ATTR", "PAD_NET", "LAYER"):
         assert consumed not in board.stats.unconsumed_types
 
 

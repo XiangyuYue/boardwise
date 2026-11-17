@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.footprint-library-sample/1",
+ "name": "f-empty-then-real",
+ "text": "{\"type\":\"DOCHEAD\"}||{\"docType\":\"FOOTPRINT\",\"uuid\":\"f3\"}|\n{\"type\":\"META\"}|||\n{\"type\":\"META\"}||{\"title\":\"Late\"}|"
+}

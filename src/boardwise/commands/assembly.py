@@ -144,6 +144,79 @@ def register_pcb_parser(sub: Any) -> None:
         "--port", type=int, default=None, help="Daemon port (default 61190)."
     )
 
+    net_path = pcb_sub.add_parser(
+        "net-path",
+        help=(
+            "Offline copper-path evidence between two pads of one board "
+            "(0 CONNECTED / 2 NOT_PROVEN / 3 INDETERMINATE or refused)."
+        ),
+        description=(
+            "Read-only, offline, no report file: is there an ordered chain of the "
+            "copper primitives this batch supports (pad, straight track, via) that "
+            "physically joins these two pads of this net on this board? The answer is "
+            "machine JSON on stdout and one of three verdicts. CONNECTED means a path "
+            "was walked; every hop shares a copper layer and the pair's copper bodies "
+            "meet under the repository's own measurement, and a net *name* is never "
+            "the evidence. NOT_PROVEN means the supported graph had no path **and** "
+            "nothing unknown could change that — it says 「this batch's copper "
+            "inventory did not prove a connection」, not 「开路」: copper pour, PLANE "
+            "layers and ARC copper are outside the graph (see `ignored` and `scope`), "
+            "so read the JSON's `scope` before quoting a negative. INDETERMINATE "
+            "means the input does not hold (a reference that is not REF.PAD, an "
+            "unknown or ambiguous pad, two nets, or an unreadable layer table) or some "
+            "evidence gap could overturn a negative answer. `FILE` must be an .epro2 "
+            "archive or an .eprj3 folder project — KiCad, a lone .epcb2 and the live "
+            "editor are refused by name, because this batch reads archives only. A "
+            "container with several boards needs `--board`, matched verbatim against "
+            "the title or board uuid the review runner reports; the first board is "
+            "never assumed. This batch does not expose --through, --layer, --json or "
+            "--project: order and measurement are the core batch's next step, and a "
+            "loose flag would promise evidence that is not there."
+        ),
+    )
+    net_path.add_argument(
+        "file",
+        metavar="FILE",
+        help="An .epro2 archive or an .eprj3 folder project (read-only).",
+    )
+    net_path.add_argument(
+        "--from",
+        dest="from_ref",
+        required=True,
+        metavar="REF.PAD",
+        help="Start pad as DESIGNATOR.PAD, for example U9.2.",
+    )
+    net_path.add_argument(
+        "--to",
+        dest="to_ref",
+        required=True,
+        metavar="REF.PAD",
+        help="Destination pad as DESIGNATOR.PAD, for example CN3.1.",
+    )
+    net_path.add_argument(
+        "--board",
+        default="",
+        metavar="TITLE_OR_UUID",
+        help=(
+            "Which board to ask about, by title or board uuid. Required when the "
+            "container holds more than one board; a name that matches nothing or "
+            "several boards is refused, never resolved by position."
+        ),
+    )
+
+
+def dispatch_pcb(
+    args: argparse.Namespace,
+    checkup: Callable[[argparse.Namespace], int],
+    bridge: Callable[[argparse.Namespace], Any],
+) -> int:
+    """Route `pcb` by its subcommand, keeping `gate` on its own adapter."""
+    if getattr(args, "pcb_command", "") == "net-path":
+        from .. import pcb_netpath
+
+        return pcb_netpath.run_cli_net_path(args)
+    return dispatch_pcb_gate(args, checkup=checkup, bridge=bridge)
+
 
 def dispatch_pcb_gate(
     args: argparse.Namespace,

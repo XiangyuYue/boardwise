@@ -1438,6 +1438,14 @@ def module_plan(
     #: a stub on **every** label, which is what 057 sec.4's "each pin needs its own
     #: name" asks for.
     planned_conductor_nets = {wire.net for wire in built.wires}
+    #: 548D3D-P1E — the clause a `native` downgrade owes about **where its row
+    #: prints**. It used to name the layout's reserved box as if that were the
+    #: printed coordinate, and after the carrier cover seats the row elsewhere
+    #: (P43: reserved `408..439`, printed `369..400`) that sentence contradicted
+    #: the plan's own `attributeMoves`. The carrier work is only this path's
+    #: (`native_carrier_settings`), so the explicit page says who seats the row
+    #: and both paths point the reader at the coordinates the plan itself states.
+    explicit_native = native_carrier_settings(presentation)
     for label in layout.labels:
         covered = any(flag.net == label.net for flag in built.flags)
         if covered:
@@ -1478,14 +1486,25 @@ def module_plan(
         )
         # The sentence every downgrade below owes: on this host a label has no
         # primitive (029). Under `native-attr` that is no longer a shortfall —
-        # the wire carries the name and the host's own attribute row prints it
-        # where the label box reserved the room — so the text says *that* rather
-        # than claiming the V4 attribute API is unusable (053T).
+        # the wire carries the name and the host's own attribute row prints it on
+        # that conductor — so the text says *that* rather than claiming the V4
+        # attribute API is unusable (053T). 548D3D-P1E: the row's **seat** is
+        # named by what decides it, and the coordinate a reader checks is the
+        # plan's own `attributeMoves`, never the layout's reservation.
         host_sentence = (
             "the planned wire carries the net's name (`sch.place_wire` net=…) and "
-            "`textPlacement: native-attr` moves that attribute row's text to the "
-            f"label box ({label.bbox[0]:g}, {label.bbox[1]:g})-"
-            f"({label.bbox[2]:g}, {label.bbox[3]:g})"
+            "`textPlacement: native-attr` prints that attribute row on the wire "
+            "itself: "
+            + (
+                "the row is seated inside the run that carries the name by the "
+                "carrier cover (543I) or on the stub by the name stub's own "
+                "re-seat (543H-2), and the position it lands is the one this "
+                "plan's `attributeMoves` states — the layout's reserved label box "
+                "is where the room was asked for, not a printed coordinate"
+                if explicit_native else
+                "the position it lands is the one this plan's `attributeMoves` "
+                "states"
+            )
             if native else
             "the planned wire carries the net's name (`sch.place_wire` net=…) and "
             "`textPlacement: native-attr` hides that attribute row's text "
@@ -1675,9 +1694,23 @@ def module_plan(
             f"net {label.net}: the compiler drew a net label at "
             f"({label.x:g}, {label.y:g}) — {host_sentence} — "
             + (
-                f"a planned wire of {label.net} runs through that point, and the net is "
-                "named on that conductor (`sch.place_wire` net=…), so the netlist "
-                "carries the name while the canvas shows the wire without a label text"
+                (
+                    # 548D3D-P1E: a visible `native` row **is** text on the canvas,
+                    # so the carried branch may not close on "the canvas shows the
+                    # wire without a label text" — that is the 053T shortfall, not
+                    # this page. The host prints the wire's own `Name` attribute row
+                    # on the very conductor the anchor rides, and the plan states
+                    # where in `attributeMoves`.
+                    f"a planned wire of {label.net} runs through that point, and the "
+                    "net is named on that conductor (`sch.place_wire` net=…): the "
+                    "netlist carries the name, and so does the canvas — the host "
+                    "prints that wire's own `Name` attribute row on the same "
+                    "conductor, at the position `attributeMoves` states"
+                    if native else
+                    f"a planned wire of {label.net} runs through that point, and the net is "
+                    "named on that conductor (`sch.place_wire` net=…), so the netlist "
+                    "carries the name while the canvas shows the wire without a label text"
+                )
                 if carried else
                 f"other planned wire(s) of {label.net} carry the name "
                 "(`sch.place_wire` net=…), so the netlist carries it, while this "
@@ -2271,14 +2304,6 @@ def _native_wire_components(
     return out
 
 
-def _native_split_nets(wires: Sequence[Any]) -> set[str]:
-    """Nets whose plan wires are **not** one continuous run."""
-    return {
-        net for net, groups in _native_wire_components(wires).items()
-        if len(groups) > 1
-    }
-
-
 def _native_carrier_cover(
     built: "_Built",
     layout: LayoutPlan,
@@ -2311,17 +2336,20 @@ def _native_carrier_cover(
 
     Only the explicit path calls this (:func:`native_carrier_settings`), and
     every candidate leg/box is measured against the plan's own ink, bodies,
-    pins, foreign wires and the sheet. The subject is the **non-continuous**
-    net: a name is one statement per run only where the net has more than one
-    run, so a single-run net keeps the drawing it had (P32's defect does not
-    exist without a second run to be mistaken for the first).
+    pins, foreign wires and the sheet. Every **visible** `native` name is the
+    subject, whether its net has one run or several (548D3D-P1E): Statement 1 of
+    :func:`native_carrier_problems` has no single-run exemption, so a single-run
+    net whose row stands past the run's end is repaired here like any other —
+    P43's six names ride 40-unit runs that are their nets' only runs, and the
+    split test used to leave every one of them to the gate's refusal. The split
+    book is Statement 2's alone (one name per non-continuous run), and that
+    statement is read on the gate's own geometry, not here.
     """
     from .drawcompiler import TEXT_GAP
 
-    split = _native_split_nets(built.wires)
     problems: list[str] = []
     for label in layout.labels:
-        if not _visible_native_label(label) or str(label.net) not in split:
+        if not _visible_native_label(label):
             continue
         found = _native_carrier_run(label, built.wires)
         if found is None:

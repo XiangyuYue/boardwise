@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.device-library-sample/1",
+ "name": "d-dup-diff",
+ "text": "{\"type\": \"DOCHEAD\"}||{\"docType\": \"DEVICE\", \"uuid\": \"dq\"}|\n{\"type\": \"META\"}||{\"title\": \"P\", \"attributes\": {\"Supplier Part\": \"C1\", \"Designator\": \"R?\"}}|\n{\"type\": \"DOCHEAD\"}||{\"docType\": \"DEVICE\", \"uuid\": \"dq\"}|\n{\"type\": \"META\"}||{\"title\": \"P\", \"attributes\": {\"Supplier Part\": \"C2\", \"Designator\": \"R?\"}}|"
+}

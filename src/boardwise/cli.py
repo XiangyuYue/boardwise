@@ -31782,7 +31782,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "persistence":
         return shared_commands.dispatch_shared(args, _cmd_persistence)
     if args.command == "pcb":
-        return assembly_commands.dispatch_pcb_gate(args, _cmd_checkup, _open_cli)
+        return assembly_commands.dispatch_pcb(args, _cmd_checkup, _open_cli)
     if args.command == "parts":
         return review_commands.dispatch_parts(args, PARTS_COMMANDS)
     if args.command == "config":

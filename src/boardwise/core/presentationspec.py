@@ -153,7 +153,10 @@ __all__ = [
     "PATH_STEP_PART",
     "PRESENTATION_SPEC_KIND",
     "PRESENTATION_SPEC_VERSION",
+    "SERVICE_BRANCH_KEYS",
+    "SERVICE_GROUP_KEYS",
     "SERVICE_LAYOUT_KEYS",
+    "SERVICE_MIN_BRANCHES",
     "SERIES_BRANCH_KEYS",
     "SIDES",
     "_FLOW_EDGE_KEYS",
@@ -169,6 +172,7 @@ __all__ = [
     "PresentationPath",
     "PresentationSpec",
     "PresentationSpecError",
+    "ServiceGroup",
     "ServiceLayout",
     "SeriesBranch",
     "UserLock",
@@ -227,6 +231,13 @@ LABEL_ROW_MODELS: tuple[str, ...] = (
 #: ground's pads are grouped by. The object is closed for the same reason every
 #: other schema here is — a key nobody reads is an intent nobody honours.
 GND_CLUSTERING_KEYS: tuple[str, ...] = ("radius",)
+
+#: The one key `railClustering` carries (548M): the same neighbourhood split
+#: 053f gave grounds, stated for a **rail** (a ``power`` net) instead. Same
+#: closed object, same single key, same validation — the drawing side has
+#: always been class-agnostic, so this key is the only statement 548M adds:
+#: a page that never writes it keeps every flag exactly where it was.
+RAIL_CLUSTERING_KEYS: tuple[str, ...] = ("radius",)
 
 #: The keys `serviceLayout` carries: 543B's interval (the distance a uniquely
 #: served shunt keeps from the host pin it serves) and 548D3C2's explicit
@@ -289,6 +300,7 @@ _TOP_KEYS = (
     "pageArrangement",
     "flagLeadLimit",
     "gndClustering",
+    "railClustering",
     "serviceLayout",
     "mainPaths",
     "feedbackPaths",
@@ -303,6 +315,8 @@ _TOP_KEYS = (
     "textPlacement",
     "seriesBranches",
     "panelGroups",
+    "serviceGroups",
+    "flagShareGroups",
 )
 _MODULE_KEYS = (
     "id", "parts", "role", "grammarRef", "presentation", "branchOrder", "core",
@@ -327,7 +341,10 @@ MODULE_PRESENTATION_KEYS = ("sidePreferences",)
 _PATH_KEYS = ("id", "chain", "note")
 _FLOW_EDGE_KEYS = ("from", "to", "mainPath")
 _OBLIGATION_KEYS = ("nets", "note")
-_LABEL_POLICY_KEYS = ("local", "crossModule", "highFanout", "stub", "stubMin", "rowModel")
+_LABEL_POLICY_KEYS = (
+    "local", "crossModule", "highFanout", "stub", "stubMin", "stubLaneReserve",
+    "rowModel",
+)
 _LOCK_KEYS = ("partId", "x", "y", "rotation", "scope")
 #: The five keys one `seriesBranches` entry may carry (548B1), and no sixth: a
 #: two-part series arm is a *reading* of the partition — end, end, and the node
@@ -344,6 +361,21 @@ SERIES_BRANCH_KEYS = ("id", "from", "to", "parts", "middleNet")
 PANEL_GROUP_KEYS: tuple[str, ...] = ("id", "side", "columns", "branches")
 PANEL_BRANCH_KEYS: tuple[str, ...] = ("from", "to", "part")
 PANEL_MIN_BRANCHES = 2
+
+#: The closed two keys one `serviceGroups` entry may carry (548J), the closed
+#: three keys each of its branches carries, and the smallest number of branches a
+#: group may hold — one, because a single arm against a host is still a joint
+#: seating statement. The group is deliberately the *smallest* shape that can
+#: state the relationship: host side, pose, terminal row, pitch, flags, text and
+#: frame are all derived by the interpreter from `CircuitSpec` + profile + the
+#: candidate, so no `side` / `columns` / `gap` / `pitch` / `frame` / coordinate
+#: key exists here to be misinterpreted as a place. `from` / `to` / `part` are
+#: the same electrical shape a panel branch has, and their truth is
+#: `CircuitSpec`'s to check.
+SERVICE_GROUP_KEYS: tuple[str, ...] = ("id", "branches")
+SERVICE_BRANCH_KEYS: tuple[str, ...] = ("part", "from", "to")
+SERVICE_MIN_BRANCHES = 1
+FLAG_SHARE_GROUP_KEYS: tuple[str, ...] = ("net", "groups")
 
 #: What a lock's coordinates are relative to (057 sec.3). ``module`` — the
 #: default, and the only reading before 057 — is the module's own drawing: the
@@ -533,6 +565,13 @@ class LabelPolicy:
     #: :attr:`~boardwise.core.layoutplan.LayoutLabel.stub_min`, where
     #: `drawapply._label_stub_candidates` reads it.
     stub_min: float = 0.0
+    #: 548K: the document asks the **name-stub lane** to be promised first (before
+    #: any flag lead and before a host branch takes the band) and to be as long as
+    #: :attr:`stub_min` states. It is the explicit switch 548K's reservation and
+    #: single-foot-first pass sit behind: absent or ``false`` keeps the historical
+    #: order (534 r15's declared carriers, then everything else), so a page written
+    #: before this key draws byte for byte as it did. Written only when ``true``.
+    stub_lane_reserve: bool = False
     #: ``anchored`` (default, the historical row above the anchor) or
     #: ``centered`` (534 r25's measured row). Travels to
     #: :attr:`~boardwise.core.layoutplan.LayoutLabel.row_model`.
@@ -711,6 +750,57 @@ class PanelGroup:
     branches: tuple[PanelBranch, ...]
 
 
+@dataclass(frozen=True)
+class ServiceGroup:
+    """A host's local branches that are seated and supplied as one unit (548J).
+
+    An ESP-01S and its three pull-ups, a decoupling pair, an MCU and the shunts
+    that serve it: the reader meets them as one **joint seating** — shared
+    terminal row, one local supply flag per group, a ground that returns beside
+    its own group — and no partition or netlist can state that grouping, because
+    a local net says only what a part hangs between, never which parts a reader
+    is meant to take in together.
+
+    The group therefore carries the smallest shape that can state it: a name,
+    and the electrical branches in the order the reader meets them. The branch
+    shape is :class:`PanelBranch`'s — two different nets and the part between
+    them — because a service branch *is* that same arm; a second, identical
+    class would be a second copy of one fact. Everything else is derived: host
+    side and pin side from the profile, pose and terminal row from the candidate,
+    pitch, flag sites, text boxes and frame from real geometry. So there is no
+    `side`, `columns`, `gap`, `pitch`, `frame` or coordinate key — a group is a
+    relationship, never a place.
+
+    The parts of one group must belong to one module (a joint seating is one
+    host's neighbourhood), and a part may sit in one statement only — a
+    `seriesBranches` arm, a `panelGroups` branch or a `serviceGroups` branch —
+    so the compiler never holds two readings of the same arm. Whether the nets
+    really meet that part's two pins and whether the host can carry the stated
+    branches are `CircuitSpec` + profile facts, checked by the consumer.
+    """
+
+    #: The group's name — what a refusal or a plan note points at.
+    id: str
+    #: The branches in declared order: a stable traversal and the order a
+    #: refusal names, **not** the terminal row's geometric order. Host side,
+    #: member columns, pitch and rows are derived from the real pins and the
+    #: candidate, so declaration order promises no place on the page.
+    branches: tuple[PanelBranch, ...]
+
+
+@dataclass(frozen=True)
+class FlagShareGroups:
+    """One rail's explicit partition into seats permitted to share a flag.
+
+    The statement names only electrical pin membership. Route distance,
+    obstacles, and whether one flag can serve a group remain the compiler's
+    existing geometric decision.
+    """
+
+    net: str
+    groups: tuple[tuple[str, ...], ...]
+
+
 @dataclass
 class PresentationSpec:
     """The whole presentation intent, in normal form."""
@@ -815,6 +905,33 @@ class PresentationSpec:
     #: silently fall back to a drawing nobody asked for.
     text_placement: str = ""
     spec_version: int = PRESENTATION_SPEC_VERSION
+    #: The host-side branch groups that are seated and supplied as one unit
+    #: (548J). Empty — the default, and every document written before this key —
+    #: is "the document states none": the compiler draws exactly what it drew
+    #: before the key existed and never infers a joint seating from shapes that
+    #: happen to share a host. A stated group contributes the grouping and the
+    #: branch order only; host side, poses, terminal row, pitch, flags, text and
+    #: frame are the interpreter's, the electrical facts are `CircuitSpec`'s, and
+    #: whether the candidate can honour the grouping is decided when it is built.
+    #:
+    #: Appended **after** every pre-548J field on purpose: a document built by
+    #: positional arguments keeps every old position, and the opt-in stays last
+    #: so its absence can never shift a value into another field.
+    service_groups: list[ServiceGroup] = field(default_factory=list)
+    #: The radius a **rail's** pads are grouped by, in canvas units (548M).
+    #: ``0`` means the document states no rail clustering, and the compiler then
+    #: draws every rail exactly as it did before this key existed — one flag per
+    #: pad. A positive value switches the same neighbourhood split `gndClustering`
+    #: states on for ``power`` nets, and is what `railClustering` writes.
+    #:
+    #: Appended **after** every pre-548M field for the same reason `service_groups`
+    #: is last: a spec built by positional arguments keeps every old position, so
+    #: an opt-in can never shift a value into another field (548J-A's contract).
+    rail_cluster_radius: float = 0.0
+    #: Explicit pin membership for one net's local flag seats. Empty means no
+    #: grouping intent was stated and preserves the existing automatic policy.
+    #: Appended to preserve every historical positional constructor argument.
+    flag_share_groups: list[FlagShareGroups] = field(default_factory=list)
 
     # ------------------------------------------------------------ derived
 
@@ -974,6 +1091,13 @@ class PresentationSpec:
                 if self.gnd_cluster_radius
                 else {}
             ),
+            # 548M: the rail statement is written only when it was stated, so a
+            # document that does not write it keeps its bytes, digest and drawing.
+            **(
+                {"railClustering": {"radius": self.rail_cluster_radius}}
+                if self.rail_cluster_radius
+                else {}
+            ),
             # 543B: written only when stated, like every opt-in switch above —
             # an old document keeps its bytes, digest and drawing.
             **(
@@ -1032,6 +1156,24 @@ class PresentationSpec:
                 if self.panel_groups
                 else {}
             ),
+            # 548J: written only when stated, on the same terms — a document that
+            # names no service group keeps its bytes and digest, and `[]` is the
+            # same statement as no key at all, so it is not written either.
+            **(
+                {"serviceGroups": [
+                    _service_group_json(group) for group in self.service_groups
+                ]}
+                if self.service_groups
+                else {}
+            ),
+            **(
+                {"flagShareGroups": [
+                    _flag_share_group_json(group)
+                    for group in self.flag_share_groups
+                ]}
+                if self.flag_share_groups
+                else {}
+            ),
             "labelPolicy": {
                 "local": self.label_policy.local,
                 "crossModule": self.label_policy.cross_module,
@@ -1047,6 +1189,14 @@ class PresentationSpec:
                 **(
                     {"stubMin": self.label_policy.stub_min}
                     if self.label_policy.stub_min
+                    else {}
+                ),
+                # 548K: the stub-lane switch is written only when true — a
+                # document that does not ask for it has to serialise exactly as
+                # it did before the key existed.
+                **(
+                    {"stubLaneReserve": True}
+                    if self.label_policy.stub_lane_reserve
                     else {}
                 ),
                 **(
@@ -1091,8 +1241,11 @@ class PresentationSpec:
         # are checked against the parts the modules name, so the modules have to
         # be read first. Nothing else in this parse depends on the order.
         # Panel groups are checked against the series arms' parts (one part may
-        # not be both), so the arms are read first as well.
+        # not be both), so the arms are read first as well — and the service
+        # groups are read after the panels, because a part may sit in one
+        # statement only and the later reader is the one that names the clash.
         series_branches = _series_branches_from(root)
+        panel_groups = _panel_groups_from(root, modules, series_branches)
         return cls(
             modules=modules,
             islands=_islands_from(root, modules),
@@ -1102,6 +1255,7 @@ class PresentationSpec:
             page_arrangement=_page_arrangement(root),
             flag_lead_limit=_flag_lead_limit(root),
             gnd_cluster_radius=_gnd_clustering(root),
+            rail_cluster_radius=_rail_clustering(root),
             service_layout=_service_layout(root),
             main_paths=_paths_from(root, "mainPaths"),
             feedback_paths=_paths_from(root, "feedbackPaths"),
@@ -1115,7 +1269,11 @@ class PresentationSpec:
             part_texts=_part_texts_from(root, modules),
             text_placement=_text_placement(root),
             series_branches=_series_branches_from(root),
-            panel_groups=_panel_groups_from(root, modules, series_branches),
+            panel_groups=panel_groups,
+            service_groups=_service_groups_from(
+                root, modules, series_branches, panel_groups
+            ),
+            flag_share_groups=_flag_share_groups_from(root),
         )
 
     def dump(self, path: str | Path) -> None:
@@ -1226,6 +1384,34 @@ def _panel_group_json(group: PanelGroup) -> dict[str, Any]:
             {"from": branch.from_net, "to": branch.to_net, "part": branch.part}
             for branch in group.branches
         ],
+    }
+
+
+def _service_group_json(group: ServiceGroup) -> dict[str, Any]:
+    """One service group — the closed two keys, branches in declared order (548J).
+
+    The branch order is the statement (the terminal row and every downstream
+    seat are derived from it), so it is written in document order and never
+    sorted. Each branch is exactly the three electrical keys, in the order the
+    contract writes them.
+    """
+    return {
+        "id": group.id,
+        "branches": [
+            {"part": branch.part, "from": branch.from_net, "to": branch.to_net}
+            for branch in group.branches
+        ],
+    }
+
+
+def _flag_share_group_json(group: FlagShareGroups) -> dict[str, Any]:
+    """Pins constrained to share flags, in their declared group order.
+
+    Unlisted pins keep the existing grouping strategy.
+    """
+    return {
+        "net": group.net,
+        "groups": [list(members) for members in group.groups],
     }
 
 
@@ -1705,20 +1891,27 @@ def _flag_lead_limit(root: dict[str, Any]) -> float:
     return float(value)
 
 
-def _gnd_clustering(root: dict[str, Any]) -> float:
-    """The stated ground-clustering radius, or ``0`` (no clustering, 053f).
+def _clustering_radius(
+    root: dict[str, Any], key: str, allowed: tuple[str, ...]
+) -> float:
+    """The stated clustering radius under ``key``, or ``0`` (none stated).
 
     Closed and strictly validated for the reason `_flag_lead_limit` is: the value
-    travels into `CompileBudget.gnd_cluster_radius`, where a `NaN`/`Infinity`
-    would make every pad-to-pad comparison false and silently put every ground
-    in its own cluster. A document that states nothing gets ``0``, which is the
-    reading every document written before this key had.
+    travels into the compiler's budget, where a `NaN`/`Infinity` would make every
+    pad-to-pad comparison false and silently put every pad in its own cluster. A
+    document that states nothing gets ``0``, which is the reading every document
+    written before the key existed had.
+
+    053f's `gndClustering` and 548M's `railClustering` are the same statement
+    about different net classes, so they are read by the same code; ``key`` is
+    also what the refusal names, and the two key names are the whole difference
+    between them.
     """
-    value = root.get("gndClustering")
+    value = root.get(key)
     if value is None:
         return 0.0
-    body = _object(value, "gndClustering")
-    _check_keys(body, GND_CLUSTERING_KEYS, "gndClustering")
+    body = _object(value, key)
+    _check_keys(body, allowed, key)
     radius = body.get("radius")
     if (
         isinstance(radius, bool)
@@ -1727,10 +1920,24 @@ def _gnd_clustering(root: dict[str, Any]) -> float:
         or radius <= 0
     ):
         raise PresentationSpecError(
-            "$.gndClustering.radius must be a positive, finite number of canvas "
+            f"$.{key}.radius must be a positive, finite number of canvas "
             f"units, got {radius!r}"
         )
     return float(radius)
+
+
+def _gnd_clustering(root: dict[str, Any]) -> float:
+    """The stated ground-clustering radius, or ``0`` (no clustering, 053f)."""
+    return _clustering_radius(root, "gndClustering", GND_CLUSTERING_KEYS)
+
+
+def _rail_clustering(root: dict[str, Any]) -> float:
+    """The stated rail-clustering radius, or ``0`` (no clustering, 548M).
+
+    Byte-for-byte the same reading as :func:`_gnd_clustering`: one closed object,
+    one positive finite `radius`, and nothing written when the key is absent.
+    """
+    return _clustering_radius(root, "railClustering", RAIL_CLUSTERING_KEYS)
 
 
 def _service_layout(root: dict[str, Any]) -> ServiceLayout | None:
@@ -2133,6 +2340,217 @@ def _panel_columns(value: Any, where: str, branches: int) -> int:
     return value
 
 
+def _service_groups_from(
+    root: dict[str, Any],
+    modules: Sequence[PresentationModule],
+    series_branches: Sequence[SeriesBranch],
+    panel_groups: Sequence[PanelGroup],
+) -> list[ServiceGroup]:
+    """The stated service groups, or none when the document states none (548J).
+
+    A service group is the **joint seating** of a host's local branches — the
+    pull-ups that configure a pin, the pair that decouples a rail — which the
+    modules cannot state (they say which parts form a functional group, not that
+    a reader takes these branches in as one unit) and the netlist cannot state
+    (a local net says only what a part hangs between). So the document states
+    the group and its branches in reading order; host side, pose, terminal row,
+    pitch, flags, text and frame are derived from real geometry by whoever
+    compiles the candidate, and the two-terminal truth of each branch stays
+    `CircuitSpec`'s.
+
+    What this reader refuses, and why:
+
+    * an empty branch list — a group with nothing to seat is a declaration with
+      no content; a **single** branch is legal, because one arm against a host
+      is still a seating statement;
+    * ``from`` equal to ``to`` — a part with both ends on one net is not an arm;
+    * a repeat of the group id, and a part named by another branch of this or
+      any other service group, by a `panelGroups` branch or by a
+      `seriesBranches` arm — one part has one reading statement, so no consumer
+      can hold two truths about the same arm;
+    * a part the modules do not declare, and a part that shares no module with
+      the group's other parts — a joint seating is one host's neighbourhood, so
+      a cross-module group is refused by name rather than split silently;
+    * an empty or missing field, any key beyond the closed two or three, and a
+      coordinate (refused upstream by :func:`_refuse_coordinates` with its path).
+
+    Groups of *different* modules with different parts may coexist with each
+    other and with `panelGroups`: the page is not made mutually exclusive, and
+    a page slice carries a whole group or omits it whole (the slice is the
+    caller's; this parser reads the whole document).
+
+    Nothing here is checked against a circuit: whether the nets really meet the
+    part's two pins, which pin faces the host, and whether the host can carry
+    the stated branches are `CircuitSpec` + profile facts, and they belong to
+    the consumer. An absent key and ``[]`` are the same statement — "no service
+    group is stated" — and neither is written back, so every document compiled
+    before this key existed keeps its bytes, digest and drawing.
+    """
+    module_parts: dict[str, set[str]] = {}
+    for module in modules:
+        for part_id in module.parts:
+            module_parts.setdefault(part_id, set()).add(module.id)
+    declared = declared_part_ids(module.parts for module in modules)
+    series_parts: dict[str, str] = {}
+    for arm in series_branches:
+        for part_id in arm.parts:
+            series_parts[part_id] = arm.id
+    panel_parts: dict[str, str] = {}
+    for group in panel_groups:
+        for branch in group.branches:
+            panel_parts[branch.part] = group.id
+    out: list[ServiceGroup] = []
+    by_id: dict[str, str] = {}
+    part_spots: dict[str, str] = {}
+    for index, item in enumerate(_list(root.get("serviceGroups"), "serviceGroups")):
+        spot = f"$.serviceGroups[{index}]"
+        body = _object(item, spot)
+        _check_keys(body, SERVICE_GROUP_KEYS, spot)
+        group_id = _text(body.get("id"), f"{spot}.id", required=True)
+        if group_id in by_id:
+            raise PresentationSpecError(
+                f"{spot}.id is {group_id!r} and {by_id[group_id]} already carries "
+                "that id — a refusal and a plan note point at a service group by "
+                "its id, so two groups cannot share one"
+            )
+        by_id[group_id] = spot
+        if body.get("branches") is None:
+            raise PresentationSpecError(
+                f"{spot}.branches is required and missing — a service group is "
+                "the joint seating of its branches, so it has to state them"
+            )
+        entries = _list(body.get("branches"), f"{spot}.branches")
+        if len(entries) < SERVICE_MIN_BRANCHES:
+            raise PresentationSpecError(
+                f"{spot}.branches names {len(entries)} branch(es); a service "
+                f"group is at least {SERVICE_MIN_BRANCHES} — a group with no "
+                "branch is a declaration with nothing to seat"
+            )
+        branches: list[PanelBranch] = []
+        common: set[str] | None = None
+        for branch_index, entry in enumerate(entries):
+            branch_spot = f"{spot}.branches[{branch_index}]"
+            head = _object(entry, branch_spot)
+            _check_keys(head, SERVICE_BRANCH_KEYS, branch_spot)
+            part = _text(head.get("part"), f"{branch_spot}.part", required=True)
+            from_net = _text(head.get("from"), f"{branch_spot}.from", required=True)
+            to_net = _text(head.get("to"), f"{branch_spot}.to", required=True)
+            if from_net == to_net:
+                raise PresentationSpecError(
+                    f"{branch_spot}.to is {to_net!r}, the same net as .from — a "
+                    "branch is one part between two different nets, and a part "
+                    "with both ends on one net is not an arm"
+                )
+            if part not in declared:
+                raise PresentationSpecError(
+                    f"{branch_spot}.part is {part!r}, which the modules do not "
+                    f"declare (they declare {sorted(declared)!r}) — a service "
+                    "group is stated over this document's own parts"
+                )
+            if part in series_parts:
+                raise PresentationSpecError(
+                    f"{branch_spot}.part is {part!r}, which seriesBranches arm "
+                    f"{series_parts[part]!r} already names — one part has one "
+                    "reading statement, and a part cannot be a series arm and a "
+                    "service branch at once"
+                )
+            if part in panel_parts:
+                raise PresentationSpecError(
+                    f"{branch_spot}.part is {part!r}, which panelGroups group "
+                    f"{panel_parts[part]!r} already names — one part has one "
+                    "reading statement, and a part cannot be a panel branch and "
+                    "a service branch at once"
+                )
+            if part in part_spots:
+                raise PresentationSpecError(
+                    f"{branch_spot}.part is {part!r}, which {part_spots[part]} "
+                    "already names — one branch, one seat: a part named twice is "
+                    "two groups claiming the same arm"
+                )
+            part_modules = module_parts[part]
+            if common is None:
+                common = set(part_modules)
+            else:
+                shared = common & part_modules
+                if not shared:
+                    raise PresentationSpecError(
+                        f"{branch_spot}.part is {part!r}, which shares no module "
+                        f"with the group's other parts (modules so far: "
+                        f"{sorted(common)!r}, this part: "
+                        f"{sorted(part_modules)!r}) — a service group is one "
+                        "host's neighbourhood, so its parts must belong to one "
+                        "module rather than silently split across two"
+                    )
+                common = shared
+            part_spots[part] = branch_spot
+            branches.append(PanelBranch(
+                from_net=from_net, to_net=to_net, part=part,
+            ))
+        out.append(ServiceGroup(id=group_id, branches=tuple(branches)))
+    return out
+
+
+def _flag_share_groups_from(root: dict[str, Any]) -> list[FlagShareGroups]:
+    """Read local flag-sharing constraints; unlisted pins keep the old strategy.
+
+    Geometric route feasibility is checked by the draw compiler after parsing.
+    """
+    out: list[FlagShareGroups] = []
+    net_spots: dict[str, str] = {}
+    member_spots: dict[str, str] = {}
+    for index, item in enumerate(_list(root.get("flagShareGroups"), "flagShareGroups")):
+        spot = f"flagShareGroups[{index}]"
+        body = _object(item, spot)
+        _check_keys(body, FLAG_SHARE_GROUP_KEYS, spot)
+        net = _text(body.get("net"), f"{spot}.net", required=True)
+        if net in net_spots:
+            raise PresentationSpecError(
+                f"$.{spot}.net is {net!r}, which $.{net_spots[net]} already "
+                "names — one declaration per net"
+            )
+        net_spots[net] = spot
+        raw_groups = body.get("groups")
+        if raw_groups is None:
+            raise PresentationSpecError(
+                f"$.{spot}.groups is required and missing — a flag-sharing "
+                "declaration must name at least one local group; omitted pins "
+                "keep the existing grouping strategy"
+            )
+        entries = _list(raw_groups, f"$.{spot}.groups")
+        if not entries:
+            raise PresentationSpecError(
+                f"$.{spot}.groups is empty — a flag partition must name at "
+                "least one group"
+            )
+        groups: list[tuple[str, ...]] = []
+        for group_index, entry in enumerate(entries):
+            group_spot = f"{spot}.groups[{group_index}]"
+            members = _text_list(entry, group_spot)
+            if not members:
+                raise PresentationSpecError(
+                    f"$.{group_spot} is empty — a flag group must name at least "
+                    "one electrical pin"
+                )
+            for member_index, member in enumerate(members):
+                part, separator, pin = member.partition(".")
+                if not separator or not part or not pin or "." in pin:
+                    raise PresentationSpecError(
+                        f"$.{group_spot}[{member_index}] is {member!r}; expected "
+                        "one complete PART.PIN member"
+                    )
+                previous = member_spots.get(member)
+                if previous:
+                    raise PresentationSpecError(
+                        f"$.{group_spot}[{member_index}] names {member!r}, which "
+                        f"{previous} already names — one pin belongs to one "
+                        "flag group"
+                    )
+                member_spots[member] = group_spot
+            groups.append(tuple(members))
+        out.append(FlagShareGroups(net=net, groups=tuple(groups)))
+    return out
+
+
 def _obligation_entries(
     root: dict[str, Any],
     key: str,
@@ -2221,6 +2639,13 @@ def _label_policy(root: dict[str, Any]) -> LabelPolicy:
                 f"units, got {stub_min!r}"
             )
         out.stub_min = float(stub_min)
+    stub_lane_reserve = body.get("stubLaneReserve", False)
+    if not isinstance(stub_lane_reserve, bool):
+        raise PresentationSpecError(
+            "$.labelPolicy.stubLaneReserve must be a boolean, got "
+            f"{stub_lane_reserve!r}"
+        )
+    out.stub_lane_reserve = stub_lane_reserve
     row_model = body.get("rowModel", LABEL_ROW_MODEL_ANCHORED)
     if row_model not in LABEL_ROW_MODELS:
         raise PresentationSpecError(

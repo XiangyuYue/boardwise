@@ -58,6 +58,7 @@ from .enet import NetlistShapeError, optional_object, shape_of
 
 from ..core.geometry import (
     ARTWORK_LAYER_TYPES,
+    ArcGeometry,
     FRAGMENT_KIND_EXTRA_RECORDS,
     FRAGMENT_KIND_STROKE_PIECE,
     MULTI_LAYER_ID,
@@ -140,9 +141,16 @@ __all__ = [
 #: asking for. ``LAYER_PHYS`` was already in this set while
 #: ``docs/epru-format.md`` still listed it as unconsumed; 182 corrected that doc
 #: line (it was stale, not this set).
+#: ``ARC`` joined in 550A, and it joined as **data, not geometry**: the walk
+#: now keeps every PCB ``ARC`` record verbatim in
+#: :attr:`~boardwise.core.geometry.BoardGeometry.arcs`, so the census stops
+#: reporting it as 「known but unread」, while nothing in this module derives a
+#: centre, radius or length from it (``angle``'s unit is unverified — see
+#: :class:`~boardwise.core.geometry.ArcGeometry`). Footprint/symbol ``ARC``
+#: records are a different document family and never reach this walk.
 CONSUMED_RECORD_TYPES: frozenset[str] = frozenset(
     {
-        "ATTR", "COMPONENT", "DOCHEAD", "FILL", "LAYER", "LAYER_PHYS", "LINE",
+        "ARC", "ATTR", "COMPONENT", "DOCHEAD", "FILL", "LAYER", "LAYER_PHYS", "LINE",
         "NET", "PAD_NET", "POLY", "POUR", "POURED", "STRING", "TEXT", "VIA",
     }
 )
@@ -2390,6 +2398,10 @@ class PcbContext:
     by_id: dict[str, ComponentPlacement] = field(default_factory=dict)
     pads: list[PadGeometry] = field(default_factory=list)
     tracks: list[TrackSegment] = field(default_factory=list)
+    #: 550A: PCB ``ARC`` records, in file order, uninterpreted. Never consumed
+    #: by a measurement; :attr:`BoardGeometry.arcs` and the net index are the
+    #: two readers.
+    arcs: list[ArcGeometry] = field(default_factory=list)
     vias: list[ViaGeometry] = field(default_factory=list)
     #: **Copper** area polygons only (162b) — see
     #: :attr:`boardwise.core.geometry.BoardGeometry.pours`.
@@ -2625,6 +2637,28 @@ def collect_pcb_context(
                     start=Point(_as_float(body.get("startX")), _as_float(body.get("startY"))),
                     end=Point(_as_float(body.get("endX")), _as_float(body.get("endY"))),
                     width=_as_float(body.get("width")),
+                )
+            )
+        elif rtype == "ARC":
+            # 550A: keep the record's own fields and nothing else. `angle` is
+            # stored verbatim because its unit is unverified; no centre, no
+            # radius, no length and no intersection is derived anywhere.
+            context.arcs.append(
+                ArcGeometry(
+                    id=record.id or "",
+                    net=_net_name(body.get("netName")),
+                    layer_id=body.get("layerId"),
+                    start=Point(
+                        _as_float(body.get("startX")), _as_float(body.get("startY"))
+                    ),
+                    end=Point(
+                        _as_float(body.get("endX")), _as_float(body.get("endY"))
+                    ),
+                    angle=_as_float(body.get("angle")),
+                    width=_as_float(body.get("width")),
+                    arc_type=str(body.get("arcType") or ""),
+                    locked=body.get("locked") if isinstance(body.get("locked"), bool) else None,
+                    z_index=body.get("zIndex") if isinstance(body.get("zIndex"), int) else None,
                 )
             )
         elif rtype in ("FILL", "POLY", "POUR", "POURED"):
@@ -2900,6 +2934,7 @@ def extract_board(
         tracks=context.tracks,
         vias=context.vias,
         pours=context.pours,
+        arcs=context.arcs,
         non_copper_shapes=context.non_copper_shapes,
         prohibit_regions=context.prohibit_regions,
         outline=context.outline,
@@ -2962,6 +2997,7 @@ def build_board_geometry(source: Epro2Source) -> BoardGeometry:
         tracks=context.tracks,
         vias=context.vias,
         pours=context.pours,
+        arcs=context.arcs,
         non_copper_shapes=context.non_copper_shapes,
         prohibit_regions=context.prohibit_regions,
         outline=context.outline,

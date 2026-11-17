@@ -550,6 +550,20 @@ Measured declarations: 毕设FOC 1.0.0's `PCB1` declares `D+/D-` as **`DP1`** an
 毕设FOC's older 2026-09-17 backup writes `true` on `D+` for the same pair — the
 flag is carried verbatim and never normalised. **[confirmed]**
 
+## 6.11 PCB `ARC` records (550A: data only)
+
+A top-level `ARC` in a **PCB document** is consumed into `ArcGeometry` with its
+`id` / `netName` / `layerId` / start / end / `angle` / `width` / `arcType` /
+`locked` / `zIndex` preserved. The angle's unit and screen direction are **not
+verified**, so the reader does not derive a centre, radius, tangent, length,
+intersection or containment. `BoardGeometry.arcs` and `NetGeometry.arcs` group
+these facts by net, while the legacy `element_count` / `track_length` / `bbox`
+and `_net_shape_records` readings deliberately exclude them. `summary()` adds
+`arcs` only when the board has any. A same-net ARC therefore downgrades a
+negative `pcb net-path` result to `INDETERMINATE`; it cannot become a path edge.
+The `ARC` command inside a footprint's artwork `path` is a different record and
+is already handled by §4's polygon reader. Tests: `tests/test_550a_arc_copper.py`.
+
 ## 7. Records present but not consumed
 
 Counted in `ParseStats.unconsumed_types` so it stays obvious what else the

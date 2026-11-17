@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.device-library-sample/1",
+ "name": "d-baseline",
+ "text": "{\"type\": \"DOCHEAD\"}||{\"docType\": \"DEVICE\", \"uuid\": \"d1\"}|\n{\"type\": \"META\"}||{\"title\": \" T \", \"attributes\": {\"Supplier Part\": \"C1\", \"Designator\": \"R?\"}}|"
+}

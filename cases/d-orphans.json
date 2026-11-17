@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.device-library-sample/1",
+ "name": "d-orphans",
+ "text": "{\"type\":\"META\"}||{\"title\":\"Orphan\",\"attributes\":{\"Designator\":\"R?\"}}|\n{\"type\":\"DOCHEAD\"}||{\"docType\":\"SYMBOL\",\"uuid\":\"s\"}|\n{\"type\":\"META\"}||{\"title\":\"Sy\",\"attributes\":{\"Designator\":\"R?\"}}|\n{\"type\":\"DOCHEAD\"}||{\"docType\":\"DEVICE\",\"uuid\":\"dx\"}|\n{\"type\":\"META\"}||{\"title\":\"Real\",\"attributes\":{\"Designator\":\"R?\"}}|"
+}

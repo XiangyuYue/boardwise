@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.device-library-sample/1",
+ "name": "d-uuid-scalar",
+ "text": "{\"type\":\"DOCHEAD\"}||{\"docType\":\"DEVICE\",\"uuid\":1234}|\n{\"type\":\"META\"}||{\"title\":\"Num\",\"attributes\":{\"Designator\":\"R?\"}}|\n{\"type\":\"DOCHEAD\"}||{\"docType\":\"DEVICE\",\"uuid\":\" u2 \"}|\n{\"type\":\"META\"}||{\"title\":\"Pad\",\"attributes\":{\"Designator\":\"R?\"}}|"
+}

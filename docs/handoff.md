@@ -1,9 +1,301 @@
 # 交接记忆 —— 换 harness / 开新会话先读这份
 
+> **当前交接（2026-11-17，548P138后）：先查C3.2固定地旗与BUZZ通道**。P138以一次cheapest单脚seed反馈使3V3联合座位在真实首次plans返回中通过（chain=5、expansions=6）；完整候选首拒已前移为C3.2 `(-205,65)` 的腿穿过BUZZ通道 `(-301,84)-(-94,86)`。仍无完整候选。证据 `evidence/548P138/README.md`。
+>
+> **当前生产与输入**：drawcompiler SHA `24f13da5219243fa4ee7f881fc9fb7a982bde4210ec1df8559ab9be4d9c030b3`，placement SHA `f550f6eafa3d45b3c23a104925c3a9fa1c2d02f8424068bd31dfe8dba9859d60`；HEAD `3d4a0d5e666a36809babbfad7871021d84cea24a`，混合未提交保留。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`，尚无完整候选。
+>
+> **下一批只读 `tasks/548p139_ground_buzz_channel.md`**：先核对C3.2固定terminal与BUZZ channel的生产关系，不得移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件未出候选，LCD automatic另列；本批未做真机/全量/apply，历史绘制线批次按用户指令另行整理提交。
+>
+> **资产索引**：先读 [`docs/draw-assets.md`](draw-assets.md) 与 `evidence/draw-assets/manifest.json`；此前整理仅经批准将12个可再生目录送回收站，记录见`evidence/draw-assets/recycle-log.json`。
+
+> **P97/P98 人工 LCD 样例（2026-11-16）**：用户要求放入 EDA 后已亲手调整 `test V4` /
+> `Schematic1` / `P47`，pageUuid `678f22680140b828`。原生源/几何/网表/PNG 位于 `evidence/548P97/`，
+> `human-reference-summary.json` 是当前依据。10脚7网与源及调整前一致；C4 与 VCC 同行，C4.2 与
+> J1.2 共地旗，J1.7 单独地旗，五个信号桩等长。**用户重申：打了旗标不再打网络标签。**
+> P98已查明既有apply本来按此做，P97手动调用无条件传net才造成重复，临时脚本已改；无需另造规则。
+> 只记人工参考，LCD automatic仍未完成；P108已确认旗标关系与样例一致。当前先推进 WiFi 三组页，LCD carrier/label 链列为后续待办；禁止抄人工绝对坐标。
+
+> **P108/P109 LCD automatic 检查点（2026-11-16，另一未完成子项）**：LCD仍未验收。P108独立复算确认候选逐脚10/10，且P47的C4.2/J1.2共旗、J1.7独立旗关系一致；拒因是五个信号名与10单位载体分离，以及C4目标姿态缺少原生图形。P109一次原编译追踪到五条载体均为10，输入`stubMin=40`；证据与精确下一步见`evidence/548P108-independent/README.md`、`evidence/548P109/`。WiFi三组页恢复后，再只读捕获40至10各档拒因和标签框变换，修原carrier/label链。旗标处不再加网络标签。
+>
 > **这份文件是路由，不是规格。** 它只回答三件事：这是什么项目、三条线现在各在哪、
 > 干活要去读哪份权威文件。细节一律不在这里复制；两处说法冲突时以它指的文件为准。
 > 写它的场合：从 Kimi Code 迁到 DeepSeek Harness（dsh）这类**换 harness**、开新会话、
-> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-15**。
+> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-16**（P111 WiFi 三组页0候选，已交下一位；LCD P108/P109 仍未验收）。
+
+> **P94/P96更新（2026-11-16）**：原S20分行已复用于严格声明的input链；父独立禁helper3红/去碰撞3红，cp+SHA恢复后63 passed, 1 warning in 60.23s (0:01:00)。drawcompiler当前c8c49503…29f07d，grammar618529e3…170c5。
+> 只完成合成机制：四器件文字standoff均26.5、8脚5网；真实LED/ATTR旋转/视觉未验，独立地旗仍开放。P95只是静态方案。根已接管用户要求的LCD人工调整起点（P97）；子链不再派实施、不碰bridge，写锁已交根。证据`evidence/548P94/`、`evidence/548P96/`。
+>
+> **P90–P93更新**：生产方向真实一次build与P82全plan/change精确相同。P91仅更正LED内部直连语义，原build通过；父P93独立核对8脚5网、内部15/15直线与两负控，原计划4件6线1旗10attr。内部tap/name均已去掉。
+> 父已亲看P93原生器件/实际ATTR诊断：文字仍同侧，共地旗仍待改，视觉未过。P94正复用原_part_texts的P38上下分行；P95只读设计独立链终端共享键。新输入`evidence/548P91/full.presentation.json`；证据`evidence/548P90/`–`548P93/`。未跑整页/真机/全量。
+>
+> **P82–P89更新**：LED方向机制已过独立验收，整图/视觉仍未完成。P87仅原grammar读取两条等臂input链的既有方向；父P89禁helper7红、放宽门控15红，逐轮cp+SHA恢复，聚焦96passed/1warning。grammar当前618529e3…170c5，drawcompiler仍81422c73…bd4a86。
+> P82一次原topology内存方向验证可构建，P86独立8脚/5网及原module_plan一致；P84原生姿态/真实ATTR诊断被视觉拒收（文字同侧、内部多余抽头、独立支路共GND待改），未签LED完成。
+> P83的pair None是首选无冲突时的no-op，不能说明无解或直接修复rail入口。LCD同网旗重叠仍开放。
+> 证据：`evidence/548P82/`、`548P83/`、`548P84/`、`548P85/`、`548P86/`、`548P87/`、`548P89/`。P90正做一次生产版本真实输入消费；P88只读查语义输入与现有文字链。无新整页/真机/全量。
+>
+## 0. 状态通告（2026-11-16）
+
+> **智能药箱 automatic 整图与 LCD automatic 均未完成。** WiFi 三组页最新状态及P111拒因见本文首段和`evidence/548P111/README.md`；P44 是人工关系参考，不是 automatic 结果。
+> 548N2 是端口避让修复历史，不代表当前已通过；P44 是人工关系参考，不是 automatic 结果。LCD 当前唯一可接受的产物仍是 P47 人工参考，P108 候选不得当作 automatic 完成，细节见上方 P108/P109 条目。暂停历史见
+> [`evidence/548P68_PAUSE/HANDOFF.md`](../evidence/548P68_PAUSE/HANDOFF.md)。
+> 历史接续：P67 完整旗位轨迹证明 `_flag_anchor` 的零长兜底提前结束横向第一轮，
+> 现有无转折第二轮未被执行。112 条记录=100 拒绝+12 零长终止，无未解释条目；
+> P67 共跑 3 次原 base（前两次为工具缺陷，记录未掩盖），未扩预算或阈值。
+> 根独立冻结回放仅延后零长兜底，J1.2 预留从无座变为 (-20,25)→(-80,25)，
+> 恢复原函数后重现无座。P69 一次同变异整链进入 J1.7 半格旗位后继拒因，仍 built=False。
+> 证据：`evidence/548P67/TOOL-V2.md`、`parent-zero-tail.json`、`evidence/548P69/report.json`。
+> **P70 原旗位梯级零长终止已独立验收。P71 查明 J1.7 落格首墙是已知 LCD_BLK 标签盒；P72 全量传墙反证失败，未实施。**
+> P71 冻结回放单补该墙能过局部落格，但 P72 整链传入全部五块 service_walls 会堵回 J1.2，不能把局部成功当修复。
+> 证据：`evidence/548P71/README.md`、`parent-wall-replay.json`、`evidence/548P72/README.md`。
+> P73 一次原 LCD compile 7.231567s，13 次布局尝试（基础6/二维6/拓扑1），0候选；独立输入/预算及两数据负控通过。
+> P75原解释器单脚input/source可见载体机制已由P78独立两变异验收（6红/3红），恢复聚焦51passed；
+> 当前source `81422c73…bd4a86`。真实LED一次compile仍0候选，拓扑输入载体撞邻脚，未完成。
+> P76原生图验旧keys/UART/SWD：原闸及逐脚均过，KEYS因S20拒收，UART/SWD被原module_plan文字/载体冲突拒绝。
+> P79 一次完整base反证：仅传lead bodies虽越过落格拒因，原readability仍因C4/J1.2两GND字形重叠报3hard，不得实施为完成修复。
+> P81冻结复算证实：已定旗glyph只存入稍后返回的walls，没有传下一旗；同net_id又豁免20个重叠预留格。补glyph可防错但第二旗无座，P83只读评估原联合走廊能否复用。
+> P80定位LED两输入同排35而stubMin40，无同向可行载体；signal family仍读power方向，忽略input=left。P82仅内存验证原grammar方向和完整构建，不改规格或生产。
+> 不扩预算、不改输入、不另造算法。详见 `evidence/548P79/`、`548P80/`、`548P81/`；原生诊断限制仍见P76。
+> P70 生产 drawcompiler `494e8e59…01c5f6`；独立变异 3红/4红，恢复聚焦 50 passed。
+> P66 两派生姿态已独立核 4/4 脚、9/9 本体及两负控，只签 derivedPose 几何；
+> `evidence/548P66/independent/README.md`。WiFi 既有局部通过不代表整页完成；
+> P60 整页 pages=0、五模块无候选仍是最后整页读数。无新成功 LCD plan、无新候选渲染、无全量或真机。
+> 主仓 HEAD 已由其他工作推进至 `504e766450453d5a10abef03c6f2263f29d910bf`；
+> 混合改动保留，本线无 Git 写、移动删除或审查线修改。
+
+> **P25–P28校准纠偏（暂停前历史）**：用户指出离线preview桩位与立创不同。
+> P25证实P18/P24用的是`HOST4/R/C`合成库，不能代表真实ESP；548J混合库的电容body、ESP边界和旗几何
+> 与P40有差异，不再作为真实WiFi编译输入。P44六件18脚与P40实测库的脚号/名字/端点/方向/长度一致；
+> 根另用整数四分之一转从P40局部tip推回P44绝对坐标18/18、最大误差0，tip偏移5负控红。
+> 读回state角与place API请求角不可混用；直接取负会制造40单位假误差，不据此改生产转换。
+> P27独立审计并目看：svgpreview只画bbox和tip圆点，不画原生引脚线/极板/完整脚名，文字也不是宿主ATTR复刻。
+> 该图只能作几何诊断，不能冒充立创最终外观或真实符号校准。
+> P26已从P8物理full精确切出6件/7网/0NC/18端点（IO0保留J2.2与J2.3），六份profile完整复用P40；
+> spec仅加native-attr，J2 below仍待验。根独立源对象核对及删IO2/错TX两负控均通过预期。
+> P28以这组实测输入、原1170×825和默认预算做一次真实编译：18.9367s，ok=False/0候选。
+> 主拒因为J2.1本地GND旗；cfg-right+50.5/cfg-left0一档到checker后4hard，首项导线穿实测旗本体。
+> **P29/P30继续纠偏**：P40的GND.body是原生负y坐标，但既有`flag_glyph_box`要求先规范为正向后再加family180。
+> P26原对象相等只证来源，不能替代格式适配。P29原checker不改，捕获到两只GND各自引线穿自己glyph，共4hard；
+> 同plan仅内存规范body后4→0，单翻一旗仍2hard。P30新库只将GND.body转为[-10.5,9.5,10.5,19.5]，
+> 原P40/P26测量保留；根独立全对象差分核对，并用原helper复原P44 rot0/180两bbox各四边0，未转换均差29。
+> 新库`evidence/548P30/library.flag-contract.json` SHA203f520f…4b12a，转换provenance单列。P31正按原预算固定复编，
+> **P31结果**：原compile ok=True/1候选/15.5844524s，但原LayoutPlan.load拒segment6同点(290,675)，
+> 因此未继续最终逐脚/module_plan/视觉签字；不得把编译绿当通过。P32定位单支共同trunk退化且record端点有语义用途。
+> **P33已过窄修复验收**：原追加口仅2行guard，保留record/非零原顶点；source现
+> `f5d92aaf4d550dfe4e9b1ac9a9077fcb108755dbb49529a2e9b354fd166be425`。实施4文件18passed，
+> 根独立两变异各3红3绿并cp+hash恢复，恢复P33/owner/layer/doc共78passed。
+> **P37消费结果**：一次compile15.683s/1候选，原loader/往返成功，hard0/grammar0、18/18脚及7网分区一致；
+> 根独立重算相同，VCC端点偏移1负控17/18缺J2.8。相对P31只少零长段，非零线/器件/旗/文字/标签不变。
+> 原module_plan仍被543I拒：ESP_RXD文字盒(298,660.5)-(353,669.5)在carrier x365..405外，未生成可执行落图计划；
+> P39只读查原标签链，不能缩网名或放宽守卫凑绿。P35独立视觉仍拒J2 below。
+> P36证partTexts同块单侧无法表达S20上下分置，原native ATTR可分别移动；P38已授权仅原_part_texts对native+
+> serviceGroups+声明core+无天然锚/显式侧的宿主优化S20，复用原单行font/碰撞/ATTR；已新增38行。
+> 原码新测3failed/6passed；实施19passed，根独立关闭门控3failed/6passed、去碰撞2failed/7passed，
+> 各cp+SHA恢复，恢复P38+owner/layer33passed/25.49s。额外宽旧回归180s超时，无汇总，不算通过。
+> P38释放时source=6837ffff…55a58080，后续P45当前hash见下；未动core/schema/drawapply。
+> P39已交只读侦察：原开放端口用stubMin40固定长度，55宽ESP_RXD放在线外，apply补长又撞IO0。
+> P40首次pin-anchor方案被原dangling闸拒绝，已cp恢复上述hash；新测两红三绿保留，未签修复。
+> P43只读确认既有两阶段合同：compile保留外置label盒，apply在足够长carrier内移动最终ATTR行。
+> 下一最小修复只提前预留长名所需长度，不改far anchor/riding/线尾守卫；不能要求原Layout盒也已内置。
+> P41/P42已从P44提取六份原生art，18条pin线内外端误差0、去12人工ATTR、留16嵌套脚字；
+> 根独立原图18/18及提取树6/6复算/负控通过。两电容270度art对x镜像逐线相等且无字，限定证明见P42。
+> P44已扩展原svgpreview可选同pose原生art；根亲看diff，独立去placement3failed/18passed、
+> fallback15failed/6passed，各cp+SHA恢复，恢复21passed。source=f7750137…2d3e9f7，默认输出不变。
+> P45原端口提前预留长名仅11行+保留stubMin语义，实施13passed，根独立两变异均2failed/3passed，
+> 恢复29passed；compiler现5e4fc1fd7817c9dc36fccf52759c01f3a2a423b1d36f0d1a6e734666066ef038。
+> P46真实输入仅移除J2 below，原compile一次9.098s/1候选，原loader/hard0/grammar0/18脚7网/原moduleplan全过；
+> TX/RX各80，最终55宽实际ATTR原cover无问题且wire点列不变。根独立逐脚同样18/18、断VCC+1为17/18。
+> **P46视觉仍拒**：右RST长465vsManhattan95，VCC最终host→rail595vs端点35，上绕y800/805；
+> 宿主S20已修但不能用机器绿放行。P47独立原闸/18脚一致且视觉拒，大绕上廊下移5仍原闸绿可省20，
+> 下移10撞旗名而红，两反证保留。用户明确指出左右电阻位置都有问题：以P44 RST近/EN远、左IO0靠宿主左上为验。
+> P48静态证P46在(right40.5,left0)首绿返回，最大真实脚行尚未尝试；branch数组不承诺几何序，
+> module.branchOrder原合同可表达近远但joint漏消费，单补顺序不能修左R6上下位置。
+> P49最高真实脚行同时纠正上下/近远，但仍被J2.1 GND拒；P50/P51证左R6距host−50挤占旗位，
+> 人工短肩也经原尺拒绝，不能靠加短挂修。P52只将左组原start_x沿本侧外推一个GAP，原seater/build
+> 得R6(−70,+25)、RST(+50,+25)、EN(+120,+25)，hard0/grammar0、18脚7网、原module_plan/ATTR通过；
+> 根独立断VCC+1得17/18、P53另上下文复算与亲看局部电阻/供电通过。六条宿主路径excess均0。
+> **P52只是原内部候选探针（compileCalls=0），生产自动搜索尚未选中它**；原生器件art已复用，旗仍诊断。
+> P54已补原列向外一档候选，生产SHA42ff7b25536f493aa2f54fff71ca67b39976f2607adebed0fbdba44472be7275；
+> 根独立去列/断offset各3红3绿、重置budget1红，各cp+SHA恢复，恢复聚焦40passed/50.23s。
+> 仅P6单预算test隔离行集合，全部跨variant/计数断言保留，不加生产调度特判。P54不改旧成功早返回。
+> P55已消费显式近远意图与原真实行；source e6812c79e1b5d88d4ee0f1f54a9da7b8f76476c3c4d0dd72e243992c6cdd7f8b，
+> 根独立禁preferred/禁preferred列各4红5绿、禁顺序拒绝1红8绿，cp+SHA恢复，恢复49passed/82.15s。
+> P56用P55I spec（只增wifi branchOrder=[R5,R4]）一次原compile24.267758s/2候选，首选18脚7网/hard0grammar0/
+> 原moduleplan最终ATTR通过；根亲看图与已验P52关系一致，左右电阻正确且无大绕线。
+> P58已独立验两候选hard0/grammar0、18脚7网、原计划/实际ATTR及断J2.8负控；局部视觉通过。
+> 两候选编译标签预留盒不同，分别生成的最终计划图形全等，未把预留盒相等当验收。
+> P57同步边界文档+docclaims49passed。仍是离线automatic WiFi局部，未签整页/真机外观。
+> P59完整10模块输入已备：30件31网4NC/120成员，五处spec意图变化与GND.body两个y适配；
+> 根独立逆向差分及删IO2负控复算一致。P60一次原pagecompile102.658185s，1170×825/default24variants/max8，
+> 显式沿原title_block_keepouts保护(460,10)-(1160,190)，未扩页框；pages0，模块层未过，不是页排布无解。
+> keys6/led1/wifi2/uart2/swd2候选；mcu/lcd/imu/env/bmp0，详见evidence/548P60/report.json。
+> 根独立13候选：WiFi同P58电阻关系/18脚7网/断端负控及原计划通过，keys/uart/swd原尺和逐脚NC过；
+> LED虽8脚/hard0，原grammar2仍开放（单端LED1/2_K链承诺与label表达），不得签完整图。
+> P63已提取18资产+引用P42一资产，根以profile端点/方向独立复算150脚最大误差2.842e-14、
+> 内端+1/错误pose两负控红，亲看原生WiFi局部通过；P60其余5种缺pose未补，旗/字体仍诊断。
+> P62已定位LCD预分组与最终foreign桩位分歧，根冻结原Router复算预尺50/终尺200，
+> 删自GND仍200，仅去四条foreign reservation为60，实际GND长200；保留reach100和最终audit。
+> P64已备份冻结源码，仅实施原标签早段前置/同状态消费；P65另域只静态侦察LED文法，未签修复。
+> 当前用户质疑仍成立：实测profile校准不使bbox/圆点预览等同立创；最终外观须原生导出验收。
+> P34证模块override只有sidePreferences，native/label全局传，railClustering未传入模块spec/预算；未接真实整页。
+> WiFi局部已签，完整图仍未签；不再执行旧P22混合库脚本，不为此改shared/helper。
+> 原校准纠偏阶段未改生产；随后P33/P38仅修改既有drawcompiler，未真机/git写。
+> 证据：`evidence/548P25/profile-fidelity.md`、`evidence/548P26/INPUT-DELTA.md`、`evidence/548P27/renderer-audit.md`；
+> 根独立脚位与输入读数在`.tmp_548p25_parent_checkpoint/pins-check.log`及`.tmp_548p26_parent/verify.log`；
+> P28读数在`evidence/548P28/report.json`。本段文档钉48passed；18输入物理键可解析不代表最终连通已验。
+
+> **同日继续 P13–P17（优先于下文较旧状态）**：目标仍是智能药箱automatic整图，用户明确要求有下一步就继续。
+> P13原Router反证：VCC到共同轨内端被未来去耦旧座挡住，另一既有端点可达。P14仅接有限外端回退，
+> 当前drawcompiler SHA `3e2f6d5045d2ee2aae25a924f04cb54014e0fa368687b6cc0232b7f56c049027`；
+> 实施20passed，父独立两变异3红/1红并cp+hash恢复，恢复P14/owner/layer 28passed。
+> 合成13脚/hard0，但父亲看供电有多余上绕，**视觉拒绝，不接真实页**；独立视觉继续复算。
+> P17只读查未来组旧墙与最终路由几何。P15另已静态确认service builder漏现有native标签三helper，
+> 真实spec未声明native；不得直接把P44人工文字锚冒充自然库profile。证据`evidence/548P14/parent/acceptance.md`、
+> `evidence/548P15/recon.md`。无审查/shared改动、无新解释器、无git写/清理/真机/全量四线。
+
+> **续进 P16/P17 后进入 P18**：P16 service尾部复用原native三收尾；hash
+> `b1e11cf996011a910ad7abf53fd9711882bc8ada1362dffdff24f4698be6c482`，实施55passed，
+> 父两变异2红/1红并恢复，恢复P16/owner/layer28passed。P14独立视觉最终拒绝，13/13、断供电12/13；
+> P17最终所有真实墙下原Router量近端45（旧155），反序控制也完整build/13脚通过，不推广成去耦优先。
+> P18仅让原host→rail消费口使用最终placement并替换具体旧run，正在实施；P19只读查native+serviceLayout载体接缝。
+> 不写新builder/Router，不清墙；真实WiFi和智能药箱整页仍未验收。详见`evidence/548P16/parent/acceptance.md`、`evidence/548P17/recon.md`。
+
+> **P18已过合成局部，继续P20（最新）**：source
+> `98d2321efaa6d96d0f18b1183ce0e60b03c1df48f937c56ceda4e50ae2457793`；实施聚焦29passed，
+> 父三变异4红/2红/2红均cp+SHA恢复，恢复owner/layer等29passed。原Router最终墙下替换旧155为唯一45，
+> 独立13/13、断端12/13、追加旧路仍13/13但P3环红；父与独立视觉均通过合成局部。
+> P19定位_open_far逐grid点未压缩，native载体把40桩末段误读为5；P20只复用原_compress保角/长度/端点，
+> native+serviceLayout门控，在实施。P21只读准备P8整页输入路线。实际WiFi仍未编译新版本，整图未完成。
+
+> **P20机制通过，P24局部示范在途（最新）**：hash
+> `a10667e45603f915d8c4afb28d0ea198330604be47345d0b77bd279fc37e59ba`；实施35passed，
+> 父变异2红/1红cp+SHA恢复，恢复P20/owner/layer28passed。旧P20合成图沿P6低行/below仍视觉拒绝，
+> P24只把native载体接到已验P18合成结构；独立视觉过后才执行已准备`.tmp_548p22_wifi/compile.py`。
+> P21证实10语义模块自动底件f19bf72c…58d8e46与P8静态30件唯一覆盖，不能换成g4辅助8岛。
+> P23未找到自然文字锚；P44另有12条人工锚，仅agent-adjusted证据，不能直接塞profile冒充默认。
+> 真实Wifi/整图仍未验收，目标持续推进。证据`evidence/548P20/parent/acceptance.md`、`evidence/548P21/full-input-route.md`、`evidence/548P23/text-source-audit.md`。
+
+> **工程约束补充（岳 2026-11-14）**：后续绘制开发复用现有解释器与规则，控制模块耦合和
+> 临时状态，新工具优先考虑 Rust，审查/绘制保持独立，代码可读性优先于省 token。
+> 具体约束在 [`tasks/draw-line.md`](../tasks/draw-line.md) §1「工程实现约束」；
+> Rust 工具与算法迁移仍分批，不由此另造绘制引擎。
+
+> **同日持续推进 P5–P13（优先于下文旧中止状态）**：用户要求目标/下一步明确时持续推进，
+> 当前goal仍是智能药箱automatic整图。P6已把真实宿主脚行接回原完整builder，P10让原页锚
+> 消费已有record.frame/port边界；当前drawcompiler SHA-256
+> `cfd563464cd94d5cdab0ad38b4ce0e883612ec63d363deb3b343ac7a7a1af77e`，Pspec仍F63B89AC…0BA60。
+> P6四独立变异、P10两独立变异均红并cp+hash恢复。P10聚焦32passed；根恢复宽邻域
+> 1failed/60passed，唯一原P宿主GND目标仍红。P6旧合成因功能名误作脚号及U1 below视觉拒绝，
+> P11只修纯合成输入，9/9连通与断端负控、独立视觉通过；不得把旧拒图当基准。
+> P8按P4连接做物理脚派生（30/31/4，120网成员），未采用g4的C3/R1/VREF+/CSB assumed改接，
+> 输入证据 `evidence/548P8/INPUT-DELTA.md`。
+> P12真实WiFi当前0候选：9个行组合已试，右组真实脚行均在座位器被host VCC→3V3 rail路径拒，
+> 旧行完整build仍GND拒；不是漏试max/max，也未扩预算。证据 `evidence/548P12/compile.json`。
+> 下一单缺口P13只读侦察原路由器固定host-facing rail入口与P44真实VCC走向，不另造router，
+> 不跳host接线、不清文字。尚无真实WiFi新渲染/视觉，更无整页/真机/全量四线通过。
+> 全部生产变更仅drawcompiler内部，未改审查/shared/bridge/CLI；混合未提交现场保留，无git写。
+
+> **同日续跑 548P2–P4：局部推进，整图未验收。** P2 只修现有解释器的座位事务：失败不改输入，
+> 成功才写回；源码现 hash `66A865339AFC785687535985B83D6D53D8D3103018D1BB0DC28800D8E2D7B4DC`，
+> `presentationspec.py` 仍 `F63B89AC…0BA60`。聚焦43 passed；主代理独立变异分别3红/1过、1红/3过，
+> 均cp+hash恢复；恢复后事务/owner/layer共28 passed。详情 `evidence/548P2/acceptance.md`。
+> 岳明确裁定“以 P44 样例为准，按功能关系修正机械指标”：P1/P4不再统一判距离或跨度；
+> P44实测265×25，因此下文§0.2/§0.6将“一字带/跨度”当根因的表述只保留为被推翻的历史判断，
+> 不再指导实现。现行口径见 `docs/draw.md` §Baseline、`evidence/548P3/README.md`。
+> P4派生输入 `evidence/548P4/circuit.full.p44.json` 为30件/31网/4NC，WiFi为6/7/0；
+> 只把IO2从NC并入ESP_IO0，固件UART方向及其他字段未变，旧输入不覆盖。修正WiFi后编译仍0候选，
+> 7个变体在现预算内均被J2.GND旗拒绝；不能据此断言所有布局无解。
+> 最新文档/原P洞口组合1 failed/49 passed，唯一红项为宿主GND旗；O的两个真实目标仍strict xfail。
+> **不重接旧行候选的漏字预检，也不扩参数续试。** 下一最小动作是设计行选择如何复用现有
+> `_build_service_group_variant` 的最终结果，让旗/文字/座位使用同一生产判断；组间回退另批，
+> 不新增第二套builder/router。未跑全量四线、未真机、无新渲染；未做git写、清理或审查线改动。
+>
+> **同日接手 548P：停止 / 未验收。** 用户已授权接下来两天绘制线开发；首批已复算边界与基线，
+> 但行候选补丁未产出合法图，已 cp 恢复本节原hash，生产净零。恢复后聚焦
+> **2 failed / 116 passed / 2 xfailed**，两红为新增 `tests/test_548p_service_rows.py`，不隐藏。
+> 新反向实验推翻“只改row_y就够”：预检漏宿主文字，placement绿而build红；不是提前return截断。
+> 下一批先补预检/生产墙集同源回归，不继续堆行参数；详见
+> [`evidence/548P/README.md`](../evidence/548P/README.md)、`row-recon.md`。
+> 原校准电路IO2=NC与P44共上拉不等价，不能冒称P44电气交付；两天推进顺序在
+> [`tasks/548p_service_row_candidates.md`](../tasks/548p_service_row_candidates.md)。下文原通告保留为历史。
+
+绘制线**中止**。本会话在 548K–548P 上工作一天，产出四批可用代码，但**没有交付一张能被
+岳接受的图**；岳叫停并指示写这份交接。**本通告优先于下文各节"四批已落"的叙述**——那四批
+代码可用，但它们的验收口径已被推翻，见 §0.3。
+
+### 0.1 现在什么在、什么不在
+
+| 项 | 状态 |
+|---|---|
+| 主仓 `E:\boardwise` | **混合未提交，未做任何 git 写**。绘制线因果文件只有两个：`drawcompiler.py` = `05139E85246A0735BC3A1F554742C37BDDCEA40C14C19E11FBD6FA8C0AA5EA3E`、`presentationspec.py` = `F63B89AC61C55FE11555C9BCC9131F87326C0AF501D4A16C652BAD22EC40BA60`。其余 `M`/`??`（`docs/bridge.md`、`docs/roadmap.md`、`tasks/038q*`、`tasks/shared-platform.md`、`connector/**`、`contracts/**`、`blocklib/parts.json.tmp`、`cases/`、`checkup/`）是他人或早前批次，本会话没碰 |
+| 548K / 548L / 548M / 548N2 | 代码在，测试 8 文件 **93 passed**；能力真实，验收口径作废（§0.3-1） |
+| 548N | 净零，已撤 |
+| 548O（宿主旗房间预留） | **判废**，补丁存 `.tmp_548o_over/548o-wrong-layer.patch`，未合并；理由见 [`evidence/548O/README.md`](../evidence/548O/README.md) |
+| 548P（组座位行候选） | **未完成**，实现在 worktree 被叫停，`drawcompiler.py` 已还原为 `05139E85…5EA3E` |
+| worktree `E:\boardwise-wt-548o` | 分支 `drawing-548o`，HEAD `f23b801`，只读档案；岳指示"这批不解决就整删" |
+
+### 0.2 唯一确定的结论：根因是一行代码
+
+校准 WiFi 岛（6 件 + 2×4 宿主）在 1170×825 上只占 **370 × 45**（31.6% 宽 × 5.5% 高，
+`whitespace_ratio=0.991`、`occupied_ratio=0.0089`）。三组 `serviceGroups`（岳裁 (b) 接受）
+下整页 `ok=False`：`the pin J2.GND has no clear upright hang…`。
+
+`drawcompiler.py:28985` `row_y = min([host_body[1]] + [全组宿主脚 y]) - GAP` —— **全组一个
+标量行**；`:29023` 的候选生成器只沿 x 扫 8 档；`:29263` 的 `_joint_rail` 把"所有 pad 同一 y"
+写成硬条件。三条独立实验（548O 补丁 / 页框翻倍 2340×1650 / 默认页测量）都指向它。
+
+**下一步最小动作**：把 `row_y` 改成**每组的行候选**（宿主本行 / 上方 / 下方 + 组间
+`taken rows` 表），行距量出来不造常数；一行一 rail 语义保留（同组 pad 仍同一 y）；门控只对
+声明 `serviceGroups` 的页生效；判据用"这一行剩下的 rail 旗能不能落座"。侦察全文
+`.tmp_548o_over/recon/SEAM_REPORT.md`（A/B/C 三方案 + 预测读数；结论选 A）。
+
+### 0.3 这一天被推翻的三个判断（**别再照旧结论做**）
+
+1. **"默认页 `8802d317cfae…` 逐字节不变"曾被当作验收线**（548M 起，548N2/548O 沿用）。
+   它是 548L 自己产出的候选指纹，那张图当时**已被视觉闸判废**；该 spec 带
+   `stubLaneReserve: true`，也不是"默认页"（开关全关是 `81557467…`）。
+   **指纹不证明能看。** 规则：[`docs/draw.md`](draw.md) §Baseline。
+2. **"548L 的 `not _service_layout_page(...)` 把 service 页排除了，所以三组页失败"** —— 错。
+   `_service_layout_page`（`:5557`）要求 `serviceLayout.localSeats is True`，校准页只写
+   `pinGap: 30` → 恒 False → 548L 一直生效；`if True` / `if False` 两测几何都不变。
+3. **"缺的是预留"** —— 错，缺的是**行**。548O 因此判废（拒因只是搬家）。
+
+### 0.4 本会话在仓库里留下的改动（要撤按此清单）
+
+文档/测试（主仓，均未提交）：[`docs/draw.md`](draw.md) §Baseline（新增）；
+[`tasks/draw-line.md`](../tasks/draw-line.md) §4（基准口径 + 勘误）；
+[`PROGRESS.md`](../PROGRESS.md)（一条 548O + 基准勘误流水）；
+[`tasks/TASKMAP.md`](../tasks/TASKMAP.md) / [`tasks/SCHEDULE.md`](../tasks/SCHEDULE.md) /
+[`tasks/548_drawing_capability_ladder.md`](../tasks/548_drawing_capability_ladder.md)
+（三处"逐字不变"→"仅指纹"）；[`tests/test_doc_claims.py`](../tests/test_doc_claims.py)
+（两条新钉：基准口径、验收独立性）；新增
+[`tests/test_548o_island_shape.py`](../tests/test_548o_island_shape.py)（两条 strict xfail 洞口）；
+`.agents/skills/boardwise-draw/SKILL.md` + `.kimi-code/…`（新增 §5B 验收独立性，两份逐字节同步
+`6954663EE024E8C5C616CBB3E77E53C34B8131C4CCB2FE52C69D5F810590BBA0`）；
+[`tasks/548p_island_shape_recon.md`](../tasks/548p_island_shape_recon.md)（侦察任务书）。
+
+证据：`evidence/548O/README.md`、`evidence/548O/spec-3groups.json`；`evidence/548L`、
+`evidence/548M` 各加一个勘误块。临时：`.tmp_548o_over/`（读数、recon 报告、548O 补丁）。
+
+### 0.5 环境坑（省一小时）
+
+`E:\boardwise\.venv\Scripts\python.exe` **不能写** `E:\boardwise-wt-*`（`PermissionError` /
+`WinError 5`；主仓内正常、系统 Python 正常）。在 worktree 里一律：
+
+```powershell
+$env:PYTHONPATH = "E:\boardwise-wt-548o\src;E:\boardwise\.venv\Lib\site-packages"
+$env:TEMP = "E:\boardwise\.tmp_548o_pt"; $env:TMP = $env:TEMP
+C:\Python314\python.exe -m pytest tests/<file>.py -q --basetemp=E:\boardwise\.tmp_548o_pt\pt -p no:cacheprovider
+```
+
+新 worktree 从 HEAD 切出**不含**主仓未提交的改动，须按 sha256 从主仓 `cp` 7 个 src + 8 个
+548 测试 + 三份 evidence 输入（`evidence/548J/wifi-canvas/calibrated-*`、
+`evidence/548M/presentation.rail.json`）。行为对等已验：默认页 `8802d317cfae…`、两组件
+`ok=True`（`317E7FD773E76A66`）、三组件 `ok=False`（同一拒因）。
+
+### 0.6 给下一任的一句
+
+**四批能力是真的，方向是错的。先量岛的形状（半小时），再修那四个错误。** 在"图能看"之前
+不要再写能力批次；判过一张图之前，不要用"逐字节不变"当验收。
 
 ## 1. 一句话
 
@@ -34,7 +326,7 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 [`docs/pits.md`](pits.md)｜V3/V4 边界 [`docs/v3-v4-boundary.md`](v3-v4-boundary.md)｜
 测试与保密闸地图 [`docs/testing-doctrine.md`](testing-doctrine.md)。
 
-## 3. 三条线的当前状态（核对日期 2026-11-08）
+## 3. 三条线的当前状态（核对日期 2026-11-13）
 
 ### 3.0 0.6.x与派单路由（先看这里）
 
@@ -124,7 +416,7 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 - **审查线下一步（真实外部依赖，逐项不合并）**：eprj3 在线容器、真实 NO_CONNECT、`down` 与
   envelope marker（信封字段缺省形态）、缺省 `yAxisDirection`、旋转几何样本需明确的 4.1.94+
   测试环境；真实多板 + 库工程 / CBB 样本 / 原始 PCB-A 复核 / 真机复测各自单独排期，缺样本
-  不开工；541 R3 的 DSH profile 重启授权未拿到，pre-execute 闸不算已加载；R6 资料获取、Rust
+  不开工；541 R3/I/R4 已在隔离真实 DSH 0.2.2-rc.3 验收，桌面 profile 尚未部署；R6 资料获取、Rust
   迁移、绘制线各自独立，不并进审查线。041 S1/S2 均已完成离线验收（S2 入口
   `tasks/041s2_interconnect.md`，已随 `6253a0b` 提交），真实 3 板与 2 板声明均已双报告对拍；
   全量 9682 passed / 25 skipped / 2 个既有 Windows 环境失败，connector/DSH/Rust 通过。
@@ -342,6 +634,63 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
 **下一步**：#87（顺手性五条，未动）→ 回收 #88（现在有 5 条 xfail 占位，修好会自己变红提醒摘掉）。
 
 ### 3.2 绘图线 —— 多岛原理图（**已并回 main**，worktree 仅作证据档案）
+
+**最新（2026-11-14，本机第二天）：548K/R、548L、548M 三个机制批落账；图仍判废，差距已定位到 placement 层。**
+- **548K + 548K-R**：名字桩带先预留（`labelPolicy.stubLaneReserve`，默认关闭）。校准 WiFi 件不写开关
+  → 几何 `f4f1c58c…`（与 548J §16 记录逐字相同）+ `draw plan` 拒绝；写开关 → `plan ok=True`、17 线/7 旗。
+  第一版把行为挂在 `stubMin` 上，全量抓出 6 条老金标准红（534x×2、534、543c、548c4、548c6），已改成显式开关。
+  最终 `drawcompiler=B965AC…1F66`、`presentationspec=667475…9BC8`。
+- **548L**：两脚 `wire` 网的直线走廊在旗位**之前**预留（同一开关门控）。`ESP_EN`/`ESP_RST` 变回导线，
+  `wired route not found` 归零，GND 旗从 `(320,680)` 让到 `(350,730)`。最终 `drawcompiler=AA86C1CE…FC5C2`。
+- **548M**：`railClustering: {radius}` 把 GND 既有聚簇能力开到 power 轨（声明时该网取 `wire` 样式；
+  053 sec.7 默认裁决未动；不碰 GND）。`3V3` 旗 **6 → 3**，与岳 P44 的三枚同构。
+  全量第一轮暴露两条本批回归（`PresentationSpec` 位置参数被挪位、假 budget 无新属性）已修；
+  另把 `test_548j_service_groups` 的"追加字段"pin 顺延一格（追加是契约允许方向，证据里写明未放宽）。
+  最终 `drawcompiler=54364928…225818`、`presentationspec=F63B89AC…0A60`。
+- **四线（每批各一轮全量）**：最终 **2 failed / 11066 passed / 22 skipped / 1 xfailed**，两条红均既有
+  （`test_548d_panel_base` 的 panel 路由次数、`test_193_secrecy_hooks` 的 Windows 环境）；connector **740**、
+  dsh-plugin **137/1**、Rust fmt/clippy/test 全过。**不称全绿。**
+- **548N / 548N2**：548N 在独立 worktree `E:\boardwise-wt-548n`（分支 `drawing-548n`）试组级座位，
+  **未达成、净改动为零**，前提被证伪（`IO0` 在左侧 → 正确形态是两组；且与 `test_548j_joint_seats.py:692`
+  的"跨侧组=具名拒绝"互斥）。**岳裁 (b)**：接受两组声明（R4/R5 右、R6 左、去耦另组），不解冻那条负例；
+  worktree 保留为**只读证据档案**（与 `boardwise-wt520` 同待遇，**不是当前实现**）。548N2 修好一个真缺陷并**已并入主仓**：`_joint_seat_group` 把
+  `_reserve_open_ports` 的同一份端口房间当墙、命中沿宿主侧外退（≤8 档，全不退仍具名拒绝），
+  同侧第二组推广到任意组；只对声明 `serviceGroups` 的页生效。最终 `drawcompiler=05139E85…5EA3E`、
+  新测试 `tests/test_548n_group_seat.py=F78CC5A2…1A6A`，变异 M-N3 可复现原拒因。
+  **三组真实页仍 `ok=False`**（新一层：`J2.GND has no clear upright hang`，座位/轨道/宿主旗三方争地），
+  已按停止线停手，下一层最小动作见 `evidence/548N2/README.md` §4。worktree 保留为证据，不清理。
+- **最终读数（5 批合并后）**：pytest 全量 **2 failed / 11070 passed / 22 skipped / 1 xfailed**；
+  两条红均既有。connector 740、dsh-plugin 137/1、Rust 全过。**不称全绿。**
+- **下一步（需岳裁）**：交接给过的唯一合规出路是「组级计划供现有标准 build/route/flag 消费」，
+  不新建第二套 builder/planner；那是架构级改动，未获裁量前不开工。548D 自动整页/548E/547G 仍未完成或暂停。
+
+**上一阶段（2026-11-13）：548J-A合同通过，B1联合座位停止交接，不能发布。**
+- 可选 `serviceGroups` 的解析、封闭负例、页面切片与两项主代理变异已通过；岳人工P44及真实2×4 ESP-01S
+  校准证据可复用。**B1目标测试22 passed、交接组合233 passed/1 skipped，但合成图仍有CFG_A/PWR大回环，
+  主代理视觉拒收**；最近脚端子行等实验已回退，真实WiFi未消费，B1真机/独立变异/全量四线未做。
+- 当前 `drawcompiler=11b2b3b9…`（B1前058a3032…），工作树混合未提交；不得git restore或直接续写独立builder。
+  P44人工页/P42/P43/Board2不动，P45空白，daemon已停。**下一任先读 `evidence/548J/HANDOFF.md`**，
+  清理或重设计由岳另裁；548D自动整页/548E/547G不因此关闭。
+
+**上一阶段：P43 落真机、强制 topology 三岛与 LED 分压链族过；真实整页仍 BLOCKED。**
+- B1前历史基线 `drawcompiler=058a3032…`、`drawapply=f713895f…`、`placement=326d96e9…`、`voltage_divider=2f67af65…`。
+- **P43 automatic**：test V4 Board1 P43 `797f20b8a217b331`，三件/19 wire/11 flag，独立逐脚
+  20/20 + 48/48 NC、lint 0/0/0、`saved:true` 但只记 **`saved_unverified`**；**DRC 开放项不隐藏**
+  （209 WARN/0 ERROR，含 6 SHOWDANDLING、3 CHECKFLOATPIN、1 跨页 ATTRMATCHCODE，并新增 NRST WARN —
+  复位脚未真实闭合）。P42 未动，本页是 MCU 单岛教学切片，不可投板。证据 `host-binding/p43/ACCEPTANCE.md`。
+- **T1 强制 topology 三岛**：port-native 由真实 placement + topology 回放产图（base 兜底零调用），
+  三岛 ok、crossings=0、主代理逐岛视觉签收；主代理 79 聚焦全绿、CH34/seat-first 邻域 171 passed；
+  有效变异（coreless 投影关、同网重旗预占放开）先红后恢复，**「删除普通信号墙」是无效变异，不记成功**。
+  baseline 仍带旧裸标签与 BOOT0 交叉，只记机器合同。
+- **F1/F1A LED 分压链族**：多链只在「信号顶端 + `serviceLayout` + `stubMin>0`」启用（native-attr 门已撤，
+  实测它让 bmp280/wifi 失候选）；LED 236×216.5、6/6 逐脚、14 测试 + 333/2 邻域、两项变异先红恢复。
+- **整页仍 BLOCKED**：10/10 岛可出候选但页级 packer unsat，三列差 **41.5**；buzzer 岛、partTexts、
+  panelGroups WiFi 上拉、native-attr 门、packer/页框/gap 调参**均已实测排除**；该方向随后进入548J，
+  当前停止状态见上条交接，不能调 pinGap/缩字/降 40/扩页框冒充。
+  详见 `evidence/548D/full-page/BLOCKED.md`；**不得写成 548D 自动整页或 548E 完成，547G 仍独立暂停**。
+- 最终全量 **10973 passed / 26 skipped / 1 xfailed / 1 failed / 1 warning**（唯一红仍是既有 panel 路由次数，
+  无新增失败，不称全绿）；Connector 740、DSH 137/1、Rust 177/4 均通过。日志
+  `evidence/548D/host-binding/full-pytest-final.log` 与 `connector-final.log`、`dsh-final.log`、`rust-final.log`。
 
 - **规格（当前有效）**：`docs/schematic-style-spec.md`——黄金板绘图规格 S-01…S-21，每条标
   `[硬]`（违反即判废）/`[统计]`/`[观察]`。算法困境与接口简报在

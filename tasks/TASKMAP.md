@@ -16,8 +16,36 @@
 
 ---
 
-## §0 当前在做（截至 2026-11-08）
+## §0 当前在做（资产整理基线 2026-11-17；流水历史截至 2026-11-14）
 
+- **绘制线资产路由**：先读 `docs/draw-assets.md` 与 `evidence/draw-assets/manifest.json`。
+  当前工作集为P125 G3C电路 + P126服务规格与生产 + P118 WiFi锚；548P126**机制通过/页面未通过**；548P127三种分组均证伪；548P128联合座存在但完整未闭环；548P129捕获built=False；548P130捕获path-first首拒；548P131信号有效/标签载体未过；548P132证实预留不一致；548P133重选未过且已回退；548P134定位跨网row-gap误伤；548P135同网过滤**机制通过/页面未通过**；548P136证实BUZZ冲突但offset未解决；548P137**C2最终首拒修复/整图未通过**，真实 `_place` 已5/5；548P138**3V3联合反馈修复/整图未通过**，真实首次plans第二次joint为chain5、expansions6，聚焦77 passed，完整候选首拒前移为C3.2/BUZZ；548P139**规划未实施**。
+  P124 GND分组与网格实验是拒绝证据，不是续作基线；仅经明确批准回收12个可再生目录，其他资产未移动或删除。
+- **绘制线历史索引 P2–P124（2026-11-14 至 2026-11-16）**：这一段是同一轮绘制线实验/迭代弧，逐批证据在
+  `evidence/548P2` … `evidence/548P124`（`-independent` 为独立复验副本），恢复点链与文件清单见
+  `tasks/548p140_draw_history_commits.md` §1–§2。除 P2/P6/P14 等少数任务书外，其余批次**没有任务书，
+  不伪造 26 份**；查历史按 evidence 目录与本文件外的 `PROGRESS.md` 2026-11-14/15/16 的 548P 段。
+- **548P140 整理在途（2026-11-17）**：此前全部未提交绘制批次按六批整理提交（C1 P124 前历史 → C2 P126
+  → C3 P135 → C4 P137 → C5 P138 → C6 文档），HEAD `3d4a0d5e`；`drawcompiler` `24f13da5…`、
+  `placement` `f550f6ea…`。任务书 `tasks/548p140_draw_history_commits.md`；未逐批授权前不做 Git 写。
+- **绘制线 2026-11-14 四批（工作树未提交；全量 2 红均既有）**：
+  - **548K / 548K-R**：名字桩带先于旗位预留，显式开关 `labelPolicy.stubLaneReserve`（默认关闭、`false` 等价不写、
+    只在 true 时序列化、非布尔具名拒绝）。不开开关的校准件几何 `f4f1c58c…` 与 548J 记录逐字相同且 `plan` 拒绝；
+    开开关后 `plan ok=True`（6 件/17 线/7 旗）。
+  - **548L**：两脚 `style=wire` 网的直线走廊也在旗位之前预留（同一开关门控），`ESP_EN`/`ESP_RST` 变回导线、
+    `wired route not found` 三处归零。
+  - **548M / 548M2**：新增 `railClustering: {"radius": N}`，把 053E 的 GND 聚簇能力开到 power（声明时该网取
+    `wire` 样式；053 sec.7 默认裁决未动；`gndClustering` 语义未动）。`3V3` 旗 6→3、GND 旗 1→2、
+    y=795 底边 rail 消失、`crossings=0`、默认页 `8802d317cfae…` 仅指纹（不作验收；见 `docs/draw.md` §Baseline）。
+  - **548N / 548N2**：548N 在独立 worktree `E:\boardwise-wt-548n`（分支 `drawing-548n`）试组级座位**未达成、
+    净改动为零**（前提被证伪：`IO0` 在左侧 → 应为两组；且与 `test_548j_joint_seats.py:692` 跨侧负例互斥）；
+    548N2 修好"组座位不避让已预留开放端口房间"这一真缺陷并**已并入主仓**，只对声明 `serviceGroups` 的页生效。
+    **三组真实页仍 `ok=False`**（新一层：宿主 GND 挂旗带与 PWR rail 争地），按停止线停手。
+  - 最终生产：`drawcompiler=05139E85…5EA3E`、`presentationspec=F63B89AC…0BA60`；完整 pytest
+    **2 failed / 11070 passed / 22 skipped / 1 xfailed**（两条红既有：panel 路由次数、193 Windows 环境）；
+    connector 740、dsh-plugin 137/1、Rust 全过。**不称全绿。**
+  - 视觉：旗域已按岳 P44 判据同形，**仍未过视觉闸**（`ESP_RST` 绕行）；逐项差距
+    `evidence/548M/p44-comparison.md`。派单账 `tasks/draw-line.md`。
 - **0.6.1 已正式发布（2026-11-10）**：main `47713c2`、`8ad625e`、`9ffeb3b`；tag 与 Release
   `targetCommitish` 均为 `9ffeb3b`（`prerelease=false`、latest）。0.6.1 含审查线 038W/X、527C2、
   529、541 R1/R2/R4 与**首次配对显式授权（549）**，绘制线 CH340 第二拓扑、CH343 持久化与旧任务核销；
@@ -80,6 +108,34 @@
   与116 hash，生产未改。主代理相关四文件 **93 passed**，变异先红并cp/hash恢复。证据
   `evidence/548D/scene08-baseline-repair.md`，任务书§40。最终全量 **10775 passed / 26 skipped /
   1 xfailed / 0 failed / 0 errors**，两条目标测试均消失，绘制线全绿（另有1条既有编码警告）。
+  **548J（2026-11-13，A合同通过；B1停止、视觉未过）**：`serviceGroups`公开合同/负例/页面切片与两项
+  独立变异完成；岳人工P44及ESP-01S双列校准证据可复用。B1目标测试22 passed、交接组合233 passed/1 skipped，
+  但当前合成图仍有CFG_A/PWR大回环，主代理视觉拒收；直接令row_y=min(feet)（不扣body/GAP）等实验已回退，真实WiFi未消费，
+  B1真机/独立变异/全量四线未做。当前 `drawcompiler=11b2b3b9…`（B1前058a3032…），工作树混合未提交，
+  不得git restore或直接续写独立builder。P44人工页/P42/P43/Board2不动，P45空白，daemon已停。
+  **权威交接 `evidence/548J/HANDOFF.md`**，任务书 `tasks/548j_pullup_joint_seats.md`；清理或重设计由岳另裁。
+  **548D3D-H3–H6/P1 → T1 → F1A → P43（2026-11-13，单岛与三岛闭环，整页仍 BLOCKED）**：
+  H3–H6 统一宿主脚绑定、本件文字逃逸、旗位方向与相邻脚独立备选；P1 宿主端口列只在
+  `localSeats:true` + `stubMin>0` + 无 `panelGroups` 时启用；T1 强制 topology 三岛 port-native
+  （coreless 投影、同网重旗预占）机器与主代理视觉通过，主代理 **79 聚焦全绿**、CH34/seat-first 邻域
+  **171 passed**，有效变异 3 failed / 1 failed 先红后 cp+SHA-256 恢复（「删普通信号墙」为**无效变异**，
+  不记成功）；F1A 同模块独立分压链族按「信号顶端 + `serviceLayout` + `stubMin>0`」启用（native-attr
+  全局门已撤，实测它让 bmp280/wifi 失候选），LED 岛 236×216.5、6/6、**14 测试 + 333/2 邻域**，
+  变异 7/7 与 2/12 先红恢复。**P43 automatic 真实 64 脚 MCU 已落 test V4 Board1 `797f20b8a217b331`**：
+  三件/19 wire/11 flag、39 写调用、`verify live ok · canvas ok`、独立逐脚 **20/20 + 48/48 NC**、
+  `draw lint` **0/0/0**、显式 save 但只记 **`saved_unverified`**；**DRC 开放项照记**（209 WARN/0 ERROR，
+  含 6 SHOWDANDLING、3 CHECKFLOATPIN、1 跨页 ATTRMATCHCODE，新增 NRST WARN）；P42 不动。
+  B1前历史基线 `drawcompiler=058a3032…`、`drawapply=f713895f…`、`placement=326d96e9…`、
+  `voltage_divider=2f67af65…`。**真实整页仍 BLOCKED**：10/10 岛可编译，页级 packer 两次真实调用
+  均 unsat，三列差 **41.5**；buzzer 独立岛、`partTexts`、`panelGroups` WiFi 上拉、native-attr 门、
+  packer/页框/gap 调参**全部实测排除**；该方向随后进入548J，当前停止状态见上条交接。
+  最终全量 **10973 passed / 26 skipped / 1 xfailed / 1 failed /
+  1 warning**（唯一红仍为既有 panel 路由次数，无新增失败，不称全绿）；Connector 740、DSH 137/1、Rust 177/4 均通过。
+  日志 `evidence/548D/host-binding/full-pytest-final.log`、`connector-final.log`、`dsh-final.log`、`rust-final.log`。
+  证据 `evidence/548D/host-binding/p43/ACCEPTANCE.md`、
+  `host-binding/three-island/implementation/ACCEPTANCE.md`、`full-page/BLOCKED.md`、
+  `full-page/divider-families/README.md`、`full-page/island-packing-review.md`、
+  `host-binding/full-pytest-t1.log`，任务书 §44。**不得写成 548D 自动整页或 548E 完成；547G 仍独立暂停。**
   **548B1 数据合同已落（2026-11-08，41 passed；完整四线 10086 passed / 16 failed 均既有）**：`evidence/548B1/`。
   **548C2 多岛共享电源网统一（2026-11-08，未通过，批次前提被证伪）**：E2/E3 的 `layout-unsat/modules[mcu]`
   与「岛数」无关——547A 自己的 mcu 用页面预算（radius 100）编译同样 4 节点；真缺口是三层（模块层拆分地

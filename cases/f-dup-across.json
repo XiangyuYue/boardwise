@@ -1,0 +1,5 @@
+{
+ "schema": "boardwise.footprint-library-sample/1",
+ "name": "f-dup-across",
+ "text": "{\"type\": \"DOCHEAD\"}||{\"docType\": \"FOOTPRINT\", \"uuid\": \"f2\"}|\n{\"type\": \"META\"}||{\"title\": \"First\"}|\n{\"type\": \"DOCHEAD\"}||{\"docType\": \"FOOTPRINT\", \"uuid\": \"f2\", \"editVersion\": \"2\"}|\n{\"type\": \"META\"}||{\"title\": \"Second\"}|"
+}

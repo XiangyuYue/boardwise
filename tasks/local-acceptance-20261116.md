@@ -48,3 +48,12 @@
 ## 天然 GREEN 裁定
 
 岳确认没有可满足当前严格审查规则的天然 GREEN PCB：即使成熟畅销产品也可能存在若干问题。天然 GREEN 不再列为本机必做验收项；不为凑通过而放宽规则或制造“干净板”。GREEN 的正向编排继续由既有 fake/合成测试支撑，真实环境保留 RED/INCOMPLETE 证据；后续若用户提供合格样本再补实测。
+
+## 失败归属清理（2026-11-17）
+
+- 对上述全量的 154 failed / 41 errors 逐项按 class 聚合：此前本批已修的 540C 合同 4 条与交付文档钉 1 条，当前聚焦 **53 passed**；其余为 **185 条绘制/CBB 绘制、2 条审查规则注册钉、3 条 Rust 差分输入钉**。185 条绘制/CBB 绘制项不归本批修改。
+- 两条规则注册失败来自 `d422e7a` 按 038Y 任务书插入 `pcb-silk-under-body` / `pcb-silk-on-foreign-pad` 后，漏同步 151/153 的旧位置钉。生产注册顺序不变，只更新两个测试的丝印族顺序与相对位置断言。
+- 三条 Rust 差分失败同因：同一官方 `review-report.json` 已随 038Y 的规则指纹与 0.6.1 版本更新，manifest 和现行代码自洽，038M/N/T 三处首键仍钉上一版哈希。只更新这一键，其他 case id、顺序、输入和哈希不变；contracts 资产零 diff。
+- 主代理独立变异：交换两条丝印规则使 151/152/153 **3 failed / 95 passed**；改输入 `rulebody` 使 038M/N/T **3 failed / 53 passed**。两次均 cp + SHA-256 恢复，生产与 contracts 无残留 diff。子代理另做降额位置与 `toolVersion` 两组独立变异，均先红并恢复。
+- 最终合并聚焦：038M/N/T、151/152/153、540C 差分/合同、交付文档钉与 owner 守卫共 **250 passed**，命令使用 `-n 4 --dist loadfile --basetemp=.tmp_pt_review_attribution_final`。本轮修改仅限五份测试；**没有重跑全量，不把上述数字改写成新的全量读数或全绿结论**。
+- 详细归因与变异记录：`.tmp_review_attribution/rule-counts.md`、`.tmp_review_attribution/rust-hashes.md`。

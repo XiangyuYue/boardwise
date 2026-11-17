@@ -133,6 +133,7 @@ from boardwise.core.pagelayoutplan import (
 )
 from boardwise.core.presentationspec import (
     DirectWiringObligation,
+    FlagShareGroups,
     FlowEdge,
     LocalLabelObligation,
     PanelBranch,
@@ -140,6 +141,7 @@ from boardwise.core.presentationspec import (
     PresentationModule,
     PresentationPath,
     PresentationSpec,
+    ServiceGroup,
     TEXT_PLACEMENT_NATIVE,
     UserLock,
     main_path_wire,
@@ -644,6 +646,12 @@ def compile_page(
     panels = drawcompiler.validate_panel_groups(circuit_spec, presentation_spec)
     if panels:
         result.failures = panels
+        return result
+
+    flag_groups = drawcompiler.validate_flag_share_groups(
+        circuit_spec, presentation_spec)
+    if flag_groups:
+        result.failures = flag_groups
         return result
 
     # 1. the page's own facts: who owns which part, where the flow points, and
@@ -1270,6 +1278,50 @@ def _module_view(
             )
             for group in getattr(presentation_spec, "panel_groups", ())
             if all(branch.part in part_ids for branch in group.branches)
+        ],
+        # 548J-A: a service group is a **joint seat and flag domain** — its
+        # hosts, poses, terminal rows, flags and text are solved together — so
+        # it travels whole or not at all, on exactly the terms a panel group
+        # does. The page's own checks refuse a cross-module group by name
+        # before any module is compiled, so a slice that saw only some of a
+        # group's branches is a page that was never validated, and half a group
+        # is a group the document did not declare. The test is the group's own
+        # branch parts, so a module holding none of them drops the group too.
+        #
+        # Nothing else travels: side, pose, terminal row, pitch, flag sites,
+        # text and frame are the interpreter's, derived from `CircuitSpec` +
+        # profile + the candidate, and a slice has no coordinate to carry.
+        service_groups=[
+            ServiceGroup(
+                id=group.id,
+                branches=tuple(
+                    PanelBranch(
+                        from_net=branch.from_net, to_net=branch.to_net,
+                        part=branch.part,
+                    )
+                    for branch in group.branches
+                ),
+            )
+            for group in getattr(presentation_spec, "service_groups", ())
+            if all(branch.part in part_ids for branch in group.branches)
+        ],
+        # 548P104: each explicit pin group is validated against the whole page
+        # before slicing, then carried whole to the one module that owns it.
+        flag_share_groups=[
+            FlagShareGroups(
+                net=declaration.net,
+                groups=tuple(
+                    members for members in declaration.groups
+                    if all(member.partition(".")[0] in part_ids
+                           for member in members)
+                ),
+            )
+            for declaration in getattr(
+                presentation_spec, "flag_share_groups", ())
+            if declaration.net in net_ids and any(
+                all(member.partition(".")[0] in part_ids for member in members)
+                for members in declaration.groups
+            )
         ],
     )
     return sub_circuit, sub_presentation

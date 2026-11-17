@@ -1,0 +1,6 @@
+{
+ "schema": "boardwise.footprint-declared-sample/1",
+ "name": "x-bad-hex",
+ "text": "{\"type\": \"DOCHEAD\"}||{\"docType\": \"FOOTPRINT\", \"uuid\": \"0a1b2c3d4e5f6071\"}|\n{\"type\": \"META\"}||{\"title\": \" CAP-SMD_8.0 \"}|\n{\"type\": \"DOCHEAD\"}||{\"docType\": \"FOOTPRINT\", \"uuid\": \"0a1b2c3d4e5f6071_0f1e2d3c4b5a69788796a5b4c3d2e1f0\"}|\n{\"type\": \"META\"}||{\"title\": \"TWO-SEG\"}|\n{\"type\": \"DOCHEAD\"}||{\"docType\": \"FOOTPRINT\", \"uuid\": \"1111111111111111\"}|\n{\"type\": \"META\"}||{\"title\": \"   \"}|",
+ "value": "0a1b2c3d4e5f607g"
+}

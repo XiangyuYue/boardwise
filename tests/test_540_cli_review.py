@@ -71,10 +71,10 @@ def test_owner_manifest_covers_review_commands():
     )
     assert data["batch"] == "540B6"
     assert data["modules"]["commands/review.py"] == "review"
-    # 038Y5: the manifest is 152 rows — 148 was 540B6's, 038Y1–Y4 added the
-    # three PCB rule modules and 038Y5 added `pcb_gate.py` (assembly). The
-    # count is pinned in all three command-module anchors on purpose.
-    assert len(data["modules"]) == 152
+    # 550: the manifest is 154 rows — 038Y5's 152 plus `core/netpath.py`
+    # (shared) and `pcb_netpath.py` (assembly). The count is pinned in all
+    # three command-module anchors on purpose.
+    assert len(data["modules"]) == 154
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

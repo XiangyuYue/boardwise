@@ -4148,7 +4148,7 @@
             "description": null,
             "epilog": null,
             "helpWidth": 80,
-            "help": "usage: boardwise pcb [-h] {gate} ...\n\npositional arguments:\n  {gate}\n    gate      Run the host PCB DRC and a fresh checkup against the active board\n              and report one verdict (0 GREEN / 2 RED / 3 cannot be stated).\n\noptions:\n  -h, --help  show this help message and exit\n",
+            "help": "usage: boardwise pcb [-h] {gate,net-path} ...\n\npositional arguments:\n  {gate,net-path}\n    gate           Run the host PCB DRC and a fresh checkup against the active\n                   board and report one verdict (0 GREEN / 2 RED / 3 cannot be\n                   stated).\n    net-path       Offline copper-path evidence between two pads of one board (0\n                   CONNECTED / 2 NOT_PROVEN / 3 INDETERMINATE or refused).\n\noptions:\n  -h, --help       show this help message and exit\n",
             "actions": [
               {
                 "optionStrings": [
@@ -4252,6 +4252,84 @@
                         "required": false,
                         "help": "Daemon port (default 61190).",
                         "metavar": "None",
+                        "choices": "None"
+                      }
+                    ]
+                  },
+                  "net-path": {
+                    "prog": "boardwise pcb net-path",
+                    "description": "Read-only, offline, no report file: is there an ordered chain of the copper primitives this batch supports (pad, straight track, via) that physically joins these two pads of this net on this board? The answer is machine JSON on stdout and one of three verdicts. CONNECTED means a path was walked; every hop shares a copper layer and the pair's copper bodies meet under the repository's own measurement, and a net *name* is never the evidence. NOT_PROVEN means the supported graph had no path **and** nothing unknown could change that — it says 「this batch's copper inventory did not prove a connection」, not 「开路」: copper pour, PLANE layers and ARC copper are outside the graph (see `ignored` and `scope`), so read the JSON's `scope` before quoting a negative. INDETERMINATE means the input does not hold (a reference that is not REF.PAD, an unknown or ambiguous pad, two nets, or an unreadable layer table) or some evidence gap could overturn a negative answer. `FILE` must be an .epro2 archive or an .eprj3 folder project — KiCad, a lone .epcb2 and the live editor are refused by name, because this batch reads archives only. A container with several boards needs `--board`, matched verbatim against the title or board uuid the review runner reports; the first board is never assumed. This batch does not expose --through, --layer, --json or --project: order and measurement are the core batch's next step, and a loose flag would promise evidence that is not there.",
+                    "epilog": null,
+                    "helpWidth": 80,
+                    "help": "usage: boardwise pcb net-path [-h] --from REF.PAD --to REF.PAD\n                              [--board TITLE_OR_UUID]\n                              FILE\n\nRead-only, offline, no report file: is there an ordered chain of the copper\nprimitives this batch supports (pad, straight track, via) that physically joins\nthese two pads of this net on this board? The answer is machine JSON on stdout\nand one of three verdicts. CONNECTED means a path was walked; every hop shares a\ncopper layer and the pair's copper bodies meet under the repository's own\nmeasurement, and a net *name* is never the evidence. NOT_PROVEN means the\nsupported graph had no path **and** nothing unknown could change that — it says\n「this batch's copper inventory did not prove a connection」, not 「开路」: copper\npour, PLANE layers and ARC copper are outside the graph (see `ignored` and\n`scope`), so read the JSON's `scope` before quoting a negative. INDETERMINATE\nmeans the input does not hold (a reference that is not REF.PAD, an unknown or\nambiguous pad, two nets, or an unreadable layer table) or some evidence gap\ncould overturn a negative answer. `FILE` must be an .epro2 archive or an .eprj3\nfolder project — KiCad, a lone .epcb2 and the live editor are refused by name,\nbecause this batch reads archives only. A container with several boards needs\n`--board`, matched verbatim against the title or board uuid the review runner\nreports; the first board is never assumed. This batch does not expose --through,\n--layer, --json or --project: order and measurement are the core batch's next\nstep, and a loose flag would promise evidence that is not there.\n\npositional arguments:\n  FILE                  An .epro2 archive or an .eprj3 folder project (read-\n                        only).\n\noptions:\n  -h, --help            show this help message and exit\n  --from REF.PAD        Start pad as DESIGNATOR.PAD, for example U9.2.\n  --to REF.PAD          Destination pad as DESIGNATOR.PAD, for example CN3.1.\n  --board TITLE_OR_UUID\n                        Which board to ask about, by title or board uuid.\n                        Required when the container holds more than one board; a\n                        name that matches nothing or several boards is refused,\n                        never resolved by position.\n",
+                    "actions": [
+                      {
+                        "optionStrings": [
+                          "-h",
+                          "--help"
+                        ],
+                        "dest": "help",
+                        "nargs": "0",
+                        "const": "None",
+                        "default": "'==SUPPRESS=='",
+                        "type": null,
+                        "required": false,
+                        "help": "show this help message and exit",
+                        "metavar": "None",
+                        "choices": "None"
+                      },
+                      {
+                        "optionStrings": [],
+                        "dest": "file",
+                        "nargs": "None",
+                        "const": "None",
+                        "default": "None",
+                        "type": null,
+                        "required": true,
+                        "help": "An .epro2 archive or an .eprj3 folder project (read-only).",
+                        "metavar": "'FILE'",
+                        "choices": "None"
+                      },
+                      {
+                        "optionStrings": [
+                          "--from"
+                        ],
+                        "dest": "from_ref",
+                        "nargs": "None",
+                        "const": "None",
+                        "default": "None",
+                        "type": null,
+                        "required": true,
+                        "help": "Start pad as DESIGNATOR.PAD, for example U9.2.",
+                        "metavar": "'REF.PAD'",
+                        "choices": "None"
+                      },
+                      {
+                        "optionStrings": [
+                          "--to"
+                        ],
+                        "dest": "to_ref",
+                        "nargs": "None",
+                        "const": "None",
+                        "default": "None",
+                        "type": null,
+                        "required": true,
+                        "help": "Destination pad as DESIGNATOR.PAD, for example CN3.1.",
+                        "metavar": "'REF.PAD'",
+                        "choices": "None"
+                      },
+                      {
+                        "optionStrings": [
+                          "--board"
+                        ],
+                        "dest": "board",
+                        "nargs": "None",
+                        "const": "None",
+                        "default": "''",
+                        "type": null,
+                        "required": false,
+                        "help": "Which board to ask about, by title or board uuid. Required when the container holds more than one board; a name that matches nothing or several boards is refused, never resolved by position.",
+                        "metavar": "'TITLE_OR_UUID'",
                         "choices": "None"
                       }
                     ]
