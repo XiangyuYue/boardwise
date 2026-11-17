@@ -240,4 +240,3 @@ def test_draw_validator_allows_unstated_pins_to_keep_legacy_grouping():
     failures = dc.validate_flag_share_groups(context.circuit, presentation)
 
     assert failures == []
-
