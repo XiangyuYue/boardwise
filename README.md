@@ -4,7 +4,7 @@ English | [中文](#中文)
 
 An agent harness for hardware engineers.
 
-Current development version: **0.6.2** (prerelease). Published packages are in
+Current development version: **0.6.2**. Published packages are in
 [Releases](https://github.com/xianyuyijinban/boardwise/releases).
 
 It lets an AI assistant (Claude Code, DeepSeek, Kimi Code — any of them)
@@ -248,7 +248,7 @@ MIT
 
 硬件工程师的 Agent Harness。
 
-当前开发版本：**0.6.2**（内测）。已发布安装包见
+当前开发版本：**0.6.2**。已发布安装包见
 [Releases](https://github.com/xianyuyijinban/boardwise/releases)。
 
 让 AI 助手（Claude Code、DeepSeek、Kimi Code……哪个都行）真正读懂你的
