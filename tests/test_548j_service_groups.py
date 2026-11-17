@@ -449,15 +449,17 @@ def test_the_serialised_group_carries_no_geometry():
 def test_the_new_field_is_appended_after_every_old_field():
     """新字段必须是最后一个：旧位置参数一位不挪。
 
-    548M 追加了 `rail_cluster_radius`（轨旗聚簇的半径），因此尾部三位的期望值顺延一格：
+    548M 追加了 `rail_cluster_radius`（轨旗聚簇的半径），548P104 又追加了
+    `flag_share_groups`（同网本地旗的显式分组），因此尾部三位的期望值顺延一格：
     断言本身**没有放宽**——它仍然要求"既有字段的相对顺序不变、新字段排在最后"，
     只是最后那个名字随最近一次追加而更新。真正护住旧位置参数的是紧随其后的那条
     位置构造用例，它用 23 个旧位置参数构造并要求每个都落回原字段。
     """
     names = [item.name for item in dataclasses.fields(PresentationSpec)]
-    assert names[-1] == "rail_cluster_radius"
-    assert names[-2] == "service_groups"
-    assert names[-3] == "spec_version"
+    assert names[-1] == "flag_share_groups"
+    assert names[-2] == "rail_cluster_radius"
+    assert names[-3] == "service_groups"
+    assert names[-4] == "spec_version"
 
 
 def test_a_positional_spec_keeps_every_old_position():

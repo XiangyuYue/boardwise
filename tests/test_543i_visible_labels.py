@@ -468,3 +468,77 @@ def test_the_native_only_page_keeps_the_old_visibility():
     assert [label.text_mode for label in labels] == [
         dc.TEXT_MODE_NATIVE, dc.TEXT_MODE_NATIVE_HIDDEN,
     ]
+
+
+# ------------------- 548D3D-P1E：不依赖整页可满足性的最小真实 module_plan
+#
+# 本文件的整页夹具声明了 8 条跨模块信号的 `portRoles`，而两个核心符号的引脚
+# 分居两列（U1 的 CTS 在 pin13/右侧 tip `[45, 5]`，H1 的 2x5 左右交替），
+# 角色→边的映射在任何一侧都不能同时成立；`relation_points_between` 的
+# net→part 次序度量因此把整页拒在 `_page_and_plan()`，P1E 的两条断言被挡在
+# 上游拒绝之前，执行不到。P1E 的两处行为与页面边框无关，所以这里用同一份
+# 夹具的**可满足变体**（不声明这 8 条跨模块信号的方向，其余一字不动）跑一次
+# 真实的 page + module_plan，让两处行为真的被执行到。
+
+
+def _p1e_payload() -> dict:
+    payload = copy.deepcopy(PAYLOAD)
+    for net in ("TXD", "RXD", "RTS", "CTS", "DTR", "DSR", "DCD", "RI"):
+        payload["portRoles"].pop(net, None)
+    return payload
+
+
+def _p1e_page_and_plan():
+    presentation = _presentation(_p1e_payload())
+    result = pc.compile_page(
+        CIRCUIT, presentation, LIBRARY,
+        pc.PageCompileBudget(page_box=PAGE_BOX),
+    )
+    assert result.ok, result.render_failures()
+    page = result.pages[0]
+    plan = drawapply.module_plan(
+        page.plan, CIRCUIT, presentation, LIBRARY,
+        candidate_index=0, label_stubs=True, page_box=PAGE_BOX,
+        module_label="p1e " + "+".join(module.id for module in page.modules),
+    )
+    return page, plan
+
+
+def test_p1e_sentence_and_row_seat_run_on_a_real_module_plan():
+    """548D3D-P1E 的两处改动在真实 module_plan 上执行到底。
+
+    一、降级句：可见的 `native` 名字是画布上的文字，所以句子要说出**谁**把行
+    落到导线上（carrier cover / name stub 的 re-seat），并把读者指向计划自己
+    的 `attributeMoves`；它既不许打印自己被丢掉的保留盒坐标，也不许再用
+    "the canvas shows the wire without a label text" 收尾。
+    二、行位：计划里每一条 `role="net"` 的 `attributeMoves` 都必须落在它自己
+    那条导线的 x/y 跨度内——这正是"行在载体上"的可检查形式。
+    """
+    _page, plan = _p1e_page_and_plan()
+    lines = [
+        line for line in plan.change.draw_downgrades
+        if "prints that attribute row on the wire itself" in line
+    ]
+    assert lines, plan.change.draw_downgrades
+    for line in lines:
+        assert "attributeMoves" in line, line
+        assert "carrier cover" in line, line
+        assert not re.search(r"label box \(-?\d", line), line
+        assert "without a label text" not in line, line
+
+    wires = plan.change.draw_wires
+    moves = [
+        move for move in plan.change.attribute_moves
+        if move.owner_kind == "wire" and move.role == "net"
+        and getattr(move, "move_version", 1) == 1
+    ]
+    assert moves
+    for move in moves:
+        points = [
+            (float(point[0]), float(point[1]))
+            for point in wires[move.wire_index].points
+        ]
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        assert min(xs) - 1e-9 <= move.x <= max(xs) + 1e-9, (move, points)
+        assert min(ys) - 1e-9 <= move.y <= max(ys) + 1e-9, (move, points)
