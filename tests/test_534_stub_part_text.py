@@ -145,7 +145,13 @@ def fresh_plan(tmp_path_factory):
          "--profiles", str(SPECS / "ch343_uart.library.json"),
          "--page-box", "0,0,1170,825",
          "-o", str(out / "change-plan.json")],
-        cwd=ROOT, env=env, capture_output=True, text=True, timeout=900,
+        cwd=ROOT, env=env, capture_output=True, text=True,
+        # 548P143-B: the child is told `PYTHONUTF8=1` above, so its stderr is
+        # UTF-8; decoding it with the parent's locale (cp936 here) killed the
+        # reader thread, left `proc.stderr` None, and the assert's own message
+        # `proc.stderr[-3000:]` raised `TypeError: 'NoneType' is not
+        # subscriptable` — the test could not see the real refusal at all.
+        encoding="utf-8", errors="replace", timeout=900,
     )
     assert proc.returncode == 0, proc.stderr[-3000:]
     return json.loads((out / "change-plan.json").read_text(encoding="utf-8")), out

@@ -51,3 +51,34 @@ M1 `>0`：`2 failed, 7 passed`（单成员变红）；M2 drawcompiler漏传：`2
 精确diff和日志在 `evidence/548P143/`。P142 联合 detour 回归 **3 passed in 253.33s**；
 其 C1.2 仍是整图下一独立首拒。
 本批不宣称30件整图完成、不宣称全量四线或视觉通过；新提交需另行明确批准，不push。
+
+## ⑦ 最终语义（主代理裁定）与双向负例
+
+**net→part 的次序关系是姿态偏好，不是页面硬闸。** 该关系量的是「object 自己在该网上的引脚」与
+「object 的 origin」——两点同属一个零件，平移同时移动两点，548P141 已明确拒绝把它当可平移修复
+的对象；因此它**不可能被摆布满足**，只能表达「这个符号的引脚本来朝哪边」。把它当页闸，等于用
+符号事实去拒一份合法输入（CH340/ESP/CH343 的 `right-of(TXD,U)`、`left-of(BOOT0,U1)` 全被逐 variant 拒）。
+
+**保留的度量（不倒退）**：`relation_points_between` 的单成员读法（P107：核心引脚 + origin）与
+多成员「无唯一端点 → None」（P143）都不动；搜索仍可拿这份度量作姿态偏好。
+**保留的硬判**：零件↔零件次序关系（两个 origin 可以分开摆，真的存在「摆错」）继续硬拒。
+
+**为什么不能拿 P107 的度量结果当页面硬闸**：P107 钉的是「尺子怎么量」，不是「量出不符就拒页」。
+同一份度量在两个消费者手里含义不同——搜索拿它当偏好（可影响选哪个变体），闸门拿它当判决
+（一个变体也不给）。对不可修复的关系，判决只有一个结局：全拒。所以闸门在
+`drawcompiler._relation_violations` 对该类关系不产出 violation（多成员本已 None）。
+
+**双向负例**（`tests/test_548p143_net_member_relation.py`）：
+
+- `test_the_gate_does_not_refuse_a_single_member_net_endpoint` —— 单成员网、声明边与引脚相反：
+  尺子仍量出 `((45,5),(0,0))`，`_relation_violations` 返回 `[]`。
+- `test_the_gate_does_not_refuse_the_reversed_part_to_net_order` —— 端点序反过来（`right-of(U1,DSR)`）
+  同样 `[]`。
+- `test_the_gate_still_refuses_a_part_to_part_order` —— `left-of(C3,U1)` 仍返回 1 条 violation，
+  两点为两个 origin：证明这是定向豁免，不是关掉整类秩序关系。
+
+实测：`test_548p143 + test_548p107 + test_548p141` → **16 passed in 0.50s**。
+变异（把 skip 条件改成 `if False and …`）→ 两条 net 端点负例 **2 failed**，零件↔零件那条仍绿
+（`2 failed, 7 passed in 1.85s`）；`cp` 还原后 `drawcompiler.py` sha256
+`976a4c2cad08804f994466419950e498aae2296a49de0b87536a72a7a653b2ea`（与变异前逐字节相同）。
+相关页面回归：`test_548l_pending_corridor + test_548d_series_reservation` → **11 passed in 42.40s**。
