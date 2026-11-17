@@ -167,14 +167,21 @@ def test_parallel_branches_get_one_return_key_and_differing_ones_get_none():
 def _branch_ctx(slots):
     from types import SimpleNamespace
 
-    return SimpleNamespace(slots={
-        part_id: dc._Slot(
-            part_id=part_id, role="decoupling", kind="branch", axis="x", rank=rank,
-            owner=owner, shared_net=shared, other_net=other,
-            pin_shared="1", pin_other="2",
-        )
-        for part_id, (rank, owner, shared, other) in slots.items()
-    })
+    #: `_Context.presentation` is a required field, and `_flag_share_members`
+    #: reads `flag_share_groups` off it: a double without one is not a
+    #: `_Context` at all, so the empty tuple (「no explicit groups declared」)
+    #: is supplied here rather than by loosening the production access.
+    return SimpleNamespace(
+        slots={
+            part_id: dc._Slot(
+                part_id=part_id, role="decoupling", kind="branch", axis="x", rank=rank,
+                owner=owner, shared_net=shared, other_net=other,
+                pin_shared="1", pin_other="2",
+            )
+            for part_id, (rank, owner, shared, other) in slots.items()
+        },
+        presentation=SimpleNamespace(flag_share_groups=()),
+    )
 
 
 def test_the_share_keys_read_the_structure_not_the_part_or_net_names():

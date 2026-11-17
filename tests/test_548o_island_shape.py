@@ -5,8 +5,9 @@
 548M 的无 serviceGroups 规格虽可编译，RST 两脚导线却长 420、直达距离仅 240。
 该同侧短直连的目标来自 P44；它不是所有带障碍导线的全局最短路规则。
 
-三组 serviceGroups（R4/R5 右、R6 左、C8/C9 去耦）仍须整页可编译。
-两条 strict xfail 都是尚未关闭的目标，XPASS 后才可改成正式通过断言。
+三组 serviceGroups（R4/R5 右、R6 左、C8/C9 去耦）必须整页可编译；2026-11-17 起它已是
+正式通过断言（原 strict xfail 随 XPASS 摘下）。剩下的 RST strict xfail 仍是未关闭目标，
+XPASS 后才可改成正式通过断言。
 真实校准件只在本地 evidence/；缺件明确 skip，skip 不算通过。
 """
 
@@ -31,7 +32,6 @@ THREE_GROUPS = ROOT / "evidence/548O/spec-3groups.json"
 PAGE = (0.0, 0.0, 1170.0, 825.0)
 
 RST_DETOUR = "548M ESP_RST still takes an unnecessary 420-unit route for a 240-unit connection"
-THREE_GROUP_FAILURE = "548P: the calibrated three-group page still fails the production gate"
 
 
 def _require(*paths: Path) -> None:
@@ -90,13 +90,21 @@ def test_the_calibrated_rst_branch_has_no_gratuitous_detour():
         f"excess {drawn - direct:g}; inspect the actual path, not origin span")
 
 
-@pytest.mark.xfail(strict=True, reason=THREE_GROUP_FAILURE)
 def test_the_calibrated_three_group_page_compiles():
     """岳裁 (b) 的三组声明必须整页可编译。
 
     548O 之前拒因是 `J2.GND has no clear upright hang`；548O 之后同一句消失、换成
     `ESP_RXD` 穿 `J2` 本体。该历史现象不证明原点跨度是根因。整页 `ok=True`
-    是 548P 的完成条件之一，不是本文件已经达到的状态。
+    是 548P 的完成条件之一。
+
+    2026-11-17（0.6.2 收口）：这条原是 `strict` xfail，reason 为
+    “548P: the calibrated three-group page still fails the production gate”，
+    现在整页 `ok=True` 且有候选，按文件头“XPASS 后才可改成正式通过断言”的约定摘掉
+    marker。摘下时刻的树是 `c41f358`。它不是空转绿：把
+    `drawcompiler.py` 的 `result.candidates` 改成 `[]` 后本用例立刻红
+    （`result.ok` 即 False），改回后复绿；此前的提交回溯（`e9ce364`、`c41f358^`）
+    上这页同样能编译，所以关闭它的提交比这段标签/地旗线更早，**不要**把功劳记给
+    `c41f358`。同文件的 RST xfail 仍是未关闭目标，与本条独立。
     """
     _spec, result = _compile(THREE_GROUPS)
     assert result.ok, [
