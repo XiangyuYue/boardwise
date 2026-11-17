@@ -38,7 +38,7 @@
   前移为 **C3.2/BUZZ**。**完整 30 件/31 网/4 NC 仍无候选，不写整图完成或全绿**；下一批 P139 只查
   C3.2 固定地旗与 BUZZ 通道（`tasks/548p139_ground_buzz_channel.md`）。历史未提交批次按
   历史批次已由用户 `cb44c2e` 落地，`4271fea` 为0.6.2发布准备；原P140六批不重复执行。
-  后续P141修复placement网端点崩溃（`752ef006…3f11`，未提交），其余集成红项按 `tasks/548p140_draw_history_commits.md` §7分批。
+  后续P141修复placement网端点崩溃（`752ef006…3f11`，已随 `c80eb2c` 落地），其余集成红项按 `tasks/548p140_draw_history_commits.md` §7分批。
 - **绘制线历史停止点（2026-11-13，548J）**：真实 64 脚 MCU 单岛 P43、强制 topology 三岛和
   LED 分压链族已各自验收；真实整页仍未通过。548J-A `serviceGroups` 合同通过，但 B1 联合座位
   虽 22 条目标测试通过，合成图仍有 CFG_A/PWR 大回环，主代理视觉拒收并停止独立 builder 路线；

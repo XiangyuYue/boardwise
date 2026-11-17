@@ -1,7 +1,7 @@
 # 548P141 — 网/端口端点不可平移修复
 
-> 状态：**DSR 崩溃已修复 / 543i 后续 CTS 输入矛盾未解决**。证据 `evidence/548P141/`。
-> 本批只改 `placement.py` 一处 `_repair_delta` 守卫与一个新测试，未提交。
+> 状态：**DSR 崩溃已修复并随 `c80eb2c` 落地 / 543i 后续 CTS 输入矛盾未解决**。证据 `evidence/548P141/`。
+> 本批只改 `placement.py` 一处 `_repair_delta` 守卫与一个新测试；用户提交 `c80eb2c09d138a7a7db39163e2b3118baa776ab9`。
 
 ## ① 前因后果
 
@@ -39,4 +39,4 @@ P16等其余红项分批处理。未做整图/视觉/真机。
 - 修复后 placement SHA `752ef00639f7c90c02a3c7bdc5be327f28d4d3a3995c8ff1909dd3b1161d3f11`。
 - 543i两条后续测试仍为 `2 failed`，明确是 `left-of(CTS,…)`，不再是 `KeyError: DSR`。
 - 下一最小动作：先由owner裁定CH343G引脚侧/规格表达，再处理其他测试钉和生产缺口；
-  新提交需另行授权，不push。
+  本批已由用户 `c80eb2c` 提交，不push。

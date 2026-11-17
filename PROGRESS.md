@@ -4,7 +4,7 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
-## [2026-11-17] 548P141：placement 网端点不可平移修复（未提交）
+## [2026-11-17] 548P141：placement 网端点不可平移修复（已随 `c80eb2c` 落地）
 
 - 历史绘制批次已由用户 `cb44c2e` 落地，`4271fea` 随后完成0.6.2发布准备；原P140六批计划不重复执行。
 - 提交前集成发现13个历史红项。P141先修 `_repair_delta` 把网名当零件索引的崩溃：任一端点无origin即返回None，
@@ -12,7 +12,7 @@ collects the current truth and the pointers.
 - 新测试基线 `3 failed` / 修复 `3 passed`，M1/M2均 `2 failed, 1 passed`；placement/P126/P137/P138聚焦
   **69 passed**，P43/WiFi geometry不变。证据 `evidence/548P141/README.md`。
 - 543i不再抛DSR，仍因CTS脚侧与规格矛盾而 `presentation-poor`；J/O/K/L/cross-side/forced/P16等分批处理，
-  不写全绿或整图完成。任务书 `tasks/548p141_net_endpoint_repair.md`，未做Git写。
+  不写全绿或整图完成。任务书 `tasks/548p141_net_endpoint_repair.md`；本批已由用户 `c80eb2c` 提交，未push。
 
 ## [2026-11-17] 548P140：绘制线历史未提交批次整理与文档同步（已由用户落地）
 

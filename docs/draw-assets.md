@@ -15,13 +15,13 @@
 | 当前 presentation | **P126语义输入，不是通过基线** | [`evidence/548P126/full.presentation.service-feedback.json`](../evidence/548P126/full.presentation.service-feedback.json)：G3C + localSeats + branchOrder + 真实GND分组；尚无候选 |
 | 当前符号库 | **本整图输入的实测库** | [`evidence/548P59/full.library.json`](../evidence/548P59/full.library.json)；WiFi/P43各有自己的校准库，不混用 |
 | 生产编译器 | **P138已验收机制状态，整图未通过** | `src/boardwise/engines/drawcompiler.py`，SHA `24f13da5219243fa4ee7f881fc9fb7a982bde4210ec1df8559ab9be4d9c030b3` |
-| 服务座位器 | **P141端点守衛已验收机制，未提交** | `src/boardwise/engines/placement.py`，SHA `752ef00639f7c90c02a3c7bdc5be327f28d4d3a3995c8ff1909dd3b1161d3f11` |
+| 服务座位器 | **P141端点守衛已验收并随c80eb2c落地** | `src/boardwise/engines/placement.py`，SHA `752ef00639f7c90c02a3c7bdc5be327f28d4d3a3995c8ff1909dd3b1161d3f11` |
 | 其他关键源码 | **混合工作树资产，不归属本批独占** | `drawapply.py`、`pagecompiler.py`、`core/presentationspec.py`；精确SHA见manifest，禁止覆盖他人改动 |
 | 当前回归 | **P141端点守衛 + P138联合反馈 + P137答案保留 + P135同网行距 + P126服务反馈 + P43精确输入钉** | [`tests/test_548p141_net_endpoint_repair.py`](../tests/test_548p141_net_endpoint_repair.py)、[`tests/test_548p138_joint_3v3_seat.py`](../tests/test_548p138_joint_3v3_seat.py)、[`tests/test_548p137_c2_service_seat.py`](../tests/test_548p137_c2_service_seat.py)、[`tests/test_548p135_same_net_gap.py`](../tests/test_548p135_same_net_gap.py)、[`tests/test_548p126_service_host_feedback.py`](../tests/test_548p126_service_host_feedback.py)、[`tests/test_548p124_p43_regression.py`](../tests/test_548p124_p43_regression.py)：一次反馈、完整服务答案、同/异网负例、真实5/5、完整P43 |
 | 当前证据说明 | **P138 3V3联合反馈通过，C3.2/BUZZ未通过** | [`evidence/548P138/README.md`](../evidence/548P138/README.md)：第二次joint chain5；完整候选首拒C3.2/BUZZ；P43/WiFi geometry不变；整图无候选、未视觉 |
 
-HEAD：`4271fea`（0.6.2 prep）；历史绘制批次已由用户 `cb44c2e` 落地，原P140六批不重复执行。
-P141 placement修复未提交，其他线未提交改动保留。禁止用 `git restore/checkout` 选择“干净基线”。
+HEAD：`c80eb2c`；历史绘制批次已由用户 `cb44c2e` 落地，原P140六批不重复执行。
+P141 placement修复已随 `c80eb2c` 落地，其他线未提交改动保留。禁止用 `git restore/checkout` 选择“干净基线”。
 当前整图、LCD automatic、真机/apply和全量验收均未完成。
 
 ## 2. 已验收锚（只在其声明范围内有效）

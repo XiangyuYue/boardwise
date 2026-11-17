@@ -27,7 +27,7 @@
   不伪造 26 份**；查历史按 `evidence/548P*` 与 `PROGRESS.md` 的 2026-11-14/15/16 段。
 - **548P140 已由用户落地（2026-11-17）**：历史绘制批次由 `cb44c2e` 一次性提交，`4271fea` 随后做0.6.2发布准备；
   原六批计划不再重复执行。任务书 `tasks/548p140_draw_history_commits.md`。
-- **548P141 DSR修复未提交（2026-11-17）**：placement网端点不可平移守卫，基线3红/修复3过、两项变异、聚焦69 passed；
+- **548P141 DSR修复已落地（2026-11-17，`c80eb2c`）**：placement网端点不可平移守卫，基线3红/修复3过、两项变异、聚焦69 passed；
   SHA `752ef006…3f11`。543i后续为CTS脚侧拒绝，J/O/K/L/cross-side/forced/P16等独立处理。任务书 `tasks/548p141_net_endpoint_repair.md`。
 - **绘制线 2026-11-14 四批（工作树未提交；全量 2 红均既有）**：
   - **548K / 548K-R**：名字桩带先于旗位预留，显式开关 `labelPolicy.stubLaneReserve`（默认关闭、`false` 等价不写、

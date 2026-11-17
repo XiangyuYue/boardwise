@@ -2,7 +2,7 @@
 
 > **当前派单（2026-11-17，548P139规划）：先查C3.2固定地旗与BUZZ通道**。P138的一次cheapest单脚seed反馈使3V3联合座位通过真实首次plans验收（chain=5、expansions=6）；完整候选首拒已前移为C3.2/BUZZ。证据 `evidence/548P138/README.md`，任务书 `tasks/548p139_ground_buzz_channel.md`。
 >
-> **当前生产与输入**：drawcompiler SHA `24f13da5219243fa4ee7f881fc9fb7a982bde4210ec1df8559ab9be4d9c030b3`，placement SHA `752ef00639f7c90c02a3c7bdc5be327f28d4d3a3995c8ff1909dd3b1161d3f11`（P141未提交）；HEAD `4271fea`，其他线未提交改动保留。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`。
+> **当前生产与输入**：drawcompiler SHA `24f13da5219243fa4ee7f881fc9fb7a982bde4210ec1df8559ab9be4d9c030b3`，placement SHA `752ef00639f7c90c02a3c7bdc5be327f28d4d3a3995c8ff1909dd3b1161d3f11`（P141已随 `c80eb2c` 落地）；HEAD `c80eb2c`，其他线未提交改动保留。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`。
 >
 > **实施只准按 `tasks/548p139_ground_buzz_channel.md`**：先核对C3.2固定terminal与BUZZ channel的生产关系；不得移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件/31网/4NC仍未出候选，LCD automatic另列；历史绘制线批次按用户指令整理提交。
 >
