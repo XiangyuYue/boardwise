@@ -2840,6 +2840,7 @@ def _label_stub(label: Any) -> tuple[float, float]:
 
 def _label_stub_candidates(
     label: Any, *, near_stagger: bool = False,
+    ink: Sequence[tuple[str, tuple[float, float, float, float]]] = (),
 ) -> list[_StubRun]:
     """The runs a label's name stub is tried as, preferred and simplest first.
 
@@ -3078,6 +3079,80 @@ def _label_stub_candidates(
                             ),
                             family=f"near stagger {_direction_text(stepped)}",
                         ))
+    if near_stagger and ink and preferred[1] == 0.0:
+        # A fixed text row can seal every ladder above while leaving one narrow
+        # escape: step out by one grid **before** its near edge, then move the
+        # printed row just past its far edge.  The offset is derived from that
+        # row, not added as another guessed length: an anchored horizontal name
+        # occupies ``corner_y .. corner_y + WIRE_NAME_ROW`` (the centred model is
+        # half a row either side), so clearing a reservation at ``box[1]`` needs
+        # ``y + row_edge - box[1]`` units upwards.  Round *up* to the existing
+        # drawing grid; boundary contact remains legal under the same hard-ink gate.
+        # This is the last rung, so every page an earlier shape served is unchanged.
+        steps: dict[float, set[float]] = {
+            1.0: set(LABEL_STUB_STEPS), -1.0: set(LABEL_STUB_STEPS),
+        }
+        row_edge = (
+            textmetrics.WIRE_NAME_ROW if _label_row_model(label) == "anchored"
+            else textmetrics.WIRE_NAME_ROW / 2.0
+        )
+        for _what, box in ink:
+            required = {
+                -1.0: y + row_edge - box[1],
+                1.0: box[3] - y + (
+                    textmetrics.WIRE_NAME_ROW / 2.0
+                    if _label_row_model(label) == "centered" else 0.0
+                ),
+            }
+            for sign, distance in required.items():
+                if distance <= 0.0:
+                    continue
+                step = math.ceil((distance - 1e-9) / DRAW_GRID) * DRAW_GRID
+                if DRAW_GRID < step <= max(lengths):
+                    steps[sign].add(step)
+        near = DRAW_GRID
+        # The escape may also have to carry its midpoint past a row already
+        # taken.  Reuse the straight carrier's existing long rungs for this last
+        # family only; the ordinary stub ladder keeps its original reach.
+        detour_lengths = sorted({*lengths, *LABEL_STUB_LENGTHS_STRAIGHT})
+        exit_start = len(out)
+        for near_sign in (1.0, -1.0):
+            lead = (preferred[0] * near_sign, preferred[1] * near_sign)
+            base = (round(x + lead[0] * near, 6),
+                    round(y + lead[1] * near, 6))
+            for sign in (1.0, -1.0):
+                stepped = (across[0] * sign, across[1] * sign)
+                for step in sorted(steps[sign]):
+                    corner = (round(base[0] + stepped[0] * step, 6),
+                              round(base[1] + stepped[1] * step, 6))
+                    for length in detour_lengths:
+                        if length <= max(near, step):
+                            continue
+                        far = (round(corner[0] + preferred[0] * length, 6),
+                               round(corner[1] + preferred[1] * length, 6))
+                        family = "exit" if near_sign > 0.0 else "reverse exit"
+                        out.append(_StubRun(
+                            points=(anchor, base, corner, far), side=preferred,
+                            shape=(
+                                f"{_direction_text(lead)} {near:g} then "
+                                f"{_direction_text(stepped)} {step:g} then "
+                                f"{_direction_text(preferred)} {length:g}"
+                            ),
+                            family=f"{family} stagger {_direction_text(stepped)}",
+                        ))
+        # The first legal row is not necessarily the readable one here: a short
+        # perpendicular step can force a very long outward run, while a later
+        # derived step clears the same ink with far less conductor.  Only this
+        # new suffix is reordered, by its measured polyline length; every older
+        # candidate keeps its historical priority and every run still faces the
+        # same gates below.
+        out[exit_start:] = sorted(
+            out[exit_start:],
+            key=lambda run: (
+                sum(math.dist(head, tail) for head, tail in zip(run.points, run.points[1:])),
+                run.shape,
+            ),
+        )
     if _label_prints_native_text(label):
         # 053T: under `textPlacement: native-attr` the host prints the name at the
         # label's own box, not along the wire — so the bend that was there to buy
@@ -3681,7 +3756,9 @@ def _place_label_stub(
     blockers: list[str] = []
     seen_shape: set[str] = set()
     clear: list["_StubRun"] = []
-    for run in _label_stub_candidates(label, near_stagger=bool(label_boxes)):
+    for run in _label_stub_candidates(
+        label, near_stagger=bool(label_boxes), ink=label_boxes,
+    ):
         reason = None
         for head, tail in zip(run.points, run.points[1:]):
             reason = _label_stub_blocked(label, head, tail, built, bodies, pins)
@@ -3704,6 +3781,30 @@ def _place_label_stub(
                     f"it leaves the sheet {_box_text(page_box)} at ({x:g}, {y:g})"
                 )
         if reason is None:
+            if len(run.points) > 2:
+                # A short perpendicular tail can tie with the first horizontal
+                # run, leaving the host's name on exactly the same row as that
+                # first segment alone.  The tail then buys no new lane and is
+                # just an unexplained bend.  The whole run has already passed
+                # the conductor and page gates, so its straight prefix is safe;
+                # the later row/ink gates still measure the simplified run.
+                first, second = run.points[:2]
+                dx, dy = second[0] - first[0], second[1] - first[1]
+                length = math.hypot(dx, dy)
+                if length > 1e-9:
+                    direction = (dx / length, dy / length)
+                    prefix = _StubRun(
+                        points=(first, second), side=direction,
+                        shape=f"{_direction_text(direction)} {length:g}",
+                        family=f"straight {_direction_text(direction)}",
+                    )
+                    row_model = _label_row_model(label)
+                    if (
+                        _stub_row_is_horizontal(prefix) == _stub_row_is_horizontal(run)
+                        and _stub_name_row(prefix, str(label.net), row_model)
+                        == _stub_name_row(run, str(label.net), row_model)
+                    ):
+                        run = prefix
             clear.append(run)
         elif run.family not in seen_shape:
             seen_shape.add(run.family)

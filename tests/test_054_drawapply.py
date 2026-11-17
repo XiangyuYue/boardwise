@@ -1008,3 +1008,76 @@ def test_a_stub_row_too_close_to_its_own_net_is_skipped_while_choosing():
     assert row is not None
     assert _row_gap(row, (200.0, 601.0, 240.0, 611.0)) >= 20.0, row
     assert any("duplicate-carrier floor" in text for text in blockers), blockers
+
+
+def test_a_pin_exit_detour_derives_its_step_from_the_reserved_text_row():
+    """A one-grid lead escapes the first text; the bend clears the next row.
+
+    The second reservation starts at y=-14.5.  An anchored ten-unit name row
+    therefore needs ``0 + 10 - (-14.5) = 24.5`` units of offset, rounded up to
+    the existing drawing grid: 25.  This is a generic clearance derivation, not a
+    net-specific coordinate or a new fixed 25-unit ladder rung.
+    """
+    import types
+
+    from boardwise.engines.drawapply import _Built, _place_label_stub
+
+    label = types.SimpleNamespace(
+        net="SIG", part_id="U", x=0.0, y=0.0,
+        bbox=(68.0, -4.5, 92.0, 4.5), row_model="anchored",
+        stub="auto", stub_min=0.0,
+    )
+    built = _Built()
+    built.label_stub_rows = [
+        ("an earlier horizontal name row", (10.0, -15.0, 60.0, -5.0)),
+    ]
+    ink = [
+        ("the value text of U", (8.0, -2.5, 53.0, 2.5)),
+        ("the reserved row of another label", (68.0, -14.5, 92.0, -5.5)),
+    ]
+    points, blockers = _place_label_stub(
+        label, built, {}, (), label_boxes=ink, page_box=(0.0, -30.0, 40.0, 0.0),
+    )
+    assert points == ((0.0, 0.0), (5.0, 0.0), (5.0, -25.0), (35.0, -25.0)), (
+        points, blockers, built.notes,
+    )
+    assert not any("pre-534" in note or "vertically" in note for note in built.notes), (
+        built.notes
+    )
+
+
+def test_an_exit_detour_can_step_back_before_turning_towards_its_name():
+    """The same clearance ladder also offers the reverse-side narrow escape."""
+    import types
+
+    from boardwise.engines.drawapply import _label_stub_candidates
+
+    label = types.SimpleNamespace(
+        net="SIG", part_id="U", x=0.0, y=0.0,
+        bbox=(68.0, -4.5, 92.0, 4.5), row_model="anchored",
+        stub="auto", stub_min=0.0,
+    )
+    ink = [("a reserved text row", (20.0, -24.5, 44.0, -14.5))]
+    runs = _label_stub_candidates(label, near_stagger=True, ink=ink)
+    expected = ((0.0, 0.0), (-5.0, 0.0), (-5.0, -35.0), (35.0, -35.0))
+    assert expected in [run.points for run in runs]
+
+
+def test_a_tie_row_bent_is_simplified_to_its_clear_straight_prefix():
+    """A perpendicular tail that does not move the name row is not a new lane."""
+    import types
+
+    from boardwise.engines.drawapply import _Built, _place_label_stub
+
+    label = types.SimpleNamespace(
+        net="SIG", part_id="U", x=0.0, y=0.0,
+        bbox=(-2.5, 45.5, 2.5, 54.5), row_model="anchored",
+        stub="auto", stub_min=0.0,
+    )
+    built = _Built()
+    points, blockers = _place_label_stub(
+        label, built, {}, (),
+        label_boxes=[("the text below the pin", (-2.5, 5.0, 2.5, 15.0))],
+        page_box=(-20.0, -20.0, 20.0, 60.0),
+    )
+    assert points == ((0.0, 0.0), (5.0, 0.0)), (points, blockers, built.notes)
