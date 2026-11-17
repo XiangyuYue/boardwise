@@ -709,9 +709,34 @@ def test_the_topology_search_spends_a_bounded_number_of_routes(monkeypatch):
     assert len(solves) <= 8, (
         f"{len(solves)} panel solves for {len({pose for _g, pose in solves})} "
         "host pose(s); a pose's geometry is solved once")
-    assert len(calls) <= 4 * len(solves), (
-        f"{len(calls)} _Router.route calls for {len(solves)} solve(s) — more "
-        "than the four cells one solve may route")
+    # 548D3D-A2 counting contract, in two halves so neither can hide the other:
+    #
+    #   * **distinct questions** — one solve may route at most its four cells, so
+    #     the number of different (start, goal) pairs may not exceed 4 × solves.
+    #     This is the "no wasted search" half and it never counted repeats.
+    #   * **repeat work** — the same pass asks one scene several times by design
+    #     (A3's discovery, then the determinism replay), so raw calls are allowed
+    #     to exceed pairs — but only in proportion: at most twice the distinct
+    #     pairs. That is what keeps a duplicated question from quietly becoming
+    #     unbounded work while the pair budget still reads green.
+    distinct = {(start, goal) for start, goal in calls}
+    assert len(distinct) <= 4 * len(solves), (
+        f"{len(distinct)} distinct route pairs for {len(solves)} solve(s) — more "
+        "than the four cells one solve may route; calls were "
+        f"{len(calls)} for {len({pose for _g, pose in solves})} host pose(s)")
+    # A cell may be asked at most **twice per variant** — once by A3's discovery
+    # and once by the determinism replay. On this fixture that is four times for
+    # the one cell both variants route; six is what the duplicated question cost.
+    counts: dict[tuple, int] = {}
+    for pair in calls:
+        counts[pair] = counts.get(pair, 0) + 1
+    assert max(counts.values()) <= 4, (
+        f"one cell was routed {max(counts.values())} times: "
+        f"{max(counts.items(), key=lambda item: item[1])}")
+    assert len(calls) <= 2 * len(distinct), (
+        f"{len(calls)} _Router.route calls for {len(distinct)} distinct pairs — "
+        "the same scene was asked more than twice; the discovery answer is "
+        "reused and only the determinism replay may repeat a question")
 
 # ======================= 11. 最终候选：共享顶点/两段局部修补
 

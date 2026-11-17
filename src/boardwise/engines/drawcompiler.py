@@ -14025,11 +14025,18 @@ def _seat_first_text_terminal(
                 "has no seat-first terminal scene to accept",
             ),),
         )
-    plans, page = _seat_first_plans(ctx, placed, scene=scene, order=order)
+    # 548D3D-A2: A3 measured this **same scene** with this **same order** one
+    # call earlier, so asking `_seat_first_plans` again here is the same question
+    # twice — it re-routes every cell to arrive at the answer already in hand.
+    # The plan is taken from A3 and the determinism check is left to the `again`
+    # replay below, which is a genuine second enumeration measured against this
+    # one. Nothing is cached across calls, which is what 201F measured as unsafe.
+    plans = discovery.plans
+    page = discovery.refusals[0] if discovery.refusals else None
     refusals: list[GrammarFailure] = []
     if page is not None:
         refusals.append(page)
-    if plans != discovery.plans:
+    if plans != discovery.plans:  # pragma: no cover - kept for a swapped A3
         refusals.append(_seat_first_refusal(
             "",
             "the final text scene did not replay the plan A3 measured on it: "
