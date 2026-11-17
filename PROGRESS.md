@@ -4,24 +4,34 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
-## [2026-11-17] 548P140：绘制线历史未提交批次整理与文档同步（在途）
+## [2026-11-17] 548P141：placement 网端点不可平移修复（未提交）
+
+- 历史绘制批次已由用户 `cb44c2e` 落地，`4271fea` 随后完成0.6.2发布准备；原P140六批计划不重复执行。
+- 提交前集成发现13个历史红项。P141先修 `_repair_delta` 把网名当零件索引的崩溃：任一端点无origin即返回None，
+  两个 `which` 一致，零件↔零件delta不变。placement SHA `752ef006…3f11`。
+- 新测试基线 `3 failed` / 修复 `3 passed`，M1/M2均 `2 failed, 1 passed`；placement/P126/P137/P138聚焦
+  **69 passed**，P43/WiFi geometry不变。证据 `evidence/548P141/README.md`。
+- 543i不再抛DSR，仍因CTS脚侧与规格矛盾而 `presentation-poor`；J/O/K/L/cross-side/forced/P16等分批处理，
+  不写全绿或整图完成。任务书 `tasks/548p141_net_endpoint_repair.md`，未做Git写。
+
+## [2026-11-17] 548P140：绘制线历史未提交批次整理与文档同步（已由用户落地）
 
 ### Problem / Task
-- 用户要求把此前所有未提交绘制批次整理提交并同步文档。盘点：TASKMAP 缺 P2–P124 索引、PROGRESS 顶部最新只到 P111（P2–P109 历史在底部，P110 中断无结果）、roadmap/SCHEDULE 停在 548J；HEAD `3d4a0d5e`，工作树混合未提交。
+- 用户要求把此前所有未提交绘制批次整理提交并同步文档。盘点（同步前）：TASKMAP 缺 P2–P124 索引、PROGRESS 顶部最新只到 P111（P2–P109 历史在底部，P110 中断无结果）、roadmap/SCHEDULE 停在 548J；HEAD `3d4a0d5e`，工作树混合未提交。
 
 ### Resolution
 - 当前绘制状态：P138 **机制通过/整图未通过**。3V3 联合座位经一次 cheapest 单脚 seed 反馈通过真实首次 plans（chain=5、expansions=6、聚焦 **77 passed**），完整候选首拒前移为 C3.2/BUZZ；不写全绿或整图完成。`drawcompiler` SHA-256 `24f13da5…`、`placement` `f550f6ea…`。
-- 历史索引：P2–P110 逐批记录见本文件 2026-11-14/15/16 的 548P 段与 `evidence/548P2…548P110`（P110 中断、无结果）；P111–P114 WiFi 三组页 J2.GND 旗位/走线，P112–P114 corridor 三轮未过、生产净零（`evidence/548P111…548P114`）；P115–P124 为标签载体/宿主导线网名、WiFi 三组页离线三关（P118 锚）、完整 30 件首编译被 UART 阻断（P119）、LED/MCU 同列与脚向（P122/P123）、P124 GND 分组与网格实验被拒；P125–P138 整图服务链逐批状态见 TASKMAP §0。
+- 历史索引：P2–P110 逐批记录见本文件 2026-11-14/15/16 的 548P 段与 `evidence/548P2…548P110`（P110 中断、无结果）；P111–P114 WiFi 三组页 J2.GND 旗位/走线，P112–P114 corridor/本地旗救援均未通过、生产净零（`evidence/548P111…548P114`）；P115–P124 为本地旗确定性、宿主导线网名与标签载体、WiFi 三组页离线三关（P118 锚）、完整 30 件首编译被 UART 阻断（P119）、LED/MCU 同列与脚向（P122/P123）、P124 GND 分组与网格实验被拒；P125–P138 整图服务链逐批状态见 TASKMAP §0。
 - 提交计划：`tasks/548p140_draw_history_commits.md` 六批 C1–C6（P124 前历史 → P126 → P135 → P137 → P138 → 文档）；每批需逐批授权，C1/C2 快照不兼容即停。本段属 C6 文档批，尚未提交。
 
 ### Verification
-- 改动仅 `tasks/TASKMAP.md`、`PROGRESS.md`、`docs/roadmap.md`、`tasks/SCHEDULE.md`；`.venv/Scripts/python.exe -m pytest tests/test_doc_claims.py tests/test_workspace_conventions.py -q -n 4 --dist loadfile --basetemp=.tmp_pt_548p140_docsync`：**67 passed in 8.51s**（日志 `.tmp_548p140/docs-sync-pytest.log`）。
+- 改动仅 `tasks/TASKMAP.md`、`PROGRESS.md`、`docs/roadmap.md`、`tasks/SCHEDULE.md`；`.venv/Scripts/python.exe -m pytest tests/test_doc_claims.py tests/test_workspace_conventions.py -q -n 4 --dist loadfile --basetemp=.tmp_pt_548p140_docsync`：**67 passed in 9.24s**（日志 `.tmp_548p140/docs-sync-pytest.log`）。
 - 未做：Git 写、真机/apply、全量 pytest、移动/删除、生产源码与证据改动。
 
 ### Commit
 - Branch: `main`
-- Commit: `3d4a0d5e666a36809babbfad7871021d84cea24a`
-- Status: 未提交；待六批逐批授权后执行
+- Commit: `cb44c2e5cbf0afe086a7a5af9197ac7c3eda1724`（绘制线历史落地），`4271fea`（0.6.2 prep）
+- Status: 已由用户提交，原六批不再重复；后续P141及集成红项另批，本文档段尚未提交
 - Files: `tasks/TASKMAP.md`、`PROGRESS.md`、`docs/roadmap.md`、`tasks/SCHEDULE.md`
 
 ## [2026-11-16] 548P111：WiFi 三组页旗位/走线实测，停止交接

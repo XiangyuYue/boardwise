@@ -1,10 +1,10 @@
 # 交接记忆 —— 换 harness / 开新会话先读这份
 
-> **当前交接（2026-11-17，548P138后）：先查C3.2固定地旗与BUZZ通道**。P138以一次cheapest单脚seed反馈使3V3联合座位在真实首次plans返回中通过（chain=5、expansions=6）；完整候选首拒已前移为C3.2 `(-205,65)` 的腿穿过BUZZ通道 `(-301,84)-(-94,86)`。仍无完整候选。证据 `evidence/548P138/README.md`。
+> **当前交接（2026-11-17，548P141后）：整图先查C3.2/BUZZ，集成红项另分批**。P138使3V3联合座位通过（chain=5、expansions=6），完整候选首拒为C3.2 `(-205,65)` 穿BUZZ通道 `(-301,84)-(-94,86)`；P141另修placement网端点崩溃，543i后续为CTS脚侧拒绝。历史批次已由用户 `cb44c2e` 落地，`4271fea` 为0.6.2 prep，不重复原P140六批。
 >
-> **当前生产与输入**：drawcompiler SHA `24f13da5219243fa4ee7f881fc9fb7a982bde4210ec1df8559ab9be4d9c030b3`，placement SHA `f550f6eafa3d45b3c23a104925c3a9fa1c2d02f8424068bd31dfe8dba9859d60`；HEAD `3d4a0d5e666a36809babbfad7871021d84cea24a`，混合未提交保留。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`，尚无完整候选。
+> **当前生产与输入**：drawcompiler SHA `24f13da5219243fa4ee7f881fc9fb7a982bde4210ec1df8559ab9be4d9c030b3`，placement SHA `752ef00639f7c90c02a3c7bdc5be327f28d4d3a3995c8ff1909dd3b1161d3f11`（P141未提交）；HEAD `4271fea`，其他线未提交改动保留。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`，尚无完整候选。
 >
-> **下一批只读 `tasks/548p139_ground_buzz_channel.md`**：先核对C3.2固定terminal与BUZZ channel的生产关系，不得移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件未出候选，LCD automatic另列；本批未做真机/全量/apply，历史绘制线批次按用户指令另行整理提交。
+> **下一批只读 `tasks/548p139_ground_buzz_channel.md`**：先核对C3.2固定terminal与BUZZ channel的生产关系，不得移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件未出候选，LCD automatic另列；P141 `tasks/548p141_net_endpoint_repair.md` 及其余集成红项按各自小批处理，未做真机/全量/apply。
 >
 > **资产索引**：先读 [`docs/draw-assets.md`](draw-assets.md) 与 `evidence/draw-assets/manifest.json`；此前整理仅经批准将12个可再生目录送回收站，记录见`evidence/draw-assets/recycle-log.json`。
 

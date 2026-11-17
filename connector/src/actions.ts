@@ -10060,6 +10060,219 @@ export const pcbDrcRuleset: ActionHandler = async (params, eda) => {
   };
 };
 
+// --------------------------------------------------------------------------
+// 551: `pcb.net_class.list` — the persisted net classes and their net rules
+// --------------------------------------------------------------------------
+
+/**
+ * The two read-side members this action calls, in the order the answer carries
+ * them.
+ *
+ * **Why this is its own action rather than two more keys on `pcb.drc_ruleset`.**
+ * That action is deliberately narrow — it answers 「which rule set is this board
+ * checked against」 and its protocol entry lists the exact members it may call.
+ * Net classes are a different question (「which nets are grouped, and what do
+ * their rules say」), and upstream keeps the two apart for the same reason
+ * (``pcb.drc.rules`` vs ``pcb.net_class.list``). Widening the narrow read would
+ * cost the 123 boundary its meaning; a second read-only action costs one frame.
+ *
+ * **What is deliberately not here.** `getNetByNetRules`, `getRegionRules`, the
+ * differential-pair and equal-length-group families and the layer table are all
+ * readable and all out of this slice: each has its own shape, and folding them
+ * in would make one answer that means four things. Every write in this
+ * namespace — `createNetClass` / `deleteNetClass` / `modifyNetClassName` /
+ * `addNetToNetClass` / `removeNetFromNetClass` and the whole
+ * pad-pair/equal-length/differential-pair set — is off the list on purpose:
+ * this action's job is to report the grouping the board already has.
+ *
+ * **And what it is not.** The width ladder a router guesses from net names
+ * (「signal / power / high-current」) is *not* this data and must never be
+ * labelled as it: `getAllNetClasses` returns the classes the editor persists,
+ * with `{name, nets, color}` and — as measured — no widths at all. A caller
+ * that wants a guessed width wants a different tool.
+ */
+const NET_CLASS_LIST_READS = [
+  { key: 'classes', path: 'pcb_Drc.getAllNetClasses' },
+  { key: 'netRules', path: 'pcb_Drc.getNetRules' },
+] as const;
+
+/**
+ * `pcb.net_class.list` — the real EasyEDA PCB net classes plus the net rules.
+ *
+ * Same discipline as `pcb.drc_ruleset`, and for the same reason: a net class
+ * read from the wrong tab would look like a board with no classes. A non-PCB
+ * focus is refused with `PAGE_MISMATCH` and the focused document named; this
+ * action never calls `doc.open`, and `active: null` is not evidence that a PCB
+ * is in front.
+ *
+ * **「读不到」and 「没有」are two different answers**, and this action keeps them
+ * apart at every step:
+ *
+ * - a member this editor build does not have is named in `missing[]` and its
+ *   key is `null` — never `[]`, which would read as 「the board has no net
+ *   classes」;
+ * - a member that exists and throws, or whose value cannot be serialised, is
+ *   named in `unreadable[]` and its key is `null`, for the same reason;
+ * - `count` is the length of `classes` **only when `classes` was really read**,
+ *   and `null` otherwise, so a caller cannot compute 「0 classes」 out of a
+ *   failed read;
+ * - `netRules` carries its own `null`/value fact: `classes: []` beside a
+ *   non-empty `netRules` is a real state and both are reported as read.
+ *
+ * The values are **verbatim and sanitised conservatively** by the same
+ * `sanitiseHostValue` the rule-set action uses (functions dropped, `Date`s
+ * rendered through the host's own serialiser, cycles cut as `(cycle)`, depth
+ * bounded) — this action does not invent a schema for fields the host has not
+ * been measured to return, because a made-up key would read as a reading.
+ *
+ * Nothing is compared: whether these classes match the board's process is a
+ * judgement for the review layer, not for the read.
+ */
+export const pcbNetClassList: ActionHandler = async (params, eda) => {
+  const problems: string[] = [];
+  const page = await drcTarget(eda, problems);
+  const focusedType = String(page.type ?? 'unknown');
+  if (focusedType !== 'pcb') {
+    throw new ActionError(
+      'PAGE_MISMATCH',
+      `the focused document is ${describeDocument(page)}, not a PCB — net classes belong to a `
+        + 'board. Open it first (doc.open); this action does not move the editor on its own, '
+        + 'because net classes read from the wrong tab would look like a board with none',
+      { focused: page, expected: 'pcb' },
+    );
+  }
+
+  let maxChars = DRC_RULESET_DEFAULT_MAX_CHARS;
+  if (params?.maxChars !== undefined) {
+    const wanted = Number(params.maxChars);
+    if (!Number.isFinite(wanted) || wanted < 1_000 || wanted > DRC_RULESET_MAX_MAX_CHARS) {
+      throw new ActionError(
+        'BAD_REQUEST',
+        `pcb.net_class.list params.maxChars must be a number between 1000 and `
+          + `${DRC_RULESET_MAX_MAX_CHARS} (got ${JSON.stringify(params.maxChars)})`,
+      );
+    }
+    maxChars = Math.floor(wanted);
+  }
+
+  const started = Date.now();
+  const reading: Record<string, unknown> = {};
+  const missing: string[] = [];
+  const unreadable: string[] = [];
+  const failures: Record<string, { code?: string; message: string }> = {};
+  const accepted = new Set<string>();
+  let answered = 0;
+
+  for (const read of NET_CLASS_LIST_READS) {
+    let call: (...args: any[]) => any;
+    try {
+      call = requireFn(eda, read.path);
+    } catch (error) {
+      if (isActionError(error)) {
+        missing.push(read.path);
+        failures[read.key] = { code: error.code, message: error.message };
+        // Explicit `null`, not an absent key: every consumer of `classes` must
+        // see 「not read」 as a value it can branch on rather than as undefined.
+        reading[read.key] = null;
+        continue;
+      }
+      throw error;
+    }
+    try {
+      const value = await raceHostCall(
+        settle(call()),
+        read.path,
+        DOCUMENT_READ_TIMEOUT_MS,
+        'the host drops an argument it dislikes rather than rejecting it',
+      );
+      const cut = sanitiseHostValue(value);
+      if (cut.error) {
+        unreadable.push(`${read.path}: ${cut.error}`);
+        failures[read.key] = { message: cut.error };
+        reading[read.key] = null;
+        continue;
+      }
+      // A host that answers `undefined` answered nothing: `null`, with the key
+      // present, and `reads[].read` still true — the same split 123 measured
+      // for `getDefaultRuleConfigurationName()`.
+      reading[read.key] = cut.value === undefined ? null : cut.value;
+      answered += 1;
+      accepted.add(read.key);
+      if (cut.cut > 0) {
+        unreadable.push(
+          `${read.path}: ${cut.cut} value(s) were sanitised out (functions, or a cycle cut at depth `
+            + `${DRC_RULESET_MAX_DEPTH})`,
+        );
+      }
+    } catch (error) {
+      if (isActionError(error)) throw error;
+      const host = hostErrorText(error);
+      unreadable.push(`${read.path}: ${host.text}`);
+      failures[read.key] = { message: host.text };
+      reading[read.key] = null;
+    }
+  }
+
+  if (answered === 0) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      'neither of the two net-class reads answered on a focused PCB — the focused document is '
+        + `${describeDocument(page)}. Nothing is reported: a board whose net classes could not be `
+        + 'read is not a board with no net classes',
+      { focused: page, attempts: failures },
+    );
+  }
+
+  const notes: string[] = [...problems];
+  if (missing.length) {
+    notes.push(
+      `this editor build has no ${missing.join(' / ')} — reported as absent members, not as values`,
+    );
+  }
+  if (unreadable.length) {
+    notes.push(...unreadable);
+  }
+
+  // `count` follows `classes` and nothing else: an array that was really read,
+  // empty or not, has a length; anything else has no count at all.
+  const classesValue = reading.classes;
+  const count = Array.isArray(classesValue) ? classesValue.length : null;
+
+  const budget = budgetDrcGroups(
+    [{ classes: classesValue ?? null, netRules: reading.netRules ?? null }],
+    maxChars,
+  );
+  if (budget.dropped > 0 || budget.jsonChars > maxChars) {
+    notes.push(
+      `the sanitised net-class reading does not fit maxChars=${maxChars}; this answer is the whole `
+        + 'reading with functions and cycles removed, not a clipped one — raise maxChars to keep '
+        + 'any doubt',
+    );
+  }
+
+  return {
+    source: 'pcb_Drc',
+    page,
+    classes: classesValue ?? null,
+    netRules: reading.netRules ?? null,
+    count,
+    reads: NET_CLASS_LIST_READS.map((read) => ({
+      key: read.key,
+      path: read.path,
+      // 「accepted」, not 「key present」: every key is written (as `null` when it
+      // failed), so presence is not evidence — this flag is the one place that
+      // separates 「read and answered nothing」 from 「never read」.
+      read: accepted.has(read.key),
+    })),
+    missing,
+    unreadable,
+    jsonChars: budget.jsonChars,
+    elapsedMs: Date.now() - started,
+    readOnly: true,
+    ...(notes.length ? { notes } : {}),
+  };
+};
+
 /**
  * A host value with functions, cycles and unserialisable objects removed.
  *
@@ -10190,7 +10403,15 @@ export const sysConnectorStatus: ActionHandler = async (_params, eda) => connect
  * `channel: 'viewport'` + `evidenceGrade: 'viewport'` (#87②, 087F1). Absent on
  * every connector built before that branch existed.
  */
-const CONNECTOR_CAPABILITIES = Object.freeze({ pcbRenderViewport: true });
+const CONNECTOR_CAPABILITIES = Object.freeze({
+  pcbRenderViewport: true,
+  // 551: `pcb.net_class.list` exists in this build. A caller that sees no
+  // `pcbNetClassList` key is talking to an older connector and must not treat
+  // the action as available — the capability is a promise about this bundle,
+  // and it is declared here rather than inferred from a daemon catalogue that
+  // may predate the action (the catalogue is a load-time constant).
+  pcbNetClassList: true,
+});
 
 function connectorStatusReport(eda: Eda): Record<string, unknown> {
   const member = readMember(eda, '__boardwiseTransportRuntime');
@@ -10308,6 +10529,12 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     // list — and it refuses a non-PCB focus instead of opening the board, the
     // boundary `pcb.drc_check` keeps.
     'pcb.drc_ruleset': bind(pcbDrcRuleset),
+    // 551: the persisted net classes and their net rules — a second *read-only*
+    // seam beside the rule set, not extra keys on it (the rule-set read is
+    // deliberately narrow). Every write in the namespace (create/delete/modify,
+    // add/remove membership, save/overwrite rules, start/stopRealTimeDrc) is off
+    // the list, and the page guard is `pcb.drc_ruleset`'s.
+    'pcb.net_class.list': bind(pcbNetClassList),
     'sch.readback': bind(schReadback),
     'lib.symbol.get': bind(libSymbolGet),
     // 038Q3: the symbol's own *file*, by explicit uuid — the read that can

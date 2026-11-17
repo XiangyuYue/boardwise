@@ -5946,6 +5946,13 @@ def _repair_delta(
     points = relation_points(request, relation, pins, origins)
     if points is None:
         return None
+    if relation.subject not in origins or relation.object not in origins:
+        # 548P141: a net/port endpoint is measured through the *same* part's
+        # pin and origin. Translating that part moves both points together, so
+        # it cannot repair the relation — and the net id has no origin to index.
+        # Both `which` directions must stop here; skipping only one would let
+        # the mirrored move report a repair that the geometry cannot make.
+        return None
     (ax, ay), (bx, by) = points
     slack = request.grid / 2.0
     kind = relation.kind

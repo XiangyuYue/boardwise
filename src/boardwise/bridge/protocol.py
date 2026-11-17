@@ -615,6 +615,51 @@ ACTIONS: tuple[Action, ...] = (
         ),
         risk="read",
     ),
+    # --- 551: the persisted net classes + net rules, read-only ----------------
+    Action(
+        name="pcb.net_class.list",
+        summary=(
+            "READ-ONLY 551: the real, host-persisted EasyEDA PCB net classes plus "
+            "the net-rule records, via pcb_Drc.getAllNetClasses() and "
+            "pcb_Drc.getNetRules(). It answers a different question from "
+            "`pcb.drc_ruleset` — which nets are grouped and what their rules say, "
+            "rather than which rule set the board is checked against — which is "
+            "why it is its own action instead of two more keys on that narrow "
+            "read. Values come back **verbatim**, sanitised exactly as the "
+            "rule-set action sanitises (functions dropped, `toJSON`-bearing "
+            "objects rendered through the host's own serialiser, cycles cut as "
+            "'(cycle)', every cut counted and named in `unreadable`/`notes`); no "
+            "field is invented for what the host has not been measured to send. "
+            "**「could not read」is never「there are none」**: an absent member "
+            "lands in `missing`, a throwing or unserialisable one in "
+            "`unreadable`, and either way the key is `null` (never `[]`) and "
+            "`count` is `null` rather than a fabricated 0. `classes: []` beside a "
+            "non-empty `netRules` is a real state and both are reported. **No "
+            "write is reachable**: createNetClass/deleteNetClass/"
+            "modifyNetClassName/addNetToNetClass/removeNetFromNetClass and the "
+            "whole pad-pair / equal-length / differential-pair / rule-writer "
+            "family are off the list. The router's heuristic width ladder "
+            "(「signal/power/high-current」guessed from net names) is **not** this "
+            "data and is never reported as a net class. Focus discipline is "
+            "`pcb.drc_ruleset`'s: a non-PCB focus is refused with PAGE_MISMATCH "
+            "and the focused document named, with no auto doc.open; `active: "
+            "null` is not evidence that a PCB is in front."
+        ),
+        params=("maxChars",),
+        returns=(
+            "{source: 'pcb_Drc', page, classes: [{name, nets, color}] | null, "
+            "netRules | null, count (classes.length or null), reads: [{key, path, "
+            "read}], missing, unreadable, jsonChars, elapsedMs, readOnly: true, "
+            "notes?}"
+        ),
+        params_schema=(
+            "maxChars: 1000..4000000 (default 400000), the same bounds as "
+            "pcb.drc_ruleset; the reading is never clipped — an oversized answer "
+            "says so in notes and keeps every key"
+        ),
+        risk="read",
+        design_write=False,
+    ),
     # --- 026b: the promoted diagnostics action ------------------------------
     Action(
         name="sys.connector_status",

@@ -117,11 +117,11 @@ test('sys.connector_status reports a throwing getStatus instead of pretending it
   assert.match(String(report.error), /the controller was released/);
 });
 
-test('sys.connector_status advertises the PCB viewport capability on every branch', async () => {
-  // 087F2: the bit a live collector reads **before** it calls `export.render`
-  // for a PCB. It is a fact about this bundle, so it must survive the branches
-  // where the runtime record is missing or unreadable — otherwise a caller
-  // cannot tell "old connector" from "this window has no status record".
+test('sys.connector_status advertises the read-only capabilities on every branch', async () => {
+  // 087F2/551: the bits a live collector reads **before** it calls the
+  // corresponding PCB action. They are facts about this bundle, so they must
+  // survive the branches where the runtime record is missing or unreadable —
+  // otherwise a caller cannot tell "old connector" from "no status record".
   const branches = [
     fakeEda(),
     fakeEda({ __boardwiseTransportRuntime: 'not a record' }),
@@ -131,7 +131,7 @@ test('sys.connector_status advertises the PCB viewport capability on every branc
   ];
   for (const eda of branches) {
     const report = await status(eda);
-    assert.deepEqual(report.capabilities, { pcbRenderViewport: true });
+    assert.deepEqual(report.capabilities, { pcbRenderViewport: true, pcbNetClassList: true });
   }
 });
 

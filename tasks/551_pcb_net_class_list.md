@@ -51,3 +51,15 @@ DRC/net class 影响面见 `.tmp_review_attribution/drc-netclass-impact.md`。�
 - 离线：connector 全量测试与 typecheck、协议/action-catalogue/政策/文档合同聚焦、至少两处独立变异（空数组冒充、缺页 guard）先红并 cp+SHA-256 恢复。
 - 真机另行等待：活动 test/test2 PCB，焦点可恢复，且板内至少一个真实网络类、两个成员网。调用前后 `pcb.drc_ruleset` 的 current 内容逐字不变，作为零写旁证。
 - 当前 test/ROBOT 窗口都 active=null，且没有已确认的网络类样本；离线通过不得写成真机兼容或发布验收。
+
+
+## 离线实际验收（2026-11-17，工作树未提交）
+
+- Connector **821 passed / 0 failed**，typecheck 通过；新 action 12 条。Python 协议、只读政策、bridge、catalogue、环境与文档邻域 **339 passed**。
+- 新 capability 已补入 `actions026b` 的既有全分支钉；`NOT_DESIGN_WRITES` 只新增本 action。审查时发现新批误给旧 `pcb.drc_ruleset` 加 `design_write=False`，已撤回该行，未用扩大白名单掩盖旧目录漂移；三段命名家族已显式登记本 action。
+- 主代理变异 `count:null → 0`：第一次未重建 dist，变异无效，不记成功；重建后 **2 failed / 10 passed**，分别钉住 missing/throwing 不得伪造 0。随后 cp + SHA-256 恢复、重建 dist，12/12 恢复通过。子代理的空数组与去页 guard 变异也均先红并恢复。
+- 没有新增 CLI/DSH 工具，没有改 daemon 路由、版本号或真实工程，没有重启/热更。旧 drc_ruleset 行为不变。
+
+### 真机仍待办
+
+当前没有活动 PCB 与已确认网络类样本，daemon 也未加载新目录，因此 `getAllNetClasses/getNetRules` 的真实字段、classes 空/非空两态、daemon 端到端和调用前后规则集零变化均未验证。不得把上述离线读数写成真机兼容或发布通过。

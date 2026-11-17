@@ -51,8 +51,8 @@ TOKEN = "test-token-not-a-real-secret"
 REAL_NAME = "我的真实工程"
 REAL_UUID = "uuid-real-0001"
 
-#: The four catalogue entries that are **not** design writes, and nothing else.
-#: Pinned as a set so adding a fifth is a review decision, not an accident.
+#: The five catalogue entries that are **not** design writes, and nothing else.
+#: Pinned as a set so adding a sixth is a review decision, not an accident.
 #: `pair.authorize` (549) is the exception that is not navigation: it changes
 #: *authority* — after it, a connector holding the code may write the pairing
 #: record — but no project byte, page or focus moves, which is why the
@@ -60,7 +60,7 @@ REAL_UUID = "uuid-real-0001"
 #: exactly that authority change, so listing it here does not let a read-only
 #: caller mint the one grant the pairing gate rests on.
 NOT_DESIGN_WRITES = frozenset(
-    {"doc.open", "doc.focus", "sys.self_update", "pair.authorize"}
+    {"doc.open", "doc.focus", "sys.self_update", "pair.authorize", "pcb.net_class.list"}
 )
 
 

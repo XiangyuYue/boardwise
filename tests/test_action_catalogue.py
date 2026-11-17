@@ -40,6 +40,8 @@ THREE_SEGMENT_FAMILIES = (
     # and the opaque archive export.
     re.compile(r"^lib\.cbb\.(personal|export|libraries)$"),
     re.compile(r"^(sch|pcb)\.doc\.(new|save)$"),
+    # 551: the persisted net-class and net-rule read, not a write family.
+    re.compile(r"^pcb\.net_class\.list$"),
 )
 
 OWNERS = frozenset({"connector", "daemon"})

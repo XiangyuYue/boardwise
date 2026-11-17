@@ -24,10 +24,11 @@
 - **绘制线历史索引 P2–P124（2026-11-14 至 2026-11-16）**：这一段是同一轮绘制线实验/迭代弧，逐批证据在
   `evidence/548P2` … `evidence/548P124`（`-independent` 为独立复验副本），恢复点链与文件清单见
   `tasks/548p140_draw_history_commits.md` §1–§2。除 P2/P6/P14 等少数任务书外，其余批次**没有任务书，
-  不伪造 26 份**；查历史按 evidence 目录与本文件外的 `PROGRESS.md` 2026-11-14/15/16 的 548P 段。
-- **548P140 整理在途（2026-11-17）**：此前全部未提交绘制批次按六批整理提交（C1 P124 前历史 → C2 P126
-  → C3 P135 → C4 P137 → C5 P138 → C6 文档），HEAD `3d4a0d5e`；`drawcompiler` `24f13da5…`、
-  `placement` `f550f6ea…`。任务书 `tasks/548p140_draw_history_commits.md`；未逐批授权前不做 Git 写。
+  不伪造 26 份**；查历史按 `evidence/548P*` 与 `PROGRESS.md` 的 2026-11-14/15/16 段。
+- **548P140 已由用户落地（2026-11-17）**：历史绘制批次由 `cb44c2e` 一次性提交，`4271fea` 随后做0.6.2发布准备；
+  原六批计划不再重复执行。任务书 `tasks/548p140_draw_history_commits.md`。
+- **548P141 DSR修复未提交（2026-11-17）**：placement网端点不可平移守卫，基线3红/修复3过、两项变异、聚焦69 passed；
+  SHA `752ef006…3f11`。543i后续为CTS脚侧拒绝，J/O/K/L/cross-side/forced/P16等独立处理。任务书 `tasks/548p141_net_endpoint_repair.md`。
 - **绘制线 2026-11-14 四批（工作树未提交；全量 2 红均既有）**：
   - **548K / 548K-R**：名字桩带先于旗位预留，显式开关 `labelPolicy.stubLaneReserve`（默认关闭、`false` 等价不写、
     只在 true 时序列化、非布尔具名拒绝）。不开开关的校准件几何 `f4f1c58c…` 与 548J 记录逐字相同且 `plan` 拒绝；
