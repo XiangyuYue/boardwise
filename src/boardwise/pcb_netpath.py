@@ -75,9 +75,14 @@ def _check_container(path: Path) -> str:
 
     The suffix check runs **before** any parser, so a wider reader downstream
     cannot turn an unsupported format into a quiet success. A folder is only a
-    container when it actually holds the ``.eprj3`` index of its own name —
-    the same test ``parsers.eprj3.looks_like_eprj3`` applies — rather than any
-    directory the caller happened to point at.
+    container when ``parsers.eprj3.looks_like_eprj3`` says so (a directory
+    holding an ``*.eprj3`` index), rather than any directory the caller
+    happened to point at.
+
+    A ``.eprj3`` **file** is that same index read by its own path — the reader
+    accepts it, so the label has to say ``".eprj3"``. Calling it ``".epro2"``
+    would put a container this run never read into ``source``, which is
+    evidence and may not be a guess.
     """
     if not path.exists():
         raise ContainerRefused(f"{path} does not exist")
@@ -98,6 +103,15 @@ def _check_container(path: Path) -> str:
             f"{path.name} is not a .epro2 archive or .eprj3 folder project; "
             "this batch reads those two containers only "
             "(KiCad, .epcb2 and the online editor are refused by name)"
+        )
+    if path.suffix.lower() == ".eprj3":
+        from .parsers.eprj3 import looks_like_eprj3
+
+        if looks_like_eprj3(path):
+            return ".eprj3"
+        raise ContainerRefused(
+            f"{path.name} is not an .eprj3 project index this batch can read; "
+            "this command reads .epro2 archives and .eprj3 folder projects only"
         )
     return ".epro2"
 

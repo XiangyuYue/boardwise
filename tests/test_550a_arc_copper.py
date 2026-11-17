@@ -288,6 +288,40 @@ def test_a_same_net_arc_on_a_silk_layer_is_ignored_not_unknown():
     assert [row["code"] for row in result.ignored] == ["arc_on_non_copper_layer"]
 
 
+def test_an_arc_on_a_layer_the_board_never_names_is_an_evidence_gap():
+    # 「not in the copper set」 is not the same fact as 「not copper」: layer 99
+    # is defined by nobody, so its copper cannot be placed and the negative
+    # verdict may not be final. (Before this, the arc was dismissed as
+    # non-copper and the run claimed NOT_PROVEN.)
+    board = _netpath_board(arcs=[_arc_obj(layer=99)], layers={1: TOP, 2: BOTTOM, 3: SILK})
+    result = find_net_path(board, "R1.1", "R2.1")
+
+    assert result.verdict == INDETERMINATE
+    assert [row["code"] for row in result.unknown] == ["arc_layer_unclassified"]
+    assert result.unknown[0]["ids"] == ["a1"]
+    assert result.unknown[0]["layers"] == [99]
+    assert result.unknown[0]["count"] == 1
+    assert [row["code"] for row in result.ignored] == []
+    assert result.path == []
+
+
+def test_the_two_arc_buckets_are_kept_apart_in_one_answer():
+    # Same net, two arcs: layer 3 (the board says silkscreen) is a certain
+    # absence, layer 99 is an unknown. Both rows must appear, each with its own
+    # id, and only the unknown escalates.
+    board = _netpath_board(
+        arcs=[_arc_obj(ident="silk", layer=3), _arc_obj(ident="gap", layer=99)],
+        layers={1: TOP, 2: BOTTOM, 3: SILK},
+    )
+    result = find_net_path(board, "R1.1", "R2.1")
+
+    assert result.verdict == INDETERMINATE
+    assert [row["code"] for row in result.unknown] == ["arc_layer_unclassified"]
+    assert result.unknown[0]["ids"] == ["gap"]
+    assert [row["code"] for row in result.ignored] == ["arc_on_non_copper_layer"]
+    assert result.ignored[0]["ids"] == ["silk"]
+
+
 def test_a_walked_path_is_not_overturned_by_a_same_net_arc():
     track = TrackSegment(id="t1", net="N1", layer_id=1,
                          start=Point(0.0, 0.0), end=Point(100.0, 0.0), width=10.0)

@@ -77,7 +77,7 @@ from collections import Counter, deque
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from .geometry import COORD_PRECISION, BoardGeometry, NetGeometry, PadGeometry
+from .geometry import COORD_PRECISION, ArcGeometry, BoardGeometry, NetGeometry, PadGeometry
 from .measure import (
     _PAD_SQUARE_EPS,
     _bbox_distance,
@@ -886,12 +886,29 @@ def find_net_path(
     # another net cannot change this net's copper, so it must not escalate.
     same_net_arcs = list(board.net(net).arcs)
     copper_ids = {info.layer_id for info in read_stackup(board).copper_layers}
-    blocking_arcs = [
-        arc
-        for arc in same_net_arcs
-        if arc.layer_id is None or not copper_ids or arc.layer_id in copper_ids
-    ]
-    non_copper_arcs = [arc for arc in same_net_arcs if arc not in blocking_arcs]
+    # Every same-net arc lands in exactly one bucket, and the three answer
+    # different questions: blocking (this is copper we cannot measure — the
+    # negative verdict may not be stated as final), unclassified (this batch
+    # cannot say whether that layer is copper at all — also not final), and
+    # non-copper (the board's own layer table says so — a certain absence, so
+    # it is disclosed and never escalates).
+    blocking_arcs: list[ArcGeometry] = []
+    unclassified_arcs: list[ArcGeometry] = []
+    non_copper_arcs: list[ArcGeometry] = []
+    for arc in same_net_arcs:
+        if arc.layer_id is None or not copper_ids or arc.layer_id in copper_ids:
+            blocking_arcs.append(arc)
+            continue
+        # 「not in the copper set」 is not the same fact as 「not copper」: a
+        # layer the table does not name (or names as copper outside the
+        # stackup) leaves the arc's copper unplaced, which is an evidence gap.
+        # Only a layer the board defines **and calls non-copper** may be
+        # dismissed by name.
+        known = board.layer(arc.layer_id)
+        if known is not None and not known.is_copper:
+            non_copper_arcs.append(arc)
+        else:
+            unclassified_arcs.append(arc)
     if blocking_arcs:
         unknown.append(
             _issue(
@@ -901,6 +918,25 @@ def find_net_path(
                 "through it and a negative answer cannot be stated as final",
                 count=len(blocking_arcs),
                 ids=[arc.id for arc in blocking_arcs],
+            )
+        )
+    if unclassified_arcs:
+        unknown.append(
+            _issue(
+                "arc_layer_unclassified",
+                "this net names ARC records on layer ids this batch cannot classify: "
+                "the board either does not define that layer or names it as copper "
+                "outside the copper stackup, so its copper cannot be placed — a "
+                "negative answer cannot be stated as final",
+                count=len(unclassified_arcs),
+                ids=[arc.id for arc in unclassified_arcs],
+                layers=_sorted_layers(
+                    {
+                        int(arc.layer_id)
+                        for arc in unclassified_arcs
+                        if isinstance(arc.layer_id, int)
+                    }
+                ),
             )
         )
     if non_copper_arcs:

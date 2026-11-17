@@ -352,6 +352,40 @@ def test_synthetic_folder_project_reaches_the_same_adapter(tmp_path: Path) -> No
     assert report["source"]["uuid"] is None
 
 
+def test_the_index_file_form_is_the_same_eprj3_container(tmp_path: Path) -> None:
+    # `looks_like_eprj3` reads a `.eprj3` **file** by its own path, so pointing
+    # the command at the index instead of its folder must answer the same
+    # question *and* label the container `.eprj3`. Labelling it `.epro2` would
+    # name a container this run never read.
+    project = _write_folder_project(
+        tmp_path / "proj",
+        boards={"pcb/PCB1.epcb2": _pcb_stream(uuid="pcb-1", title="PCB1")},
+        titles={"pcb-1": "PCB1"},
+    )
+    index_file = project / f"{project.name}.eprj3"
+
+    code, report = _payload(
+        ["pcb", "net-path", str(index_file), "--from", "U1.1", "--to", "U1.2"]
+    )
+    assert code == 3
+    assert report["verdict"] == "INDETERMINATE"
+    assert report["source"]["container"] == ".eprj3"
+    assert report["source"]["boardCount"] == 1
+    assert report["source"]["title"] == "PCB1"
+
+    # Same container, same answer: the folder and its index are one input. Only
+    # `path` differs, because it echoes the argument the caller actually gave.
+    folder_code, folder_report = _payload(
+        ["pcb", "net-path", str(project), "--from", "U1.1", "--to", "U1.2"]
+    )
+    assert folder_code == code
+    assert folder_report["verdict"] == report["verdict"]
+    assert {
+        key: value for key, value in folder_report["source"].items() if key != "path"
+    } == {key: value for key, value in report["source"].items() if key != "path"}
+    assert report["source"]["path"] == str(index_file)
+
+
 def test_synthetic_folder_project_with_two_boards_requires_board(tmp_path: Path) -> None:
     project = _write_folder_project(
         tmp_path / "multi",
