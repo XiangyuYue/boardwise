@@ -13042,6 +13042,7 @@ def _seat_first_net_jobs(
             ))
             continue
         complete: list[_SeatFirstCandidate] = []
+        measured_stop: GrammarFailure | None = None
         for owner in members:
             point = present[owner]
             # The signal runs are **not** walls here: a flag's lead is the one
@@ -13071,6 +13072,8 @@ def _seat_first_net_jobs(
             )
             if not answers:
                 seat_failure = seat_stop
+                if seat_stop is not None:
+                    measured_stop = seat_stop
                 obstacle = _seat_first_member_obstacle(point, solids)
                 if seat_failure is not None:
                     detail = seat_failure.detail.rstrip().rstrip(".") + "."
@@ -13133,7 +13136,14 @@ def _seat_first_net_jobs(
                 + ", ".join(members)
                 + ") has no complete seat: no member of the group owns a "
                 "seat every other member can reach (see this plan's "
-                "candidates for the measured obstacle)",
+                "candidates for the measured obstacle)"
+                + (
+                    # 548D3D: the ladder's own measured reason, not just "some
+                    # seat is missing" — a refusal the reader can act on names the
+                    # pad and the node/box that stopped it.
+                    " — " + measured_stop.detail
+                    if measured_stop is not None else ""
+                ),
             ))
             continue
         jobs.append(_SeatFirstJob(
@@ -25187,6 +25197,64 @@ def _flag_seat_pins(
     return [pin, *others]
 
 
+def _rail_flag_blocker_sentence(
+    ctx: _Context,
+    placed: _Placement,
+    member: str,
+    point: tuple[float, float],
+    stops: Mapping[Box, int],
+    blocked: Iterable[tuple[float, float]] = (),
+) -> str:
+    """The obstacle the ladder kept hitting, named with its box and its owner.
+
+    ``stops`` is what :func:`_rail_flag_seat` measured: every rung it refused
+    recorded the first box its own glyph-and-clearance box overlapped. The
+    sentence names the most frequent one — the box that stopped the most rungs is
+    the one that makes this pad unstatable — and, when that box is a part's own
+    drawn extent, the part it belongs to. Empty when nothing was recorded, so the
+    wording of every other page is unchanged.
+    """
+    if not stops:
+        # 548D3D cross-side: on this page nothing *box* shaped stops the ladder —
+        # the pad's own escape lanes are **blocked nodes** (a foreign pin tip, a
+        # label anchor or another net's vertex). Those are the measured obstacle,
+        # so they are what the refusal names; a coordinate nobody can act on is
+        # not an explanation.
+        near = sorted(
+            (round(math.hypot(node[0] - point[0], node[1] - point[1]), 3), node)
+            for node in blocked
+            if math.hypot(node[0] - point[0], node[1] - point[1]) <= 120.0
+        )[:3]
+        if not near:
+            return ""
+        listed = ", ".join(
+            f"{_point_text(node)} ({distance:g} away)" for distance, node in near
+        )
+        return (
+            f". What stops it is a blocked node beside the pad: {listed} — each of "
+            "them is a connection in the host's own model (a foreign pin tip, a "
+            "label anchor or another net's vertex), so a lead may not pass it"
+        )
+    box = max(stops.items(), key=lambda item: (item[1], -item[0][0]))[0]
+    owner = ""
+    for part_id, origin in sorted(placed.origins.items()):
+        if _part_box(ctx.profile(part_id), placed.poses[part_id], origin) == box:
+            owner = part_id
+            break
+    where = _point_text(point)
+    if owner and owner == member.partition(".")[0]:
+        named = f"the drawn extent of {owner} — the part's own body"
+    elif owner:
+        named = f"the drawn extent of {owner}"
+    else:
+        named = "a box on the page"
+    return (
+        f". The box it kept hitting is ({box[0]:g}, {box[1]:g})-({box[2]:g}, "
+        f"{box[3]:g}) — {named} — {stops[box]} rung(s) of the ladder stopped on "
+        f"it from the pad at {where}"
+    )
+
+
 def _rail_flag_room_failure(
     net_id: str,
     member: str,
@@ -25319,13 +25387,26 @@ def _rail_flag_seat(
     room = _flag_room(router, solids, inner, blocked)
     ruler = _flag_wire_ruler(ctx, net_id, profile, router)
     crossings: list[str] = []
+    #: 548D3D cross-side: the boxes that actually stopped a rung, in the order the
+    #: ladder met them, so the refusal can name the obstacle instead of saying "a
+    #: part, a text row, another net's wire or the page's edge". Measured on the
+    #: cross-side host: every reach lands the GND glyph on **U1's own body**,
+    #: because the pad sits ten units from the body edge and the glyph is 22.8
+    #: wide — a page that cannot be drawn, stated as what it is.
+    stops: dict[Box, int] = {}
     for hang in (natural, -natural):
         def fits(anchor: tuple[float, float], _hang: float = hang) -> bool:
             rotation = _flag_rotation((0.0, _hang), family)
-            return room(
-                _flag_box(profile, rotation, anchor, net_id, margin=0.0),
-                _flag_box(profile, rotation, anchor, net_id),
-            ) and ruler(anchor, rotation)
+            margin_box = _flag_box(profile, rotation, anchor, net_id, margin=0.0)
+            if not room(
+                margin_box, _flag_box(profile, rotation, anchor, net_id),
+            ):
+                for candidate in (*solids, *getattr(router, "boxes", ())):
+                    if _overlaps(margin_box, candidate):
+                        stops[candidate] = stops.get(candidate, 0) + 1
+                        break
+                return False
+            return ruler(anchor, rotation)
 
         anchor, lead, placed_hang = _flag_anchor(
             router, point, (0.0, hang), blocked,
@@ -25359,7 +25440,9 @@ def _rail_flag_seat(
             "the grid's step and the two long ones, up and down, then a run out "
             "along the pin's own side with a turn, and then the other three "
             "directions — lands the glyph, its name row and their clearance on a "
-            "part, a text row, another net's wire or the page's edge",
+            "part, a text row, another net's wire or the page's edge"
+            + _rail_flag_blocker_sentence(
+                ctx, placed, member, point, stops, blocked),
             cluster=cluster,
         ),
     )
