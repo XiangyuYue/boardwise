@@ -104,13 +104,14 @@ def test_native_service_does_not_measure_a_midpoint_name_across_its_host():
                in readability._named_wire_rows(built.plan) if net == "SERIAL_RX")
     assert label.text_mode == "native"
     assert row == label.bbox
-    # Establish the causal pressure independently of the builder's verdict.
-    carrier = next(run for run in built.plan.segments if run.net == "SERIAL_RX")
-    ghost = readability.wire_name_box(carrier.points, carrier.net)
+    # 因果压力不在这一页上（实测）：本页 open port 的清跑地板把载体锁在 60 单位，
+    # 中点 220，名字行 220..259.33 与本体 x0=260 差 0.67 不相交；改名会同步把跑长
+    # 抬一档，差值反而更负。所以「中点命名会横穿本体」由
+    # `test_a_midpoint_name_would_cross_the_host_and_the_cover_seats_it` 用真实
+    # body + 更短载体证明，这一页保留它自己的结论：
     host = next(part for part in built.plan.parts if part.part_id == "U1")
     body = dc._body_box(book[host.symbol_ref], dc.SymbolPose(host.rotation, host.mirror),
                         (host.x, host.y))
-    assert ghost is not None and dc._overlaps(ghost, body)
     assert not dc._overlaps(row, body)
     _assert_connected(circuit, book, built.plan)
 
@@ -157,3 +158,59 @@ def test_unstated_native_keeps_default_modes_and_never_calls_native_finishing(mo
     assert rebuilt.plan.to_jsonable() == expected
     assert all(not label.text_mode for label in rebuilt.plan.labels)
     _assert_connected(case[0], case[2], rebuilt.plan)
+
+
+# ------------------- 中点命名的因果压力：真实 body + 短载体（434 sec.1 的实测规则）
+#
+# `core/textmetrics.py:433` 的实测规则是「锚在最长直跑的中点、起点锚定向右」，
+# 短跑上的名字会溢出远端。本页的 port 清跑地板把载体锁在 60 单位，中点 220 与
+# 本体 x0=260 只差 0.67，压力失效；这里用**同一个** U1 本体（取自真实编译结果）
+# 配一条更短的横段，让中点命名真的压进本体，再跑真实的 `_native_carrier_cover`。
+
+
+class _Wire:
+    def __init__(self, net, points, from_pin=""):
+        self.net = net
+        self.points = [(float(x), float(y)) for x, y in points]
+        self.from_pin = from_pin
+
+
+def test_a_midpoint_name_would_cross_the_host_and_the_cover_seats_it():
+    case = _fixture(ghost=True)
+    built, failure, violations = _build(case)
+    assert built is not None, (failure, violations)
+    plan = built.plan
+    host = next(part for part in plan.parts if part.part_id == "U1")
+    book = case[2]
+    body = dc._body_box(book[host.symbol_ref],
+                        dc.SymbolPose(host.rotation, host.mirror), (host.x, host.y))
+
+    # 一条比本页载体更短、贴着本体的真实横段：不放大任何长度。
+    run = [(body[0] - 2.0, 375.0), (body[0] - 56.0, 375.0)]
+    wire = _Wire("SERIAL_RX", run)
+    ghost = readability.wire_name_box(wire.points, wire.net)
+    assert ghost is not None and dc._overlaps(ghost, body), (ghost, body)
+
+    label = dc.LayoutLabel(
+        net="SERIAL_RX", text="SERIAL_RX", bbox=tuple(ghost),
+        x=ghost[0], y=ghost[1], text_mode=dc.TEXT_MODE_NATIVE,
+    )
+    # 未修复时这是机器拒因：行不在它自己的载体上。
+    before = drawapply.native_carrier_problems([label], [wire], (0.0, 0.0, 1170.0, 825.0))
+    assert before and "is not on the x" in before[0], before
+
+    built_cover = drawapply._Built()
+    built_cover.wires.extend([wire])
+    problems = drawapply._native_carrier_cover(
+        built_cover, dc.LayoutPlan(labels=[label]), {}, {}, [],
+        (0.0, 0.0, 1170.0, 825.0),
+    )
+    assert problems == []
+    assert wire.points == [(float(x), float(y)) for x, y in run], wire.points
+    row = built_cover.native_carrier_rows[id(label)]
+    span = sorted(point[0] for point in wire.points)
+    assert span[0] - 1e-9 <= row[0] and row[2] <= span[-1] + 1e-9, (row, span)
+    assert not dc._overlaps(row, body), (row, body)
+    assert drawapply.native_carrier_problems(
+        [label], [wire], (0.0, 0.0, 1170.0, 825.0), built_cover.native_carrier_rows,
+    ) == []
