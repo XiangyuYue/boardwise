@@ -343,3 +343,19 @@ def test_a_replayed_lane_that_holds_a_siblings_flag_is_dropped(monkeypatch):
         "two same-net flags were drawn in one room: "
         f"{[(item.x, item.y) for item in flags]}"
     )
+    # 548D3D-B 负例：本趟画下的旗是后续导线的墙。没有这条，replay 自己那枚
+    # powerSymbol 会被同趟的线穿过（实测 `wire-through-body segments[2] +
+    # powerSymbols[1]`）——所以这里直接量「没有任何线穿任何已画旗的图元盒」。
+    plan = result.best().plan
+    glyphs = [
+        dc.flag_glyph_box(book[symbol.symbol_ref], rotation=symbol.rotation,
+                          anchor=(symbol.x, symbol.y))
+        for symbol in plan.power_symbols
+    ]
+    for segment in plan.segments:
+        for start, stop in zip(segment.points, segment.points[1:]):
+            for box in glyphs:
+                assert box is None or not dc._segment_hits_box(start, stop, box), (
+                    f"a conductor of {segment.net!r} runs through the drawn "
+                    f"extent of a flag at {box}"
+                )

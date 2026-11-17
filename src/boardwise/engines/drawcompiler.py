@@ -24854,6 +24854,19 @@ def _place_flag(
     if flag != glyph:
         occupied.append(flag)
         solids.append(flag)
+    if router is not None:
+        # 548D3D-B: a flag this call **drew** is a wall for every wire this same
+        # pass lays afterwards. `occupied`/`solids` answer "may this seat stand
+        # here" and the readability gate reads them, but the wiring loop rebuilds
+        # `router.boxes` from `solids` + `flag_walls`, so a seat decided in one
+        # net's turn could still be crossed by the next net's route — measured on
+        # the forced three-island page, where the replay's own symbol carried
+        # `wire-through-body segments[2] + powerSymbols[1]`. `flag_walls` is the
+        # list every rebuild carries, so the box lands where the router reads it;
+        # nothing is relaxed and no second router is built.
+        router.flag_walls.append(glyph)
+        if flag != glyph:
+            router.flag_walls.append(flag)
 
 
 def _flag_crossing_failure(
