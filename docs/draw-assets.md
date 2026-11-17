@@ -20,7 +20,7 @@
 | 当前回归 | **P141端点守衛 + P138联合反馈 + P137答案保留 + P135同网行距 + P126服务反馈 + P43精确输入钉** | [`tests/test_548p141_net_endpoint_repair.py`](../tests/test_548p141_net_endpoint_repair.py)、[`tests/test_548p138_joint_3v3_seat.py`](../tests/test_548p138_joint_3v3_seat.py)、[`tests/test_548p137_c2_service_seat.py`](../tests/test_548p137_c2_service_seat.py)、[`tests/test_548p135_same_net_gap.py`](../tests/test_548p135_same_net_gap.py)、[`tests/test_548p126_service_host_feedback.py`](../tests/test_548p126_service_host_feedback.py)、[`tests/test_548p124_p43_regression.py`](../tests/test_548p124_p43_regression.py)：一次反馈、完整服务答案、同/异网负例、真实5/5、完整P43 |
 | 当前证据说明 | **P138 3V3联合反馈通过，C3.2/BUZZ未通过** | [`evidence/548P138/README.md`](../evidence/548P138/README.md)：第二次joint chain5；完整候选首拒C3.2/BUZZ；P43/WiFi geometry不变；整图无候选、未视觉 |
 
-HEAD：`c80eb2c`；历史绘制批次已由用户 `cb44c2e` 落地，原P140六批不重复执行。
+生产基线：`c80eb2c`（文档同步另批）；历史绘制批次已由用户 `cb44c2e` 落地，原P140六批不重复执行。
 P141 placement修复已随 `c80eb2c` 落地，其他线未提交改动保留。禁止用 `git restore/checkout` 选择“干净基线”。
 当前整图、LCD automatic、真机/apply和全量验收均未完成。
 
