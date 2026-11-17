@@ -73,6 +73,13 @@ Newer pieces worth knowing:
   `review <file> --interconnect <declaration.json>` (also on `checkup --file`)
   discloses engineer-declared cross-board ties without merging netlists or moving
   findings and verdicts.
+- **Copper paths and real net classes** — `pcb net-path FILE --from REF.PAD --to
+  REF.PAD [--board ...]` proves a pad/track/via chain from an `.epro2` or `.eprj3`
+  archive, with `CONNECTED` / `NOT_PROVEN` / `INDETERMINATE` rather than treating a
+  net name or a missing answer as connectivity. `pcb.net_class.list` reads the
+  host's persisted classes and net rules; an unreadable class list is `null`, never
+  an invented empty list. PCB ARC records are preserved and scoped by net, but arc
+  geometry and non-empty net classes are still outside the verified boundary.
 - **Geometry and shelf fixes** — round, oval and non-round elliptical pads are no
   longer all measured as bounding rectangles. The checkout's default parts shelf
   resolves independently of the caller's working directory, and a missing shelf is
@@ -292,6 +299,11 @@ boardwise checkup
 - **V4 与跨板证据**——V4 归档工程可逐块 PCB 审查，重复 PCB 和分歧库副本会明确拒绝。
   `review <file> --interconnect <声明.json>`（`checkup --file` 同样支持）只披露工程师确认的
   板间连接，不合并网表、不改变 finding 或 verdict。
+- **铜路径与真实网络类**——`pcb net-path FILE --from REF.PAD --to REF.PAD [--board …]`
+  从 `.epro2` / `.eprj3` 归档找出 pad/track/via 铜链，以 `CONNECTED` / `NOT_PROVEN` /
+  `INDETERMINATE` 区分「找到 / 未证明 / 证据不足」，不把网名或读不到当成连通。
+  `pcb.net_class.list` 读宿主持久化网络类和网规则；读不到是 `null`，不伪造成空列表。
+  PCB ARC 已按网保留，但弧几何和非空网络类仍属未验证边界。
 - **几何与货架修复**——圆盘、`OVAL` 和非圆 `ELLIPSE` 焊盘不再统一按外接矩形量间距；
   默认货架不再受启动目录影响，文件缺失也不会被静默说成「真实空架」。
 - **分阶段、可中断的审查**——**一次** `checkup` 之后，先把首轮检查点
