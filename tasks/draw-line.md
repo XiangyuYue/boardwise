@@ -1,10 +1,10 @@
 # 绘制线派单入口（540B8）
 
-> **当前派单（2026-11-17，548P139规划）：先查C3.2固定地旗与BUZZ通道**。P138的一次cheapest单脚seed反馈使3V3联合座位通过真实首次plans验收（chain=5、expansions=6）；完整候选首拒已前移为C3.2/BUZZ。证据 `evidence/548P138/README.md`，任务书 `tasks/548p139_ground_buzz_channel.md`。
+> **当前派单（2026-11-17，548P144规划）：先查C1.2固定地旗与标签房间**。P142联合detour+foreign和P143多成员度量均已验收，完整543i为9 passed、P142为3 passed；完整整图首拒已前移为C1.2。证据 `evidence/548P143/README.md`，任务书 `tasks/548p144_ground_label_terminal.md`。
 >
-> **当前生产与输入**：drawcompiler SHA `24f13da5219243fa4ee7f881fc9fb7a982bde4210ec1df8559ab9be4d9c030b3`，placement SHA `752ef00639f7c90c02a3c7bdc5be327f28d4d3a3995c8ff1909dd3b1161d3f11`（P141已随 `c80eb2c` 落地）；生产基线 `c80eb2c`，文档同步另批，其他线未提交改动保留。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`。
+> **当前生产与输入**：HEAD `e32737a`；drawcompiler SHA `87f82009ca85109faacd0bbccddf5cb98ef7207201f1cdc47444caf3f5cd5473`，placement SHA `0674eb3842529fe280d06dc59c426f9eda7a1789cd0a1c35b86e89244596bb82`，pagecompiler SHA `28b2907d8904da9917a64d3015ae8fd37619313abfaf6a6ee3987e7763628e1c`（P142/P143未提交）。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`。
 >
-> **实施只准按 `tasks/548p139_ground_buzz_channel.md`**：先核对C3.2固定terminal与BUZZ channel的生产关系；不得移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件/31网/4NC仍未出候选，LCD automatic另列；历史绘制线批次按用户指令整理提交。
+> **实施只准按 `tasks/548p144_ground_label_terminal.md`**：先捕获C1.2 glyph/lead、占用盒producer和LED1_K/U1.18名称关系；不得移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件/31网/4NC仍未出候选，LCD automatic另列；P142/P143未提交实现保留。
 >
 > **资产索引**：`docs/draw-assets.md` 与 `evidence/draw-assets/manifest.json` 为当前资产权威路由；此前整理仅经批准将12个可再生目录送回收站，其他资产未移动或删除。
 >

@@ -9,19 +9,19 @@
 
 | 资产 | 当前身份 | 权威位置 / 边界 |
 |---|---|---|
-| 当前任务书 | **3V3联合反馈修复 / 整图未通过** | [`tasks/548p138_joint_3v3_seat.md`](../tasks/548p138_joint_3v3_seat.md) + [`验收`](../evidence/548P138/README.md)：一次cheapest单脚seed反馈；77 focused、两项变异、第二次joint chain5，完整候选仍拒 |
-| 下一任务书 | **规划，未实施** | [`tasks/548p139_ground_buzz_channel.md`](../tasks/548p139_ground_buzz_channel.md)：C3.2固定地旗腿穿BUZZ通道，当前真实首拒 |
+| 当前任务书 | **P142/P143机制通过、未提交 / 整图未通过** | [`tasks/548p143_net_member_relation.md`](../tasks/548p143_net_member_relation.md) + [`验收`](../evidence/548P143/README.md)：detour+foreign与多成员度量；543i 9 passed、P142 3 passed，完整候选仍拒 |
+| 下一任务书 | **规划，未实施** | [`tasks/548p144_ground_label_terminal.md`](../tasks/548p144_ground_label_terminal.md)：C1.2固定地旗与y=-15导体/LED1_K名称盒 |
 | 当前电路 | **下一批输入；电气纠正已核，页面未通过** | [`evidence/548P125/circuit.full.g3c.pinmap.json`](../evidence/548P125/circuit.full.g3c.pinmap.json)：30件/31网/4NC/114成员；仅C3.1→NRST、R1.1→BOOT0，沿用547G3C assumed意图 |
 | 当前 presentation | **P126语义输入，不是通过基线** | [`evidence/548P126/full.presentation.service-feedback.json`](../evidence/548P126/full.presentation.service-feedback.json)：G3C + localSeats + branchOrder + 真实GND分组；尚无候选 |
 | 当前符号库 | **本整图输入的实测库** | [`evidence/548P59/full.library.json`](../evidence/548P59/full.library.json)；WiFi/P43各有自己的校准库，不混用 |
-| 生产编译器 | **P138已验收机制状态，整图未通过** | `src/boardwise/engines/drawcompiler.py`，SHA `24f13da5219243fa4ee7f881fc9fb7a982bde4210ec1df8559ab9be4d9c030b3` |
-| 服务座位器 | **P141端点守衛已验收并随c80eb2c落地** | `src/boardwise/engines/placement.py`，SHA `752ef00639f7c90c02a3c7bdc5be327f28d4d3a3995c8ff1909dd3b1161d3f11` |
+| 生产编译器 | **P142/P143机制通过、未提交，整图未通过** | `src/boardwise/engines/drawcompiler.py`，SHA `87f82009ca85109faacd0bbccddf5cb98ef7207201f1cdc47444caf3f5cd5473` |
+| 服务座位器 | **P143多成员度量已验收、未提交** | `src/boardwise/engines/placement.py`，SHA `0674eb3842529fe280d06dc59c426f9eda7a1789cd0a1c35b86e89244596bb82` |
 | 其他关键源码 | **混合工作树资产，不归属本批独占** | `drawapply.py`、`pagecompiler.py`、`core/presentationspec.py`；精确SHA见manifest，禁止覆盖他人改动 |
-| 当前回归 | **P141端点守衛 + P138联合反馈 + P137答案保留 + P135同网行距 + P126服务反馈 + P43精确输入钉** | [`tests/test_548p141_net_endpoint_repair.py`](../tests/test_548p141_net_endpoint_repair.py)、[`tests/test_548p138_joint_3v3_seat.py`](../tests/test_548p138_joint_3v3_seat.py)、[`tests/test_548p137_c2_service_seat.py`](../tests/test_548p137_c2_service_seat.py)、[`tests/test_548p135_same_net_gap.py`](../tests/test_548p135_same_net_gap.py)、[`tests/test_548p126_service_host_feedback.py`](../tests/test_548p126_service_host_feedback.py)、[`tests/test_548p124_p43_regression.py`](../tests/test_548p124_p43_regression.py)：一次反馈、完整服务答案、同/异网负例、真实5/5、完整P43 |
-| 当前证据说明 | **P138 3V3联合反馈通过，C3.2/BUZZ未通过** | [`evidence/548P138/README.md`](../evidence/548P138/README.md)：第二次joint chain5；完整候选首拒C3.2/BUZZ；P43/WiFi geometry不变；整图无候选、未视觉 |
+| 当前回归 | **P143多成员度量 + P141端点守衛 + P138联合反馈 + P137答案保留 + P135同网行距 + P126服务反馈 + P43精确输入钉** | [`tests/test_548p143_net_member_relation.py`](../tests/test_548p143_net_member_relation.py)、[`tests/test_548p141_net_endpoint_repair.py`](../tests/test_548p141_net_endpoint_repair.py)、[`tests/test_548p138_joint_3v3_seat.py`](../tests/test_548p138_joint_3v3_seat.py)、[`tests/test_548p137_c2_service_seat.py`](../tests/test_548p137_c2_service_seat.py)、[`tests/test_548p135_same_net_gap.py`](../tests/test_548p135_same_net_gap.py)、[`tests/test_548p126_service_host_feedback.py`](../tests/test_548p126_service_host_feedback.py)、[`tests/test_548p124_p43_regression.py`](../tests/test_548p124_p43_regression.py)：一次反馈、完整服务答案、同/异网负例、真实5/5、完整P43 |
+| 当前证据说明 | **P142/P143机制通过，C1.2未通过** | [`evidence/548P143/README.md`](../evidence/548P143/README.md)：detour+foreign、多成员度量；543i 9 passed、P142 3 passed；完整候选首拒C1.2；P43/WiFi geometry不变；整图无候选、未视觉 |
 
-生产基线：`c80eb2c`（文档同步另批）；历史绘制批次已由用户 `cb44c2e` 落地，原P140六批不重复执行。
-P141 placement修复已随 `c80eb2c` 落地，其他线未提交改动保留。禁止用 `git restore/checkout` 选择“干净基线”。
+生产基线：`e32737a`；历史绘制批次已由用户 `cb44c2e` 落地，原P140六批不重复执行。
+P142/P143实现未提交，其他线未提交改动保留。禁止用 `git restore/checkout` 选择“干净基线”。
 当前整图、LCD automatic、真机/apply和全量验收均未完成。
 
 ## 2. 已验收锚（只在其声明范围内有效）

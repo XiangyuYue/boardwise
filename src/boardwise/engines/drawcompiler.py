@@ -1771,6 +1771,7 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     *,
     intent: IntentSource | DesignIntent | None = None,
     page_ground_domains: frozenset[str] | None = None,
+    page_net_members: Mapping[str, int] | None = None,
 ) -> CompileResult:
     """Compile a drawing, or say why there is none.
 
@@ -1802,6 +1803,11 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     whole page spells — the flag gate's 绝不并地 question is a page question.
     A caller that leaves it ``None`` gets the old reading, derived from this
     circuit's own nets, which is the right one for a standalone compile.
+
+    ``page_net_members`` is the root page's membership view for net→part order
+    relations (548P143). The page compiler passes it so a cross-module net is not
+    mistaken for a unique movable endpoint; module parts and poses still use the
+    module-local circuit. ``None`` keeps the standalone/current-circuit reading.
     """
     for value, expected in (
         (circuit_spec, CircuitSpec),
@@ -1936,7 +1942,8 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
 
     # 4. semantics: roles and relations -> ranks and lanes.
     prepare = _prepare(
-        circuit_spec, presentation_spec, binding, book, budget, intent=intent
+        circuit_spec, presentation_spec, binding, book, budget, intent=intent,
+        net_members=page_net_members,
     )
     if prepare.failures:
         result.failures = prepare.failures
@@ -2709,6 +2716,9 @@ class _Context:
     local_flag_repair_seed: Any = None
     local_flag_repair_active: bool = False
     local_flag_repair_attempts: int = 0
+    #: 548P143: root-page membership for net→part order relations. Empty means
+    #: this context's own circuit slice; module part/pose reads never use it.
+    net_members: dict[str, int] = field(default_factory=dict)
 
     def services(self):
         """The 543A relations, computed once per compilation (543B)."""
@@ -3002,6 +3012,7 @@ def _prepare(
     budget: CompileBudget,
     *,
     intent: IntentSource | DesignIntent | None = None,
+    net_members: Mapping[str, int] | None = None,
 ) -> _Prepare:
     """Stages 2 and 3's inputs: axis, ranks, lanes, poses, lock legality."""
     axis = _axis(binding)
@@ -3110,6 +3121,10 @@ def _prepare(
         accepted={}, body_dirs={}, intent=intent,
         lane_groups=lanes,
         lane_edges=_branch_lane_edges(circuit_spec, binding, lanes),
+        net_members=(
+            dict(net_members) if net_members is not None else
+            {net.id: len(net.members) for net in circuit_spec.nets}
+        ),
     )
     failures = list(order_failures)
     for part_id in sorted(slots):
@@ -4712,6 +4727,7 @@ def _topology_request(ctx: _Context) -> placement.PlacementInput:
         # from this candidate's own pose — so base and topology share one answer
         # instead of each stating a foot the other may not.
         service_host_choice=_service_layout_page(ctx.presentation),
+        net_members=ctx.net_members,
         # 548D3B: the same label corridors the base consumer gets — one reading
         # of "which names this page prints and where they sit by default", so
         # the same arm cannot be legal in one consumer and illegal in the other.
@@ -6177,6 +6193,7 @@ def _series_placement_request(
         # 548D3D-H: the base round hands the host-foot choice to the binder too,
         # so its seats and the topology round's are read off one rule.
         service_host_choice=_service_layout_page(ctx.presentation),
+        net_members=ctx.net_members,
         label_corridors=_label_corridors(ctx),
         progress=ctx.progress, lateral=ctx.lateral(),
         grid=ctx.budget.grid, near_limit=ctx.budget.near_limit,
@@ -10823,6 +10840,7 @@ def _relation_failures(ctx: _Context, placed: _Placement) -> list[GrammarFailure
             ctx.profile(part_id), token, SymbolPose(0.0, False)),
         pair_reading=_pair_bands(ctx),
         point_override=_service_pair,
+        net_members=ctx.net_members,
     ):
         locked = sorted(
             part_id for part_id in (item.subject, item.object)
@@ -13280,6 +13298,23 @@ def _seat_first_plans(
             return (), failure
     else:
         solids, bodies = scene.solids, scene.bodies
+    # 548P142: a service host lead the detour pass had to route round a fixed
+    # terminal is a conductor on this page, not a wall. The joint selection and
+    # the terminal ladder read the same run, so a direct two-point span keeps
+    # its historical behaviour and only a real detour is added as `foreign`.
+    if _service_layout_page(ctx.presentation) and getattr(
+            placed, "service_plans", ()):
+        service_channels, service_problem = _panel_channels(
+            ctx, placed, service_only=True)
+        if service_problem is None:
+            detours = tuple(
+                segment
+                for items in service_channels.values()
+                for segment in items
+                if len(segment.points) > 2
+            )
+            if detours:
+                foreign = (*foreign, *detours)
     terminal_seats, terminal_failure = _seat_first_terminal_seats(ctx, placed)
     if terminal_failure is not None:
         return (), terminal_failure
@@ -18705,7 +18740,8 @@ def _record_built_candidate(
         return
     seen.add(digest)
     findings = check_grammar(
-        plan, circuit_spec, presentation_spec, book, budget=budget, intent=intent
+        plan, circuit_spec, presentation_spec, book, budget=budget, intent=intent,
+        net_members=ctx.net_members,
     )
     tolerance_lines = island_gate_tolerance_notes(list(built.tolerated))
     plan.evidence = LayoutEvidence(
@@ -19182,7 +19218,8 @@ def _try_island_variants(
 
     checked = readability.check(
         plan, circuit_spec, presentation_spec, book,
-        grammar_checker=partial(check_grammar, intent=intent),
+        grammar_checker=partial(
+            check_grammar, intent=intent, net_members=ctx.net_members),
         page_box=budget.page_box,
         keepouts=budget.keepouts,
         grid=budget.grid,
@@ -19254,7 +19291,8 @@ def _try_island_variants(
     result.notes.extend(tolerance_lines)
 
     findings = check_grammar(
-        plan, circuit_spec, presentation_spec, book, budget=budget, intent=intent
+        plan, circuit_spec, presentation_spec, book, budget=budget, intent=intent,
+        net_members=ctx.net_members,
     )
     plan.evidence = LayoutEvidence(
         checker=CHECKER_NAME,
@@ -22227,6 +22265,121 @@ def _path_first_carrier_failures(
     return failures
 
 
+def _seat_first_service_host_detours(
+    ctx: _Context, placed: _Placement,
+) -> None:
+    """Move a service host lead off a fixed terminal it really crosses (548P142).
+
+    The joint seat answer can put one branch under another branch's terminal
+    flag: the measured page has C3.2's upright lead crossing BZ1's horizontal
+    host lead, so a wire the placement recorded before the flag existed refuses
+    the fixed terminal. The existing router (:func:`_seat_first_router`) already
+    has a legal way round; this pass gives it exactly that job and only for a
+    lead measured to cross a **fixed terminal's lead or glyph** or another
+    seated service channel. The branch's own terminal is not an obstacle (it is
+    the lead's own flag), and a lead with no legal route is left untouched, so
+    the page keeps the refusal it already had instead of gaining a second rule.
+    A repaired path is written to **both** the cell and the plan
+    (``host_path`` / ``host_paths``): :func:`_panel_channels` reads the plan's
+    record, and a detour in one of them only would draw a wire the channel never
+    promised.
+    """
+    plans = tuple(getattr(placed, "service_plans", ()))
+    if not plans or not _service_layout_page(ctx.presentation):
+        return
+    seats, failure = _seat_first_terminal_seats(ctx, placed)
+    if failure is not None:
+        return
+    solids, _bodies, scene_failure = _seat_first_scene(ctx, placed)
+    if scene_failure is not None:
+        return
+    terminal_boxes: list[tuple[str, list[Box]]] = []
+    for (net_id, member), (anchor, lead, hang, _source) in seats.items():
+        net = ctx.circuit.net(net_id)
+        boxes = list(placement._service_lead_legs(lead))
+        profile, _ref = _flag_plan(
+            ctx, net_id, net.cls if net is not None else "gnd")
+        if profile is not None:
+            rotation = _flag_rotation((0.0, hang), flag_glyph_kind(profile))
+            rotation = _flag_rotation_away(profile, anchor, lead, rotation)
+            boxes.append(_flag_box(profile, rotation, anchor, net_id))
+        terminal_boxes.append((member, boxes))
+    repaired_of: dict[tuple[int, int], tuple[tuple[float, float], ...]] = {}
+    for plan_index, plan in enumerate(plans):
+        if not plan.seated:
+            continue
+        for cell_index, cell in enumerate(plan.cells):
+            path = tuple(cell.host_path)
+            if len(path) < 2 or cell.from_seat is None:
+                continue
+            obstacles: list[Box] = list(solids)
+            for member, boxes in terminal_boxes:
+                if member.partition(".")[0] == cell.part_id:
+                    continue
+                obstacles.extend(boxes)
+            for other_plan in plans:
+                for other_cell in other_plan.cells:
+                    if other_cell is cell:
+                        continue
+                    obstacles.extend(
+                        placement._service_lead_legs(other_cell.host_path))
+            if not any(
+                _segment_hits_box(start, stop, box)
+                for start, stop in zip(path, path[1:])
+                for box in obstacles
+            ):
+                continue
+            host_tip = _pin_point(
+                ctx, plan.host_part, cell.host_token,
+                placed.poses, placed.origins)
+            if host_tip is None:
+                continue
+            net_id = cell.from_net or _part_nets(
+                ctx.circuit, plan.host_part).get(cell.host_token, "")
+            router, _blocked = _seat_first_router(
+                ctx, placed, net_id, obstacles,
+                (("host", host_tip), (cell.part_id, cell.from_seat)),
+            )
+            run = router.route(host_tip, cell.from_seat)
+            if run is None:
+                # No legal way round: leave the recorded span alone and let the
+                # page keep its original first refusal.
+                continue
+            repaired = tuple(_panel_collapse(run))
+            if (
+                len(repaired) < 2
+                or _key(repaired[0]) != _key(host_tip)
+                or _key(repaired[-1]) != _key(cell.from_seat)
+            ):
+                continue
+            repaired_of[(plan_index, cell_index)] = repaired
+    if not repaired_of:
+        return
+    new_plans: list[Any] = []
+    for plan_index, plan in enumerate(plans):
+        if not any(
+            (plan_index, cell_index) in repaired_of
+            for cell_index in range(len(plan.cells))
+        ):
+            new_plans.append(plan)
+            continue
+        new_cells = tuple(
+            replace(cell, host_path=repaired_of[(plan_index, cell_index)])
+            if (plan_index, cell_index) in repaired_of else cell
+            for cell_index, cell in enumerate(plan.cells)
+        )
+        if len(plan.host_paths) == len(plan.cells):
+            new_paths = tuple(
+                repaired_of.get((plan_index, cell_index), path)
+                for cell_index, path in enumerate(plan.host_paths)
+            )
+        else:
+            new_paths = tuple(cell.host_path for cell in new_cells)
+        new_plans.append(replace(
+            plan, cells=new_cells, host_paths=new_paths))
+    placed.service_plans = tuple(new_plans)
+
+
 def _build_path_first_variant(
     ctx: _Context, variant: _Variant, placed: _Placement,
 ) -> tuple[_Built | None, GrammarFailure | None, list[str]]:
@@ -22240,6 +22393,10 @@ def _build_path_first_variant(
     a page that would draw a second flag, a missing run, a cross-net short or a
     seat-to-seat wire is refused by name instead of shipped.
     """
+    # 548P142: a service lead measured across a fixed terminal is given the
+    # existing router's legal way round before the terminal is read, so the
+    # repaired path is the channel this build and its replay both consume.
+    _seat_first_service_host_detours(ctx, placed)
     terminal = _seat_first_path_first_terminal(ctx, placed, replay=False)
     if not terminal.ok:
         return None, terminal.refusals[0], [item.detail for item in terminal.refusals]
@@ -22254,7 +22411,8 @@ def _build_path_first_variant(
         ctx.circuit,
         ctx.presentation,
         ctx.book,
-        grammar_checker=partial(check_grammar, intent=ctx.intent),
+        grammar_checker=partial(
+            check_grammar, intent=ctx.intent, net_members=ctx.net_members),
         page_box=ctx.budget.page_box,
         keepouts=ctx.budget.keepouts,
         grid=ctx.budget.grid,
@@ -23423,7 +23581,8 @@ def _build_one_variant(
             # documents the constraints came from — the contract included. Without
             # it a plan whose order came from a decision would be graded against
             # the designator order it was deliberately not drawn with.
-            grammar_checker=partial(check_grammar, intent=ctx.intent),
+            grammar_checker=partial(
+            check_grammar, intent=ctx.intent, net_members=ctx.net_members),
             page_box=ctx.budget.page_box,
             keepouts=ctx.budget.keepouts,
             grid=ctx.budget.grid,
@@ -28201,6 +28360,7 @@ def check_grammar(
     *,
     budget: CompileBudget | None = None,
     intent: IntentSource | DesignIntent | None = None,
+    net_members: Mapping[str, int] | None = None,
 ) -> list[GrammarFinding]:
     """The drawing grammar's half of the readability contract, over a plan.
 
@@ -28331,6 +28491,7 @@ def check_grammar(
         ),
         pair_reading=_pair_reading(presentation_spec),
         point_override=_drawn_pair,
+        net_members=net_members,
     ):
         out.append(GrammarFinding(
             kind=KIND_RELATION_BROKEN,
@@ -28481,6 +28642,7 @@ def _relation_violations(
     frame_of: Any = None,
     pair_reading: bool = False,
     point_override: Any = None,
+    net_members: Mapping[str, int] | None = None,
 ) -> list[tuple[Any, tuple[tuple[float, float], tuple[float, float]]]]:
     """Every relation the given points do not keep.
 
@@ -28502,6 +28664,7 @@ def _relation_violations(
     for item in binding.constraints:
         points = _points_for_relation(
             circuit_spec, item, origin_of=origin_of, pin_of=pin_of,
+            net_members=net_members,
         )
         # 548D3D-H3: a service branch's relation is measured between the feet the
         # page really drew — the seat the BoundPlan chose and the host foot its
@@ -28538,6 +28701,7 @@ def _points_for_relation(
     *,
     origin_of: Any,
     pin_of: Any,
+    net_members: Mapping[str, int] | None = None,
 ) -> tuple[tuple[float, float], tuple[float, float]] | None:
     """The two points a relation is measured between — **one reading** (201B).
 
@@ -28558,6 +28722,9 @@ def _points_for_relation(
         origin_of=origin_of,
         pin_of=pin_of,
         class_of=lambda net_id: _circuit_net_class(circuit_spec, net_id),
+        net_members=(net_members if net_members is not None else {
+            net.id: len(net.members) for net in circuit_spec.nets
+        }),
     )
 
 
@@ -31210,7 +31377,8 @@ def _build_service_group_variant(
         ctx.circuit,
         ctx.presentation,
         ctx.book,
-        grammar_checker=partial(check_grammar, intent=ctx.intent),
+        grammar_checker=partial(
+            check_grammar, intent=ctx.intent, net_members=ctx.net_members),
         page_box=ctx.budget.page_box,
         keepouts=ctx.budget.keepouts,
         grid=ctx.budget.grid,

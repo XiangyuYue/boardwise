@@ -1456,6 +1456,9 @@ class PlacementInput:
     #: seats: the templates then carry the admitted foot set and no answer, and
     #: base and topology share this one selection.
     service_host_choice: bool = False
+    #: 548P143: root-page net membership used only to decide whether a net
+    #: endpoint is geometrically unique. Empty means this request's own nets.
+    net_members: Mapping[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.parts:
@@ -1849,6 +1852,9 @@ def relation_points(
         origin_of=lambda part_id: origins.get(part_id),
         pin_of=lambda part_id, token: (pins.get(part_id) or {}).get(token),
         class_of=lambda net_id: classes.get(net_id, ""),
+        net_members=(request.net_members or {
+            net.net_id: len(net.members) for net in request.nets
+        }),
     )
 
 
@@ -1859,6 +1865,7 @@ def relation_points_between(
     origin_of: Any,
     pin_of: Any,
     class_of: Callable[[str], str] | None = None,
+    net_members: Mapping[str, int] | None = None,
 ) -> tuple[tuple[float, float], tuple[float, float]] | None:
     """The two points a relation is measured between — **the one reading**.
 
@@ -1891,6 +1898,13 @@ def relation_points_between(
     signal, not on whichever id sorts first. ``None`` keeps the old sorted
     reading for any caller that has no netlist to hand. Other endpoint forms
     keep the existing origin-based reading.
+
+    ``net_members`` is the caller-selected membership view (root page for
+    cross-module relations, the current circuit otherwise), mapping net id to
+    member count. A multi-member net has no unique geometric endpoint: an order
+    relation that names one is not measurable and returns ``None`` rather than
+    pretending the net is a part that can be moved. A single-member net keeps
+    the P107 pin+origin reading; omitting the mapping keeps the legacy behavior.
     """
     if relation.kind in _PIN_KINDS:
         subject_nets = nets_of(relation.subject)
@@ -1910,6 +1924,8 @@ def relation_points_between(
 
         if subject_origin is None and object_origin is not None:
             net_id = relation.subject
+            if net_members is not None and net_members.get(net_id, 0) > 1:
+                return None
             object_nets = nets_of(relation.object)
             if net_id in object_nets.values():
                 subject_pin = _pin_on_net(
@@ -1920,6 +1936,8 @@ def relation_points_between(
 
         elif subject_origin is not None and object_origin is None:
             net_id = relation.object
+            if net_members is not None and net_members.get(net_id, 0) > 1:
+                return None
             subject_nets = nets_of(relation.subject)
             if net_id in subject_nets.values():
                 object_pin = _pin_on_net(

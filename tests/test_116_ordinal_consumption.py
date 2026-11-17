@@ -634,6 +634,12 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     各共用一条信号网加 `GND`，量尺与落座因此换到信号脚；场景仍无图
     （`ok=False`、`candidates=0`），差异只有拒因文本 5 行。旧字节留
     `098_scene08_narrow_refused.pre_547s.txt`。
+
+    **548P143 重钉**：`68340ef2…` → `88c8e198…`，只有 `topology-search:` 一行
+    的最小布局估计从 `365.5 x 333.5` 变为 `394 x 253.5`。多成员网端点不再由
+    单个坐标裁决左右，声明边不再形成硬约束，页面恢复 `cb44c2e` 之前的行为；
+    这只是恢复合法输入的拒报，scene08 仍 `ok=False`、`candidates=0`，声明边
+    在视觉上是否合理仍未证明，`_ORIENTATION_CONFLICT` 仍只作 note。
     """
     import hashlib
     out = ROOT / "outputs" / "116" / "previews" / "098"
@@ -646,7 +652,7 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     assert result.returncode == 0, result.stdout + result.stderr
     target = out / "098_scene08_narrow_refused.txt"
     digest = hashlib.sha256(target.read_bytes()).hexdigest()
-    assert digest == "68340ef293d0ce35a40606eda7e2f948e9a4b4057d14a0b9b9da07450efaa5b4", (
+    assert digest == "88c8e198cddaaf4853fcde15005233c59d8e9960fa54f7a7ac6b9a750deb847f", (
         f"098 scene 08 moved: {digest}"
     )
 

@@ -454,6 +454,12 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     复现旧基线**，**0.6.1 的 commit ``2df6926`` 与当前工作树逐字节相同**——所以这不是
     548D3B7（``serviceLayout.localSeats``）的产物；不应为迁就旧拒因而回退547S，
     这里按已审定的契约重钉。旧字节留在 ``098_scene08_narrow_refused.pre_547s.txt``，五版可对拍。
+
+    **548P143 重钉**：`68340ef2…` → `88c8e198…`，只有 `topology-search:` 一行
+    的最小布局估计从 `365.5 x 333.5` 变为 `394 x 253.5`。多成员网端点不再由
+    单个坐标裁决左右，声明边不再形成硬约束，页面恢复 `cb44c2e` 之前的行为；
+    这只是恢复合法输入的拒报，scene08 仍 `ok=False`、`candidates=0`，声明边
+    在视觉上是否合理仍未证明，`_ORIENTATION_CONFLICT` 仍只作 note。
     """
     baseline = (
         ROOT / "outputs" / "114" / "previews" / "098"

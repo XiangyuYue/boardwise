@@ -1384,6 +1384,7 @@ def _compile_modules(
             ctx.book,
             _module_budget_for(module_budget, ctx.budget),
             page_ground_domains=ground_domains,
+            page_net_members={net.id: len(net.members) for net in ctx.circuit.nets},
         )
         ctx.results[module.id] = compiled
         result.modules[module.id] = compiled

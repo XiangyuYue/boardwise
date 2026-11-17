@@ -46,16 +46,18 @@
 | **0.6.0 后（独立方向）** | **AI 电路语义编译层**：网表 → 类型化、类 C 的可读语言，AI 读编译结果而非原始网表；调研任务 `tasks/038_v4_review_line_research.md` 只登记 V3/V4 共用语义边界，不实施编译器 | 先定义语义合同与可验证还原，再逐规则/逐视图小批接入；不与 V4 适配同批 | — |
 | 远景 | **R5 SPICE**：岳 10-17 裁——等**原理图绘制过关** + **041 跨板网络**搞定后再开 | 冻结 | 两个前置 |
 
-## 当前主攻（2026-11-17：548P138 机制通过/整图未通过；P139 规划、P140/P141 已落地）
+## 当前主攻（2026-11-17：548P138 机制通过/整图未通过；P142/P143 未提交、P144 规划）
 
 - **548P138 当前点（2026-11-17）**：3V3 联合座位经一次 cheapest 单脚 seed 反馈通过真实首次
   plans（chain=5、expansions=6、聚焦 77 passed），完整候选首拒前移为 C3.2/BUZZ；**整图未通过**。
   `drawcompiler=24f13da5…`、`placement=f550f6ea…`，HEAD `3d4a0d5e`，混合工作树保留。
   证据 `evidence/548P138/README.md`。
-- **548P139 下一缺口（规划，未实施）**：只查 C3.2 固定地旗与 BUZZ channel 哪条生产关系先决定
-  冲突，给三种最小改动与预测；依赖 P138 恢复点、P125 电路/P126 规格/P59 库，P43/WiFi/
-  P126/P135/P137/P138 聚焦不得退化。禁止移动固定 terminal、扩 reach/GAP/预算/页框、恢复 P124
-  实验；只有真实 `ok=True` 才做逐脚/渲染/视觉。任务书 `tasks/548p139_ground_buzz_channel.md`。
+- **548P142/P143 机制通过、未提交（2026-11-17）**：detour+foreign使C3.2/BUZZ与3V3联合成立，
+  多成员网不可裁决使完整543i恢复9 passed；P142回归3 passed，P143/P141合计18 passed。
+  drawcompiler `87f82009…cd5473`，placement `0674eb38…96bb82`，证据 `evidence/548P143/README.md`。
+- **548P144 下一缺口（规划，未实施）**：只查C1.2固定terminal与y=-15导体/LED1_K名称盒，
+  任务书 `tasks/548p144_ground_label_terminal.md`。禁止移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验；
+  只有真实 `ok=True` 才做逐脚/渲染/视觉。
 - **548P140 已由用户落地**：`cb44c2e` 一次性提交历史绘制批次，`4271fea` 完成0.6.2发布准备；
   原六批不重复执行。提交前集成13红转入后续小批，任务书 `tasks/548p140_draw_history_commits.md` §7。
 - **548P141 DSR修复（已随 `c80eb2c` 落地）**：placement任一端点无origin即不可平移修复，基线3红/修复3过、

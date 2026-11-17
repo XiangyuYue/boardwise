@@ -1,10 +1,10 @@
 # 交接记忆 —— 换 harness / 开新会话先读这份
 
-> **当前交接（2026-11-17，548P141后）：整图先查C3.2/BUZZ，集成红项另分批**。P138使3V3联合座位通过（chain=5、expansions=6），完整候选首拒为C3.2 `(-205,65)` 穿BUZZ通道 `(-301,84)-(-94,86)`；P141另修placement网端点崩溃，543i后续为CTS脚侧拒绝。历史批次已由用户 `cb44c2e` 落地，`4271fea` 为0.6.2 prep，不重复原P140六批。
+> **当前交接（2026-11-17，548P143后）：整图下一首拒为C1.2标签/固定地旗**。P142的detour+foreign使C3.2与C1.1/U1.13的BUZZ冲突消失，P143按多成员网不可裁决修复CTS，完整543i为9 passed；P142回归3 passed。完整整图仍无候选，C1.2 `(-165,5)` 被y=-15导体/LED1_K名称盒覆盖。证据 `evidence/548P143/README.md`。
 >
-> **当前生产与输入**：drawcompiler SHA `24f13da5219243fa4ee7f881fc9fb7a982bde4210ec1df8559ab9be4d9c030b3`，placement SHA `752ef00639f7c90c02a3c7bdc5be327f28d4d3a3995c8ff1909dd3b1161d3f11`（P141已随 `c80eb2c` 落地）；生产基线 `c80eb2c`，文档同步另批，其他线未提交改动保留。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`，尚无完整候选。
+> **当前生产与输入**：HEAD `e32737a`；drawcompiler SHA `87f82009ca85109faacd0bbccddf5cb98ef7207201f1cdc47444caf3f5cd5473`，placement SHA `0674eb3842529fe280d06dc59c426f9eda7a1789cd0a1c35b86e89244596bb82`，pagecompiler SHA `28b2907d8904da9917a64d3015ae8fd37619313abfaf6a6ee3987e7763628e1c`（P142/P143未提交）。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`，尚无完整候选。
 >
-> **下一批只读 `tasks/548p139_ground_buzz_channel.md`**：先核对C3.2固定terminal与BUZZ channel的生产关系，不得移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件未出候选，LCD automatic另列；P141 `tasks/548p141_net_endpoint_repair.md` 及其余集成红项按各自小批处理，未做真机/全量/apply。
+> **下一批只读 `tasks/548p144_ground_label_terminal.md`**：先捕获C1.2 glyph/lead、占用盒producer和LED1_K/U1.18名称关系，不得移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件未出候选，LCD automatic另列；P142/P143实现未提交，未做真机/全量/apply。
 >
 > **资产索引**：先读 [`docs/draw-assets.md`](draw-assets.md) 与 `evidence/draw-assets/manifest.json`；此前整理仅经批准将12个可再生目录送回收站，记录见`evidence/draw-assets/recycle-log.json`。
 
