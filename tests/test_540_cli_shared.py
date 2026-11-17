@@ -70,8 +70,11 @@ def test_shared_and_assembly_modules_have_their_declared_dependencies():
     assert _in_package_imports(PACKAGE / "commands" / "shared.py") == set()
     # 038Y5: assembly also reaches the assembly-owned `pcb_gate.py` — one module,
     # for `pcb gate`; neither command module gains a `cli.py` edge.
+    # 550: assembly reaches `pcb_netpath.py` too — the offline `pcb net-path`
+    # adapter, which is assembly-owned and keeps its judgement in the shared
+    # `core/netpath.py`. Still no `cli.py` edge in either command module.
     assert _in_package_imports(PACKAGE / "commands" / "assembly.py") == {
-        "pcb_gate.py", "skill_install.py",
+        "pcb_gate.py", "pcb_netpath.py", "skill_install.py",
     }
 
 
@@ -86,8 +89,12 @@ def test_owner_manifest_covers_the_final_command_modules():
     #: exactly one. Pinned here, on the shared side, because that is the layer the
     #: module was added to; draw/review only carry the count.
     #: 038Y5: 152 rows — 038Y1–Y4 added three PCB rule modules, 038Y5 `pcb_gate.py`.
+    #: 550: 154 rows — `core/netpath.py` (shared judgement) and `pcb_netpath.py`
+    #: (assembly adapter), both added by the offline `pcb net-path` slice.
     assert data["modules"]["parsers/elibz.py"] == "shared"
-    assert len(data["modules"]) == 152
+    assert data["modules"]["core/netpath.py"] == "shared"
+    assert data["modules"]["pcb_netpath.py"] == "assembly"
+    assert len(data["modules"]) == 154
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

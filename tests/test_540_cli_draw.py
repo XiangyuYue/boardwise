@@ -66,7 +66,8 @@ def test_owner_manifest_covers_the_two_command_modules():
     # 038Y5: the manifest is 152 rows — 148 was 540B6's, 038Y1–Y4 added the
     # three PCB rule modules and 038Y5 added `pcb_gate.py` (assembly). The
     # count is pinned in all three command-module anchors on purpose.
-    assert len(data["modules"]) == 152
+    # 550 added two more (`core/netpath.py` shared, `pcb_netpath.py` assembly).
+    assert len(data["modules"]) == 154
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 
