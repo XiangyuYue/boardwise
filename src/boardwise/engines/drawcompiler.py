@@ -15500,6 +15500,32 @@ def _seat_first_path_first_terminal(
     )
 
 
+def _seat_first_fixed_flag_boxes(
+    ctx: _Context, placed: _Placement,
+) -> tuple[tuple[Box, ...], GrammarFailure | None]:
+    """The fixed terminal glyphs a label may not stand on (548P144).
+
+    Fixed terminals are declared before labels are re-selected, but the final
+    power symbols do not exist yet. Replaying their lead, hang and rotation here
+    gives the label pass the same glyph the fixed-seat gate will later enforce;
+    it never moves the terminal and never invents a new seat.
+    """
+    seats, failure = _seat_first_terminal_seats(ctx, placed)
+    if failure is not None:
+        return (), failure
+    boxes: list[Box] = []
+    for (net_id, member), (anchor, lead, hang, _source) in sorted(seats.items()):
+        net = ctx.circuit.net(net_id)
+        profile, _ref = _flag_plan(
+            ctx, net_id, (net.cls if net is not None else "") or "gnd")
+        if profile is None:
+            continue
+        rotation = _flag_rotation((0.0, hang), flag_glyph_kind(profile))
+        rotation = _flag_rotation_away(profile, anchor, lead, rotation)
+        boxes.append(_flag_box(profile, rotation, anchor, net_id))
+    return tuple(boxes), None
+
+
 def _seat_first_port_columns(
     ctx: _Context,
     placed: _Placement,
@@ -15566,6 +15592,19 @@ def _seat_first_port_columns(
         moves.append((net_id, member, (float(label.x), float(label.y)), label))
     if not moves:
         return tuple(labels), (), None
+
+    fixed_boxes, fixed_failure = _seat_first_fixed_flag_boxes(ctx, placed)
+    if fixed_failure is not None:
+        return tuple(labels), (), fixed_failure
+    if fixed_boxes:
+        # The terminal is declared even though its final power symbol is not in
+        # `symbols` yet. Let the carrier/name re-selection see that room now,
+        # instead of accepting a name and refusing the fixed flag afterwards.
+        scene = replace(
+            scene,
+            solids=(*scene.solids, *fixed_boxes),
+            bodies=(*scene.bodies, *fixed_boxes),
+        )
 
     tips: set[tuple[float, float]] = set()
     for part_id in placed.origins:

@@ -31,7 +31,9 @@
   SHA `752ef006…3f11`。543i后续为CTS脚侧拒绝，J/O/K/L/cross-side/forced/P16等独立处理。任务书 `tasks/548p141_net_endpoint_repair.md`。
 - **548P142/P143 机制通过、未提交（2026-11-17）**：detour+foreign联合首拒前移为C1.2；多成员网端点不可裁决使完整543i恢复9 passed。
   P142回归3 passed，P143/P141合计18 passed；drawcompiler `87f82009…cd5473`，placement `0674eb38…96bb82`。
-- **548P144 规划（2026-11-17）**：C1.2 `(-165,5)` 被y=-15导体与LED1_K名称盒覆盖；只查固定地旗与标签房间，见 `tasks/548p144_ground_label_terminal.md`。
+- **548P144 固定glyph场景通过、未提交（2026-11-17）**：固定terminal glyph纳入port-columns的scene，C1.2消失；
+  新测试3 passed、两项变异、P43/WiFi geometry不变。drawcompiler `976a4c2c…b2ea`。
+- **548P145 规划（2026-11-17）**：U1.18 local-label exception与LED2_K/LCD_SCK回放冲突，见 `tasks/548p145_u18_label_replay.md`。
 - **绘制线 2026-11-14 四批（工作树未提交；全量 2 红均既有）**：
   - **548K / 548K-R**：名字桩带先于旗位预留，显式开关 `labelPolicy.stubLaneReserve`（默认关闭、`false` 等价不写、
     只在 true 时序列化、非布尔具名拒绝）。不开开关的校准件几何 `f4f1c58c…` 与 548J 记录逐字相同且 `plan` 拒绝；

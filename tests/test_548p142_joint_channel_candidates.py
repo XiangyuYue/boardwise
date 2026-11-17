@@ -9,8 +9,8 @@
    让 3V3 chain 在**同一次**候选枚举里避开 BUZZ 的绕行，而不是先定 channel 再让 chain 被动接受。
 
 基线（本批生产改动前）首拒是 C3.2 固定 terminal；只做 detour 时 C1.1/U1.13 在 (-160,85) 与
-BUZZ 共点（P139 已测）。修复后的真实读数应到 C1.2 固定 terminal，且不再出现 C3.2/C1.1/U1.13
-的 BUZZ 冲突。C1.2 是**下一独立首拒**，本批不宣称整图 ok。
+BUZZ 共点（P139 已测）。修复后的真实读数应越过 C1.2，且不再出现 C3.2/C1.1/U1.13
+的 BUZZ 冲突。P144 纳入固定 glyph 后，U1.18 成为**下一独立首拒**，本批不宣称整图 ok。
 """
 
 from __future__ import annotations
@@ -92,16 +92,17 @@ def _buzz_plan(placed: dc._Placement):
 # ------------------------------------------------- ① 修复后的联合答案
 
 
-def test_joint_channel_detours_buzz_and_stops_at_c12(ctx):
-    """detour 与 3V3 chain 在同一答案里成立，下一首拒是 C1.2 固定 terminal。"""
+def test_joint_channel_detours_buzz_and_stops_at_u18(ctx):
+    """detour 与 3V3 chain 在同一答案里成立，P144 后首拒前移为 U1.18。"""
     placed = _placed(ctx)
     built, failure, _notes = _build(ctx, placed)
     detail = failure.detail if failure is not None else ""
-    assert built is None, "the page must still refuse; C1.2 is the next refusal"
+    assert built is None, "the page must still refuse; U1.18 is the next refusal"
     assert "C3.2" not in detail, detail
     assert "C1.1" not in detail and "U1.13" not in detail, detail
-    assert "C1.2" in detail, detail
-    assert "fixed terminal is not moved" in detail, detail
+    assert "C1.2" not in detail, detail
+    assert "U1.18" in detail, detail
+    assert "local-label exception" in detail, detail
 
 
 def test_buzz_host_path_and_channel_wall_are_the_same_detour(ctx):

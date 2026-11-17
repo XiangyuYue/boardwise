@@ -31,13 +31,14 @@
   已验收拓扑，不扩大为任意电路都能自动画好的承诺；CH340 页的关闭重开仍未验证。
 - **540 平台准备已收口**：审查/绘制共享模块化底座，CLI 与 DSH 工具面保持兼容；Rust 最小
   workspace、合同和双侧差分持续运行。Rust 新增库解析垂直切片不代表 Python 主流程已迁移完成。
-- **绘制线最新（2026-11-17，548P142/P143：机制通过/整图未通过）**：P138 已消掉3V3联合首拒；
-  P142 以 detour+foreign 使 C3.2/BUZZ 与3V3 chain 联合成立（回归3 passed），P143 按多成员网端点
-  不可裁决修复CTS（完整543i **9 passed**）。当前工作集仍为 P125 G3C 电路 + P126 服务规格 + P118
-  WiFi 锚，**完整30件/31网/4NC仍无候选，不写整图完成或全绿**；下一批 P144 只查C1.2固定地旗与
-  标签房间（`tasks/548p144_ground_label_terminal.md`）。drawcompiler `87f82009…cd5473`，placement
-  `0674eb38…96bb82`，P142/P143未提交。历史批次已由用户 `cb44c2e` 落地，`4271fea` 为0.6.2 prep；
-  P141已随 `c80eb2c` 落地，其余集成红项按 `tasks/548p140_draw_history_commits.md` §7分批。
+- **绘制线最新（2026-11-17，548P144：机制通过/整图未通过）**：P142 以 detour+foreign 使
+  C3.2/BUZZ 与3V3 chain 联合成立，P143 按多成员网端点不可裁决修复CTS（完整543i **9 passed**），
+  P144 再把固定 terminal glyph 纳入 port-columns 的 scene.solids/bodies，C1.2消失（新测试3 passed、
+  两项变异）。当前工作集仍为 P125 G3C 电路 + P126 服务规格 + P118 WiFi 锚，**完整30件/31网/4NC
+  仍无候选，不写整图完成或全绿**；下一批 P145 只查U1.18名称盒与标签回放
+  （`tasks/548p145_u18_label_replay.md`）。drawcompiler `976a4c2c…b2ea`，placement `0674eb38…96bb82`，
+  P142/P143/P144未提交。历史批次已由用户 `cb44c2e` 落地，`4271fea` 为0.6.2 prep；P141已随 `c80eb2c`
+  落地，其余集成红项按 `tasks/548p140_draw_history_commits.md` §7分批。
 - **绘制线历史停止点（2026-11-13，548J）**：真实 64 脚 MCU 单岛 P43、强制 topology 三岛和
   LED 分压链族已各自验收；真实整页仍未通过。548J-A `serviceGroups` 合同通过，但 B1 联合座位
   虽 22 条目标测试通过，合成图仍有 CFG_A/PWR 大回环，主代理视觉拒收并停止独立 builder 路线；

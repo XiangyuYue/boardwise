@@ -1,7 +1,8 @@
 # 548P142 — service channel 与 rail 成员路径联合候选
 
-> 状态：规划，未实施。P139 已证 C3.2 可绕，但静态 detour 与当前3V3 chain不能共存。
-> 证据：`evidence/548P139/README.md`、`evidence/548P139/buzz-router-build.log`。
+> 状态：**detour+foreign联合已实现并验收；整图未通过**。P144把固定glyph纳入标签场景后，
+> 首拒由C1.2前移为U1.18，下一批见 `tasks/548p145_u18_label_replay.md`。
+> 证据：`evidence/548P142/README.md`、`evidence/548P144/README.md`。
 
 ## ① 前因后果
 

@@ -46,7 +46,7 @@
 | **0.6.0 后（独立方向）** | **AI 电路语义编译层**：网表 → 类型化、类 C 的可读语言，AI 读编译结果而非原始网表；调研任务 `tasks/038_v4_review_line_research.md` 只登记 V3/V4 共用语义边界，不实施编译器 | 先定义语义合同与可验证还原，再逐规则/逐视图小批接入；不与 V4 适配同批 | — |
 | 远景 | **R5 SPICE**：岳 10-17 裁——等**原理图绘制过关** + **041 跨板网络**搞定后再开 | 冻结 | 两个前置 |
 
-## 当前主攻（2026-11-17：548P138 机制通过/整图未通过；P142/P143 未提交、P144 规划）
+## 当前主攻（2026-11-17：548P138 机制通过/整图未通过；P142/P143/P144 未提交、P145 规划）
 
 - **548P138 当前点（2026-11-17）**：3V3 联合座位经一次 cheapest 单脚 seed 反馈通过真实首次
   plans（chain=5、expansions=6、聚焦 77 passed），完整候选首拒前移为 C3.2/BUZZ；**整图未通过**。
@@ -55,8 +55,10 @@
 - **548P142/P143 机制通过、未提交（2026-11-17）**：detour+foreign使C3.2/BUZZ与3V3联合成立，
   多成员网不可裁决使完整543i恢复9 passed；P142回归3 passed，P143/P141合计18 passed。
   drawcompiler `87f82009…cd5473`，placement `0674eb38…96bb82`，证据 `evidence/548P143/README.md`。
-- **548P144 下一缺口（规划，未实施）**：只查C1.2固定terminal与y=-15导体/LED1_K名称盒，
-  任务书 `tasks/548p144_ground_label_terminal.md`。禁止移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验；
+- **548P144 固定glyph场景通过、未提交（2026-11-17）**：固定terminal glyph纳入port-columns的
+  scene.solids/bodies，C1.2消失；新测试3 passed、两项变异，drawcompiler `976a4c2c…b2ea`。
+- **548P145 下一缺口（规划，未实施）**：只查U1.18 local-label exception与LED2_K/LCD_SCK回放冲突，
+  任务书 `tasks/548p145_u18_label_replay.md`。禁止删除名称、移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验；
   只有真实 `ok=True` 才做逐脚/渲染/视觉。
 - **548P140 已由用户落地**：`cb44c2e` 一次性提交历史绘制批次，`4271fea` 完成0.6.2发布准备；
   原六批不重复执行。提交前集成13红转入后续小批，任务书 `tasks/548p140_draw_history_commits.md` §7。

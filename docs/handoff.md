@@ -1,10 +1,10 @@
 # 交接记忆 —— 换 harness / 开新会话先读这份
 
-> **当前交接（2026-11-17，548P143后）：整图下一首拒为C1.2标签/固定地旗**。P142的detour+foreign使C3.2与C1.1/U1.13的BUZZ冲突消失，P143按多成员网不可裁决修复CTS，完整543i为9 passed；P142回归3 passed。完整整图仍无候选，C1.2 `(-165,5)` 被y=-15导体/LED1_K名称盒覆盖。证据 `evidence/548P143/README.md`。
+> **当前交接（2026-11-17，548P144后）：整图下一首拒为U1.18名称盒**。P142 detour+foreign和P143多成员度量通过，P144把固定terminal glyph纳入port-columns的scene，C1.2消失；P142旧下一首拒断言已按证据更新为U1.18。完整整图仍无候选。证据 `evidence/548P144/README.md`。
 >
-> **当前生产与输入**：HEAD `e32737a`；drawcompiler SHA `87f82009ca85109faacd0bbccddf5cb98ef7207201f1cdc47444caf3f5cd5473`，placement SHA `0674eb3842529fe280d06dc59c426f9eda7a1789cd0a1c35b86e89244596bb82`，pagecompiler SHA `28b2907d8904da9917a64d3015ae8fd37619313abfaf6a6ee3987e7763628e1c`（P142/P143未提交）。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`，尚无完整候选。
+> **当前生产与输入**：HEAD `108e42d`；drawcompiler SHA `976a4c2cad08804f994466419950e498aae2296a49de0b87536a72a7a653b2ea`，placement SHA `0674eb3842529fe280d06dc59c426f9eda7a1789cd0a1c35b86e89244596bb82`，pagecompiler SHA `28b2907d8904da9917a64d3015ae8fd37619313abfaf6a6ee3987e7763628e1c`（P142/P143/P144未提交）。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`，尚无完整候选。
 >
-> **下一批只读 `tasks/548p144_ground_label_terminal.md`**：先捕获C1.2 glyph/lead、占用盒producer和LED1_K/U1.18名称关系，不得移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件未出候选，LCD automatic另列；P142/P143实现未提交，未做真机/全量/apply。
+> **下一批只读 `tasks/548p145_u18_label_replay.md`**：先捕获U1.18 far/bbox/run、LED2_K/LCD_SCK channel与名称回放，不得删除名称、移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件未出候选，LCD automatic另列；P142/P143/P144实现未提交，未做真机/全量/apply。
 >
 > **资产索引**：先读 [`docs/draw-assets.md`](draw-assets.md) 与 `evidence/draw-assets/manifest.json`；此前整理仅经批准将12个可再生目录送回收站，记录见`evidence/draw-assets/recycle-log.json`。
 

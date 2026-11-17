@@ -1,7 +1,8 @@
 # 548P144 — C1.2 固定地旗与标签房间
 
-> 状态：规划，未实施。P142/P143 联合与CTS机制已验收，当前真实下一首拒是C1.2。
-> 证据：`evidence/548P142/baseline-joint-foreign.log`、`evidence/548P143/README.md`。
+> 状态：**固定glyph已纳入标签场景，C1.2消失；整图仍未通过，下一首拒为U1.18**。
+> 新测试3 passed、两项变异均先红并恢复；P144未提交。下一批见 `tasks/548p145_u18_label_replay.md`。
+> 证据：`evidence/548P144/README.md`、`evidence/548P144/fixed-green.log`。
 
 ## ① 前因后果
 
@@ -12,10 +13,10 @@ P142 的 detour+foreign 联合使 C3.2 与 C1.1/U1.13 的 BUZZ 冲突消失，P1
 
 ## ② 当前树状态
 
-HEAD `e32737a`。P143 drawcompiler `87f82009ca85109faacd0bbccddf5cb98ef7207201f1cdc47444caf3f5cd5473`，
+HEAD `108e42d`。P144 drawcompiler `976a4c2cad08804f994466419950e498aae2296a49de0b87536a72a7a653b2ea`，
 placement `0674eb3842529fe280d06dc59c426f9eda7a1789cd0a1c35b86e89244596bb82`，
 pagecompiler `28b2907d8904da9917a64d3015ae8fd37619313abfaf6a6ee3987e7763628e1c`。
-P142/P143未提交实现保留，P125/P126/P59输入不变。
+P142/P143/P144未提交实现保留，P125/P126/P59输入不变。
 
 ## ③ 文件域与禁触清单
 
@@ -40,3 +41,12 @@ bridge/connector/dsh-plugin、真实工程或fixtures。
 
 子代理20分钟/40步，主代理约60步内收束。报告命令→真实汇总行→差异、SHA、证据路径、
 未做项和下一最小动作；不把拒绝前移当作完成。
+
+## 实测交卷
+
+- 基线 `3 failed in 82.60s`（首拒C1.2，helper不存在）；实现后 `3 passed in 138.69s`。
+- M1去掉scene注入：`1 failed, 2 passed in 189.61s`；M2只注入bodies不注入solids：
+  `1 failed, 2 passed in 209.45s`。两次均Copy-Item+SHA恢复至 `2c162510…ba072`。
+- 新增 `_seat_first_fixed_flag_boxes`，port-columns把固定glyph同时加入scene.solids/bodies；
+  不移动固定terminal，不改标签阈值或输入。
+- 首拒前移为U1.18 local-label exception；未做整图逐脚、渲染、视觉、真机、apply或提交。
