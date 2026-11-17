@@ -340,14 +340,12 @@ def test_the_name_stub_band_carries_no_foreign_copper_or_flag():
     assert hits == [], hits
 
 
-def test_without_the_switch_the_page_keeps_the_pre_548k_answer():
-    """去掉开关、只留 ``stubMin=40``：桩带不预留，页面回到能力引入前的读数。
+def test_without_the_switch_the_page_keeps_a_legal_candidate():
+    """去掉开关、只留 ``stubMin=40``：桩带不预留，但仍给出合法候选。
 
-    开关默认关闭，所以这一档就是**所有老页面**走的路径。本夹具在这一档的实测
-    读数（写进断言消息，免得把"被拒"误读成"测试坏了"）：0 候选、5 个变体被
-    readability 闸拒绝，归口 ``layout-unsat``，硬违规是 ``wire-through-body``
-    （``segments[6] + powerSymbols[5]``）。开关打开时同一夹具是 1 个
-    ``ok=True`` 的候选（上面两条）——两档读数不同，才是开关在起作用。
+    本夹具旧读数曾因本趟穿旗而拒绝；`_place_flag` 把本趟旗盒接入
+    `router.flag_walls` 后，穿旗这一生产缺陷已修，不能再把旧拒因当成合同。
+    真正的契约是：默认关闭时仍然能生成不穿旗的候选，而且开关前后几何不同。
     """
     spec = _spec(stub_lane_reserve=False)
     floor = dc._stated_stub_floor(spec)
@@ -356,16 +354,10 @@ def test_without_the_switch_the_page_keeps_the_pre_548k_answer():
     assert reserved is False, f"_stub_lane_reserved read {reserved!r}"
     assert "stubMin" in _document(stub_lane_reserve=False)["labelPolicy"]
     _circuit_, _same, _book, result = _compile(spec=spec)
-    readings = [
-        (item.category, item.subject, item.detail) for item in result.failures
-    ]
-    assert not result.ok, f"the switch must not be needed to compile: {readings}"
-    assert result.best() is None, f"a candidate came out without the switch: {readings}"
-    refused = [item for item in result.failures
-               if "the independent readability checker refused" in item.detail]
-    assert refused, f"no readability refusal among {readings}"
-    assert any("wire-through-body" in item.detail for item in refused), readings
-    assert {item.category for item in refused} == {"layout-unsat"}, readings
+    assert result.ok and result.best() is not None, result.failures
+    _label, _direction, _far, hits = _band_occupancy(result.best(), _circuit_, _book)
+    assert all(kind != "flag" for kind, _net, _box, _point in hits), hits
+    assert result.failures == []
 
 
 def test_the_canonical_form_leaves_the_switch_out_when_it_is_off():
