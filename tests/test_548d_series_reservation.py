@@ -185,10 +185,23 @@ def _budget():
     return pc._module_budget_for(budget.module_budget, budget)
 
 
-def _documents(declared: bool = True):
+def _documents(declared: bool = True, c1_flag_room: bool = False):
+    """The P32 documents; ``c1_flag_room`` moves C1 out of the flag deadlock.
+
+    2026-11-17（0.6.2）：`C1` 的默认座位是 `(30, 20)`，069 sec.1 的固定地旗闸要求
+    `C1.2` 的 GND 旗在四种朝向里都放得下 glyph + 名字行，而默认座位上四个方向都被
+    邻件/文字占满，整页在**旗阶段**就被拒（`net 'GND' … on C1.2 at (30, 20) … no
+    lead fits anywhere around that pad`），于是所有标签阶段用例都测不到。
+    `c1_flag_room=True` 用文档自己的 `userLocks` 把 C1 钉到 `(30, 60)`（同模块内
+    40 单位平移），旗闸由此可过；岛内其余件重排，**旧布局坐标（`R1_ROW`、绕行
+    245/215）随之失效**——那两条是旧布局的数字，不是机制，用它们的用例改成对新
+    布局实测值的断言（见 `test_548d_label_walls.py`）。
+    """
     circuit = CircuitSpec.from_dict(CIRCUIT_PAYLOAD)
     payload = dict(PRESENTATION_PAYLOAD)
     payload["seriesBranches"] = [dict(arm) for arm in ARMS] if declared else []
+    if c1_flag_room:
+        payload["userLocks"] = [{"partId": "C1", "x": 30.0, "y": 60.0}]
     return circuit, PresentationSpec.from_dict(payload)
 
 

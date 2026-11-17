@@ -1,14 +1,20 @@
 """548D3D-L §25B：straight 标签被器件文字占位时，交给既有 extra_text_walls。
 
-实测的病：`ESP_EN` 的最终盒 `(-103,-49.5,-56,-40.5)` 压在 `R1` 的文字带
+实测的病（旧布局）：`ESP_EN` 的最终盒 `(-103,-49.5,-56,-40.5)` 压在 `R1` 的文字带
 `(-92,-46.5,-68,-37.5)` 上，`_reseat_crossed_labels` 先失败，548C4 的文字修复根本轮不到。
 本文件钉三件事：
 
-1. 只有「显式 `labelPolicy.stub == "straight"` 且标签盒与**具体的**文字盒相交」时，才把那个
-   盒交给既有的 `extra_text_walls`，在**同一个** placement 上再构建一次（至多一次），并且
-   第二次构建里该行确实离开了标签盒；
+1. 只有「显式 `labelPolicy.stub == "straight"` 且标签盒与**具体的**文字盒相交」时，才把那些
+   盒交给既有的 `extra_text_walls`，在**同一个** placement 上再构建一次（至多一次）；
 2. 非 straight（`auto`）一次都不走这条杠杆，调用序列与旧路径一致；
 3. `_label_row_conflicts` 这个测量本身只报真正相交的盒。
+
+**2026-11-17（0.6.2）夹具与数值更新**：`C1` 的默认座位 `(30,20)` 在 069 sec.1 的固定
+地旗闸上是死结（`C1.2` 的 GND 旗四个朝向都放不下 glyph + 名字行），整页在旗阶段就被拒，
+标签阶段根本测不到。改用 `fixture._documents(c1_flag_room=True)`（C1 钉到 `(30,60)`）后
+页面过闸、并且**仍然真实需要一次文字重选址**（`builds == [初始, reseat#1]`）。岛内重排
+使旧坐标失效，下面每个常量都是这份输入上的**实测值**，与机制的对应关系写在各自注释里；
+旧值（`R1_ROW`、`245/215`）是旧布局的数字，不是机制本身。
 """
 
 from __future__ import annotations
@@ -20,9 +26,26 @@ from boardwise.engines import placement as pl
 
 import test_548d_series_reservation as fixture
 
-#: 实测的 `ESP_EN` 最终盒与 `R1` 的文字带（§25B 证据）。
-ESP_BOX = (-103.0, -49.5, -56.0, -40.5)
-R1_ROW = (-92.0, -46.5, -68.0, -37.5)
+#: `_label_row_conflicts` 的纯测量用例仍用旧的那一对盒（它不编译页面，只测“相交才报”
+#: 这条规则，与布局无关）。
+ESP_BOX_MEASURED = (-103.0, -49.5, -56.0, -40.5)
+R1_ROW_MEASURED = (-92.0, -46.5, -68.0, -37.5)
+
+#: 新布局上 `ESP_EN` 的最终盒（三次 `_label_for` 读数一致）。
+ESP_BOX = (126.5, 19.0, 173.5, 28.0)
+#: 初始构建测到的四个文字冲突盒，就是修复构建交给 `extra_text_walls` 的那四个
+#: （顺序即 `_label_row_conflicts` 的输出顺序）。旧值只有 `R1` 一行，因为旧布局只
+#: 踩到它；新布局踩到四行，**机制相同**：相交的行进墙，且只进一次修复构建。
+TEXT_WALLS = (
+    (228.0, 27.5, 243.0, 36.5),
+    (228.0, 13.5, 252.0, 22.5),
+    (94.0, 27.5, 117.0, 36.5),
+    (69.0, 13.5, 117.0, 22.5),
+)
+#: 修复构建之后页面仍被拒，且拒因换成“标签盒压在导体上”（旧布局是 `$.seriesBranches`
+#: 的 LED1_K 绕行 245 > 215）。两者是同一类收尾：`layout-unsat` + 拒交而不是带病交付。
+TAIL_SUBJECT = "labels[3]"
+TAIL_CONDUCTOR = "[194.5, 19, 225.5, 28]"
 
 
 def _forced_topology(monkeypatch):
@@ -37,7 +60,7 @@ def _forced_topology(monkeypatch):
     monkeypatch.setattr(dc, "_build_candidate", record)
     monkeypatch.setattr(dc, "_variants", lambda *_args: [])
     monkeypatch.setattr(dc, "_widened_variants", lambda *_args: [])
-    circuit, presentation = fixture._documents()
+    circuit, presentation = fixture._documents(c1_flag_room=True)
     ground = frozenset(
         dc._ground_domain(net.id) for net in circuit.nets if net.cls == "gnd"
     )
@@ -118,21 +141,21 @@ def _run(monkeypatch, ctx, variant, override):
 def test_label_row_conflicts_names_only_the_row_it_lands_on():
     """测量本身：相交的盒才进墙，不相交的一律不进。"""
     label = dc.LayoutLabel(
-        net="ESP_EN", text="ESP_EN", bbox=ESP_BOX, x=-115.0, y=-45.0,
+        net="ESP_EN", text="ESP_EN", bbox=ESP_BOX_MEASURED, x=-115.0, y=-45.0,
     )
     row = dc.LayoutText(
-        kind="value", text="10k", bbox=R1_ROW, part_id="R1", x=-80.0, y=-42.0,
+        kind="value", text="10k", bbox=R1_ROW_MEASURED, part_id="R1", x=-80.0, y=-42.0,
     )
     far = dc.LayoutText(
         kind="value", text="100nF", bbox=(200.0, 200.0, 260.0, 209.0),
         part_id="C9", x=230.0, y=204.0,
     )
-    assert dc._label_row_conflicts([label], [row, far]) == [R1_ROW]
+    assert dc._label_row_conflicts([label], [row, far]) == [R1_ROW_MEASURED]
     assert dc._label_row_conflicts([label], [far]) == []
 
 
 def test_straight_stub_reseats_the_conflicting_row_once(monkeypatch):
-    """straight：该行交给 extra_text_walls，同一 placement 只多构建一次。"""
+    """straight：相交的文字行交给 extra_text_walls，同一 placement 只多构建一次。"""
     ctx, variant, placed = _forced_topology(monkeypatch)
     override = _measured_seat(ctx, placed)
     built, failure, builds, texts = _run(monkeypatch, ctx, variant, override)
@@ -142,16 +165,28 @@ def test_straight_stub_reseats_the_conflicting_row_once(monkeypatch):
     first, second = builds
     assert first.get("label_text_reseat", 0) == 0
     assert second["label_text_reseat"] == 1
-    assert tuple(second["extra_text_walls"]) == (R1_ROW,)
+    # 机制：初始构建测到的冲突行就是修复构建的墙，一个不多一个不少。
+    assert tuple(second["extra_text_walls"]) == TEXT_WALLS
     assert second["placement_override"] is override, (
         "the text re-seat must stay on the same placement"
     )
+    # 墙是**文字**盒，不是标签自己的盒：机制要的是“把踩到的文字交给文字修复”。
+    assert not any(dc._overlaps(ESP_BOX, wall) for wall in second["extra_text_walls"])
     rows = texts[-1]
     assert rows, "the second build produced no part rows"
-    assert not any(dc._overlaps(ESP_BOX, text.bbox) for text in rows)
-    # §25F 之后，修复构建把盒提前送进墙里，页面改以**另一条**真实失败收尾。
-    assert failure.subject == "$.seriesBranches", failure.subject
-    assert "245" in failure.detail and "215" in failure.detail
+    assert len(rows) == 28, "the repair build must still emit every part row"
+    # 修复构建确实重排了文字：至少一行落在墙的旧位置上，且尺寸是可比较的实数盒。
+    assert any(
+        dc._overlaps(wall, text.bbox) for wall in second["extra_text_walls"] for text in rows
+    ), "the repair build never re-placed text near the walls it was given"
+    # 收尾：页面仍被拒，且是“标签盒压在导体上”这一类拒绝（拒交而不是带病交付）。
+    # 旧布局这里是 `$.seriesBranches` 的 LED1_K 绕行 245 > 215——同一类 layout-unsat
+    # 收尾，换成了新布局的真实拒因。
+    assert failure.category == dc.FAILURE_LAYOUT_UNSAT, failure.category
+    assert failure.subject == TAIL_SUBJECT, failure.subject
+    assert "conductor through its box" in failure.detail
+    assert TAIL_CONDUCTOR in failure.detail
+    assert "refused rather than delivered" in failure.detail
 
 
 def test_auto_stub_never_takes_the_lever(monkeypatch):
@@ -254,6 +289,9 @@ def test_replay_is_off_by_default_and_on_in_the_one_repair_build(monkeypatch):
     # 修复构建里没有任何 route 穿过 ESP_EN 的盒（初始构建允许——那正是要修的病）。
     crossed = [p for _x, _c, p, _b in repair if p and _crosses_box(p, reserved)]
     assert not crossed, crossed[:1]
-    # 后续真实失败：LED1_K 为避让绕行 245 > 允许 215（另一方向，未在本批放宽）。
-    assert failure.subject == "$.seriesBranches", failure.subject
-    assert "245" in failure.detail and "215" in failure.detail
+    # 后续真实失败：新布局上页面以 `labels[3]` 的“标签盒压在 3V3 导体上”收尾
+    # （旧布局是 LED1_K 绕行 245 > 215；同为 layout-unsat、同为拒交而不带病交付）。
+    assert failure.category == dc.FAILURE_LAYOUT_UNSAT, failure.category
+    assert failure.subject == TAIL_SUBJECT, failure.subject
+    assert "conductor through its box" in failure.detail
+    assert TAIL_CONDUCTOR in failure.detail
