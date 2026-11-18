@@ -332,3 +332,128 @@ describe('boardwise_draw_lint: offline replay only', () => {
     })).rejects.toThrow(/source/)
   })
 })
+
+/** The `boardwise.v4-facts/1` envelope `draw v4-facts -o` writes. */
+function factsPayload(): Record<string, unknown> {
+  return {
+    schema: 'boardwise.v4-facts/1',
+    source: { file: 'demo.eprj3', format: 'eprj3' },
+    sourceBoard: { uuid: 'board-1', title: 'Board1' },
+    meta: { pageCount: 1 },
+    pages: [{ uuid: 'page-1', name: 'P1' }],
+    instances: [{ designator: 'U1', instanceId: 'c-inst-u1', page: 'P1', rotation: 0 }],
+    symbols: [],
+    nets: [
+      { name: 'V33', class: 'power', members: ['U1.24'], pages: ['P1'] },
+      { name: 'GND', class: 'gnd', members: ['U1.23'], pages: ['P1'] },
+    ],
+    bus: { memberSemanticsProven: false, recordCounts: { BUS: 0, BUSENTRY: 0 } },
+    notes: ['cross-page connectivity is never proven by a shared name'],
+  }
+}
+
+describe('boardwise_draw_v4_facts: .eprj3 evidence reader', () => {
+  it('passes the file through -o and returns the whole envelope, never stdout', async () => {
+    const project = fixture('demo.eprj3', '')
+    const payload = factsPayload()
+    let outPath = ''
+    const mock = installSpawn((child, _command, args) => {
+      outPath = flagValue(args, '-o') as string
+      writeJson(outPath, payload)
+      child.out(JSON.stringify(payload) + 'x'.repeat(40 * 1024))
+      child.finish(0)
+    })
+
+    const value = await callObject('boardwise_draw_v4_facts', { file: project })
+
+    expect(value).toEqual(payload)
+    // The transport file is the plugin's own temp dir, never the caller's dir.
+    expect(outPath.startsWith(tmpdir())).toBe(true)
+    const argv = spawnedCommand(mock)
+    expect(argv.slice(1)).toEqual(['draw', 'v4-facts', '--file', project, '-o', outPath])
+    // It reads a project; it must not reach a live editor.
+    for (const liveFlag of ['--page', '--project', '--instance', '--port']) {
+      expect(argv).not.toContain(liveFlag)
+    }
+  })
+
+  it('passes --board, --profiles and --circuit verbatim when given', async () => {
+    const mock = installSpawn((child, _command, args) => {
+      writeJson(flagValue(args, '-o') as string, factsPayload())
+      child.finish(0)
+    })
+    const project = fixture('demo.eprj3', '')
+    const profiles = fixture('profiles.json')
+    const circuit = fixture('circuit.json')
+
+    await callObject('boardwise_draw_v4_facts', {
+      file: project, board: 'Board1', profiles, circuit, writeCircuit: true,
+    })
+
+    const argv = spawnedCommand(mock)
+    expect(flagValue(argv, '--board')).toBe('Board1')
+    expect(flagValue(argv, '--profiles')).toBe(profiles)
+    expect(flagValue(argv, '--circuit')).toBe(circuit)
+    expect(argv).toContain('--out-circuit')
+  })
+
+  it('writes the optional documents into out and names them in dshArtifacts', async () => {
+    const out = join(tempDir(), 'facts')
+    installSpawn((child, _command, args) => {
+      writeJson(flagValue(args, '-o') as string, factsPayload())
+      child.finish(0)
+    })
+
+    const value = await callObject('boardwise_draw_v4_facts', {
+      file: fixture('demo.eprj3', ''),
+      out,
+      writeCircuit: true,
+      writePresentation: true,
+      writeEvidence: true,
+    })
+
+    expect(value['schema']).toBe('boardwise.v4-facts/1')
+    expect(value['dshArtifacts']).toEqual({
+      circuit: join(out, 'circuit.json'),
+      presentation: join(out, 'presentation.json'),
+      evidence: join(out, 'evidence.json'),
+    })
+    expect(existsSync(out)).toBe(true)
+  })
+
+  it('adds no extra key at all when nothing is written', async () => {
+    installSpawn((child, _command, args) => {
+      writeJson(flagValue(args, '-o') as string, factsPayload())
+      child.finish(0)
+    })
+    const value = await callObject('boardwise_draw_v4_facts', { file: fixture('demo.eprj3', '') })
+    expect(value['dshArtifacts']).toBeUndefined()
+  })
+
+  it('keeps exit 2 as an error: an unreadable project returns no facts', async () => {
+    const mock = installSpawn(child => {
+      child.err('draw v4-facts: not an EasyEDA .epro2 archive')
+      child.finish(2)
+    })
+    await expect(callObject('boardwise_draw_v4_facts', { file: fixture('demo.eprj3', '') }))
+      .rejects.toThrow(/exit 2/)
+    expect(mock).toHaveBeenCalled()
+  })
+
+  it('refuses an envelope that is not boardwise.v4-facts/1', async () => {
+    installSpawn((child, _command, args) => {
+      writeJson(flagValue(args, '-o') as string, { ...factsPayload(), schema: 'boardwise.v4-facts/2' })
+      child.finish(0)
+    })
+    await expect(callObject('boardwise_draw_v4_facts', { file: fixture('demo.eprj3', '') }))
+      .rejects.toThrow(/schema/)
+  })
+
+  it('refuses a missing project before spawning anything', async () => {
+    const mock = installSpawn(child => child.finish(0))
+    await expect(callObject('boardwise_draw_v4_facts', {
+      file: join(tempDir(), 'missing.eprj3'),
+    })).rejects.toThrow(/file not found/)
+    expect(mock).not.toHaveBeenCalled()
+  })
+})

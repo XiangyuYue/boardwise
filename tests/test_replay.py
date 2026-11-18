@@ -485,6 +485,89 @@ def test_an_annotated_wire_end_is_a_terminal():
     assert not any(v.code == "ENDPOINT_NOT_TERMINAL" for v in with_label)
 
 
+# --------------------------------------------------------------------------
+# a net label *inside* a run names that run — and only that run
+# --------------------------------------------------------------------------
+
+
+def _two_run_model():
+    """One part, one net, two runs: each run can end free on its own."""
+    from boardwise.core.model import Component, DesignModel, Net, Pin
+
+    model = DesignModel()
+    model.components["U1"] = Component(
+        uid="u1",
+        designator="U1",
+        pins=[Pin(number="1", name="", net="A"), Pin(number="2", name="", net="A")],
+    )
+    model.nets["A"] = Net(name="A", pins=[("U1", "1"), ("U1", "2")])
+    return model
+
+
+def _two_run_page(label_net):
+    """Two runs of one net; the first ends free at x=200, the second at x=300.
+
+    The label (when given) sits at x=160 on the **interior** of the first run —
+    the same shape the V4 reference page repeats five times (P47: free end
+    at x=530, same-net label at x=580 on the same horizontal wire).
+    """
+    from boardwise.parsers.schematic import (
+        NetLabelAnchor,
+        PageLayout,
+        PlacedPart,
+        WireRun,
+    )
+
+    return PageLayout(
+        parts=[PlacedPart(designator="U1", x=100.0, y=100.0, rotation=0.0, mirror=False)],
+        wires=[
+            WireRun(group="g1", net="A", points=[(100.0, 100.0), (200.0, 100.0)]),
+            WireRun(group="g2", net="A", points=[(100.0, 130.0), (300.0, 130.0)]),
+        ],
+        labels=(
+            [NetLabelAnchor(net=label_net, x=160.0, y=100.0, rotation=0.0)]
+            if label_net
+            else []
+        ),
+    )
+
+
+def _two_run_plan(label_net):
+    return build_replay_plan(
+        _two_run_model(),
+        _two_run_page(label_net),
+        sheet_frame_from_bbox(L.Rect(0.0, 0.0, 1170.0, 825.0)),
+        {"U1": {"1": (0.0, 0.0), "2": (0.0, 30.0)}},
+        strategy="text",
+    )
+
+
+def test_a_label_inside_a_run_names_that_run_alone():
+    """A same-net label in a run's interior names that run: its two ends are
+    terminals, while the unnamed sibling run of the SAME net keeps its own
+    floating end (one refusal, not zero and not two)."""
+    plan = _two_run_plan("A")
+    dx = plan.placements[0].x - 100.0
+    dy = plan.placements[0].y - 100.0
+    hits = [v for v in plan.violations if v.code == "ENDPOINT_NOT_TERMINAL"]
+    assert len(hits) == 1, [v.detail for v in hits]
+    assert f"({300.0 + dx:.0f},{130.0 + dy:.0f})" in hits[0].detail, (
+        "the refusal must be the unnamed run's free end"
+    )
+    assert all(
+        f"({200.0 + dx:.0f},{100.0 + dy:.0f})" not in v.detail for v in hits
+    ), "the named run's free end must not be refused"
+
+
+def test_an_internal_label_names_only_its_own_net():
+    """Reverse proof: with no label, or with a foreign net's label in the same
+    spot, nothing is released and both floating ends are still counted."""
+    without = [v for v in _two_run_plan(None).violations if v.code == "ENDPOINT_NOT_TERMINAL"]
+    assert len(without) == 2, [v.detail for v in without]
+    foreign = [v for v in _two_run_plan("B").violations if v.code == "ENDPOINT_NOT_TERMINAL"]
+    assert len(foreign) == 2, [v.detail for v in foreign]
+
+
 def test_the_frame_override_moves_the_sheet_edge():
     model = _synthetic_two_pin_model()
     pins = {("U1", "1"): (0.0, 0.0), ("U1", "2"): (100.0, 0.0)}

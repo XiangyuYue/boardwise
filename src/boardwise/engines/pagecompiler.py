@@ -186,6 +186,7 @@ __all__ = [
     "PageRejection",
     "compile_page",
     "page_layered_key",
+    "page_presentation_view",
     "wants_page",
 ]
 
@@ -4579,6 +4580,15 @@ def _page_presentation_view(
     offsets: Mapping[str, tuple[float, float]],
     merged: LayoutPlan | None = None,
 ) -> PresentationSpec:
+    return page_presentation_view(ctx.presentation, ctx.modules, offsets, merged)
+
+
+def page_presentation_view(
+    presentation: PresentationSpec,
+    modules: Sequence[PresentationModule | PageModule],
+    offsets: Mapping[str, tuple[float, float]],
+    merged: LayoutPlan | None = None,
+) -> PresentationSpec:
     """The presentation as the *page* reads it: the locks translated with their modules.
 
     A lock inside a module is honoured inside that module (the module compile
@@ -4595,11 +4605,11 @@ def _page_presentation_view(
     module's, and a module lock on the same part still checks it).
     """
     owner: dict[str, str] = {}
-    for module in ctx.modules:
+    for module in modules:
         for part_id in module.parts:
             owner[part_id] = module.id
     locks: list[UserLock] = []
-    for lock in ctx.presentation.user_locks:
+    for lock in presentation.user_locks:
         if lock.is_page:
             part = merged.part(lock.part_id) if merged is not None else None
             locks.append(UserLock(
@@ -4613,7 +4623,7 @@ def _page_presentation_view(
             part_id=lock.part_id, x=lock.x + dx, y=lock.y + dy,
             rotation=lock.rotation,
         ))
-    return dataclasses.replace(ctx.presentation, user_locks=locks)
+    return dataclasses.replace(presentation, user_locks=locks)
 
 
 def _no_candidate_failures(result: PageCompileResult) -> list[GrammarFailure]:

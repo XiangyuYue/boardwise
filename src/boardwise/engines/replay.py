@@ -34,6 +34,7 @@ and when no measurement is available the replay refuses instead of guessing.
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from boardwise.core.geometry import transform_point as _transform_point
@@ -54,8 +55,8 @@ from boardwise.engines.generate import (
 )
 from boardwise.engines.layout import Placement, Rect, RoutedNet, Violation
 from boardwise.parsers.schematic import (
+    NetLabelAnchor,
     PageLayout,
-
 )
 
 #: The page offset is snapped to this lattice so pins stay on the wire grid.
@@ -400,6 +401,55 @@ def _resolve_run_nets(
     return out
 
 
+def _run_ends_named_from_inside(
+    routes: list[RoutedNet],
+    labels: list[NetLabelAnchor],
+    to_page: Callable[[float, float], tuple[float, float]],
+) -> set[tuple[float, float]]:
+    """Endpoints of the runs a same-net label names from the run's *interior*.
+
+    The terminality check (:func:`layout.validate_full`) treats a wire end as a
+    legal terminal when an annotation point sits **on that end**, because a
+    name is what the human terminates a wire with. The reference page also ends
+    runs the other way round: the net label sits somewhere along the run and
+    the wire's free end is elsewhere — measured on P47, five signal runs end at
+    ``x=530`` while their label sits at ``x=580`` on the same horizontal wire.
+    The label names the *run*, so both of that run's ends are terminals.
+
+    Naming is a property of **one polyline**, never of the whole route: only
+    the polyline whose interior carries a label of the same net donates its two
+    endpoints here, so an unnamed sibling run of the same net keeps its own
+    floating end. A label of another net names nothing (``route.net !=
+    label.net``), and this function adds no points for it.
+
+    ``to_page`` is the replay's own page offset, so the label's golden position
+    is compared to the replayed geometry in the same canvas space. The points
+    are rounded to 2 decimals, the form ``validate_full`` compares.
+    """
+    named: set[tuple[float, float]] = set()
+    for label in labels:
+        if not label.net:
+            continue
+        point = to_page(label.x, label.y)
+        for route in routes:
+            if route.net != label.net:
+                continue
+            for poly in route.polylines:
+                if len(poly) < 2:
+                    continue
+                on_this_run = any(
+                    layout._point_on_segment(
+                        point, layout.Segment(a[0], a[1], b[0], b[1], route.net)
+                    )
+                    for a, b in zip(poly, poly[1:])
+                )
+                if not on_this_run:
+                    continue
+                named.add((round(poly[0][0], 2), round(poly[0][1], 2)))
+                named.add((round(poly[-1][0], 2), round(poly[-1][1], 2)))
+    return named
+
+
 def build_replay_plan(
     model: DesignModel,
     page: PageLayout,
@@ -659,6 +709,7 @@ def build_replay_plan(
         {(round(step.x, 2), round(step.y, 2)) for step in plan.net_names}
         | {(round(label.x + dx, 2), round(label.y + dy, 2)) for label in page.labels}
         | {(round(flag.x + dx, 2), round(flag.y + dy, 2)) for flag in page.flags}
+        | _run_ends_named_from_inside(routes, page.labels, to_page)
     )
     members_by_net = {
         name: {des for des, _pin in net.pins} for name, net in model.nets.items()

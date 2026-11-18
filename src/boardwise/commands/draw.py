@@ -221,6 +221,15 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
         help="Which compiled candidate to land (default: 0, the ranked leader).",
     )
     draw_plan.add_argument(
+        "--layout", default=None, metavar="PATH",
+        help=(
+            "Preflight this saved PageLayoutPlan without compiling again. The file "
+            "selects the candidate; --candidate must remain 0. Specs and profiles "
+            "are still required and checked. The sheet defaults to the document; "
+            "an explicit --page-box must match it."
+        ),
+    )
+    draw_plan.add_argument(
         "--lcsc", action="append", default=None, metavar="R1=C25744",
         help=(
             "The LCSC number of a part the circuit spec does not carry one for. "
@@ -704,6 +713,89 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
     islands_apply.add_argument(
         "--json", dest="json_path", metavar="PATH",
         help="Write the machine-readable apply report (one row per judgement).",
+    )
+    draw_v4_facts = draw_sub.add_parser(
+        "v4-facts",
+        help="Read an .eprj3 project and emit evidence-bound V4 net/pin facts.",
+        description=(
+            "Offline, read-only: preserve page/flag/label provenance and raw Pin Type "
+            "values without guessing electrical direction, voltage, bus membership or "
+            "cross-page connectivity. The JSON uses schema boardwise.v4-facts/1 and "
+            "can feed the thin semantic functions in engines.v4facts."
+        ),
+    )
+    draw_v4_facts.add_argument(
+        "--file", required=True, metavar="PATH",
+        help="The .eprj3 folder project (or its index file) to read.",
+    )
+    draw_v4_facts.add_argument(
+        "--board", default="", metavar="UUID_OR_TITLE",
+        help="Board to read in a multi-board project (required when several boards exist).",
+    )
+    draw_v4_facts.add_argument(
+        "--profiles", default="", metavar="PATH",
+        help=(
+            "Optional measured symbol library. LCSC ids bind CircuitSpec parts to "
+            "these symbolRefs instead of relying on device_uuid."
+        ),
+    )
+    draw_v4_facts.add_argument(
+        "-o", "--out", dest="out_path", default=None, metavar="PATH",
+        help="Write the deterministic JSON here (default: print it to stdout).",
+    )
+    draw_v4_facts.add_argument(
+        "--circuit", default="", metavar="PATH",
+        help=(
+            "Optional CircuitSpec to enrich with matching flag evidence. "
+            "Requires --out-circuit; nets and members are never invented."
+        ),
+    )
+    draw_v4_facts.add_argument(
+        "--out-circuit", default="", metavar="PATH",
+        help=(
+            "Write an enriched CircuitSpec here. With --circuit, enrich that base; "
+            "without it, first build the full spec from the V4 DesignModel."
+        ),
+    )
+    draw_v4_facts.add_argument(
+        "--out-evidence", default="", metavar="PATH",
+        help=(
+            "Write a boardwise.v4-presentation-evidence/1 sidecar: page-attributed "
+            "instances, net evidence and open questions, not a module assignment."
+        ),
+    )
+    draw_v4_facts.add_argument(
+        "--out-presentation", default="", metavar="PATH",
+        help=(
+            "Write a page-grouped PresentationSpec seed for draw islands propose. "
+            "It is not a functional partition: islands/roles/flow stay unstated."
+        ),
+    )
+    draw_v4_facts.add_argument(
+        "--out-profiles", default="", metavar="PATH",
+        help=(
+            "Write the profile book augmented with V4 instance rotation/mirror "
+            "evidence (requires --profiles; does not re-measure text geometry)."
+        ),
+    )
+
+    draw_move_propose = draw_sub.add_parser(
+        "move-propose",
+        help="Propose an agent-adjusted move from V4 evidence (no live writes).",
+        description=(
+            "Validate designators, grid delta and a semantic reason, then write an "
+            "agent-adjusted work order. Target occupancy and netlist identity stay "
+            "unproven until the existing edit plan/apply --move path judges them."
+        ),
+    )
+    draw_move_propose.add_argument("--evidence", required=True, metavar="PATH")
+    draw_move_propose.add_argument("--designators", required=True, metavar="R7,C9")
+    draw_move_propose.add_argument("--dx", required=True, metavar="UNITS")
+    draw_move_propose.add_argument("--dy", required=True, metavar="UNITS")
+    draw_move_propose.add_argument("--reason", required=True, metavar="TEXT")
+    draw_move_propose.add_argument(
+        "-o", "--out", dest="out_path", default=None, metavar="PATH",
+        help="Write the work order here (default: print it to stdout).",
     )
 
 

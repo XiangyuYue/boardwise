@@ -213,10 +213,11 @@ def check_grid(group: Sequence[Part], dx: float, dy: float) -> None:
 def _far_points(geometry: Any, exclude: Iterable[str]) -> list[tuple[str, str]]:
     """``(kind, what)`` for every non-wire primitive sitting on the page.
 
-    Used to refuse a boundary wire whose far end is attached to something this
-    slice cannot move: a net label or a net flag. A wire's far end that lands on
-    another component's *pin* is the ordinary case and is allowed — that pin is
-    not moving, so the redrawn wire simply reaches it again.
+    Used to refuse a wire (internal or boundary) that has one of these attached to
+    **any** of its reported points: a net label, a net flag, or another part's
+    origin. A wire's point that lands on another component's *pin* is the ordinary
+    case and is allowed — that pin is not moving, so the redrawn wire simply
+    reaches it again.
     """
     out: list[tuple[str, str]] = []
     skip = set(exclude)
@@ -243,6 +244,7 @@ def _redraw_field(
     group: Sequence[Part],
     net: str,
     *exclude: tuple[float, float],
+    pins: Mapping[str, Mapping[str, tuple[float, float]]] | None = None,
 ) -> addcomponent.ObstacleField:
     """The obstacle field a redrawn wire is routed against (112).
 
@@ -264,8 +266,12 @@ def _redraw_field(
     field = addcomponent.avoid_from_geometry(geometry, net)
     free = {(round(point[0], 3), round(point[1], 3)) for point in exclude}
     free |= {(round(part.x, 3), round(part.y, 3)) for part in group}
+    pin_points = {
+        (round(point[0], 3), round(point[1], 3))
+        for part in group for point in (pins or {}).get(part.designator, {}).values()
+    }
     kept = tuple(
-        point for point in field.blocked
+        point for point in (*field.blocked, *sorted(pin_points))
         if (round(point[0], 3), round(point[1], 3)) not in free
     )
     return addcomponent.ObstacleField(
@@ -289,8 +295,11 @@ def plan_wires(
     Internal (both ends on group pins) → shifted by the delta, same shape.
     Boundary (one end on a group pin) → redrawn orthogonally from the moved pin to
     the **original far point**. Anything else that touches a group pin — a T
-    through the pin, a far end on a label or a flag, more than one wire ending on
-    the same pin — is a refusal that names it (v1 does not guess, 037 §一).
+    through the pin, more than one wire ending on the same pin — is a refusal that
+    names it (v1 does not guess, 037 §一). A label, a flag or another part's origin
+    sitting on **any** reported point of the wire is likewise a refusal: a redraw is
+    an orthogonal rebuild that would drop it (047), so it is refused before either
+    route is attempted.
     """
     group_pins: dict[tuple[float, float], tuple[str, str]] = {}
     for part in group:
@@ -344,6 +353,29 @@ def plan_wires(
                 + ", ".join(f"{name}.{number}" for (name, number), _point in distinct)
                 + ") — v1 不猜：把这条线拆成一条一段再移动"
             )
+        # 047: the attachment test is about **every** reported point, not only the
+        # far end a boundary redraw happens to pick. The host reports a wire as a
+        # point *set* (see above), so a flag or a label sitting on a T or a bend is
+        # as real a connection as one at the end — and the redraw is an orthogonal
+        # rebuild, not a replay, so nothing off the two legs survives. The group's
+        # own primitives are already out of `strays`. Both branches redraw, so this
+        # is judged here, before either route is attempted.
+        attached: list[tuple[str, tuple[float, float]]] = []
+        for kind, what in strays:
+            point = next((item for item in points if _at_point(what, item)), None)
+            if point is not None:
+                attached.append((f"{kind} {what}", point))
+        if attached:
+            raise MoveRefused(
+                f"the wire {segment.primitive_id} carries a non-group attachment on "
+                "one of its reported points: "
+                + "; ".join(
+                    f"{what} on ({point[0]:g},{point[1]:g})" for what, point in attached
+                )
+                + " — 线点上的附着不会被重画保留（重画是正交重建，不是原路径回放）；"
+                "label / netflag / 认不出的图元 v1 一律拒绝（本机 sch_PrimitiveNetLabel "
+                "连读都不存在，SKILL 坑 9）"
+            )
         if len(distinct) == 2:
             (name_a, pin_a), point_a = distinct[0]
             (name_b, pin_b), point_b = distinct[1]
@@ -355,7 +387,7 @@ def plan_wires(
             # about the rest of the page: a body it slid onto, or a neighbour's.
             route = addcomponent.wire_route(
                 start_a, start_b,
-                avoid=_redraw_field(geometry, group, segment.net, start_a, start_b),
+                avoid=_redraw_field(geometry, group, segment.net, start_a, start_b, pins=pins),
             )
             if route is None:
                 raise MoveRefused(
@@ -373,28 +405,21 @@ def plan_wires(
             ))
             continue
         (name, number), pin_point = distinct[0]
+        # Only a real endpoint can be the far end of this boundary wire. Taking
+        # the Euclidean-farthest *point* can select a bend and leave the actual
+        # far pin dangling (measured on the V4 LED_A bent carrier).
         far_point = max(
-            points, key=lambda item: (item[0] - pin_point[0]) ** 2 + (item[1] - pin_point[1]) ** 2
+            (points[0], points[-1]),
+            key=lambda item: (item[0] - pin_point[0]) ** 2 + (item[1] - pin_point[1]) ** 2,
         )
         if patchpin.same_point(far_point, pin_point):
             raise MoveRefused(
                 f"the wire {segment.primitive_id} on {name}.{number} reports no other point, "
                 "so there is nowhere to redraw it to — v1 不猜"
             )
-        attached = [
-            f"{kind} {what}" for kind, what in strays
-            if _at_point(what, far_point)
-        ]
-        if attached:
-            raise MoveRefused(
-                f"the wire {segment.primitive_id} leaves the group and ends on "
-                + "; ".join(attached)
-                + " — 边界附着只认脚（wire 端点落在脚上）；label / netflag / 认不出的图元 "
-                "v1 一律拒绝（本机 sch_PrimitiveNetLabel 连读都不存在，SKILL 坑 9）"
-            )
         start_at = (pin_point[0] + dx, pin_point[1] + dy)
         route = addcomponent.wire_route(
-            start_at, far_point, avoid=_redraw_field(geometry, group, segment.net, start_at),
+            start_at, far_point, avoid=_redraw_field(geometry, group, segment.net, start_at, pins=pins),
         )
         if route is None:
             raise MoveRefused(

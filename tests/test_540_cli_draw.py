@@ -21,8 +21,14 @@ TOP_COMMANDS = [
     "pcb",
     "lint", "parts", "bom", "pintable", "validate", "arch", "intent", "config",
 ]
-DRAW_PARSER_COMMANDS = ["compile", "plan", "apply", "discard", "lint", "propose", "islands"]
-DRAW_REGISTRY_COMMANDS = ["compile", "plan", "apply", "discard", "propose", "lint", "islands"]
+DRAW_PARSER_COMMANDS = [
+    "compile", "plan", "apply", "discard", "lint", "propose", "islands", "v4-facts",
+    "move-propose",
+]
+DRAW_REGISTRY_COMMANDS = [
+    "compile", "plan", "apply", "discard", "propose", "lint", "islands", "v4-facts",
+    "move-propose",
+]
 
 
 def _subparsers(parser: argparse.ArgumentParser):
@@ -67,7 +73,8 @@ def test_owner_manifest_covers_the_two_command_modules():
     # three PCB rule modules and 038Y5 added `pcb_gate.py` (assembly). The
     # count is pinned in all three command-module anchors on purpose.
     # 550 added two more (`core/netpath.py` shared, `pcb_netpath.py` assembly).
-    assert len(data["modules"]) == 154
+    # beta 2 adds agentadjusted (draw), v4facts (draw), v4circuitspec (shared).
+    assert len(data["modules"]) == 157
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

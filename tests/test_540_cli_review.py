@@ -74,7 +74,8 @@ def test_owner_manifest_covers_review_commands():
     # 550: the manifest is 154 rows — 038Y5's 152 plus `core/netpath.py`
     # (shared) and `pcb_netpath.py` (assembly). The count is pinned in all
     # three command-module anchors on purpose.
-    assert len(data["modules"]) == 154
+    # beta 2 adds agentadjusted (draw), v4facts (draw), v4circuitspec (shared).
+    assert len(data["modules"]) == 157
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

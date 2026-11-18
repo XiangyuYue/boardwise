@@ -4,6 +4,116 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-11-19] 0.6.3 beta 2 本地包与当前工作树提交
+
+- 用户授权打包beta 2并提交当前修复/未提交内容，随后明确禁止推送。57项源码/测试/文档纳入：A/B/C绘制可靠性、V4 facts/移动证据、移动/回放修复与550B只读实例探针；临时日志、lock、构建产物、工程容器不入库。CLI/根包/DSH统一`0.6.3-beta.2`，connector维持同系列0.6.2。
+- 集成独立审计修复选中重复位号、同料号多profile歧义及已有CircuitSpec同时输出profiles的崩溃；父独立三次磁盘变异先红后copy+SHA恢复。owner与CLI合同漂移修复；全量另检出C2误及真正单脚网，只按既有root成员数收窄helper及4处调用，保留跨岛切片实际接线，恢复原几何指纹与通道数量，未改旧断言凑过。
+- 最终全量：`python .tmp_release_063b2/full_r5.py`，实际pytest `tests/ -q -n 4 --dist loadfile --basetemp=.tmp_pt_063b2_r5 --durations=50 --durations-min=1.0 --junitxml=.tmp_perf_pytest/junit-063b2-r5.xml` → **11756 passed,22 skipped,2 xfailed in2086.45s(34:46)**。connector **846 passed**，DSH **193 passed/1 skipped**，两端typecheck/build通过；Rust fmt/clippy通过、**177 passed/4 ignored**。修后独立聚焦 **65 passed in18.62s**，父退root资格 **4failed3passed**、禁载线 **2failed3passed**、owner锚退154 **3failed**，均恢复SHA。
+- 执行失误如实保留：首轮因新CLI崩溃45%主动停止；次轮30分钟上限在97%超时。用户指出全量近40分钟后改90分钟，完整第三轮35分钟8红（PATH1/计数3/载线4）已修；第四轮basetemp含`verified`造成7条全输出关键字假红，212.8秒主动停止；最终中性r5全绿。没有skip/xfail掩红、加worker或降低发布闸。全量重跑与影响面漏算造成额外耗时，后续使用实际时长及中性临时批号。
+- 最终exe已重构建：版本、隔离随机端口54383自动拉起/doctor、两端skill及各5份references逐字节同步通过；无connector时status/doctor预期exit1，不冒充现场全绿。仅停止本批PID23292并核端口闭。实际打包DSH lib调用新exe保存候选plan **ok=true/exit0**，12工具登记。发布件3/3及526个exe压缩流、解包正文扫描无命中；提交钩子不跳过。
+- 交付路径`outputs/releases/0.6.3-beta.2/boardwise-0.6.3-beta.2-windows.zip`，真实证据/manifest/SHA见`evidence/release-063-beta2/`与包内。现有61190旧daemon保留；其test V4/P48只读lint **0E/0W/9I**，不等于新三件套激活。实际DSH应用端到端/service名称冲突仍待用户本地试跑，P48已完成参考不重画，不做eprj2/P145。
+- Branch main；记录时HEAD `75347ab53068a5efe3c1cbce454474dff113e6d9`，本条随用户授权的本地beta 2提交纳入，最终commit号写包内及证据manifest；无push/tag/公开发布/用户环境安装/设计写。3个复用子代理分别负责元数据/窄修、独立审计、歧义与载线修复；父亲看diff、独立变异/包内/隔离进程验收。跨压缩总步骤与usage不可准确重建，不虚报预算内；本轮明显超小批预算，原因和每轮真实读数留证，自己起的测试/隔离daemon均已退出。
+
+## [2026-11-18] 绘制可靠性C1/C2：普通标签真实载线合同
+
+- 3件2岛最小输入真实复现compile成功但plan拒DATA_BUS；父修前独立1 failed/1 passed，保存页CLI exit5。只修显式stubLaneReserve的普通非service标签，复用原预留、carrier输出及文字墙反馈，不新建router或放宽规则。默认关闭四候选指纹保持，也保留原默认路径失败。
+- 新回归5条钉实际compiler/consumer载线同形、40/60直线长度、改网名、模块平移、逐脚分区、生产名称行/旗标/可读性；根独立固定输入40地板4/4候选、60地板2/2候选计划通过。合成渲染亲看，不替代宿主原生视觉；未落图、未安装到DSH或发布。
+- 父最终聚焦命令见`evidence/draw-reliability-c/README.md`：核心/保存page入口/layer **70 passed,1 warning in37.07s**；local/paired/service代表邻域 **10 passed,1 warning in38.80s**。中间八文件180秒超时无汇总，不计绿；新测试symbols属性笔误两红已修并复验，没有削断言。既有owner三红/CLI合同漂移保留，不报全仓绿。
+- 父最终三磁盘变异：禁实际输出 **2failed/3passed**、禁floor **4setup errors/1passed**、禁名行反馈 **2setup errors/3passed**；均原生产拒绝或实际几何合同检出，逐轮copy+SHA恢复。额外方向覆盖变异仍 **5passed**，已删该6行，未倒造测试。生产SHA `339322871cc676ac1f378c6adc919d918f05a2f3f8f3786720b3a4eea772e1a3`，新测试SHA `c09446e26799ad31ad7e616e52a1ec55b85195692f78bd66386978186250c792`。
+- 更新handoff/draw-line/方案；下一最小批离线回放原会话失败输入，service ESP_RXD/ESP_EN冲突、auto形状、真实新模块/原生视觉/DSH端到端仍未验；不重画药箱、不重启P145、不做eprj2。启用后合成compile约3.4/3.9秒，比旧0.38秒假绿更贵，计划约1–2毫秒，不宣传整页提速。
+- 收尾文档检查 **52 passed,1 warning in2.22s**，限定diff-check退出0、进度标题计数1；真实官方CLI入口读保存页exit0，生成3件11线4旗计划，无apply。两次错误Python入口加载失败已留日志，核pyproject后改正。删冗余方向后的全部候选几何与删前一致，最终compile4.37/4.80秒（默认off0.45秒）；关键日志/产物已复制`evidence/draw-reliability-c/accepted/`长期保留。
+- 收尾61190有既存Python PID57352监听（20:04:54启动，早于本C2），连接者EDA PID48212自00:15运行；本批未启动、未关闭这份共享进程，不声称端口已停。Get-CimInstance命令行枚举拒绝访问，仅Get-Process核实名称/路径/启动时间；本批受控测试子进程已结束。
+- 主代理独立验收；2个串行子代理分别做C1挖洞与C2实现/修剪，无再次派生。完整模型步骤/usage不可读，压缩前后总数不能准确重建，不能宣称预算内；180秒超时、M4仍绿与一次文档patch上下文不符均留证。无本批daemon/watcher残留、无Git写/删除/移动/真机/全量。Branch main，HEAD `75347ab53068a5efe3c1cbce454474dff113e6d9`，混合未提交保留。
+
+## [2026-11-18] 绘制可靠性A/B源码修复与独立验收（C未实施）
+
+- 用户“开始修吧”授权分批实施。A校正draw-assets/draw-line/handoff默认路由：P48已完成参考、P145历史暂停、547A旧逻辑草图不可落图，保留历史证据。现有doc_claims **52 passed**，86个本地链接零缺失。
+- B1新增`draw plan --layout candN.page.json`，复用既有PageLayoutPlan/module_plan，无新builder/router。源双hash、profile、分区、当前check_page/check、模块局部锁原变换、live census/pool/findings/占用检查保留；现场不可读返回unknown/exit3，不静默重排。真实合成一次compile产8候选，全部消费新增compile调用0。合同仅更新官方生成draw.plan节点，其他旧漂移不混入。
+- 父独立命令：`C:/Python314/python.exe -m pytest tests/test_draw_plan_saved_page.py tests/test_057_draw_page_cli.py tests/test_057_page_offline.py tests/test_540_cli_draw.py -q --basetemp=.tmp_pt_draw_page_parent_final` → **97 passed, 1 warning in17.65s**。父磁盘变异额外compile→1 failed/18 deselected；禁源比较→2 failed/17 deselected；逐轮copy恢复CLI SHA `2fdc004986f29bd261c51494a5b7ecb2bf15069250ad8dad2f23dffe84cd7cef`。证据 `evidence/draw-reliability-b1/`。
+- B2在旧注册末尾追加离线`boardwise_draw_plan`，四输入+可选输出目录，仅运输`draw plan --layout`完整JSON（包括exit5拒绝），不在TS重算判断。父`node node_modules/vitest/vitest.mjs run tests/draw-plan.spec.ts tests/draw-tools.spec.ts tests/register.spec.ts --maxWorkers=1` → **50 passed/3files，928ms**；实现者typecheck/build均exit0，生成物仅draw-tools.js和对应声明变化。父两磁盘变异去layout/禁exit5分别1 failed/16 skipped，copy恢复TS SHA `3319c765e535bddcbf547a4ce5983e3ff8c9668f6e08f6e810b029e3d7903ae3`；证据 `evidence/draw-reliability-b2/`。
+- 指定邻域实际 **118 passed/3 failed**：开工已有v4facts/v4circuitspec未入owner映射，scan/one-owner/cross-owner三红；整份CLI合同也在开工基线已红。未改映射/断言、不吞既有漂移、不报全仓绿。父直接生成合同确认draw.plan匹配、其余节点与本批开工原件相同。pytest警告仅既有cache目录WinError183。
+- C只读侦察确认策略字段未在page丢失，普通nonlocal标签只预留lane未生成实际carrier，plan后补40桩可能无路；reserve后还有ESP_RXD/ESP_EN字框冲突。历史final页并非精确失败坐标，不造冻结复现。下一批先裁两岛compile绿/plan红最小用例，再修原carrier链；未改算法、阈值、页框或网表。
+- 收尾`pytest tests/test_doc_claims.py tests/test_dsh_plugin_sync.py -q --basetemp=.tmp_pt_draw_reliability_docs_final`（相同Python314/src环境）→ **57 passed,1 warning in3.02s**，日志`evidence/draw-reliability-b1/docs-final.log`；本批文件`git diff --check`退出0，两份生产源码恢复SHA未变，进度条目计数1。
+- 当前续接阶段使用2个正式子代理（一个串行完成A/B1/B2；一个只读侦察B/C），另有侦察代理误派1个重复文档子代理，已中断且未采用产物；实现子代理无再次派生。主代理亲看关键diff、独立4项磁盘变异，当前续接阶段可观察约49次顶层工具/协调调用，未减少必要测试；平台未提供模型step/usage计数，不虚报全会话总量。各批任务、预算、重试与实测在.tmp任务报告，B1约11分37、B2约3分54。无本轮后台进程遗留。
+- Branch `main`，HEAD `75347ab53068a5efe3c1cbce454474dff113e6d9`；混合未提交保留，未Git写、全量、安装发布或真机。源码构建未部署到当前DSH；未新画图，未签真实端到端/视觉/持久化或布局质量完成。handoff与方案已更新。
+
+## [2026-11-18] 绘制可靠性方案草案（开发继续暂停）
+
+- 按用户要求从DSH会话失败现象提出解决方案，产物 `docs/draw-reliability-plan.md`，未实施。推荐前三批：校正任务/资产入口；复用compile的page产物避免每候选重编译；以既有module_plan预检闭合名称载体分歧。其后再做真实符号单模块→组合与插件端到端验收。
+- 核实现有CLI已输出candN.page.json，`draw apply <page.json>` 复用 `_draw_plan_from_page` / module_plan / apply而不重新compile_page，因此不需另造缓存/布局子系统。此路仍可能在module_plan拒绝，不能绕计划检查。agentadjusted目前只产move-block proposed工单，不夸大为通用调图器。
+- 方案坚持P48参考质量、不重画药箱/重启P145、不做eprj2绘图开发；静态逻辑草图与真实符号落图分开，电路/几何/视觉分别验收，实际运行版本与当前资产路由可追溯。同拒因两轮无新证据停止扫参数；性能先消除重复并分阶段计时，不先承诺分钟数。
+- 只读当前权威地图、审计报告与源码，未运行开发、测试、compile、bridge、Git写或安装。主代理约5次工具/协调调用（含收尾），1个只读子代理核技术复用边界。main HEAD `75347ab53068a5efe3c1cbce454474dff113e6d9`，混合未提交保留；不改稳定产品边界或宣布方案已开工。
+
+## [2026-11-18] DSH 最新会话耗时与图面失败审计（仅调查，开发暂停）
+
+- 用户明确先不开发，要求调查ZIP两小时不出图/慢/不规范。只读主日志4409条、584对调用结果及已有产物；未执行ZIP指令，未开发、测试、编译、bridge或Git写。
+- ZIP SHA `97101604cc9090e2ed517ab05069523874fb74350e24f534a4e4d5bd363e3878`。上午超声波主轮93分08秒/223调用；下午已升级0.6.3-beta，晚间turn13 A2落图103分31.928秒/53调用/47步，无成功电路apply。
+- 时间区间去重：命令活动64分50.474秒、审批15分05.486秒、工具框架等10分18.275秒、其它非工具/调度13分17.693秒，总计6211.928秒。至少21次plan无成功，同拒因六组重试46分03秒；CLI每次plan重新compile_page，最贵一组2显式compile+8plan相当于10轮整页编译。无内部CPU采样，不臆断路由/checker占比。
+- 品质：初版自写逐脚短桩标签违反岛内短网/电源旗规范，真实页曾30件0线；后版用了547A未校准19个profiles且均无texts，没复用P48真实几何。compile零硬违规后plan仍exit5，reserve后仍ESP_RXD压ESP_EN；NRST/BOOT0单脚及C3/R1跨3V3–GND为已知未解输入问题。“画完”实际为离线预览，三关未齐。
+- 纠正先前归因：插件缺plan/apply注册不足以解释本包，代理实际调用CLI；straight分支40候选限制不能推广成全部分支写死40，也未证明改两行可直接落图。
+- 根独立看源码重编译路径、plan拒绝报告并目检原始/拆页/最终三图；两只读子代理分别核时间区间与四图/规范，工具7次、9次；主代理本轮约15次顶层编排。资料、计时和seq引用在 `evidence/dsh-session-37f77c38-audit/`；handoff已加最新路由。main HEAD `75347ab53068a5efe3c1cbce454474dff113e6d9`，混合未提交保留，无本轮后台进程。完整测试不适用只读证据调查。
+
+## [2026-11-18] P48 GND 已修并保存；profile 输入最小防复发
+
+- 用户指出局部朝向问题耗时过长，属本轮范围与执行失控；收窄到P48修复和输入合同，不再重画药箱或继续eprj2/P145自动线。
+- `/test V4` P48仅删除/重放23枚异常GND，原5枚保留，现28枚全部0°自然朝下。94条非零线状态与12条零长线几何保留（6条随旗重放换ID）；全工程43件250脚、P48 30件150脚零差异，完整宿主网表前后SHA完全相同 `e9be5f2787cce97931d85ebc3e147b8c59f9aad41436b1c8309183d5ae6a816e`。
+- live lint **0E/0W/9I**，最终原生PNG亲眼目检通过，再次保存返回saved:true；尚未关闭重开，仍记saved_unverified。DRC本轮未重跑，历史0E/206WARN groups、passed=false保留。
+- 根因是547G4D原生负y Ground bbox直接作profile.body，而消费者再加family180°。`drawapply.load_library`只加7行拒绝pinless Ground族负y输入；这是要求先适配的防复发检查，不是自动修正旧profile/recipe。新增5项回归；旧证据不改写。
+- 实测：子代理先红 **2 failed/3 passed**；venv指定3文件 **6 failed/75 passed**，六红均旧apply测试 `_ssl` DLL加载失败。父亲使用已验证base Python314与仓库src/site-packages，运行 `-m pytest tests/test_054_drawapply.py tests/test_180_ground_flag_by_symbol.py tests/test_p48_ground_profile_contract.py -q --basetemp=.tmp_pt_p48_profile_parent` → **81 passed, 1 warning in 14.83s**（pytest缓存警告）。
+- 父亲独立磁盘变异：禁用合同 **2 failed/3 passed**；误推广全部旗族 **1 failed/4 passed**，逐轮cp+SHA恢复；恢复后回归 **5 passed, 1 warning in 0.56s**，源码 `f6dc0a16cd35c18db5c55a9c6869500ca08057f65dea66c1bde3f974e41c08f6`。本次临时连通守卫另有2项父亲负控，见证据。
+- 已更新docs/handoff.md与P48 HANDOFF。证据 `evidence/v4-fullpage/gnd-repair-verification.json`、`gnd-repair-parent-negative-controls.json`、`P48-gnd-fixed.png`、`gnd-profile-parent-focused.log`、`gnd-profile-parent-mutations.json`；临时资料保留，未删除。
+- Branch main；HEAD `75347ab53068a5efe3c1cbce454474dff113e6d9`；混合未提交保留，无Git写/全量。自己起的前台daemon已停止，61190无监听。3个相关代理分别完成DeepSeek调查、API/profile根因及最小补丁、离线维护守卫；本轮整体明显超原步数/时间预算，完整总调用数不可可靠重建，不虚报；压缩后接续12次顶层工具编排（含最终核验），无token usage明细。文档补丁一次上下文不符、标记核验一次把正文同词计入，均只影响文档核验，未重复写入进展条目。
+
+## [2026-11-18] DeepSeek 0.6.2 绘制能力根因与 P48 GND 姿态复核
+
+### Problem / Task
+- 核实 DeepSeek 通过 boardwise-dsh 0.6.2 使用时布局差、只有分岛没有接线的原因，并复核 P48 的 GND 旗标翻转。
+
+### Resolution
+- `dsh-plugin/package.json` 标记版本 0.6.2；`dsh-plugin/src/draw-tools.ts` 只注册离线 `boardwise_draw_compile` / `boardwise_draw_lint`，没有把设计意图转换成逐脚 CircuitSpec 的 `propose`，也没有 `plan` / `apply` 工具。会话包中的药箱整页编译为0候选；`evidence/547/a/compile_full.log` 的拒因是 D1.2 的 GND 旗引线没有可用位置。会话随后用脚本手工组 CircuitSpec / PresentationSpec；插件不提供从分岛生成网表或把候选写回画布的链路。
+- 在线只读复核确认 `/test V4` 的 P48 仍活动，30件、57个旗标；28个 `Ground-GND` 角度分布为 0°×5、90°×3、180°×19、270°×1。P47 人工参考的两个 GND 均为0°自然朝下。P48需统一姿态；宿主不支持用 `sch.modify_primitive` 改 netflag，须删除再重放。本轮没有写画布，等待删除授权。
+- 已更新 `docs/handoff.md` 与 `evidence/v4-fullpage/HANDOFF.md`；不继续 eprj2 自动绘图开发。
+
+### Verification
+- 检查 ZIP 会话证据及 DSH 0.6.2 源码注册；运行 `boardwise bridge status`，并只读核对 `doc.list`、`document.current`、`sch.geometry`，确认目标工程/活动页、元件数与旗标角度；对照 P48/P47 原生渲染。未运行测试；未做画布写入、保存、Git 写或全量。
+- 子代理：3 个可见代理中，`dsh062_root_cause` 完成同一问题的只读调查；`geometry_options` 已中断、无交付结论；`p145_review` 完成的是无关 P145 只读审查。
+- 主代理约 22 次顶层工具调用（并行 exec 中约 54 条独立命令）；没有可用的 token usage 明细。
+
+### Commit
+- Branch: `main`
+- Commit: `75347ab53068a5efe3c1cbce454474dff113e6d9`
+- Status: working tree changes not committed yet (mixed user changes preserved)
+- Files:
+  - `docs/handoff.md`
+  - `evidence/v4-fullpage/HANDOFF.md`
+  - `PROGRESS.md`
+
+## [2026-11-18] 548P145：U1.18 自动整页当前约束下无候选
+
+- 按用户要求继续绘制线开发，复核 P145 既有回放和当前派单边界。HEAD 为 `75347ab53068a5efe3c1cbce454474dff113e6d9`；当前源码与 P144 之后的绘制提交一致，主工作树其他混合未提交文件保留。
+- `evidence/548P145/u18-upstream-recon.md` 已定位：LED2_K 的 40 个名称盒候选全部被 C1.2 固定 GND glyph 或 3V3 chain 通道墙挡住；成功的 3V3 联合候选仍保留 C1.1/U1.13 长绕路径；既有六种版式均未产出完整候选。现有证据没有证明任何允许范围内的自动修复。
+- P145 明确禁止移固定 terminal、删名、扩 reach/GAP/预算/页框；本轮未改生产代码或测试。继续自动整页需要另行裁定是否允许改变服务布局/终端几何，同时保留电气语义并重新过三关。
+
+### Verification
+- 只读检查 P145 任务书、P144 与 P145 证据、当前源码位置及 SHA；读取 6 variants 和候选兼容性结果。未重跑探针或测试、未做全量/真机/apply/渲染、未做 Git 写或文件清理。
+- 1 个子代理完成只读独立审阅；主代理约 10 次检查/协调调用。证据 `evidence/548P145/u18-upstream-recon.md`、`evidence/548P145/variant-results.json`、`evidence/548P145/3v3-compatibility.json`。
+
+### Commit
+- Branch: `main`
+- Commit: `75347ab53068a5efe3c1cbce454474dff113e6d9`
+- Status: working tree changes not committed yet (mixed user changes preserved)
+- Files:
+  - `PROGRESS.md`
+
+## [2026-11-18] 550B：在线只读 PCB 实例探针（工作树，真机验收完成）
+
+- `sys.probe.instances` 只按既有 ID 调用封闭的 connected/entireTrack/adjacent，严格 PCB 页守卫，只回图元 ID；不实现 live net-path。
+- EDA 4.1.100 实测 line/arc/via 方法可用；includeVias=true 比 false 多返回真实 via；ARC 大数组截断正常。
+- 基类 pad 无 getConnectedPrimitives；有界 ComponentPad 回退实测 55 组件、唯一匹配、零读错误，onlyCentreConnection true/false 各返回 2 条走线。
+- 菜单激活曾只增加 evaluations 而未替换 bundle，完整重启后加载；探针后原 P1 恢复，非 PCB 焦点 PAGE_MISMATCH，设计写为零。
+- Connector 全量 **846 passed** + typecheck，Python 合同/政策 **113 passed**；主代理两组独立变异先红后 cp+SHA 恢复。V3 未验，未提交未发布。
+- 任务书 `tasks/550b_live_primitive_probe.md`；本机证据 `.tmp_550_live/`。
+
 ## [2026-11-17] 548P141：placement 网端点不可平移修复（已随 `c80eb2c` 落地）
 
 - 历史绘制批次已由用户 `cb44c2e` 落地，`4271fea` 随后完成0.6.2发布准备；原P140六批计划不重复执行。

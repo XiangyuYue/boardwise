@@ -650,13 +650,29 @@ see `docs/persistence-baseline.md` for the four-scenario checklist.
 ## The compiled page (057: `draw compile|plan|apply` on a page, `draw discard`)
 
 054 landed one compiled module; 056 compiled several modules into one page
-offline; 057 lands that page. There is **no new landing command and no new
-flag** — the three `draw` commands take a page on the same flags:
+offline; 057 lands that page. The three existing `draw` commands accept a page:
 
 | input | `draw compile` | `draw plan` | `draw apply` |
 |---|---|---|---|
 | a presentation with ≥2 modules, a `flow`, a module `grammarRef` or a page lock | page compiler; `candN.page.json` + framed `candN.svg`; `--page-box` required | the chosen page's `plan` field → the same `draw-module` plan; `<plan>.page.json` written beside it | — |
-| a page document (`kind=boardwise-page-layout-plan`) | — | — | as `--layout` (digests its `plan`), or as the positional (needs `--circuit/--presentation/--profiles` and `--page`/`--new-page`; the plan is built at apply time) |
+| a page document (`kind=boardwise-page-layout-plan`) | — | `--layout candN.page.json`: preflight the saved candidate without recompiling | as `--layout` (digests its `plan`), or as the positional (needs `--circuit/--presentation/--profiles` and `--page`/`--new-page`; the plan is built at apply time) |
+
+**Reuse a compiled page**: `boardwise draw plan --layout out/cand1.page.json
+--circuit circuit.json --presentation presentation.json --profiles library.json
+--out plan.json` uses that file as the selected candidate. The three current input
+files remain required. `--candidate` must be 0; select another file to select
+another candidate. The sheet defaults to the document's `pageBox`; an explicit
+`--page-box` must match. Schema/digests, both source hashes, module membership,
+symbol geometry and the current page/drawing readability checks must pass before
+the existing ChangePlan builder's output is written. The report names
+`layoutSource` and current `checks`; it invents no candidate count or ranking.
+Old documents carry no compiler fingerprint: passing these checks establishes
+current preflight acceptance, not provenance for every engine version or visual
+acceptance. With `--page`, existing measured primitives are checked as keep-outs;
+occupied or unreadable geometry refuses preflight instead of rearranging or
+recompiling the saved drawing. Plan only reads the editor. Apply keeps its own
+guards and read-back requirements. Omitting `--layout` keeps the original compile
+and candidate-selection path.
 
 **A non-empty page** (`draw plan --page`): every primitive already on the page
 (part, wire segment, flag, net label — parts and labels at their `bboxIds`-measured

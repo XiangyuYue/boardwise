@@ -52,7 +52,7 @@ interface Tool {
 type Decision = { kind: 'allow' } | { kind: 'deny'; reason: string }
 type Listener = (exec: unknown, next: () => Promise<Decision>) => Promise<Decision>
 
-/** The whole eight-plus-draw order `apply` has always published. */
+/** The original eight tools followed by the four drawing tools. */
 const TOOL_ORDER = [
   'boardwise_checkup',
   'boardwise_arch',
@@ -64,6 +64,8 @@ const TOOL_ORDER = [
   'boardwise_review_finalize',
   'boardwise_draw_compile',
   'boardwise_draw_lint',
+  'boardwise_draw_v4_facts',
+  'boardwise_draw_plan',
 ] as const
 
 /** Everything before the finalize tool: registered without touching projections. */

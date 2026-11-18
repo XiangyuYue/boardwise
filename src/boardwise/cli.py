@@ -12318,7 +12318,7 @@ def _cmd_draw_plan(args: argparse.Namespace) -> int:
     """
     import asyncio
 
-    if _draw_is_page(args):
+    if getattr(args, "layout", None) or _draw_is_page(args):
         _warn_page_intent(args, "draw plan")
         return _cmd_draw_plan_page(args)
     notes: list[str] = []
@@ -15099,8 +15099,8 @@ async def _draw_census_keepouts_live(call, geometry, notes: list[str]):
 def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
     """``draw plan`` for a page (057 sec.1-3).
 
-    The page is compiled here (the specs are the input, as for a single module)
-    and candidate N's merged drawing becomes the `draw-module` plan. Bound to a
+    The page is compiled here, or a saved ``--layout`` page is rechecked without
+    compiling. Its merged drawing becomes the same `draw-module` plan. Bound to a
     live page (``--page``/``--project``/``--instance``), three more things happen,
     all of them reads: the census of what is already on the page becomes the
     page compiler's keep-outs (057 sec.2: every existing primitive, measured),
@@ -15112,14 +15112,24 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
     """
     import asyncio
 
-    from .engines import drawapply, pagecompiler
+    from .core.pagelayoutplan import PageLayoutPlan, PageLayoutPlanError
+    from .engines import drawapply, pagecompiler, readability
 
+    layout_path = getattr(args, "layout", None)
+    saved_page = None
     try:
         page_box = _draw_page_box(args.page_box)
         circuit, presentation, profiles = _draw_inputs(args)
         lcsc = _draw_pairs(args.lcsc, "--lcsc")
         values = _draw_pairs(args.value, "--value")
-    except _DrawInputError as exc:
+        if layout_path:
+            saved_page = PageLayoutPlan.load(layout_path)
+            if args.candidate != 0:
+                raise _DrawInputError("--layout selects its own candidate; --candidate must be 0")
+            if page_box is not None and page_box != saved_page.page_box:
+                raise _DrawInputError("--page-box differs from the saved page; no geometry was changed")
+            page_box = saved_page.page_box
+    except (_DrawInputError, PageLayoutPlanError, OSError) as exc:
         print(f"boardwise draw plan: {exc}", file=sys.stderr)
         return 5
     if page_box is None:
@@ -15160,6 +15170,20 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
         notes.extend(lines)
         return _render_draw_plan(report, args)
 
+    if saved_page is not None:
+        report["layoutSource"] = str(layout_path)
+        stale = [
+            f"{label}: saved {stated[:12]}… differs from current {current[:12]}…"
+            for label, stated, current in (
+                ("circuitSha256", saved_page.plan.source.circuit_sha256, circuit.sha256()),
+                ("presentationSha256", saved_page.plan.source.presentation_sha256,
+                 presentation.sha256()),
+            )
+            if stated != current
+        ]
+        if stale:
+            return refuse("stale_layout", "saved page sources changed; compile the current specs", stale)
+
     def build(context: dict | None) -> int:
         keep_boxes: list = []
         keep_labels: list[str] = []
@@ -15172,26 +15196,30 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
             {"box": list(box), "from": label}
             for box, label in zip(keep_boxes, keep_labels)
         ]
-        result = pagecompiler.compile_page(
-            circuit, presentation, profiles,
-            _draw_page_budget(page_box, keep_boxes, relocate=bool(keep_boxes)),
-        )
-        if not result.ok:
-            return refuse(
-                "compile_refused",
-                "the page compiler refused this page; nothing to plan",
-                [
-                    _draw_keepout_names(line, keep_labels)
-                    for line in result.render_failures().splitlines()
-                ],
+        result = None
+        if saved_page is None:
+            result = pagecompiler.compile_page(
+                circuit, presentation, profiles,
+                _draw_page_budget(page_box, keep_boxes, relocate=bool(keep_boxes)),
             )
-        if args.candidate < 0 or args.candidate >= len(result.pages):
-            return refuse(
-                "candidate_out_of_range",
-                f"--candidate {args.candidate} is out of range — {len(result.pages)} "
-                f"page(s) came out (0-{len(result.pages) - 1})",
-            )
-        page = result.pages[args.candidate]
+            if not result.ok:
+                return refuse(
+                    "compile_refused",
+                    "the page compiler refused this page; nothing to plan",
+                    [
+                        _draw_keepout_names(line, keep_labels)
+                        for line in result.render_failures().splitlines()
+                    ],
+                )
+            if args.candidate < 0 or args.candidate >= len(result.pages):
+                return refuse(
+                    "candidate_out_of_range",
+                    f"--candidate {args.candidate} is out of range — {len(result.pages)} "
+                    f"page(s) came out (0-{len(result.pages) - 1})",
+                )
+            page = result.pages[args.candidate]
+        else:
+            page = saved_page
         try:
             plan = _draw_plan_from_page(
                 page, circuit, presentation, profiles,
@@ -15200,15 +15228,42 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
                 baseline=(context or {}).get("census"),
                 baseline_findings=(context or {}).get("findings") or [],
                 notes=[
-                    f"the layout is the page compiler's candidate {args.candidate} "
-                    f"({page.page_geometry_sha256()[:12]}…)",
+                    (f"the layout is the saved page {layout_path} "
+                     if saved_page is not None else
+                     f"the layout is the page compiler's candidate {args.candidate} ")
+                    + f"({page.page_geometry_sha256()[:12]}…)",
                     f"the designator pool is {report['poolSource'] or 'empty (offline)'}",
-                    *_draw_page_notes(page, keep_labels, keep_notes),
+                    *_draw_page_notes(page, [] if saved_page is not None else keep_labels, keep_notes),
                 ],
                 keep_names=bool(getattr(args, "keep_names", False)),
             )
         except drawapply.DrawPlanError as exc:
             return refuse("cannot_build_plan", str(exc))
+        if saved_page is not None:
+            try:
+                page_check = readability.check_page(
+                    page, circuit, presentation, profiles, keepouts=keep_boxes,
+                )
+                view = pagecompiler.page_presentation_view(
+                    presentation, page.modules,
+                    {module.id: module.origin for module in page.modules}, page.plan,
+                )
+                drawing_check = readability.check(
+                    page.plan, circuit, view, profiles,
+                    page_box=page_box, keepouts=keep_boxes,
+                )
+            except readability.ReadabilityError as exc:
+                return refuse("readability_refused", str(exc))
+            report["checks"] = {
+                "page": {"checker": readability.PAGE_CHECKER_NAME, "ok": page_check.ok},
+                "drawing": {"checker": readability.CHECKER_NAME, "ok": drawing_check.ok},
+            }
+            problems = page_check.hard_violations + drawing_check.hard_violations
+            if problems:
+                return refuse(
+                    "readability_refused", "saved page failed current readability checks; no recompile",
+                    [_draw_keepout_names(item.render(), keep_labels) for item in problems],
+                )
         if args.out_path:
             plan.dump(args.out_path)
             target = Path(args.out_path)
@@ -15231,9 +15286,12 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
                  "frame": list(module.frame), "parts": list(module.parts)}
                 for module in page.modules
             ],
-            "key": result.ranked[args.candidate].describe_key(),
-            "candidates": len(result.pages),
         }
+        if result is not None:
+            report["page"].update({
+                "key": result.ranked[args.candidate].describe_key(),
+                "candidates": len(result.pages),
+            })
         report["module"] = plan.target.module
         report["exitCode"] = 0
         report["ok"] = True
@@ -15242,7 +15300,9 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
             f"page of {len(page.modules)} module(s): {len(plan.change.draw_parts)} "
             f"part(s), {len(plan.change.draw_wires)} wire(s), "
             f"{len(plan.change.draw_flags)} flag(s)"
-            + (f", compiled around {len(keep_boxes)} existing primitive(s)" if keep_boxes else "")
+            + ((f", preflighted against {len(keep_boxes)} existing primitive(s)"
+                if saved_page is not None else
+                f", compiled around {len(keep_boxes)} existing primitive(s)") if keep_boxes else "")
         )
         return _render_draw_plan(report, args)
 
@@ -15280,6 +15340,14 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
             }
             report["poolSource"] = context["poolSource"]
             geometry = context.get("geometry")
+            if saved_page is not None and (
+                not isinstance(geometry, dict) or not context.get("pageUuid")
+            ):
+                report["exitCode"] = 3
+                report["outcome"] = "unknown"
+                report["reason"] = "guard_unreadable"
+                notes.append("saved page preflight needs readable live geometry and page identity; no compile or write")
+                return _render_draw_plan(report, args)
             if isinstance(geometry, dict):
                 keep_notes: list[str] = []
                 boxes, labels, _measured = await _draw_census_keepouts_live(
@@ -16551,6 +16619,123 @@ def _cmd_draw_islands_apply(args: argparse.Namespace) -> int:
     return 0 if application.result.written else 5
 
 
+def _cmd_draw_v4_facts(args: argparse.Namespace) -> int:
+    """`draw v4-facts --file PATH`: an offline, evidence-only V4 reader."""
+    from .engines import v4facts
+
+    if args.circuit and not (args.out_circuit or args.out_presentation or args.out_profiles):
+        print(
+            "draw v4-facts: --circuit requires an output spec or profile book",
+            file=sys.stderr,
+        )
+        return 2
+    if args.out_profiles and not args.profiles:
+        print("draw v4-facts: --out-profiles requires --profiles", file=sys.stderr)
+        return 2
+    try:
+        facts = v4facts.read_v4_facts(args.file, board=args.board)
+        if args.out_circuit or args.out_presentation or args.out_profiles:
+            from .core.circuitspec import CircuitSpec
+            from .engines import drawapply, v4circuitspec
+
+            production = None
+            profiles = (
+                drawapply.load_library(args.profiles)
+                if args.profiles and (not args.circuit or args.out_profiles) else None
+            )
+            if args.circuit:
+                circuit = CircuitSpec.load(args.circuit)
+            else:
+                binding_profiles = profiles if args.out_circuit else None
+                circuit, production = v4circuitspec.circuit_spec_from_design_model(
+                    v4facts.select_board_model(args.file, args.board)[0],
+                    profiles=binding_profiles,
+                )
+            if args.out_circuit:
+                enriched, report = v4facts.enrich_circuit_spec(facts, circuit)
+                enriched.dump(args.out_circuit)
+                facts["circuitEnrichment"] = report
+            if production is not None:
+                facts["circuitProduction"] = production
+            if args.out_presentation:
+                seed, seed_report = v4facts.presentation_seed_from_facts(facts, circuit)
+                seed.dump(args.out_presentation)
+                facts["presentationSeed"] = seed_report
+            if args.out_profiles:
+                augmented, pose_report = v4facts.with_instance_poses(
+                    profiles, facts, circuit,
+                )
+                Path(args.out_profiles).write_text(
+                    json.dumps(
+                        {"profiles": [profile.to_jsonable() for profile in augmented.values()]},
+                        ensure_ascii=False, indent=2,
+                    ) + "\n",
+                    encoding="utf-8",
+                )
+                facts["profilePoses"] = pose_report
+        if args.out_evidence:
+            evidence = v4facts.presentation_evidence(facts)
+            Path(args.out_evidence).write_text(
+                json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+    except (OSError, ValueError) as exc:
+        print(f"draw v4-facts: {exc}", file=sys.stderr)
+        return 2
+    payload = json.dumps(
+        facts, ensure_ascii=False, indent=2, sort_keys=True,
+    ) + "\n"
+    if args.out_path:
+        Path(args.out_path).write_text(payload, encoding="utf-8")
+    else:
+        print(payload, end="")
+    rails = v4facts.power_rails(facts)
+    interfaces = v4facts.signal_interfaces(facts)
+    questions = v4facts.open_questions(facts)
+    print(
+        f"draw v4-facts: {len(facts['nets'])} named net fact(s), "
+        f"{len(rails)} rail(s), {len(interfaces)} page interface(s), "
+        f"{len(questions)} open question(s)",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_draw_move_propose(args: argparse.Namespace) -> int:
+    """`draw move-propose`: semantic input -> an agent-adjusted work order."""
+    from .engines import agentadjusted
+
+    try:
+        evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
+        if not isinstance(evidence, dict):
+            raise ValueError("the evidence document must be a JSON object")
+        work = agentadjusted.propose_agent_adjusted_move(
+            evidence,
+            [item.strip() for item in args.designators.split(",") if item.strip()],
+            float(args.dx), float(args.dy), args.reason,
+        )
+    except json.JSONDecodeError as exc:
+        print(f"draw move-propose: invalid evidence JSON: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"draw move-propose: cannot read the evidence: {exc}", file=sys.stderr)
+        return 2
+    except (AttributeError, TypeError, ValueError) as exc:
+        print(f"draw move-propose: {exc}", file=sys.stderr)
+        return 5
+    payload = json.dumps(work, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    if args.out_path:
+        Path(args.out_path).write_text(payload, encoding="utf-8")
+    else:
+        print(payload, end="")
+    print(
+        f"draw move-propose: {len(work['designators'])} part(s), "
+        "agent-adjusted proposal; live guards remain unproven",
+        file=sys.stderr,
+    )
+    return 0
+
+
 DRAW_COMMANDS = {
     "compile": _cmd_draw_compile,
     "plan": _cmd_draw_plan,
@@ -16559,6 +16744,8 @@ DRAW_COMMANDS = {
     "propose": _cmd_draw_propose,
     "lint": _cmd_draw_lint,
     "islands": _cmd_draw_islands,
+    "v4-facts": _cmd_draw_v4_facts,
+    "move-propose": _cmd_draw_move_propose,
 }
 
 

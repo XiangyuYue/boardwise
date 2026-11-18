@@ -1,12 +1,22 @@
 # 绘制线派单入口（540B8）
 
-> **当前派单（2026-11-17，548P145规划）：先查U1.18名称盒与标签回放**。P142联合detour+foreign、P143多成员度量、P144固定glyph场景均已验收；完整整图首拒已前移为U1.18。证据 `evidence/548P144/README.md`，任务书 `tasks/548p145_u18_label_replay.md`。
+> **当前派单（2026-11-19）：A/B及C普通标签窄修复已有源码验收，进入本地beta 2集成**。A入口已校正；B1保存page候选预检父验97 passed，B2 DSH工具父验50 passed、typecheck/build通过，见[B1](../evidence/draw-reliability-b1/README.md)、[B2](../evidence/draw-reliability-b2/README.md)。C1/C2用3件2岛复现并修显式reserve普通非service载线，父验70+10 passed、三独立因果变异检出并恢复；默认关闭四候选几何保持，见[C证据](../evidence/draw-reliability-c/README.md)。owner与CLI合同漂移现已修，打包和当前未提交内容提交已获用户授权，最终读数见[本地包任务](063_beta2_local_package.md)。下一批先离线回放原会话失败输入，service名称冲突与真实符号模块分别验收；未校准旧输入不落图。实际DSH端到端与新三件套真机激活仍待验。不夹带迁移，不把合成通过当任意布局质量已修复，见[方案](../docs/draw-reliability-plan.md)。
 >
-> **当前生产与输入**：HEAD `108e42d`；drawcompiler SHA `976a4c2cad08804f994466419950e498aae2296a49de0b87536a72a7a653b2ea`，placement SHA `0674eb3842529fe280d06dc59c426f9eda7a1789cd0a1c35b86e89244596bb82`，pagecompiler SHA `28b2907d8904da9917a64d3015ae8fd37619313abfaf6a6ee3987e7763628e1c`（P142/P143/P144未提交）。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`。
+> **沿P48已完成结果继续**：`test V4/P48` 的30件/31网/5NC/8岛为agent-adjusted reference replay；GND已修为28枚0°、网表前后一致、lint 0E/0W/9I、原生图已目检。持久化仍saved_unverified，DRC历史206 WARN groups、passed=false。见[P48交接](../evidence/v4-fullpage/HANDOFF.md)。不要重画药箱、不重启U1.18/P145、不做eprj2绘图开发。
 >
-> **实施只准按 `tasks/548p145_u18_label_replay.md`**：先捕获U1.18 far/bbox/run、LED2_K/LCD_SCK channel与名称回放；不得删除名称、移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件/31网/4NC仍未出候选，LCD automatic另列；P142/P143/P144未提交实现保留。
+> **默认输入纪律**：新设计先按用户要求固定电路与目标，不能因有现成三件套自行换设计。547A是旧逻辑草图，未校准profile不能落图；P48旧page/recipe未随现场GND修复改写，不能当修后可执行输入。选用真实符号/物理脚号/文字与姿态后，再按既有计划与三关验收推进；B/C不得另造builder/router或绕计划闸。
 >
-> **资产索引**：`docs/draw-assets.md` 与 `evidence/draw-assets/manifest.json` 为当前资产权威路由；此前整理仅经批准将12个可再生目录送回收站，其他资产未移动或删除。
+> **资产路由**：[当前资产索引](../docs/draw-assets.md)；`evidence/draw-assets/manifest.json`仅为2026-11-17历史快照，本批未更新。HEAD `75347ab53068a5efe3c1cbce454474dff113e6d9`，混合未提交保留，无Git清理授权。
+
+## 历史自动线入口（保留追溯，不构成当前派单）
+
+> **历史派单（2026-11-17，548P145，现暂停）：先查U1.18名称盒与标签回放**。P142联合detour+foreign、P143多成员度量、P144固定glyph场景均已验收；完整整图首拒已前移为U1.18。证据 `evidence/548P144/README.md`，任务书 `tasks/548p145_u18_label_replay.md`。
+>
+> **当时生产与输入**：HEAD `108e42d`；drawcompiler SHA `976a4c2cad08804f994466419950e498aae2296a49de0b87536a72a7a653b2ea`，placement SHA `0674eb3842529fe280d06dc59c426f9eda7a1789cd0a1c35b86e89244596bb82`，pagecompiler SHA `28b2907d8904da9917a64d3015ae8fd37619313abfaf6a6ee3987e7763628e1c`（P142/P143/P144未提交）。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`。
+>
+> **当时任务约束（现不再派发） `tasks/548p145_u18_label_replay.md`**：先捕获U1.18 far/bbox/run、LED2_K/LCD_SCK channel与名称回放；不得删除名称、移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件/31网/4NC仍未出候选，LCD automatic另列；P142/P143/P144未提交实现保留。
+>
+> **当时资产索引（manifest为历史快照）**：`docs/draw-assets.md` 与 `evidence/draw-assets/manifest.json` 为当时资产路由；此前整理仅经批准将12个可再生目录送回收站，其他资产未移动或删除。
 >
 > **P113 历史侦察结论（2026-11-16）**：P113 已证伪固定近档 corridor：仅 router `16 failed / 16 passed`，仅 gate `6 failed / 26 passed`。真实旗位提前选择缩到 `11 failed / 21 passed`，P64 全绿、U1 仅余 text-on-wire，但全局启用会改变 P54/P6 尝试次数和 P55 旧座位，不能直接落生产。当前 `drawcompiler.py` SHA-256 仍为 `25ef2fc17fdf058683d81ecf426c54212acb89afb0bf41331e594cc4950df9c5`，HEAD `504e766450453d5a10abef03c6f2263f29d910bf`，混合未提交保留。证据 `evidence/548P113/README.md`。
 >

@@ -18045,6 +18045,20 @@ def _stub_lane_reserved(presentation: Any) -> bool:
     return bool(getattr(policy, "stub_lane_reserve", False))
 
 
+def _plain_reserved_carriers(ctx: _Context, net_id: str) -> bool:
+    """A reserved label connects a multi-pin source net, even in a one-pin slice.
+
+    A genuine singleton keeps its bare name unless a separate input/local-label
+    obligation promises a carrier. Root membership already travels with module
+    views; testing the slice's pin count would also discard cross-island wires.
+    """
+    return (
+        _stub_lane_reserved(ctx.presentation)
+        and not _service_layout_page(ctx.presentation)
+        and ctx.net_members.get(net_id, 0) > 1
+    )
+
+
 def _label_for(
     ctx: _Context,
     net_id: str,
@@ -21753,18 +21767,24 @@ def _label_row_conflicts(
 
 
 def _text_label_repair_boxes(
-    plan: LayoutPlan, violations: Sequence[readability.HardViolation]
+    plan: LayoutPlan, violations: Sequence[readability.HardViolation],
+    *, carrier_rows: bool = False,
 ) -> list[Box]:
     """The label boxes a `text-overlap` names against a part's own row (548C4).
 
     One entry per distinct label box, read off the plan the gate just measured —
     the label's *seat* is the only thing this repair needs, and the plan carries
-    it. Only the kind the repair can answer is read: `texts[i] × labels[j]`. A
-    text against a **part's** drawn extent is a different sentence (the ladder
+    it. Ordinary explicitly reserved carriers also admit `texts[i] × segments[j]`:
+    their name row is read from the same production geometry the gate measured,
+    then fed to this existing bounded text ladder. Other pages keep the original
+    `texts[i] × labels[j]` path. A text against a **part's** drawn extent is a
+    different sentence (the ladder
     had no free side at this pitch, and no amount of extra walls moves a part),
     so it is left to the gate and to the pitch, never "repaired" here.
     """
     out: list[Box] = []
+    wire_rows = ({name: box for name, box, _text, _owner in
+                  readability._named_wire_rows(plan)} if carrier_rows else {})
     for item in violations:
         if item.kind != readability.KIND_TEXT_OVERLAP:
             continue
@@ -21772,6 +21792,11 @@ def _text_label_repair_boxes(
         if len(named) < 2:
             continue
         for text_name, label_name in (named[:2], named[:2][::-1]):
+            if text_name.startswith("texts[") and label_name in wire_rows:
+                box = wire_rows[label_name]
+                if box not in out:
+                    out.append(box)
+                continue
             if not (text_name.startswith("texts[") and label_name.startswith("labels[")):
                 continue
             try:
@@ -23262,7 +23287,7 @@ def _build_one_variant(
                     occupied.append(label.bbox)
                 labels.append(label)
                 solids.append(label.bbox)
-                if net_id in local_label_nets(ctx.presentation) or _declared_input_wire(
+                if _plain_reserved_carriers(ctx, net_id) or net_id in local_label_nets(ctx.presentation) or _declared_input_wire(
                     ctx, net_id, len(expression.points)
                 ):
                     # 534: this label is the net's name and it is anchored on the
@@ -23720,7 +23745,13 @@ def _build_one_variant(
         # text walls and build the variant once more (bounded, like 148's name-row
         # ladder, and unreachable on a page that does not collide).
         if text_repair_round < TEXT_LABEL_REPAIR_ROUNDS:
-            repair = _text_label_repair_boxes(plan, checked.hard_violations)
+            repair = _text_label_repair_boxes(
+                plan, checked.hard_violations,
+                carrier_rows=any(
+                    _plain_reserved_carriers(ctx, net_id)
+                    for net_id, _member, _point, _label in deferred_local_labels
+                ),
+            )
             if repair:
                 return _build_one_variant(
                     ctx, variant, label_fallbacks,
@@ -26692,7 +26723,8 @@ def _reserve_label_stubs(
     A pin with **no accepted candidate** is a named ``layout-unsat`` carrying every
     candidate's measured reason. The returned map is what
     :func:`_local_label_carriers` draws: the reserved lane *is* the carrier. Every
-    other label net keeps the straight first rung it has always had, verbatim.
+    ordinary label net keeps its old first rung unless it explicitly opts into
+    ``stubLaneReserve``; that switch must reserve and draw the same carrier.
 
     **543L: a mirrored pin pair is one decision.** When the document's entry names
     exactly two nets and a part carries both on one side at mirrored offsets
@@ -26725,7 +26757,10 @@ def _reserve_label_stubs(
                tuple[tuple[float, float], tuple[float, float],
                      list[tuple[float, float]]]] = {}
     input_wire = _declared_input_wire(ctx, net_id, len(expression.points))
-    local = net_id in local_label_nets(ctx.presentation) or input_wire
+    plain_carrier = _plain_reserved_carriers(ctx, net_id) and not (
+        net_id in local_label_nets(ctx.presentation) or input_wire
+    )
+    local = net_id in local_label_nets(ctx.presentation) or input_wire or plain_carrier
     rows: list[Box] = (
         rows_by_net.setdefault(net_id, []) if rows_by_net is not None else []
     )
@@ -26799,14 +26834,14 @@ def _reserve_label_stubs(
             )
         else:
             paths = _local_label_paths(point, direction, router.grid)
-            if native or (input_wire and _label_stub_policy(ctx) == LABEL_STUB_STRAIGHT):
+            if native or ((input_wire or plain_carrier) and _label_stub_policy(ctx) == LABEL_STUB_STRAIGHT):
                 paths = [item for item in paths if len(item[1]) == 2]
             for candidate_direction, path in paths:
-                if input_wire:
+                if input_wire or plain_carrier:
                     length = sum(math.dist(start, stop) for start, stop in zip(path, path[1:]))
                     if length < _stated_stub_floor(ctx.presentation):
                         continue
-                    if not all(_span_free(router, start, stop, tips - {_key(point)})
+                    if input_wire and not all(_span_free(router, start, stop, tips - {_key(point)})
                                for start, stop in zip(path, path[1:])):
                         reasons.append(f"the reserved input carrier to {_point_text(path[-1])} is blocked")
                         continue
@@ -27568,6 +27603,10 @@ def _local_label_carriers(
     for net_id, member, point, original in moves:
         reserved = preplan.get((net_id, point)) if preplan else None
         input_wire = _declared_input_wire(ctx, net_id, len(own_points[net_id]))
+        floor_bound = input_wire or (
+            _plain_reserved_carriers(ctx, net_id)
+            and net_id not in local_label_nets(ctx.presentation)
+        )
         if input_wire:
             if reserved is None:
                 return _local_label_failure(
@@ -27606,7 +27645,7 @@ def _local_label_carriers(
             paths.append([tuple(p) for p in path])
             measured.append([])
             reserved_flags.append(True)
-            input_wire_flags.append(bool(input_wire))
+            input_wire_flags.append(bool(floor_bound))
             promised_segments.append(promised)
             continue
         lane = _label_stub_lane(original, point)
@@ -27822,7 +27861,7 @@ def _local_label_carriers(
                 nets[index], members[index], points[index], measured[index],
             )
         trial.stub = _label_stub_policy(ctx)
-        if _declared_input_wire(ctx, nets[index], len(own_points[nets[index]])):
+        if input_wire_flags[index]:
             trial.stub_min = _stated_stub_floor(ctx.presentation)
             trial.row_model = ctx.presentation.label_policy.row_model
         seated.append(trial)

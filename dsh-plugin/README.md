@@ -57,6 +57,7 @@ review_read/finalize/doctor 始终可收尾，已派发命令不被取消。541R
 | `boardwise_review_finalize` | `review finalize --out D [--strict-partial]` | `out` 必填；可选 `stage=initial/partial` | 120 000 |
 | `boardwise_draw_compile` | `draw compile --circuit C --presentation P --profiles S --out D --json J` | 三个输入必填，`pageBox`/`intent`/`out` 可选；整份 JSON 返回：单模块 `candidates`，页级 `pages`（见下） | 600 000 |
 | `boardwise_draw_lint` | `draw lint --snapshot S --render R [--bodies B] --json J` | `snapshot`/`render` 必填，仅离线回放；完整 JSON 返回 | 120 000 |
+| `boardwise_draw_plan` | `draw plan --layout L --circuit C --presentation P --profiles S --out D/plan.json --json J` | 四个现有文件必填，仅离线预检保存的PageLayoutPlan；`out`目录可选，默认独立持久临时目录；完整CLI JSON返回 | 120 000 |
 
 统一约定：
 
@@ -75,6 +76,10 @@ review_read/finalize/doctor 始终可收尾，已派发命令不被取消。541R
   都读取并返回整份 `--json` 文件——**前提是 CLI 真写出了这个文件**；`draw compile` 在
   "输入读不出" 时同样 exit 5 但不写文件，那种情况是错误（报错里显示实际 exit code）。
   `boardwise_draw_lint` 在 exit 0 / 1 同样返回整份文件。
+  `boardwise_draw_plan` 直接复用保存的页候选，exit 0 / 5有完整JSON才返回，拒绝缺失/坏JSON与其他退出码；
+  不再编译，不暴露page/project/instance/apply参数。预检通过不等于已画完、逐脚回读或视觉通过。
+  返回的`pageDocument`与`plan.json`同目录；需要当前源码CLI支持`draw plan --layout`，
+  本仓库构建成功不代表已安装到运行中的DSH。原compile/lint接口保留；本地beta包版本为0.6.3-beta.2。
   `draw compile` 有两种负载：单模块 presentation 返回 `candidates` + `failureRounds`，
   页级 presentation（CLI 标 `document: "page"`，即多模块 / 有 `flow` / 模块自带 `grammarRef` /
   page lock）返回 `pages` + `moduleFailureRounds`；两者都带 `failures` / `categories` /
@@ -156,10 +161,10 @@ npm pack                       # 产出 boardwise-dsh-<version>.tgz
 ### 装进 profile
 
 ```sh
-dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.2.tgz
-dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.2.tgz
+dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.2.tgz
+dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.2.tgz
 # desktop / web / headless 是**不同** profile，各装一次
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.2.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.2.tgz
 ```
 
 也可以从 GitHub 装（要求仓库根的 shim 已提交，见下节）：

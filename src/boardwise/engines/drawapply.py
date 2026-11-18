@@ -80,7 +80,8 @@ from ..core.layoutplan import (
 from ..core.model import is_ground_net
 from ..core.presentationspec import PresentationSpec, TEXT_PLACEMENT_NATIVE
 from ..core.symbolprofile import (
-    SymbolProfile, SymbolPose, flag_glyph_box, pose_box, role_siblings,
+    FLAG_GLYPH_KIND_GND, SymbolProfile, SymbolPose, flag_glyph_box, flag_glyph_kind,
+    pose_box, role_siblings,
 )
 from . import addcomponent
 #: 534 — one ruler for the two gates. `SOFT_FLOOR_TEXT_GAP` is S-21's number,
@@ -359,6 +360,13 @@ def load_library(path: str | Path) -> dict[str, SymbolProfile]:
             profile = SymbolProfile.from_dict(body)
         except ValueError as exc:
             raise DrawPlanError(f"{source}: {exc}") from exc
+        if (not profile.pins and flag_glyph_kind(profile) == FLAG_GLYPH_KIND_GND
+                and profile.body[1] < 0.0):
+            raise DrawPlanError(
+                f"{source}: {profile.symbol_ref!r} needs a canonical positive-y flag body; "
+                "reflect the native ground bbox across y=0 before loading it "
+                "(yMin, yMax) -> (-yMax, -yMin); preserve the raw measurement"
+            )
         if profile.symbol_ref in book:
             raise DrawPlanError(
                 f"{source}: {profile.symbol_ref!r} is described twice — one symbol has "

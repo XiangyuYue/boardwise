@@ -1,26 +1,45 @@
 # 交接记忆 —— 换 harness / 开新会话先读这份
 
-> **当前交接（2026-11-17，548P144后）：整图下一首拒为U1.18名称盒**。P142 detour+foreign和P143多成员度量通过，P144把固定terminal glyph纳入port-columns的scene，C1.2消失；P142旧下一首拒断言已按证据更新为U1.18。完整整图仍无候选。证据 `evidence/548P144/README.md`。
+> **本地beta 2集成（2026-11-19）**：用户授权打包`0.6.3-beta.2`及提交当前未提交源码/测试/文档，并重申**不要推送**，由本地DSH试跑。最终pytest **11756 passed/22 skipped/2 xfailed，34:46**；connector846 passed、DSH193 passed/1 skipped，两端typecheck/build及Rust fmt/clippy/test通过。owner/CLI合同漂移与三项审计P2已修；全量暴露的C2真实单脚网范围扩大已按root成员数收窄，原指纹/通道/跨岛接线合同均恢复，父独立变异检出。最终exe隔离daemon/skill同步及打包插件保存候选plan已验，包路径`outputs/releases/0.6.3-beta.2/boardwise-0.6.3-beta.2-windows.zip`。命令、误设30分钟及临时目录关键字导致重跑的记录见[打包任务](../tasks/063_beta2_local_package.md)、`PROGRESS.md`与`evidence/release-063-beta2/README.md`。实际DSH普通用户端到端、service名称冲突和新三件套真机激活仍待验；保留61190旧daemon，不重画药箱或恢复eprj2/P145。
 >
-> **当前生产与输入**：HEAD `108e42d`；drawcompiler SHA `976a4c2cad08804f994466419950e498aae2296a49de0b87536a72a7a653b2ea`，placement SHA `0674eb3842529fe280d06dc59c426f9eda7a1789cd0a1c35b86e89244596bb82`，pagecompiler SHA `28b2907d8904da9917a64d3015ae8fd37619313abfaf6a6ee3987e7763628e1c`（P142/P143/P144未提交）。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`，尚无完整候选。
+> **可靠性A/B源码验收（2026-11-18）**：A任务/资产路由已校正；B1新增`draw plan --layout candN.page.json`，一次真实合成编译的8份候选预检新增编译调用为0，父验97 passed、两因果变异先红恢复，见[B1证据](../evidence/draw-reliability-b1/README.md)。B2新增离线`boardwise_draw_plan`，父验50 passed，typecheck/build通过、两父变异先红恢复，见[B2证据](../evidence/draw-reliability-b2/README.md)。实际DSH安装及真机/发布验收的当前覆盖以上方beta 2记录为准；当时遗留owner与CLI合同漂移现已在集成批修复。
 >
-> **下一批只读 `tasks/548p145_u18_label_replay.md`**：先捕获U1.18 far/bbox/run、LED2_K/LCD_SCK channel与名称回放，不得删除名称、移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件未出候选，LCD automatic另列；P142/P143/P144实现未提交，未做真机/全量/apply。
+> **可靠性C1/C2：普通标签载线源码已修，限显式reserve的合成合同**。3件2岛复现了compile绿/plan拒DATA_BUS；现在复用原预留与carrier输出、长度筛选和既有文字避让反馈。父验核心70 passed、local/paired/service邻域10 passed，40/60长度、改网名、模块平移与默认关闭四候选指纹均有证据；三项父独立磁盘变异检出并copy+SHA恢复。另一个方向覆盖变异仍5 passed，已删去该无必要性证据的6行，不为留代码倒造测试。见[C证据](../evidence/draw-reliability-c/README.md)。未安装DSH、未真机或原生视觉验收，不签任意新电路布局完成。
 >
-> **资产索引**：先读 [`docs/draw-assets.md`](draw-assets.md) 与 `evidence/draw-assets/manifest.json`；此前整理仅经批准将12个可再生目录送回收站，记录见`evidence/draw-assets/recycle-log.json`。
+> **下一最小批**：用原会话失败输入做离线接缝回放，分别记录普通与service路径；ESP_RXD/ESP_EN名称盒冲突仍是未验子项，不能用本组合成通过代替。原包未校准profile只作失败证据，不作落图资产；真实符号新模块与DSH端到端另按既有三关。默认reserve关闭保持兼容，也保留原默认路径的失败；未强开开关、重画药箱、重启P145或做eprj2绘图开发。详见[方案](draw-reliability-plan.md)；入口为[tasks/draw-line.md](../tasks/draw-line.md)与[docs/draw-assets.md](draw-assets.md)。
+
+> **会话审计结论（2026-11-18，调查时暂停开发，现已授权分批修复）**：以下保留当时调查结果，实施以顶部当前派单为准。最新ZIP SHA `97101604…e3878` 含下午0.6.3-beta升级及晚间smartbox重绘；不能只按0.6.2解释。turn13落图耗103分32秒，约65分钟命令活动，至少21次plan无成功；每次CLI plan重新整页compile，同拒因六组重跑耗46分钟。初版绕开编译器逐脚桩+标签，后版用547A未校准profile（19/19、无texts），非P48真实几何；compile通过后plan仍exit5，reserve后又ESP_RXD压ESP_EN，没有三关合格成品。详情与逐调用计时见 [`evidence/dsh-session-37f77c38-audit/README.md`](../evidence/dsh-session-37f77c38-audit/README.md)。以下先前“只因插件没plan/apply”的说法不完整，不能覆盖这份新证据；代理实际上用shell调用了CLI plan。
+
+> **当前交接（2026-11-18，P48 GND已修并保存）**：`test V4` 的 P48 `e4a3658c0417c139`，A2 2338×1652，547G **agent-adjusted reference replay** 的30件/31网/5NC/8岛已完成。原5枚0°保留，仅删除并重放23枚异常GND，现 **28枚全部0°自然朝下**。锚点/网及导线几何保留；94条非零线完整状态一致，12条零长线几何多重集一致（其中6条随旗重放换ID）。全工程43件250脚、P48 30件150脚逐脚0差异，完整宿主网表前后SHA完全相同。live lint **0E/0W/9I**；最终原生图已目检。再次保存返回saved:true，持久化仍仅 **saved_unverified**。DRC本轮未重跑，历史 **0 error / 206 warn groups，passed=false** 保留。证据见 [`evidence/v4-fullpage/HANDOFF.md`](../evidence/v4-fullpage/HANDOFF.md)。
+>
+> **DeepSeek 0.6.2 根因**：DSH 插件只注册离线 `boardwise_draw_compile` / `boardwise_draw_lint`，没有把自然语言/岛定义转成逐脚 CircuitSpec 的 `propose`，也没有 `plan/apply` 落画布链。会话包中的药箱整页编译是0候选；[`evidence/547/a/compile_full.log`](../evidence/547/a/compile_full.log) 的拒因是 GND 旗引线没有可用位置。会话转而用脚本手工组 CircuitSpec / PresentationSpec；插件自身既不从分岛补网表，也不把候选写回画布。源码证据在 [`dsh-plugin/src/draw-tools.ts`](../dsh-plugin/src/draw-tools.ts)。
+>
+> **根因与最小防复发**：547G4D校准脚本把原生GND负y bbox直接写入profile，而既有 `flag_glyph_box` 还会叠加Ground family 180°，与宿主自然姿态相反；正确canonical body在P30已有 `[-10.5,9.5,10.5,19.5]` 先例。`drawapply.load_library` 新增7行拒绝pinless Ground族负y body，明确要求输入适配；这是拒绝错误输入，**没有自动修正旧校准脚本或旧reference recipe**。聚焦 **81 passed**；主代理禁用检查变异 **2 failed/3 passed**、误推广全部旗族变异 **1 failed/4 passed**，cp+SHA恢复。
+>
+> **下一步边界**：沿P48已完成结果推进。待用户关闭重开 test V4 后只读核对持久化，再按需分诊历史DRC警告；不要重画智能药箱、不要继续 eprj2 自动绘图开发，也不重启U1.18/P145。用户指出本次耗时过长，后续局部朝向问题按最小因果改动处理，不再扩成新系统或整页算法批。HEAD `75347ab53068a5efe3c1cbce454474dff113e6d9`，混合未提交保留，未做Git写/全量；本批前台daemon已停止，61190无监听。
+>
+
+> **历史交接（2026-11-17，548P144后，P145现暂停）：当时整图下一首拒为U1.18名称盒**。P142 detour+foreign和P143多成员度量通过，P144把固定terminal glyph纳入port-columns的scene，C1.2消失；P142旧下一首拒断言已按证据更新为U1.18。完整整图仍无候选。证据 `evidence/548P144/README.md`。
+>
+> **历史生产与输入（不作当前路由）**：HEAD `108e42d`；drawcompiler SHA `976a4c2cad08804f994466419950e498aae2296a49de0b87536a72a7a653b2ea`，placement SHA `0674eb3842529fe280d06dc59c426f9eda7a1789cd0a1c35b86e89244596bb82`，pagecompiler SHA `28b2907d8904da9917a64d3015ae8fd37619313abfaf6a6ee3987e7763628e1c`（P142/P143/P144未提交）。输入 `evidence/548P125/circuit.full.g3c.pinmap.json` + `evidence/548P126/full.presentation.service-feedback.json`，尚无完整候选。
+>
+> **历史下一批（现暂停，不再派发） `tasks/548p145_u18_label_replay.md`**：先捕获U1.18 far/bbox/run、LED2_K/LCD_SCK channel与名称回放，不得删除名称、移动固定terminal、扩reach/GAP/预算/页框或恢复P124实验。完整30件未出候选，LCD automatic另列；P142/P143/P144实现未提交，未做真机/全量/apply。
+>
+> **资产索引**：先读 [`docs/draw-assets.md`](draw-assets.md) ；`evidence/draw-assets/manifest.json`为2026-11-17历史快照；此前整理仅经批准将12个可再生目录送回收站，记录见`evidence/draw-assets/recycle-log.json`。
 
 > **P97/P98 人工 LCD 样例（2026-11-16）**：用户要求放入 EDA 后已亲手调整 `test V4` /
 > `Schematic1` / `P47`，pageUuid `678f22680140b828`。原生源/几何/网表/PNG 位于 `evidence/548P97/`，
 > `human-reference-summary.json` 是当前依据。10脚7网与源及调整前一致；C4 与 VCC 同行，C4.2 与
 > J1.2 共地旗，J1.7 单独地旗，五个信号桩等长。**用户重申：打了旗标不再打网络标签。**
 > P98已查明既有apply本来按此做，P97手动调用无条件传net才造成重复，临时脚本已改；无需另造规则。
-> 只记人工参考，LCD automatic仍未完成；P108已确认旗标关系与样例一致。当前先推进 WiFi 三组页，LCD carrier/label 链列为后续待办；禁止抄人工绝对坐标。
+> 只记人工参考，LCD automatic仍未完成；P108已确认旗标关系与样例一致。当时先推进 WiFi 三组页，LCD carrier/label 链列为当时后续待办；当前按顶部可靠性派单；禁止抄人工绝对坐标。
 
 > **P108/P109 LCD automatic 检查点（2026-11-16，另一未完成子项）**：LCD仍未验收。P108独立复算确认候选逐脚10/10，且P47的C4.2/J1.2共旗、J1.7独立旗关系一致；拒因是五个信号名与10单位载体分离，以及C4目标姿态缺少原生图形。P109一次原编译追踪到五条载体均为10，输入`stubMin=40`；证据与精确下一步见`evidence/548P108-independent/README.md`、`evidence/548P109/`。WiFi三组页恢复后，再只读捕获40至10各档拒因和标签框变换，修原carrier/label链。旗标处不再加网络标签。
 >
 > **这份文件是路由，不是规格。** 它只回答三件事：这是什么项目、三条线现在各在哪、
 > 干活要去读哪份权威文件。细节一律不在这里复制；两处说法冲突时以它指的文件为准。
 > 写它的场合：从 Kimi Code 迁到 DeepSeek Harness（dsh）这类**换 harness**、开新会话、
-> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-16**（P111 WiFi 三组页0候选，已交下一位；LCD P108/P109 仍未验收）。
+> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-18**（DeepSeek 0.6.2 根因已确认；P48 GND已修并保存，未关闭重开验证）。
 
 > **P94/P96更新（2026-11-16）**：原S20分行已复用于严格声明的input链；父独立禁helper3红/去碰撞3红，cp+SHA恢复后63 passed, 1 warning in 60.23s (0:01:00)。drawcompiler当前c8c49503…29f07d，grammar618529e3…170c5。
 > 只完成合成机制：四器件文字standoff均26.5、8脚5网；真实LED/ATTR旋转/视觉未验，独立地旗仍开放。P95只是静态方案。根已接管用户要求的LCD人工调整起点（P97）；子链不再派实施、不碰bridge，写锁已交根。证据`evidence/548P94/`、`evidence/548P96/`。

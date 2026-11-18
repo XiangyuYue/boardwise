@@ -1,33 +1,49 @@
 # 绘制线资产索引
 
-> 整理基线：2026-11-17；P137状态已更新。本文只做资产路由，不授权移动、删除或 Git 写。
-> 当前派单仍以 [`tasks/draw-line.md`](../tasks/draw-line.md) 为准，历史结论以各批次验收文件为准。
-> 机器元数据（文件大小、SHA-256、目录计数、worktree 原文）见
-> [`evidence/draw-assets/manifest.json`](../evidence/draw-assets/manifest.json)。
+> 当前路由核对：2026-11-18，按[绘制可靠性方案](draw-reliability-plan.md)完成A路由校正与B保存候选CLI/DSH预检源码验收，下一批C先最小复现；未部署或发布。沿P48已完成结果继续；不重画药箱、不重启P145、不做eprj2绘图开发。
+> 当前派单见 [`tasks/draw-line.md`](../tasks/draw-line.md)。本文只做资产路由，不授权移动、删除或Git写。
+> [`manifest.json`](../evidence/draw-assets/manifest.json) 是2026-11-17整理时的机器元数据快照，**不是当前源码/资产指纹**；本批未改写该历史证据。
 
-## 1. 当前唯一工作集
+## 1. 当前工作集（2026-11-18）
 
 | 资产 | 当前身份 | 权威位置 / 边界 |
 |---|---|---|
-| 当前任务书 | **P144固定glyph场景通过、未提交 / 整图未通过** | [`tasks/548p144_ground_label_terminal.md`](../tasks/548p144_ground_label_terminal.md) + [`验收`](../evidence/548P144/README.md)：固定glyph纳入scene.solids/bodies；新测试3 passed、两项变异，C1.2消失，完整候选仍拒 |
-| 下一任务书 | **规划，未实施** | [`tasks/548p145_u18_label_replay.md`](../tasks/548p145_u18_label_replay.md)：U1.18名称盒与LED2_K/LCD_SCK回放冲突 |
-| 当前电路 | **下一批输入；电气纠正已核，页面未通过** | [`evidence/548P125/circuit.full.g3c.pinmap.json`](../evidence/548P125/circuit.full.g3c.pinmap.json)：30件/31网/4NC/114成员；仅C3.1→NRST、R1.1→BOOT0，沿用547G3C assumed意图 |
-| 当前 presentation | **P126语义输入，不是通过基线** | [`evidence/548P126/full.presentation.service-feedback.json`](../evidence/548P126/full.presentation.service-feedback.json)：G3C + localSeats + branchOrder + 真实GND分组；尚无候选 |
-| 当前符号库 | **本整图输入的实测库** | [`evidence/548P59/full.library.json`](../evidence/548P59/full.library.json)；WiFi/P43各有自己的校准库，不混用 |
+| 当前改进路线 | **A路由已校正、B源码已独立验收；C待最小复现** | [B1 CLI证据](../evidence/draw-reliability-b1/README.md)、[B2 DSH证据](../evidence/draw-reliability-b2/README.md)；未部署/发布/真机验收，布局质量未冒称已修 |
+| P48完整页 | **30件/31网/5NC/8岛的agent-adjusted reference replay已完成** | [P48交接](../evidence/v4-fullpage/HANDOFF.md)，页UUID `e4a3658c0417c139`；不是任意新电路automatic能力 |
+| P48修后几何与电气 | **28枚GND均0°，逐脚零差异** | [修后几何](../evidence/v4-fullpage/gnd-repair-after-geometry.json)、[修后网表](../evidence/v4-fullpage/gnd-repair-after-netlist.json)、[严格前后验证](../evidence/v4-fullpage/gnd-repair-verification.json)；旧page/recipe未随现场重放改写，不得直接当作修后可执行输入 |
+| P48最新图面 | **原生图已目检，lint 0E/0W/9I** | [PNG](../evidence/v4-fullpage/P48-gnd-fixed.png)、[SVG](../evidence/v4-fullpage/P48-gnd-fixed.svg)、[lint](../evidence/v4-fullpage/lint-gnd-fixed.json) |
+| P48交付开放项 | **saved_unverified；DRC历史206 WARN groups、passed=false** | [P48交接](../evidence/v4-fullpage/HANDOFF.md)；未关闭重开验证，GND修复未重跑DRC，不能写可投板 |
+| DSH失败输入/执行证据 | **诊断材料，不是可落图基线** | [会话审计](../evidence/dsh-session-37f77c38-audit/README.md)；547A未校准逻辑库不与P48混称，不能因编译有候选就跳过真实几何/计划/逐脚/视觉 |
+| 新任务的符号和电路输入 | **按用户任务选择并验证，未指定时不能自行换成旧药箱** | [输入入口要求](draw-reliability-plan.md#2-先修的三批)；P48捕获资料仅在声明范围内作真实测量与质量对照，不证明所有新器件已校准 |
+
+工作树HEAD为 `75347ab53068a5efe3c1cbce454474dff113e6d9`，混合未提交保留。当前资产入口不授权清理、还原、提交或真机重画。
+
+以下保留被暂停自动线的历史材料，便于追溯，不再作为默认输入或下一任务：
+
+### 1.1 历史自动绘图工作集（2026-11-17，暂停）
+
+| 资产 | 当前身份 | 权威位置 / 边界 |
+|---|---|---|
+| 当时任务书 | **P144固定glyph场景通过、未提交 / 整图未通过** | [`tasks/548p144_ground_label_terminal.md`](../tasks/548p144_ground_label_terminal.md) + [`验收`](../evidence/548P144/README.md)：固定glyph纳入scene.solids/bodies；新测试3 passed、两项变异，C1.2消失，完整候选仍拒 |
+| 当时后续任务（现暂停） | **规划，未实施** | [`tasks/548p145_u18_label_replay.md`](../tasks/548p145_u18_label_replay.md)：U1.18名称盒与LED2_K/LCD_SCK回放冲突 |
+| 当时电路 | **下一批输入；电气纠正已核，页面未通过** | [`evidence/548P125/circuit.full.g3c.pinmap.json`](../evidence/548P125/circuit.full.g3c.pinmap.json)：30件/31网/4NC/114成员；仅C3.1→NRST、R1.1→BOOT0，沿用547G3C assumed意图 |
+| 当时 presentation | **P126语义输入，不是通过基线** | [`evidence/548P126/full.presentation.service-feedback.json`](../evidence/548P126/full.presentation.service-feedback.json)：G3C + localSeats + branchOrder + 真实GND分组；尚无候选 |
+| 当时符号库 | **本整图输入的实测库** | [`evidence/548P59/full.library.json`](../evidence/548P59/full.library.json)；WiFi/P43各有自己的校准库，不混用 |
 | 生产编译器 | **P144固定glyph场景通过、未提交，整图未通过** | `src/boardwise/engines/drawcompiler.py`，SHA `976a4c2cad08804f994466419950e498aae2296a49de0b87536a72a7a653b2ea` |
 | 服务座位器 | **P143多成员度量已验收、未提交** | `src/boardwise/engines/placement.py`，SHA `0674eb3842529fe280d06dc59c426f9eda7a1789cd0a1c35b86e89244596bb82` |
 | 其他关键源码 | **混合工作树资产，不归属本批独占** | `drawapply.py`、`pagecompiler.py`、`core/presentationspec.py`；精确SHA见manifest，禁止覆盖他人改动 |
-| 当前回归 | **P144固定glyph + P143多成员度量 + P141端点守衛 + P138联合反馈 + P137答案保留 + P135同网行距 + P126服务反馈 + P43精确输入钉** | [`tests/test_548p144_ground_label_terminal.py`](../tests/test_548p144_ground_label_terminal.py)、[`tests/test_548p143_net_member_relation.py`](../tests/test_548p143_net_member_relation.py)、[`tests/test_548p141_net_endpoint_repair.py`](../tests/test_548p141_net_endpoint_repair.py)、[`tests/test_548p138_joint_3v3_seat.py`](../tests/test_548p138_joint_3v3_seat.py)、[`tests/test_548p137_c2_service_seat.py`](../tests/test_548p137_c2_service_seat.py)、[`tests/test_548p135_same_net_gap.py`](../tests/test_548p135_same_net_gap.py)、[`tests/test_548p126_service_host_feedback.py`](../tests/test_548p126_service_host_feedback.py)、[`tests/test_548p124_p43_regression.py`](../tests/test_548p124_p43_regression.py)：一次反馈、完整服务答案、同/异网负例、真实5/5、完整P43 |
-| 当前证据说明 | **P144固定glyph通过，U1.18未通过** | [`evidence/548P144/README.md`](../evidence/548P144/README.md)：固定glyph纳入scene.solids/bodies；新测试3 passed、两项变异、P142/P143/P144合计6 passed；完整候选首拒U1.18；P43/WiFi geometry不变；整图无候选、未视觉 |
+| 当时回归 | **P144固定glyph + P143多成员度量 + P141端点守衛 + P138联合反馈 + P137答案保留 + P135同网行距 + P126服务反馈 + P43精确输入钉** | [`tests/test_548p144_ground_label_terminal.py`](../tests/test_548p144_ground_label_terminal.py)、[`tests/test_548p143_net_member_relation.py`](../tests/test_548p143_net_member_relation.py)、[`tests/test_548p141_net_endpoint_repair.py`](../tests/test_548p141_net_endpoint_repair.py)、[`tests/test_548p138_joint_3v3_seat.py`](../tests/test_548p138_joint_3v3_seat.py)、[`tests/test_548p137_c2_service_seat.py`](../tests/test_548p137_c2_service_seat.py)、[`tests/test_548p135_same_net_gap.py`](../tests/test_548p135_same_net_gap.py)、[`tests/test_548p126_service_host_feedback.py`](../tests/test_548p126_service_host_feedback.py)、[`tests/test_548p124_p43_regression.py`](../tests/test_548p124_p43_regression.py)：一次反馈、完整服务答案、同/异网负例、真实5/5、完整P43 |
+| 当时证据说明 | **P144固定glyph通过，U1.18未通过** | [`evidence/548P144/README.md`](../evidence/548P144/README.md)：固定glyph纳入scene.solids/bodies；新测试3 passed、两项变异、P142/P143/P144合计6 passed；完整候选首拒U1.18；P43/WiFi geometry不变；整图无候选、未视觉 |
 
-生产基线：`108e42d`；历史绘制批次已由用户 `cb44c2e` 落地，原P140六批不重复执行。
+当时生产基线：`108e42d`；历史绘制批次已由用户 `cb44c2e` 落地，原P140六批不重复执行。
 P142/P143/P144实现未提交，其他线未提交改动保留。禁止用 `git restore/checkout` 选择“干净基线”。
-当前整图、LCD automatic、真机/apply和全量验收均未完成。
+此处“整图未通过”仅指当时的automatic工作线，不覆盖P48已完成的agent-adjusted reference replay。U1.18/P145不再是当前派单。
 
 ## 2. 已验收锚（只在其声明范围内有效）
 
 | 锚 | 已通过范围 | 不能外推 |
 |---|---|---|
+| P48修后完整页 | [P48交接](../evidence/v4-fullpage/HANDOFF.md)：agent-adjusted reference replay，28枚GND为0°，逐脚网表不变，原生图目检 | 非automatic通用能力；保存未重开，DRC未通过；旧recipe不等于修后现场 |
 | P43真实64脚MCU | [`ACCEPTANCE.md`](../evidence/548D/host-binding/p43/ACCEPTANCE.md)：automatic单岛，20/20声明脚+48/48 NC、lint 0/0/0、已apply；持久化仅`saved_unverified` | 不是当前六件MCU、不是完整三岛/整页；DRC开放项仍在 |
 | P124 P43 regression | [`p43-regression/README.md`](../evidence/548P124/p43-regression/README.md)：当前生产码恢复原P43 geometry/SVG；119 focused、两项变异、主代理视觉 | 不证明当前整图MCU通过，不是新真机验收 |
 | WiFi三组页 | [`548P118/README.md`](../evidence/548P118/README.md) + [`独立验收`](../evidence/548P118-independent/README.md)：1候选、18/18物理脚、7网、独立视觉 | 不返工；不签宿主标签外观、真机或整页 |
@@ -40,6 +56,8 @@ P142/P143/P144实现未提交，其他线未提交改动保留。禁止用 `git 
 
 | 资产 | 分类与原因 |
 |---|---|
+| `evidence/547/a/` 逻辑三件套 | **旧逻辑草图，非可落图输入**；未校准profile不能代替P48实测几何；见[会话审计](../evidence/dsh-session-37f77c38-audit/README.md) |
+| P145/U1.18工作线 | **按用户方向暂停**；保留历史拒因，不作为当前默认派单，不继续eprj2绘图开发 |
 | [`548P120/circuit.full.pinmap.json`](../evidence/548P120/circuit.full.pinmap.json) | **被P125 G3C输入取代，但保留为映射来源**；仍把C3.1/R1.1放3V3，与547G3C冲突 |
 | [`548P123/full.presentation.mcu-roles.json`](../evidence/548P123/full.presentation.mcu-roles.json) | **历史输入**；脚向纠正有效，但不包含P125电气纠正/localSeats实验 |
 | [`548P124/full.presentation.gnd-groups.json`](../evidence/548P124/full.presentation.gnd-groups.json) | **完整页拒绝证据**；生产校验实测：GND不含U1.31/U1.47/U1.63，不能进入整页 |
@@ -82,7 +100,7 @@ P142/P143/P144实现未提交，其他线未提交改动保留。禁止用 `git 
 
 ## 5. worktree 边界
 
-`git worktree list --porcelain` 当前共20项（含主仓），原文在manifest。主仓之外的
+2026-11-17整理快照中，`git worktree list --porcelain` 共20项（含主仓），原文在历史manifest；本入口批未重新盘点。主仓之外的
 `.tmp_algo_eval`、`.tmp_corridor*`、`.tmp_review_line`、`E:\boardwise-wt-*` 等均是独立边界，
 **不按普通临时目录归档或回收**。绘制线、审查线及release worktree互不改文件；
 `worktree add/remove/prune` 仍需逐次批准。

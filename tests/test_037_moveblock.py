@@ -334,10 +334,10 @@ def test_a_wire_between_two_group_pins_moves_with_the_group():
     assert after[0] == (445.0, 310.0) and after[-1] == (655.0, 320.0), (
         "the redraw connects the two moved pins"
     )
-    assert len(after) == 3, (
-        "reconstructed orthogonally: the reported point list is a set, not a path,"
-        " and its consecutive pairs can be diagonal"
-    )
+    assert all(
+        first[0] == second[0] or first[1] == second[1]
+        for first, second in zip(after, after[1:])
+    ), "every reconstructed leg stays orthogonal"
     assert "internal wire (U1.5 ↔ U2.1)" in wires[0].why
 
 
@@ -353,6 +353,38 @@ def test_a_wire_leaving_the_group_is_redrawn_orthogonally_to_its_original_far_po
     assert after[0] == (445.0, 310.0), "starts at the moved pin"
     assert after[-1] == (555.0, 320.0), "and reaches the far point that did not move"
     assert len(after) == 3, "two legs, so the route is orthogonal (029's rule)"
+
+
+def test_a_bent_boundary_wire_redraws_to_the_other_endpoint_not_a_bend():
+    """A bend is not the far endpoint: endpoint selection must not use Euclidean distance."""
+    page = _geometry(
+        components=[("U1", 300.0, 300.0), ("U2", 600.0, 300.0)],
+        wires=[("w-bent", "N", [(200.0, 310.0), (200.0, 400.0),
+                                (500.0, 400.0), (555.0, 320.0)])],
+    )
+    group = mb.resolve_group(page, ["U2"], {"U2": PINS["p-U2"]})
+    wires = mb.plan_wires(page, group, {"U2": PINS["p-U2"]}, 100.0, 0.0)
+    assert len(wires) == 1
+    after = wires[0].points_after
+    assert after[0] == (655.0, 320.0), "starts at the moved pin"
+    assert after[-1] == (200.0, 310.0), (
+        "the far endpoint is the other end of the wire, not the more distant bend"
+    )
+
+
+def test_a_redraw_avoids_other_group_pins_not_only_new_endpoints():
+    """The obstacle field must include the group's other pins, not just origins."""
+    page = _geometry(
+        components=[("U1", 300.0, 300.0), ("U2", 600.0, 300.0)],
+        wires=[("w-bent", "N", [(200.0, 310.0), (200.0, 400.0),
+                                (500.0, 400.0), (555.0, 320.0)])],
+    )
+    group = mb.resolve_group(page, ["U2"], {"U2": PINS["p-U2"]})
+    pins = {"U1": PINS["p-U1"], "U2": PINS["p-U2"]}
+    wires = mb.plan_wires(page, group, pins, 100.0, 0.0)
+    after = wires[0].points_after
+    assert after[-1] == (200.0, 310.0)
+    assert (345.0, 310.0) not in after, "U1.5 is not the wire's own new endpoint"
 
 
 def test_a_wire_that_only_crosses_a_group_pin_is_left_alone_and_identity_catches_it():
@@ -412,6 +444,64 @@ def test_a_boundary_wire_ending_on_a_label_is_refused():
     with pytest.raises(mb.MoveRefused) as caught:
         mb.plan_wires(page, group, {"U1": PINS["p-U1"]}, 100.0, 0.0)
     assert "netlabel" in str(caught.value) and "v1 一律拒绝" in str(caught.value)
+
+
+#: 047 (V4 P47): the page whose agent-adjusted C4 move exposed the hole. C4.1 is
+#: at (500, 580), J1.1 at (630, 535), the wire reports a T at (630, 580) **and** a
+#: `3V3` net flag at (630, 605) — the flag sits on the T stub, i.e. neither the
+#: endpoint the old far-point rule picked nor any point of the route it drew
+#: (`(575,535)→(630,535)→(630,580)`), so the flag was left hanging.
+def _p47_page(*, with_flag: bool):
+    page = _geometry(
+        components=[("C4", 480.0, 580.0), ("J1", 650.0, 500.0)],
+        wires=[("w-3v3", "3V3", [(500.0, 580.0), (630.0, 535.0),
+                                 (630.0, 605.0), (630.0, 580.0)])],
+    )
+    if with_flag:
+        page["components"].append({
+            "primitiveId": "p-flag-3v3",
+            "state": {"ComponentType": "netflag", "Designator": "", "Net": "3V3",
+                      "X": 630.0, "Y": 605.0},
+        })
+    return page
+
+
+def test_a_netflag_anywhere_on_the_wire_refuses_the_redraw():
+    page = _p47_page(with_flag=True)
+    pins = {"C4": {"1": (500.0, 580.0)}}
+    group = mb.resolve_group(page, ["C4"], pins)
+    with pytest.raises(mb.MoveRefused) as caught:
+        mb.plan_wires(page, group, pins, 75.0, -45.0)
+    text = str(caught.value)
+    assert "w-3v3" in text, "the refusal names the primitive"
+    assert "netflag" in text and "3V3" in text, "and the attachment sitting on it"
+    assert "630,605" in text, "and the point it sits on — the T stub, not the far end"
+
+
+def test_the_same_page_without_the_flag_still_gets_its_redraw():
+    page = _p47_page(with_flag=False)
+    pins = {"C4": {"1": (500.0, 580.0)}}
+    group = mb.resolve_group(page, ["C4"], pins)
+    wires = mb.plan_wires(page, group, pins, 75.0, -45.0)
+    assert len(wires) == 1, "no flag, so there is nothing to refuse — not a blanket refusal"
+    after = wires[0].points_after
+    assert after[0] == (575.0, 535.0)
+    assert after[-1] == (630.0, 580.0), "the far endpoint is still the T"
+
+
+def test_a_label_on_an_internal_wires_bend_is_refused_too():
+    """The internal branch redraws as well, so it cannot keep an attachment either."""
+    page = _geometry(
+        components=[("U1", 300.0, 300.0), ("U2", 600.0, 300.0)],
+        wires=[("w-internal", "N", [(345.0, 310.0), (345.0, 320.0), (555.0, 320.0)])],
+        netlabels=[("MID", 345.0, 320.0)],
+    )
+    pins = {"U1": PINS["p-U1"], "U2": PINS["p-U2"]}
+    group = mb.resolve_group(page, ["U1", "U2"], pins)
+    with pytest.raises(mb.MoveRefused) as caught:
+        mb.plan_wires(page, group, pins, 100.0, 0.0)
+    text = str(caught.value)
+    assert "w-internal" in text and "netlabel" in text and "345,320" in text
 
 
 def test_a_wire_that_touches_no_group_pin_is_left_alone():

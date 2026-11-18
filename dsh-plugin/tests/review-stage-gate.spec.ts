@@ -360,7 +360,7 @@ afterEach(() => {
 /* -------------------------------------------------------------------- tests */
 
 describe('541R3 registration: both gates on one waterfall', () => {
-  it('keeps the ten-tool order and mounts the stage gate beside the present gate', async () => {
+  it('keeps the twelve-tool order and mounts the stage gate beside the present gate', async () => {
     const h = await harness()
     expect(h.names).toEqual([
       'boardwise_checkup',
@@ -373,6 +373,8 @@ describe('541R3 registration: both gates on one waterfall', () => {
       'boardwise_review_finalize',
       'boardwise_draw_compile',
       'boardwise_draw_lint',
+      'boardwise_draw_v4_facts',
+      'boardwise_draw_plan',
     ])
     // Two listeners, not one: the old `present` gate is not overwritten.
     expect(h.listeners.get(REVIEW_STAGE_EVENT)?.length).toBe(2)

@@ -221,7 +221,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 | 19 | 宿主 `sys_Timer` 也吃页面节流 |
 | 20 | 让窗口真"后台"只能抢走前台 |
 | 21 | 诊断脚本自己会把现场搞死 |
-| 22 | 多窗口 update-connector 的三档行为与共享存储盲区 |
+| 22 | 多窗口 update-connector 的三档行为与共享存储盲区；V4.1.100 菜单仅激活旧包时须完整重启（550B） |
 | 23 | export.render` 挂死 = 目标页自载入后从未被激活；PCB 例外：缺 `pcbRenderViewport` 零 render 调用、有旗标走 viewport（工作树实现，test V4 已在线验收、未发布，见 docs/pits.md 坑 23） |
 | 24 | 导出文件对删除永不重算 |
 | 25 | 036 三条宿主习性（真机实证） |

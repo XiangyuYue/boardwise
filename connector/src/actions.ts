@@ -2073,7 +2073,7 @@ function probeChecks(checks: Record<string, unknown>, eda: any): Record<string, 
  * the whole build is a downgrade — so this action enumerates the *real* member
  * names and returns them as data for a human to read.
  *
- * Two modes, because enumeration itself proved fragile:
+ * Several modes, because enumeration itself proved fragile:
  *
  * - **`checks`** (preferred): `{"checks": {"<namespace>": ["methodA", …]}}`.
  *   Each name is read with a plain property access, `typeof ns[name]`, which
@@ -2096,9 +2096,9 @@ function probeChecks(checks: Record<string, unknown>, eda: any): Record<string, 
  *   allowlist is closed and read-only (see {@link PROBE_CALL_ACTIONS}) so this
  *   channel cannot bypass the daemon's `create` gate.
  *
- * Purely read-only: it calls nothing. Every branch records its own outcome, so
- * an empty answer is distinguishable from a failed one. (The `call` mode is the
- * one exception, and it only reaches actions that are themselves read-only.)
+ * Every branch is read-only and records its own outcome, so an empty answer is
+ * distinguishable from a failed one. `call` reaches only actions that are
+ * themselves read-only; `instances` invokes only its three closed getters.
  *
  * Params:
  * - `checks` (object, optional): `{namespace: [methodName, …]}` — the exact
@@ -2114,6 +2114,20 @@ function probeChecks(checks: Record<string, unknown>, eda: any): Record<string, 
  *   (`realmProbe` below); it is a **switch** — any value other than `true` is
  *   refused with `BAD_REQUEST`, and no code is ever read out of `params`.
  *   Checked before `call`, so the two modes cannot be combined.
+ * - `instances` (array, optional, 1..4 items): `{kind, primitiveId, method, …}`
+ *   selects the 550B instance probe — resolve **one named PCB primitive** per
+ *   item with `<manager>.get(primitiveId)` and call the one method the type
+ *   package declares on that instance (`connected` → pad,
+ *   `entireTrack` / `adjacent` → line and arc, `adjacent` → via). Checked
+ *   first, and it is a mode of its own: any of `realm` / `call` / `checks` /
+ *   `namespace` / `namespaces` / `functionsOnly` alongside it is refused with
+ *   `BAD_REQUEST`. The answer's `status` says which fact happened per item
+ *   (`function` / `absent` / `not-found` / `unavailable` / `error`), and only
+ *   `getState_PrimitiveId` is read off the returned primitives — the objects
+ *   themselves, their nets and their geometry never leave the editor.
+ * - `limit` (integer, optional, 1..64, default 32): with `instances`, how many
+ *   primitive ids **one** item's answer may report. `count` always keeps the
+ *   host's own array length and `truncated` states whether ids were held back.
  */
 /*
  * Section note (deliberately not a JSDoc): the constants and `realmProbe`
@@ -2192,6 +2206,721 @@ async function realmProbe(): Promise<Record<string, unknown>> {
   };
 }
 
+// --------------------------------------------------------------------------
+// 550B: `sys.probe {instances: […]}` — one real primitive instance at a time
+// --------------------------------------------------------------------------
+
+/**
+ * The PCB primitive kinds this mode may address, and the **one** manager
+ * namespace that holds each.
+ *
+ * Closed on purpose, and per the 550B ruling: no action of its own, no live
+ * net-path design, and **no arbitrary method name** — the three methods below
+ * are the whole vocabulary, because each of them was declared in the type
+ * package on `IPCB_*` *instances* only (the static `sys.probe` check says
+ * `undefined` on the namespace, which is not evidence about instances). This
+ * batch measures whether the running editor answers them; it does not build a
+ * net-path on the answer.
+ */
+const PROBE_INSTANCE_MANAGERS = {
+  pad: 'pcb_PrimitivePad',
+  line: 'pcb_PrimitiveLine',
+  arc: 'pcb_PrimitiveArc',
+  via: 'pcb_PrimitiveVia',
+} as const;
+
+type ProbeInstanceKind = keyof typeof PROBE_INSTANCE_MANAGERS;
+
+/** The public method names, and the host method each one calls. */
+const PROBE_INSTANCE_HOST_METHOD = {
+  connected: 'getConnectedPrimitives',
+  entireTrack: 'getEntireTrack',
+  adjacent: 'getAdjacentPrimitives',
+} as const;
+
+type ProbeInstanceMethod = keyof typeof PROBE_INSTANCE_HOST_METHOD;
+
+/**
+ * Which method each kind may be asked for.
+ *
+ * Read off the type package, not invented: `getConnectedPrimitives` is declared
+ * on `IPCB_PrimitiveComponentPad` only, `getEntireTrack` on the line and the arc, and
+ * `getAdjacentPrimitives` on the line, the arc and the via (a via is a point,
+ * so it has neighbours but no track). A combination outside this table is
+ * refused before any host call, so a typo cannot silently be measured as
+ * "the method is missing on this build".
+ */
+const PROBE_INSTANCE_METHODS: Record<ProbeInstanceKind, readonly ProbeInstanceMethod[]> = {
+  pad: ['connected'],
+  line: ['entireTrack', 'adjacent'],
+  arc: ['entireTrack', 'adjacent'],
+  via: ['adjacent'],
+};
+
+/** The optional keys each method accepts, and nothing else. */
+const PROBE_INSTANCE_OPTIONS: Record<ProbeInstanceMethod, readonly string[]> = {
+  connected: ['onlyCentreConnection'],
+  entireTrack: ['includeVias'],
+  adjacent: [],
+};
+
+/** The key set of one `instances[]` entry — a closed list, unknown keys refused. */
+const PROBE_INSTANCE_KEYS = [
+  'kind', 'primitiveId', 'method', 'onlyCentreConnection', 'includeVias',
+];
+
+/**
+ * The modes `instances` cannot be combined with.
+ *
+ * They all answer a *different* question (enumerate the API surface, or run
+ * another action), and mixing them would leave the answer ambiguous: which of
+ * the two did the caller get? The refusal names the combination instead of
+ * guessing an order.
+ */
+const PROBE_INSTANCE_CONFLICTS = [
+  'realm', 'call', 'checks', 'namespace', 'namespaces', 'functionsOnly',
+];
+
+const PROBE_INSTANCE_MAX = 4;
+const PROBE_INSTANCE_LIMIT_DEFAULT = 32;
+const PROBE_INSTANCE_LIMIT_MAX = 64;
+
+/** One validated `instances[]` entry. */
+type ProbeInstanceRequest = {
+  kind: ProbeInstanceKind;
+  primitiveId: string;
+  method: ProbeInstanceMethod;
+  onlyCentreConnection?: boolean;
+  includeVias?: boolean;
+};
+
+/** `Name: message` for a thrown host error, in the shape the probe reports. */
+function probeErrorText(error: unknown): string {
+  const err = error as Error;
+  return `${err?.name ?? 'Error'}: ${String(err?.message ?? error)}`;
+}
+
+/** What a host answered, for a message — never the value itself. */
+function probeValueShape(value: unknown): string {
+  if (Array.isArray(value)) return `an array of ${value.length}`;
+  if (value === null) return 'null';
+  return typeof value;
+}
+
+/**
+ * Refuse unless the **focused page is a PCB, stated exactly**.
+ *
+ * Same rule as `pcb.readback`'s guard (527B B4) and the same `PAGE_MISMATCH`
+ * code, tightened to the 550B contract: "not a PCB" **and** "cannot be proven to
+ * be a PCB" both refuse. The reading that counts is `activeDocument`'s direct
+ * getter — the heuristic per-kind fallbacks cannot tell "a PCB is in front" from
+ * "a PCB exists", and `get(primitiveId)` on the wrong page would answer ids that
+ * belong to a different document. Nothing is switched automatically: the caller
+ * moves the tab (`doc.open`) and asks again, so the probe never rearranges the
+ * user's window.
+ */
+async function requirePcbFocus(eda: Eda): Promise<{ uuid: string; type: string }> {
+  const problems: string[] = [];
+  const active = await activeDocument(eda, problems);
+  if (active === null) {
+    throw new ActionError(
+      'PAGE_MISMATCH',
+      'sys.probe instances mode reads primitives of the focused PCB, but the host reports no active '
+        + 'document — bring the PCB page to the front (doc.open) and call again',
+      { active: null, problems },
+    );
+  }
+  const described = { uuid: active.uuid, type: active.type };
+  if (active.source !== DIRECT_DOCUMENT_SOURCE) {
+    throw new ActionError(
+      'PAGE_MISMATCH',
+      `sys.probe instances mode needs the focused page to be a PCB, and this window's focus was only `
+        + `read heuristically (${active.source} → ${describeDocument(described)}) — that cannot tell `
+        + '"a PCB is in front" from "a PCB exists", so the read is refused rather than aimed at a '
+        + 'page it cannot vouch for',
+      { active: { ...described, source: active.source }, problems },
+    );
+  }
+  if (readbackKindOf(active.type) !== 'pcb') {
+    throw new ActionError(
+      'PAGE_MISMATCH',
+      `sys.probe instances mode reads PCB primitives, but the focused document is `
+        + `${describeDocument(described)} — bring the PCB page to the front (doc.open) and call again`,
+      { active: { ...described, source: active.source }, problems },
+    );
+  }
+  return described;
+}
+
+/** `params.limit`: how many ids of one answer may be reported (1..64, default 32). */
+function probeInstanceLimit(params: Record<string, unknown>): number {
+  const raw = params.limit;
+  if (raw === undefined) return PROBE_INSTANCE_LIMIT_DEFAULT;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > PROBE_INSTANCE_LIMIT_MAX) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `sys.probe params.limit must be an integer 1..${PROBE_INSTANCE_LIMIT_MAX} `
+        + `(got ${JSON.stringify(raw)}) — it caps how many primitive ids one instance answer reports`,
+    );
+  }
+  return raw;
+}
+
+/** One `instances[]` entry, validated against the closed table above. */
+function probeInstanceRequest(entry: unknown, index: number): ProbeInstanceRequest {
+  const at = `sys.probe params.instances[${index}]`;
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `${at} must be an object {kind, primitiveId, method} (plus the one optional key its `
+        + 'method accepts)',
+    );
+  }
+  const item = entry as Record<string, unknown>;
+  const unknownKeys = Object.keys(item).filter((key) => !PROBE_INSTANCE_KEYS.includes(key));
+  if (unknownKeys.length) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `${at} carries ${unknownKeys.join(', ')} — the allowed keys are `
+        + `${PROBE_INSTANCE_KEYS.join(', ')}; this list is closed`,
+      { unknown: unknownKeys },
+    );
+  }
+
+  const kind = String(item.kind ?? '');
+  if (!Object.prototype.hasOwnProperty.call(PROBE_INSTANCE_MANAGERS, kind)) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `${at}.kind must be one of ${Object.keys(PROBE_INSTANCE_MANAGERS).join(' | ')} `
+        + `(got ${JSON.stringify(item.kind)})`,
+    );
+  }
+  const method = String(item.method ?? '');
+  const methods = PROBE_INSTANCE_METHODS[kind as ProbeInstanceKind];
+  if (!(methods as readonly string[]).includes(method)) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `${at}.method for a ${kind} must be ${methods.join(' | ')} (got ${JSON.stringify(item.method)})`,
+    );
+  }
+  const primitiveId = typeof item.primitiveId === 'string' ? item.primitiveId.trim() : '';
+  if (!primitiveId) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `${at}.primitiveId must be a non-empty string (the id this page already reports)`,
+    );
+  }
+
+  const allowed = PROBE_INSTANCE_OPTIONS[method as ProbeInstanceMethod];
+  for (const key of PROBE_INSTANCE_OPTIONS.connected.concat(PROBE_INSTANCE_OPTIONS.entireTrack)) {
+    if (item[key] === undefined || allowed.includes(key)) continue;
+    throw new ActionError(
+      'BAD_REQUEST',
+      `${at} calls ${method}, which accepts `
+        + `${allowed.length ? allowed.join(', ') : 'no optional key'} — ${key} does not apply `
+        + '(a key that would be ignored is refused, not dropped silently)',
+    );
+  }
+  for (const key of allowed) {
+    if (item[key] !== undefined && typeof item[key] !== 'boolean') {
+      throw new ActionError('BAD_REQUEST', `${at}.${key} must be a boolean`);
+    }
+  }
+
+  const request: ProbeInstanceRequest = {
+    kind: kind as ProbeInstanceKind,
+    primitiveId,
+    method: method as ProbeInstanceMethod,
+  };
+  if (method === 'connected') {
+    // The declared default: the pad's own centre counts as a connection.
+    request.onlyCentreConnection = item.onlyCentreConnection !== false;
+  }
+  if (method === 'entireTrack') {
+    // Off by default — the caller asks for the vias explicitly.
+    request.includeVias = item.includeVias === true;
+  }
+  return request;
+}
+
+/** The whole `instances` array, validated; nothing is read from the host here. */
+function probeInstanceRequests(params: Record<string, unknown>): ProbeInstanceRequest[] {
+  const conflicts = PROBE_INSTANCE_CONFLICTS.filter((key) => params[key] !== undefined);
+  if (conflicts.length) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `sys.probe params.instances is a mode of its own: it cannot be combined with `
+        + `${conflicts.map((key) => `params.${key}`).join(', ')}`,
+      { conflicts },
+    );
+  }
+  if (params.instances === undefined) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      'sys.probe params.limit only means something together with params.instances — '
+        + 'it caps how many ids one instance answer reports',
+    );
+  }
+  const raw = params.instances;
+  if (!Array.isArray(raw)) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      'sys.probe params.instances must be an array of 1..'
+        + `${PROBE_INSTANCE_MAX} {kind, primitiveId, method, …} items`,
+    );
+  }
+  if (raw.length < 1 || raw.length > PROBE_INSTANCE_MAX) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `sys.probe params.instances takes 1..${PROBE_INSTANCE_MAX} items (got ${raw.length}) — `
+        + 'this is a probe of named primitives, not a whole-board enumeration',
+      { count: raw.length },
+    );
+  }
+  return raw.map((entry, index) => probeInstanceRequest(entry, index));
+}
+
+/**
+ * Run one `instances[]` entry and report what happened, **per item**.
+ *
+ * The statuses are the whole point of the batch, and each is a distinct fact
+ * that must not be folded into another:
+ *
+ * - `unavailable` — the manager namespace, or its `get`, is not on this build,
+ *   so the id could not even be resolved;
+ * - `not-found` — `get(primitiveId)` answered nothing: this page has no such
+ *   primitive (the id may be stale, or from another page);
+ * - `absent` — the instance exists but the host method is not a function on it;
+ * - `error` — the instance was reached and the host threw (from `get`, or from
+ *   the method), or the method answered something that is not an array;
+ * - `function` — the method exists, was called, and its answer is under `call`.
+ *
+ * `call` is present **iff the method was actually invoked** (`ok: true` with
+ * `count` / `ids` / `truncated`, or `ok: false` with the error). A missing
+ * method never gets `call`, and an empty answer (a real `[]`) never gets a
+ * status of its own: "the host says this pad connects to nothing" and "the host
+ * has no such method" are different measurements and are spelled differently.
+ *
+ * Only ids leave this function. The returned primitives are host objects, and
+ * their other state (net, geometry, layer) is deliberately not read: the batch
+ * asks whether the methods answer, and a smaller answer cannot leak a design.
+ */
+async function probeInstanceRow(
+  request: ProbeInstanceRequest,
+  eda: Eda,
+  limit: number,
+): Promise<Record<string, unknown>> {
+  const row: Record<string, unknown> = {
+    kind: request.kind,
+    primitiveId: request.primitiveId,
+    method: request.method,
+  };
+  const manager = PROBE_INSTANCE_MANAGERS[request.kind];
+
+  const nsRead = readMember(eda, manager);
+  const ns = nsRead.value;
+  if (nsRead.error !== undefined) {
+    return { ...row, status: 'unavailable', error: `read ${manager}: ${nsRead.error}` };
+  }
+  if (!ns || (typeof ns !== 'object' && typeof ns !== 'function')) {
+    return {
+      ...row,
+      status: 'unavailable',
+      error: `${manager} is not available in this editor version (typeof ${typeof ns})`,
+    };
+  }
+  const getter = readMember(ns, 'get');
+  if (typeof getter.value !== 'function') {
+    return {
+      ...row,
+      status: 'unavailable',
+      error: getter.error !== undefined
+        ? `read ${manager}.get: ${getter.error}`
+        : `${manager}.get is not a function on this build (typeof ${typeof getter.value})`,
+    };
+  }
+
+  let instance: any;
+  try {
+    instance = await settle(getter.value.call(ns, request.primitiveId));
+  } catch (error) {
+    return {
+      ...row,
+      status: 'error',
+      error: `${manager}.get(${JSON.stringify(request.primitiveId)}) threw ${probeErrorText(error)}`,
+    };
+  }
+  if (instance === undefined || instance === null) {
+    return {
+      ...row,
+      status: 'not-found',
+      error: `${manager}.get(${JSON.stringify(request.primitiveId)}) answered ${String(instance)} `
+        + '— no such primitive on this page',
+    };
+  }
+  if (typeof instance !== 'object' && typeof instance !== 'function') {
+    return {
+      ...row,
+      status: 'error',
+      error: `${manager}.get(${JSON.stringify(request.primitiveId)}) answered a `
+        + `${typeof instance}, not a primitive instance`,
+    };
+  }
+
+  const hostMethod = PROBE_INSTANCE_HOST_METHOD[request.method];
+  const member = readMember(instance, hostMethod);
+  if (member.error !== undefined) {
+    return { ...row, status: 'error', error: `read ${hostMethod}: ${member.error}` };
+  }
+  if (typeof member.value === 'function') {
+    // Direct hit: nothing else is enumerated. This is the only path a
+    // line/arc/via ever takes, and the answer for them carries no `resolution`
+    // key — their output is exactly what 550B shipped.
+    return {
+      ...row,
+      ...(await probeInstanceCall(request, instance, member.value, limit)),
+      ...(request.kind === 'pad' ? { resolution: 'direct' } : {}),
+    };
+  }
+  if (request.kind === 'pad' && request.method === 'connected') {
+    // The 550B machine run measured exactly this on EDA 4.1.100: the instance
+    // `pcb_PrimitivePad.get(id)` hands back has no `getConnectedPrimitives`,
+    // because the type package declares it on `IPCB_PrimitiveComponentPad`
+    // (the component's own pad), not on the base pad. The bounded fallback
+    // below is that finding turned into a rule.
+    return { ...row, ...(await probeComponentPadFallback(request, eda, limit, member.value)) };
+  }
+  return {
+    ...row,
+    status: 'absent',
+    error: `${hostMethod} is not a function on this ${request.kind} instance `
+      + `(typeof ${typeof member.value})`,
+  };
+}
+
+/**
+ * Call one instance method and report its answer — the tail 550B already had,
+ * shared by the direct path and the ComponentPad fallback so the two can never
+ * disagree about what "ok" looks like.
+ */
+async function probeInstanceCall(
+  request: ProbeInstanceRequest,
+  target: any,
+  fn: (...args: any[]) => unknown,
+  limit: number,
+): Promise<Record<string, unknown>> {
+  const hostMethod = PROBE_INSTANCE_HOST_METHOD[request.method];
+  const arity = typeof fn.length === 'number' ? fn.length : undefined;
+
+  const args = request.method === 'connected'
+    ? [request.onlyCentreConnection !== false]
+    : request.method === 'entireTrack'
+      ? [request.includeVias === true]
+      : [];
+  let answer: unknown;
+  try {
+    answer = await settle(fn.call(target, ...args));
+  } catch (error) {
+    return {
+      status: 'error',
+      ...(arity === undefined ? {} : { arity }),
+      call: { ok: false, error: `${hostMethod}() threw ${probeErrorText(error)}` },
+    };
+  }
+  if (!Array.isArray(answer)) {
+    return {
+      status: 'error',
+      ...(arity === undefined ? {} : { arity }),
+      call: {
+        ok: false,
+        // `null` is the one shape a reader is tempted to take for "nothing
+        // connected"; it is a different answer and is named as one.
+        error: `${hostMethod}() answered ${probeValueShape(answer)}, not an array — an empty `
+          + 'connection list is [] and this is not that',
+      },
+    };
+  }
+
+  const ids: string[] = [];
+  let unreadable = 0;
+  for (const entry of answer.slice(0, limit)) {
+    // The id is the *only* field read off a returned primitive (the same
+    // getter `pcb.readback` uses), and a primitive whose id will not read is
+    // counted, never dropped: `count` says how many came back, `ids` how many
+    // could be named, and the difference is stated.
+    const id = await getState(entry, 'PrimitiveId');
+    if (typeof id === 'string' && id) ids.push(id);
+    else unreadable += 1;
+  }
+  return {
+    status: 'function',
+    ...(arity === undefined ? {} : { arity }),
+    call: {
+      ok: true,
+      count: answer.length,
+      ids,
+      truncated: answer.length > limit,
+      ...(unreadable ? { unreadable } : {}),
+    },
+  };
+}
+
+/**
+ * How many components the bounded ComponentPad fallback may inspect.
+ *
+ * A cap rather than "the whole board": the fallback exists to answer one pad's
+ * method, and an unbounded walk is the whole-board enumeration this probe was
+ * built to avoid. A board with more components than this is **disclosed**
+ * (`truncated: true`) and its negative answers are refused, never guessed.
+ */
+const PROBE_COMPONENT_CAP = 512;
+
+/** What the bounded component walk measured, gaps included. */
+type ComponentPadLookup = {
+  pad: any | null;
+  components: number;
+  matches: number;
+  readErrors: string[];
+  truncated: boolean;
+  unavailable?: string;
+  error?: string;
+};
+
+/**
+ * Find the **component pad** whose primitive id is the requested pad id.
+ *
+ * Measured on EDA 4.1.100 (550B): `pcb_PrimitivePad.get(id)` answers a base pad
+ * instance that has no `getConnectedPrimitives`; the type package declares that
+ * method on `IPCB_PrimitiveComponentPad`, which is only reachable through a
+ * component's `getAllPins()`. So this walks `pcb_PrimitiveComponent.getAll()`
+ * and each component's pins, matching **only** `getState_PrimitiveId` — no net,
+ * no geometry, no position is read, and no write method is called anywhere.
+ *
+ * Every failure along the way is counted in `readErrors` and the walk continues:
+ * a component whose `getAllPins` is missing, throws, or answers a non-array is
+ * one line of evidence, not the end of the scan. `matches` is the honest count,
+ * so the caller can refuse an ambiguous id instead of taking the first one.
+ */
+async function findComponentPad(eda: Eda, padId: string): Promise<ComponentPadLookup> {
+  const lookup: ComponentPadLookup = {
+    pad: null, components: 0, matches: 0, readErrors: [], truncated: false,
+  };
+  const MANAGER = 'pcb_PrimitiveComponent';
+
+  const nsRead = readMember(eda, MANAGER);
+  const ns = nsRead.value;
+  if (nsRead.error !== undefined) {
+    return { ...lookup, unavailable: `read ${MANAGER}: ${nsRead.error}` };
+  }
+  if (!ns || (typeof ns !== 'object' && typeof ns !== 'function')) {
+    return {
+      ...lookup,
+      unavailable: `${MANAGER} is not available in this editor version (typeof ${typeof ns})`,
+    };
+  }
+  const getAll = readMember(ns, 'getAll');
+  if (typeof getAll.value !== 'function') {
+    return {
+      ...lookup,
+      unavailable: getAll.error !== undefined
+        ? `read ${MANAGER}.getAll: ${getAll.error}`
+        : `${MANAGER}.getAll is not a function on this build (typeof ${typeof getAll.value})`,
+    };
+  }
+
+  let components: unknown;
+  try {
+    components = await settle(getAll.value.call(ns));
+  } catch (error) {
+    return { ...lookup, error: `${MANAGER}.getAll() threw ${probeErrorText(error)}` };
+  }
+  if (!Array.isArray(components)) {
+    return {
+      ...lookup,
+      error: `${MANAGER}.getAll() answered ${probeValueShape(components)}, not an array — `
+        + 'an empty page is [] and this is not that',
+    };
+  }
+  lookup.truncated = components.length > PROBE_COMPONENT_CAP;
+
+  for (const component of components.slice(0, PROBE_COMPONENT_CAP)) {
+    lookup.components += 1;
+    const at = `component #${lookup.components}`;
+    if (!component || (typeof component !== 'object' && typeof component !== 'function')) {
+      lookup.readErrors.push(`${at} is ${probeValueShape(component)}, not a component instance`);
+      continue;
+    }
+    const pins = readMember(component, 'getAllPins');
+    if (typeof pins.value !== 'function') {
+      lookup.readErrors.push(
+        `${at}: getAllPins is not a function (typeof ${typeof pins.value})`
+          + (pins.error === undefined ? '' : ` — ${pins.error}`),
+      );
+      continue;
+    }
+    let list: unknown;
+    try {
+      list = await settle(pins.value.call(component));
+    } catch (error) {
+      lookup.readErrors.push(`${at}: getAllPins() threw ${probeErrorText(error)}`);
+      continue;
+    }
+    if (!Array.isArray(list)) {
+      lookup.readErrors.push(
+        `${at}: getAllPins() answered ${probeValueShape(list)}, not an array`,
+      );
+      continue;
+    }
+    let unnamed = 0;
+    for (const pin of list) {
+      const id = await getState(pin, 'PrimitiveId');
+      if (typeof id !== 'string' || !id) {
+        unnamed += 1;
+        continue;
+      }
+      if (id !== padId) continue;
+      lookup.matches += 1;
+      if (lookup.pad === null) lookup.pad = pin;
+    }
+    if (unnamed) {
+      // A pin whose id will not read could be the one asked for, so the scan
+      // is incomplete — the same reason a truncated scan cannot answer "no".
+      lookup.readErrors.push(`${at}: ${unnamed} pin(s) whose getState_PrimitiveId would not read`);
+    }
+  }
+  return lookup;
+}
+
+/**
+ * The bounded ComponentPad fallback for `pad.connected`, and its evidence.
+ *
+ * The rule the 550B machine run forces: the base pad instance lacking the
+ * method is **not** the same fact as the component pad lacking it, so the
+ * answer must say which one was measured (`resolution`) and what the walk saw
+ * (`componentFallback`). Only a **complete** walk may keep a negative answer:
+ *
+ * - one match and a callable method → the ordinary call path, reported with
+ *   `resolution: 'component'` (gaps and truncation still disclosed);
+ * - one match and the method still missing, with no gaps → `absent`, now with
+ *   the evidence that the component pad was checked;
+ * - more than one match → `error`/ambiguous: the id is not unique and taking
+ *   the first one would be a guess;
+ * - no match, or a match, with any read gap or a truncated scan → `error`
+ *   whose text says the scan did not complete, because "the ComponentPad has
+ *   no such method either" cannot be claimed from an incomplete walk;
+ * - the component namespace or its `getAll` unusable → `unavailable`.
+ */
+async function probeComponentPadFallback(
+  request: ProbeInstanceRequest,
+  eda: Eda,
+  limit: number,
+  directValue: unknown,
+): Promise<Record<string, unknown>> {
+  const hostMethod = PROBE_INSTANCE_HOST_METHOD[request.method];
+  const id = JSON.stringify(request.primitiveId);
+  const lookup = await findComponentPad(eda, request.primitiveId);
+  const componentFallback = {
+    components: lookup.components,
+    matches: lookup.matches,
+    readErrors: lookup.readErrors,
+    truncated: lookup.truncated,
+  };
+  const base: Record<string, unknown> = { componentFallback, resolution: 'component' };
+  const direct = `${hostMethod} is not a function on the base pad instance `
+    + `(typeof ${typeof directValue})`;
+  const gaps = (): string => {
+    const parts: string[] = [];
+    if (lookup.readErrors.length) {
+      parts.push(`${lookup.readErrors.length} component read(s) failed: `
+        + lookup.readErrors.slice(0, 3).join('; '));
+    }
+    if (lookup.truncated) {
+      parts.push(`only the first ${PROBE_COMPONENT_CAP} components were inspected`);
+    }
+    return parts.length ? ` — the scan did not complete: ${parts.join('; ')}` : '';
+  };
+
+  if (lookup.unavailable !== undefined) {
+    return {
+      ...base,
+      status: 'unavailable',
+      error: `${direct}, and the component-pad fallback could not run: ${lookup.unavailable}`,
+    };
+  }
+  if (lookup.error !== undefined) {
+    return {
+      ...base,
+      status: 'error',
+      error: `${direct}, and the component-pad fallback could not run: ${lookup.error}`,
+    };
+  }
+  if (lookup.matches > 1) {
+    return {
+      ...base,
+      status: 'error',
+      error: `${lookup.matches} component pads answer getState_PrimitiveId ${id} — ambiguous, `
+        + 'and taking the first match would be a guess',
+    };
+  }
+  if (lookup.matches === 0) {
+    if (lookup.readErrors.length || lookup.truncated) {
+      return {
+        ...base,
+        status: 'error',
+        error: `${direct}, and no component pad answered ${id} in the `
+          + `${lookup.components}-component walk, but${gaps()} — so "no ComponentPad has it `
+          + 'either" is not a claim this walk can support',
+      };
+    }
+    return {
+      ...base,
+      status: 'absent',
+      error: `${direct}, and the complete ${lookup.components}-component walk found no `
+        + `ComponentPad answering ${id}`,
+    };
+  }
+
+  const pad = lookup.pad;
+  const member = readMember(pad, hostMethod);
+  if (member.error !== undefined) {
+    return { ...base, status: 'error', error: `read ${hostMethod} on the component pad: ${member.error}` };
+  }
+  if (typeof member.value !== 'function') {
+    if (lookup.readErrors.length || lookup.truncated) {
+      return {
+        ...base,
+        status: 'error',
+        error: `${direct}, and the unique ComponentPad for ${id} does not expose ${hostMethod} `
+          + `(typeof ${typeof member.value}) either, but${gaps()}`,
+      };
+    }
+    return {
+      ...base,
+      status: 'absent',
+      error: `${direct}, and neither does the unique ComponentPad for ${id} `
+        + `(typeof ${typeof member.value}) — both instances were measured`,
+    };
+  }
+  return { ...base, ...(await probeInstanceCall(request, pad, member.value, limit)) };
+}
+
+/** The `instances` mode's answer body, minus the version/connector/topLevel header. */
+async function probeInstances(
+  params: Record<string, unknown>,
+  eda: Eda,
+): Promise<Record<string, unknown>> {
+  const requests = probeInstanceRequests(params);
+  const limit = probeInstanceLimit(params);
+  // The page guard runs before any `get()`: a get on a page that is not in
+  // front would answer ids belonging to another document.
+  const page = await requirePcbFocus(eda);
+  const rows: Array<Record<string, unknown>> = [];
+  for (const request of requests) {
+    rows.push(await probeInstanceRow(request, eda, limit));
+  }
+  return { page, readOnly: true, instances: rows };
+}
+
 export const sysProbe: ActionHandler = async (params, eda) => {
   const version = (() => {
     try {
@@ -2215,6 +2944,15 @@ export const sysProbe: ActionHandler = async (params, eda) => {
       return [];
     }
   })();
+
+  // `instances` mode (550B): does this build answer the three methods the type
+  // package declares on **PCB primitive instances**? Checked first, so a call
+  // that carries `instances` together with `realm`/`call`/`checks`/… is refused
+  // as the conflict it is instead of being answered by whichever branch happens
+  // to come first.
+  if (params?.instances !== undefined || params?.limit !== undefined) {
+    return { version, connector: VERSION, topLevel, ...(await probeInstances(params, eda)) };
+  }
 
   // `realm` mode (R4 stage 1): can this realm execute a string? Read-only,
   // constant code only — see `realmProbe`.

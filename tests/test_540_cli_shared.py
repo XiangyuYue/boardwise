@@ -94,7 +94,8 @@ def test_owner_manifest_covers_the_final_command_modules():
     assert data["modules"]["parsers/elibz.py"] == "shared"
     assert data["modules"]["core/netpath.py"] == "shared"
     assert data["modules"]["pcb_netpath.py"] == "assembly"
-    assert len(data["modules"]) == 154
+    #: beta 2 adds agentadjusted (draw), v4facts (draw), v4circuitspec (shared).
+    assert len(data["modules"]) == 157
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 
