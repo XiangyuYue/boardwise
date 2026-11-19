@@ -220,19 +220,47 @@ def test_load_annotations_reads_the_bishe_a_and_b_rulings():
     assert "U7" not in b2.topic and "U6" not in b2.topic
 
     model = load_board_model(aset.source)
-    # 040b: the project is three boards now, so the oracle's 30 refs split by the
-    # board that can see them — 28 names are on more than one board (reported
-    # once, by the first board that carries them) and U15/U16 repeat twice within
-    # one page of Board1. The union is what has to match the records.
+    # 040b signed 30 refs. Two rulings landed after the signature and the model
+    # now disagrees with exactly those two, which is why the comparison names
+    # them instead of the file being trimmed:
+    #
+    # * **552 — U15/U16 are multi-unit parts, not repeats.** Each was placed
+    #   twice on page 5f0f of Board1 under one non-empty ``Unique ID`` and one
+    #   non-empty ``Device``, with a *different* non-empty ``partId`` per
+    #   placement -- the file's own identity for one physical part drawn as two
+    #   units (``_one_device_several_units``). The model holds them once each
+    #   now, every unit contributing its own pins, so they are not repeats.
+    # * **553 (岳, 2026-11-19) — a name on another board is not a defect.**
+    #   Each board numbers its own parts. ``multi_board_designators()`` still
+    #   records the 28 project-scoped facts, and ``repeated_designators()``
+    #   retains them for consumers that must resolve project-level ambiguity;
+    #   only the rule's ERROR findings retired.
+    #
+    # The signed records stay as signed -- deleting them would erase the history
+    # the 30/30 measurement was made against -- so the assertion subtracts the
+    # two refs 552 retired, by name, and requires the rest to equal the model's
+    # 28. Anything else that drifts still fails here.
     assert isinstance(model, ProjectModel)
-    assert sorted(item.ref for item in duplicates) == model.repeated_designators()
+    assert len(duplicates) == 30, "the signed records are history and are kept"
+    retired_by_552 = {"U15", "U16"}
+    assert retired_by_552 <= {item.ref for item in duplicates}
+    assert sorted(
+        item.ref for item in duplicates if item.ref not in retired_by_552
+    ) == model.repeated_designators(), (
+        "after 552's two multi-unit refs, the records and the model agree on 28"
+    )
     cross = model.multi_board_designators()
     assert len(cross) == 28, "28 names are on more than one board"
     assert cross["C1"] == ["Board1", "Board2", "Board3"]
     assert cross["R8"] == ["Board1", "Board3"]
+    assert not retired_by_552 & set(cross), (
+        "552 merged U15/U16 into one placement on Board1 -- neither is a "
+        "cross-board name"
+    )
     assert model.board_titles() == ["Board1", "Board2", "Board3"]
-    assert model.boards[0].duplicate_designators == ["U15", "U16"], (
-        "the same-page repeats: page 5f0f carries U15 and U16 twice each"
+    assert model.boards[0].duplicate_designators == [], (
+        "552 proved 5f0f's U15/U16 pairs are the units of one part each, so "
+        "Board1 has no same-page repeat left"
     )
     assert model.boards[0].cross_page_designators == {}, (
         "Board1's two pages share no designator: 5f0f is the drawn one and "

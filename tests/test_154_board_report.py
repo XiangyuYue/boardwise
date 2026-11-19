@@ -412,8 +412,35 @@ def test_checkup_writes_the_integrated_report_for_foc_1_1_0(tmp_path, monkeypatc
     # Three schematic boards, each with its PCB document merged in, in model order.
     assert [b["board"] for b in section["boards"]] == ["Board1", "Board2", "Board3"]
     assert [b["pcb"] for b in section["boards"]] == ["PCB1", "PCB2", "PCB3"]
-    # The 1.0.0 wall-clock anchor: 毕设FOC 1.1.0 carries 50 ERROR.
-    assert section["totals"]["ERROR"] == 50
+    # 554 re-read, per rule (the old anchor read 50). The 30 that left are
+    # exactly `conn-duplicate-designators`: 28 cross-board names (553 — each
+    # board numbers its own parts, 岳 2026-11-19, so a shared name is a fact and
+    # not a defect) plus Board1's U15/U16 same-page pairs (552 — one
+    # TLV9062IDR each, two units of one physical part, not two parts on one name).
+    assert section["totals"]["ERROR"] == 20
+    errors = [
+        finding
+        for board in section["boards"]
+        for group in board["groups"]
+        for finding in group["findings"]
+        if finding["severity"] == "ERROR"
+    ]
+    # The 20 that remain are E1's footprint measurement, and nothing else -- so
+    # the drop is the retired rule, not a finding that went missing with it.
+    assert {finding["rule_id"] for finding in errors} == {"pcb-footprint-consistency"}
+    assert len(errors) == 20
+    assert {
+        board["board"]: sum(
+            1 for group in board["groups"] for finding in group["findings"]
+            if finding["severity"] == "ERROR"
+        )
+        for board in section["boards"]
+    } == {"Board1": 14, "Board2": 0, "Board3": 6}
+    assert not [
+        finding for board in section["boards"] for group in board["groups"]
+        for finding in group["findings"]
+        if finding["rule_id"] == "conn-duplicate-designators"
+    ], "553 retired the cross-board class and 552 the multi-unit repeats"
     assert section["verdict"]["canShip"] is False
     # Every board has a 器件检查 group (E1/E2/E3 rules ran on each document).
     for board in section["boards"]:
@@ -443,7 +470,17 @@ def test_checkup_integrated_report_carries_the_footprint_errors_on_foc_1_0_0(
         ref for f in footprint for ref in f["refs"]
     }
     assert section["verdict"]["canShip"] is False
-    assert "13 项 ERROR" in section["verdict"]["line"]
+    # 554: this run used to carry 13 ERROR — the six E1 footprint rows plus 7
+    # `conn-duplicate-designators`. The 7 are the 5 cross-board names (553) and
+    # the U14/U4 same-page pairs (552's multi-unit reading); the six footprint
+    # ERROR are untouched, and no other rule lost one.
+    assert section["totals"]["ERROR"] == 6
+    assert not [
+        finding for board in section["boards"] for group in board["groups"]
+        for finding in group["findings"]
+        if finding["rule_id"] == "conn-duplicate-designators"
+    ]
+    assert "6 项 ERROR" in section["verdict"]["line"]
 
 
 def test_checkup_integrated_report_refuses_passed_without_datasheets_on_robot(

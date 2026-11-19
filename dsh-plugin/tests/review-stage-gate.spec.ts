@@ -371,6 +371,7 @@ describe('541R3 registration: both gates on one waterfall', () => {
       'boardwise_review_evidence',
       'boardwise_triage_batch',
       'boardwise_review_finalize',
+      'boardwise_parts_hunt',
       'boardwise_draw_compile',
       'boardwise_draw_lint',
       'boardwise_draw_v4_facts',

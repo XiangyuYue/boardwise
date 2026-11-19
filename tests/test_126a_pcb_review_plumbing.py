@@ -1685,14 +1685,28 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `manifest.json` 与 `inputs/review-report.json` 两处 rulebody 由官方
     # `tools.build_differential_fixtures` 重生成同步。本批不动任何既有规则体：
     # 三个值都只有新增一个文件这一项因果。
-    assert old_digest == "d345bfc0"
+    # **553（本字段 = 直接口径，2026-11-19 实测）**：d345bfc0 -> **761a94b5**。
+    # 因果与文件末 553 段落同一处：`rules/connectivity.py` 是 `rules/` 顶层的直接
+    # 文件，553 退休跨板 ERROR 改了它（外加主代理的注释清理），所以直接口径也动；
+    # 552 的 `parsers/schematic.py` 不在射程内。038Q18 到 038Y4 期间它是 d345bfc0。
+    assert old_digest == "761a94b5"
     # **038Y4**：recursive 3f90b257 -> **1cc2bff3**。新文件 `rules/pcb/silkbody.py`
     # （`pcb-silk-under-body`）同样只在 `rules/pcb/` 里：递归口径看得见、直接
     # 口径（d345bfc0）不动。本批没有改动任何既有规则体——recursive 的移动只有
     # 「新增一个规则文件」这一项因果（`engines/pcbreview.py` 的 import/注册、
     # `contracts/module-owners.json` 与该文件所在目录都不在这份配方的射程内或不在
     # `src/boardwise/rules/` 下）。
-    assert recursive == "1cc2bff3", (
+    # **553（2026-11-19，552/553 集成批 554 实测）**：recursive 1cc2bff3 ->
+    # **dcc659a6**、direct d345bfc0 -> **761a94b5**。因果只有一项：553 退休跨板
+    # 共用位号 ERROR，改的是 `rules/connectivity.py`（删掉 `_rows` 里的 cross-board
+    # 遍历 26 行、类 docstring 与 `title`/OK 文案收窄；主代理随后在该文件里做了注释
+    # 清理，同样改变字节）。它是 `rules/` 顶层的**直接**文件，所以直接与递归两个
+    # 口径**都**动——与 038Y2/3/4「只新增 `rules/pcb/` 文件」的情形相反。552 改的是
+    # `parsers/schematic.py`，不在本配方射程内，对这两个值零影响。
+    # 指纹算法未改：direct 仍按本测试内的老配方（sorted `rules/*.py`，名 + `\x00` +
+    # LF 折叠字节）实测，recursive 仍由 `rulebody_fingerprint(rules_dir)` 实测；
+    # 两值都取自当前这棵工作树，没有放宽断言。
+    assert recursive == "dcc659a6", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

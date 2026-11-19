@@ -235,7 +235,10 @@ def test_the_project_totals_count_parts_not_names(foc):
     assert foc.component_count() == 155
     assert len(foc.designators()) == 121
     assert sum(len(b.components) for b in foc.boards) == 155
-    assert foc.net_count() == 137
+    # 552 re-pinned 137 -> 130: the dual op-amps' second units stopped
+    # carrying the first unit's pin set, so seven islands the flattening had
+    # split (or welded) are gone. Placements and names are unmoved.
+    assert foc.net_count() == 130
 
 
 # --------------------------------------------------------------------------
@@ -248,22 +251,31 @@ def test_every_finding_carries_the_board_that_produced_it(foc):
     titles = set(foc.board_titles())
     assert findings, "the fixture must produce findings or this pins nothing"
     assert {f.board for f in findings} <= titles
-    assert {f.board for f in findings} == {"Board1", "Board2", "Board3"}
+    # 553: Board2's only findings were the cross-board designator rows, which
+    # 553 retired as facts (岳 2026-11-19), so the stamped set is the two boards
+    # that still have something to judge — Board2's silence is the causal pin.
+    assert {f.board for f in findings} == {"Board1", "Board3"}
     # and the rules saw each board's own netlist: the shunts live on Board3
     shunt = [f for f in findings if f.rule_id == "shunt-sense-link"]
     assert {f.board for f in shunt} == {"Board3"}
     assert len(shunt) == 3, "R43, R8 and R18 — each judged on its own netlist"
 
 
-def test_oracle_a1s_thirty_refs_are_all_reported_once(foc):
-    """WI-5: A1 stands (30 ERRORs), now split across the three classes."""
+def test_oracle_a1s_thirty_refs_survive_as_facts_not_as_findings(foc):
+    """WI-5: A1's 30 refs stay in the model, and leave the verdict.
+
+    552 retired U15/U16 because they are two units of one TLV9062IDR each
+    (Unique ID + Device equal, partId .1/.2), not two parts answering to one
+    name. 553 (岳 2026-11-19) retired the 28 cross-board names as *defects*
+    while keeping them as facts. What must not happen either way is the signed
+    review set quietly losing refs, so the comparison moves from findings to the
+    model's facts instead of being dropped.
+    """
     findings = [
         f for board_model in foc.boards
         for f in DuplicateDesignators().check(board_model)
     ]
-    assert len(findings) == 30
-    assert {f.severity for f in findings} == {"ERROR"}
-    reported = sorted(f.message.split()[0] for f in findings)
+    assert findings == [], "neither same-board class has an instance on this archive"
     annotations = json.loads(
         (Path("reviewsets") / "ProPrj_毕设FOC驱动板_2026-09-17.json").read_text(
             encoding="utf-8"
@@ -273,7 +285,15 @@ def test_oracle_a1s_thirty_refs_are_all_reported_once(foc):
         item["ref"] for item in annotations["items"]
         if item.get("rule_hint") == "conn-duplicate-designators"
     )
-    assert reported == a1
+    # 552: the annotation is kept whole; only the two refs this batch proved to
+    # be units of one part are taken out of the comparison, and the assertion
+    # that they *are* in the signed set is what keeps this from being a silent
+    # loosening.
+    dual_unit_refs = {"U15", "U16"}
+    assert dual_unit_refs <= set(a1), a1
+    repeated = foc.repeated_designators()
+    assert repeated == sorted(ref for ref in a1 if ref not in dual_unit_refs)
+    assert set(foc.multi_board_designators()) == set(repeated)
 
 
 def test_the_project_facade_refuses_to_read_a_multi_board_project(foc):

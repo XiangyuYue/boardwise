@@ -258,7 +258,13 @@ def test_pages_are_not_welded(foc, motor):
     the 高速电机控制器 board loses nine of the same kind (52 -> 43).
     """
     board3 = _board(foc, "Board3")
-    assert [len(b.nets) for b in foc.boards] == [99, 13, 25]
+    # 552 re-pinned Board1 99 -> 92: the dual op-amps' second units were
+    # carrying the first unit's whole pin set, so U15/U16 (Board1) and
+    # U15/U16/U17/U20 (the 高速 board) welded pins that are not on one
+    # point. Their own units' pins now read their own islands, and the
+    # islands the flattening had split/shorted are gone. Board2/Board3 do
+    # not carry a dual-unit part and are untouched.
+    assert [len(b.nets) for b in foc.boards] == [92, 13, 25]
     # The 高速电机控制器 project: two boards with the designer's own titles
     # (板名自定义 — the board *is* the unit, not a board numbered by us).
     # 042 §WI-1 re-measured this pair: the board's displaced attribute blocks
@@ -277,7 +283,9 @@ def test_pages_are_not_welded(foc, motor):
     # PAD_NET puts them on (9/9 agree, 0 split over the board's shared nets).
     # Again islands fewer on boards whose pages stay apart: the isolation this
     # test asserts is what is being measured, not what changed.
-    assert [len(b.nets) for b in motor.boards] == [104, 43]
+    # 552 re-pinned the 控制板 as 104 -> 96, same cause as the 毕设 Board1
+    # above (its four dual op-amps). The 驱动板 has no dual-unit part.
+    assert [len(b.nets) for b in motor.boards] == [96, 43]
     assert motor.board_titles() != ["Board1", "Board2"]
     # The old weld's signature: one net with 100+ members. None is left.
     for board_model in (*foc.boards, *motor.boards):
@@ -364,14 +372,18 @@ def test_the_model_separates_the_three_kinds_of_repeat(foc, motor):
     高速电机控制器 project does (below), which is why the middle class has a test.
     """
     board1, board3 = _board(foc, "Board1"), _board(foc, "Board3")
-    assert board1.duplicate_designators == ["U15", "U16"]
+    # 552: U15/U16 on Board1 were never two parts — they are the two units
+    # of one TLV9062IDR each (same Unique ID, same Device, partId .1/.2), so
+    # the board has no same-page repeat left at all.
+    assert board1.duplicate_designators == []
     assert board1.cross_page_designators == {}
     assert len(board3.cross_board_designators) == 28
     assert board3.cross_board_designators["C1"] == ["Board1", "Board2", "Board3"]
     assert foc.multi_board_designators()["C1"] == ["Board1", "Board2", "Board3"]
     # the union of the three classes is the 30 refs oracle A1 ruled on
-    assert len(foc.repeated_designators()) == 30
-    assert "U15" in foc.repeated_designators() and "U16" in foc.repeated_designators()
+    assert len(foc.repeated_designators()) == 28
+    assert "U15" not in foc.repeated_designators()
+    assert "U16" not in foc.repeated_designators()
     # 高速电机控制器: same-page repeats again, and 18 cross-board names. Neither
     # real multi-board fixture repeats a name across *its own* pages (their
     # second pages are the empty ones), which is why the middle class is tested
@@ -381,7 +393,8 @@ def test_the_model_separates_the_three_kinds_of_repeat(foc, motor):
     # the six names the board's two halves now share, and they are real — the PCB
     # lists six capacitors the schematic parse could not see.
     same_page = {name for b in motor.boards for name in b.duplicate_designators}
-    assert same_page == {"U15", "U16", "U17", "U20"}
+    # 552: these four names were the 控制板's dual op-amps, one part each.
+    assert same_page == set()
     assert len(motor.multi_board_designators()) == 18
     assert motor.multi_board_designators()["C8"] == ["控制板", "驱动板"]
     for board_model in (*foc.boards, *motor.boards):
@@ -411,21 +424,22 @@ def test_single_page_boards_have_neither_kind():
         assert model.cross_page_designators == {}, name
 
 
-def test_the_rule_reports_all_three_kinds_and_names_the_subject(foc):
-    """Three classes, all ERROR (oracle A1, unchanged), and the message says which
-    class it is: same page, another page of the same board, or another board."""
+def test_a_cross_board_name_is_a_project_fact_not_a_finding(foc):
+    """Three classes in the facts, two in the verdict (553, 岳 2026-11-19).
+
+    The archive keeps all 28 cross-board names as facts; the two same-board
+    classes keep firing, measured above (the synthetic middle class) and below
+    (the injected R24), so this zero cannot be a total that hides a same-board
+    repeat behind the cross-board removal.
+    """
     findings = []
     for board_model in foc.boards:
         findings.extend(DuplicateDesignators().check(board_model))
-    same_page = [f for f in findings if "more than one placed part on one page" in f.message]
-    cross_board = [f for f in findings if "more than one board" in f.message]
-    assert sorted(f.message.split()[0] for f in same_page) == ["U15", "U16"]
-    assert "C1 is placed on more than one board (Board1、Board2、Board3)" == (
-        cross_board[0].message.split(";")[0]
-    ), cross_board[0].message
-    assert len(cross_board) == 28, "one report per name, not one per board"
-    assert {f.severity for f in findings} == {"ERROR"}
-    assert len(findings) == len(foc.repeated_designators()) == 30
+    assert findings == []
+    assert foc.multi_board_designators()["C1"] == ["Board1", "Board2", "Board3"]
+    assert len(foc.repeated_designators()) == 28
+    assert {name for b in foc.boards for name in b.duplicate_designators} == set()
+    assert {name for b in foc.boards for name in b.cross_page_designators} == set()
 
 
 def test_an_injected_same_board_repeat_is_still_a_violation():

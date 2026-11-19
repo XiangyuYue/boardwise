@@ -4,6 +4,7 @@
  */
 import { isPendingRegistration } from './review-finalize.js';
 import { registerDrawTools } from './draw-tools.js';
+import { registerPartsHunt } from './parts-hunt.js';
 import { registerReviewDelivery } from './review-delivery.js';
 import { hasPromiseFace, mountReviewStageGate, registerReviewStageProjection, } from './review-stage-gate.js';
 import { registerReviewCheckup, registerReviewWorkflow } from './review-tools.js';
@@ -50,6 +51,9 @@ export function apply(ctx) {
 }
 /** Everything that reads a finalize or stage projection, published at once. */
 function publish(ctx, finalizeReader, stageReader) {
+    // 555: the batch datasheet hunt reads a design the way checkup does and
+    // draws nothing, so it lands after the old eight tools and before draw.
+    registerPartsHunt(ctx);
     registerDrawTools(ctx);
     registerReviewDelivery(ctx, finalizeReader);
     // The stage gate proves a checkpoint with **both** projections: a stage

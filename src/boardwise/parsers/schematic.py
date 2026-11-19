@@ -97,6 +97,21 @@ Point = tuple[float, float]
 
 
 @dataclass
+class _PinSet:
+    """One part's pins out of a multi-unit SYMBOL document (552).
+
+    A dual op-amp is one ``DEVICE`` the library draws as two symbols: the SYMBOL
+    document carries both units' ``PIN`` rows and each row names its own part by
+    ``partId``. This is that partition, so a placement whose ``partId`` hits one
+    of these keys can take **its** pins instead of every unit's.
+    """
+
+    pins: dict[str, tuple[Point, str]] = field(default_factory=dict)
+    pin_names: dict[str, str] = field(default_factory=dict)
+    pin_types: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class _SymbolDef:
     """One SYMBOL library document.
 
@@ -118,6 +133,14 @@ class _SymbolDef:
     pin_names: dict[str, str] = field(default_factory=dict)
     #: Pin number -> ``Pin Type`` (``Undefined``/``Power``/``Input``…).
     pin_types: dict[str, str] = field(default_factory=dict)
+    #: ``PIN.partId`` -> the pins that part declares (552). Kept **beside** the
+    #: full maps above, which stay complete for every consumer that has no unit.
+    parts: dict[str, _PinSet] = field(default_factory=dict)
+    #: Whether every numbered ``PIN`` of the document named a ``partId``, which
+    #: makes ``parts`` a partition instead of a fragment. A document where some
+    #: pins name no part may not be read per unit: the unit pins would silently
+    #: drop the unnamed ones, and dropping pins is what this parser may not do.
+    parts_complete: bool = False
 
 
 @dataclass
@@ -1047,6 +1070,11 @@ class _PinRun:
     number: str = ""
     name: str = ""
     type: str = ""
+    #: The ``partId`` the ``PIN`` row names. A multi-unit device's SYMBOL holds
+    #: every unit's pins, each row saying which part it belongs to (measured:
+    #: ``TLV9062IDR.1`` / ``TLV9062IDR.2``); empty on a document that does not
+    #: partition its pins.
+    part_id: str = ""
 
 
 def _pin_ref(record: Any, pin_key: str) -> str:
@@ -1106,6 +1134,15 @@ def _symbol_definition(symbol: _SymbolDef) -> tuple[Any, ...]:
         tuple(sorted((number, point) for number, (point, _ref) in symbol.pins.items())),
         tuple(sorted(symbol.pin_names.items())),
         tuple(sorted(symbol.pin_types.items())),
+        # 552: which part each pin belongs to is part of the definition — two
+        # copies that assign the same pins to different units are not the same
+        # symbol, and first-wins would hide it.
+        tuple(
+            (part_id, tuple(sorted(unit.pins)),
+             tuple(sorted(unit.pin_names.items())),
+             tuple(sorted(unit.pin_types.items())))
+            for part_id, unit in sorted(symbol.parts.items())
+        ),
     )
 
 
@@ -1185,6 +1222,7 @@ def _commit_symbol(
             point=(round(float(body.get("x") or 0), COORD_PRECISION),
                    round(_page_y(body.get("y")), COORD_PRECISION)),
             ref=_pin_ref(record, pin_key),
+            part_id=str(body.get("partId") or "").strip(),
         )
         runs.append(run)
         if record.id:
@@ -1218,6 +1256,7 @@ def _commit_symbol(
             if run is not None and _fill_pin_attr(run, str(body.get("key")), value):
                 break
 
+    parts_complete = True
     for run in runs:
         if not run.number:
             if parse_stats is not None:
@@ -1231,6 +1270,16 @@ def _commit_symbol(
             symbol.pin_names[run.number] = run.name
         if run.type:
             symbol.pin_types[run.number] = run.type
+        if not run.part_id:
+            parts_complete = False
+            continue
+        unit = symbol.parts.setdefault(run.part_id, _PinSet())
+        unit.pins[run.number] = (run.point, run.ref)
+        if run.name:
+            unit.pin_names[run.number] = run.name
+        if run.type:
+            unit.pin_types[run.number] = run.type
+    symbol.parts_complete = parts_complete and bool(symbol.parts)
     if symbol.uuid:
         first = symbols.get(symbol.uuid)
         if first is None:
@@ -2174,6 +2223,48 @@ def build_schematic_model(
     return project.boards[0]
 
 
+def _unit_of(symbol_def: _SymbolDef, part_id: str) -> _SymbolDef | _PinSet:
+    """The pins one placement may claim: its own unit's, or the whole symbol.
+
+    552: an **exact** ``partId`` hit on a document whose every pin names a part
+    narrows the reading to that unit. Everything else -- no ``partId`` on the
+    placement, an old document that does not partition its pins, a ``partId``
+    the symbol does not declare, a partially partitioned document -- falls back
+    to the whole symbol, which is the pre-552 reading. Guessing a unit is the
+    one thing this must not do.
+    """
+    if not part_id or not symbol_def.parts_complete:
+        return symbol_def
+    unit = symbol_def.parts.get(part_id)
+    if unit is None or not unit.pins:
+        return symbol_def
+    return unit
+
+
+def _one_device_several_units(evidence: list[tuple[int, str, str, str]]) -> bool:
+    """Are these same-designator placements the units of ONE physical part? (552)
+
+    Only the file's own identity may answer: every placement carries the same
+    non-empty ``Unique ID``, the same non-empty ``Device``, and a **different**
+    non-empty ``partId``. Anything else is a repeat -- two copies of one library
+    part share their ``partId`` (the DCDC board's ``100NF`` x4), a copied
+    placement keeps its ``Unique ID`` as well, and an identity with an empty
+    field is no identity at all. MPN, Value, footprint, title and coordinates
+    are not evidence and are never consulted.
+    """
+    if len(evidence) < 2:
+        return False
+    uids = {uid for _index, uid, _device, _part in evidence}
+    devices = {device for _index, _uid, device, _part in evidence}
+    parts = [part for _index, _uid, _device, part in evidence]
+    return (
+        len(uids) == 1 and "" not in uids
+        and len(devices) == 1 and "" not in devices
+        and all(parts)
+        and len(set(parts)) == len(parts)
+    )
+
+
 def _fill_board_model(
     model: BoardModel,
     split: _PageSplit,
@@ -2219,6 +2310,10 @@ def _fill_board_model(
     placements_seen: dict[str, dict[str, int]] = {}
     # (instance, component, [(pin number, page point, ez key, pin name)])
     placed: list[tuple[_Instance, Component, list[tuple[str, Point, str, str]]]] = []
+    # designator -> every placement's own identity, in placement order: (index
+    # into ``placed``, Unique ID, Device, partId). 552 reads a multi-unit part
+    # from nothing else -- see `_one_device_several_units`.
+    unit_evidence: dict[str, list[tuple[int, str, str, str]]] = {}
 
     # --- instances that carry a real designator become model components
     for inst in instances:
@@ -2306,16 +2401,11 @@ def _fill_board_model(
         component.props["device_uuid"] = (inst.attrs.get("Device") or "").strip()
         if meta.get("symbol"):
             component.props["library_symbol_uuid"] = meta["symbol"]
-        # Which pages this designator was placed on. The assignment below keeps
-        # only the **first** placement per designator — the one the copper layer
-        # agrees with (049: on the thesis-FOC board's U15/U16 the first copy's
-        # pins are the PCB's pins, the later copy's power pins are unwired); the
-        # "one designator, one component" contract itself is unchanged, and 040b
-        # re-scopes it per board. The two kinds of repeat are not the same thing
-        # (040 §WI-3, measured on the 毕设 board: 30 refs repeat across three
-        # pages that are three boards) — same page = two parts answer to one name
-        # in one netlist (a real clash), different pages = another board
-        # numbering its own R1.
+        # Count placements per page for the repeat classification below. The
+        # first placement starts as the designator's root component; 552 later
+        # proves same-physical-part units and adds their pins/nets to that root.
+        # Only unresolved duplicates retain 049/105's first-placement fallback;
+        # pages and boards remain separate netlist scopes (040/040b).
         pages_of = placements_seen.setdefault(designator, {})
         pages_of[inst.page] = pages_of.get(inst.page, 0) + 1
         components.setdefault(designator, component)
@@ -2323,18 +2413,28 @@ def _fill_board_model(
         symbol_def = symbols.get(symbol_uuid)
         pins: list[tuple[str, Point, str, str]] = []
         if symbol_def is not None:
-            for number, (point, ez) in sorted(symbol_def.pins.items(), key=lambda kv: kv[0]):
+            # 552: a multi-unit device's placement takes **its own** unit's pins
+            # when the file names the unit it is; every other placement keeps the
+            # whole symbol (`_unit_of`).
+            source = _unit_of(symbol_def, inst.part_id)
+            for number, (point, ez) in sorted(source.pins.items(), key=lambda kv: kv[0]):
                 page_point = _transform_point(
                     point[0], point[1], rotation=inst.rotation,
                     mirror=inst.is_mirror, ox=inst.x, oy=inst.y,
                 )
-                pins.append((number, page_point, ez, symbol_def.pin_names.get(number, "")))
+                pins.append((number, page_point, ez, source.pin_names.get(number, "")))
         else:
             # No symbol document behind this placement: the component is in the
             # model but carries no pins at all, so nothing it connects can be
             # checked. Counted (task 020 §WI-1) — the model itself is unchanged.
             stats.components_without_symbol += 1
         placed.append((inst, component, pins))
+        unit_evidence.setdefault(designator, []).append((
+            len(placed) - 1,
+            (inst.attrs.get("Unique ID") or "").strip(),
+            (inst.attrs.get("Device") or "").strip(),
+            inst.part_id.strip(),
+        ))
 
     # --- connectivity graph, page-scoped (040 §WI-1)
     #
@@ -2390,25 +2490,6 @@ def _fill_board_model(
     for group in sorted(split.wire_groups):
         page = split.pages.get(group, "")
         wires_by_page.setdefault(page, []).extend(segments.get(group) or [])
-    # (designator, pin number) -> page + posed point. Only the placement the
-    # model **keeps** writes here, the same rule 049/105 set for net members: a
-    # second placement of one designator is not in this netlist, so it must not
-    # claim the pin's position either. ``setdefault`` states that: the first
-    # placement seen wins, exactly as ``components`` does.
-    pin_points: dict[tuple[str, str], tuple[str, float, float]] = {}
-    for inst, component, pins in placed:
-        if components.get(component.designator) is not component:
-            continue
-        for number, point, _ez, _pin_name in pins:
-            pin_points.setdefault(
-                (component.designator, number), (inst.page, point[0], point[1])
-            )
-    model.pin_wires = {
-        "binding": "endpoint",
-        "pins": pin_points,
-        "wires": wires_by_page,
-    }
-
     # --- no-connect pins: ``NO_CONNECT`` parents are
     # ``"<instance container id>-e<pin element id>"``; the container id is the
     # common parentId of that instance's trailing attributes.
@@ -2708,6 +2789,76 @@ def _fill_board_model(
         for root, name in labels.items():
             labels[root] = redirect.get(name, name)
 
+    # --- 552: one physical part, several units (contract §3/§4)
+    #
+    # The identity gate above says these placements *are* one part; this says
+    # their netlist is one netlist. A pin number that two units both declare may
+    # only be merged when both read the **same** net: a conflict, or a number one
+    # unit reads and the other does not, is a knowledge gap -- the old
+    # duplicate-designator reading (with 107's truncation note) stands rather
+    # than a netlist invented to look unique.
+    unit_candidates = {
+        designator: [index for index, *_rest in evidence]
+        for designator, evidence in unit_evidence.items()
+        if _one_device_several_units(evidence)
+    }
+    merged_units: dict[str, tuple[int, ...]] = {}
+    for designator, indexes in sorted(unit_candidates.items()):
+        # The reading compared here is the one the model will publish as
+        # ``Pin.net``: a ``NO_CONNECT`` pin is on no net (``None``), every other
+        # pin is its cluster's name or ``None`` when that cluster has none. A
+        # bare net *name* was not the same question -- it made "no connect" and
+        # "no name" both read ``""``, so a number one unit leaves open could be
+        # compared as though the two units had agreed.
+        readings: dict[str, list[str | None]] = {}
+        for index in indexes:
+            inst, _component, pins = placed[index]
+            for number, _point, ez, _pin_name in pins:
+                if (inst.container_id, ez) in nc_set:
+                    readings.setdefault(number, []).append(None)
+                    continue
+                readings.setdefault(number, []).append(
+                    labels.get(uf.find((inst.page, designator, number, index)), "")
+                    or None
+                )
+        conflicted = any(
+            len(names) > 1 and len(set(names)) != 1
+            for names in readings.values()
+        )
+        if not conflicted:
+            merged_units[designator] = tuple(indexes)
+    # The placements whose readings this model keeps: the first per designator
+    # (049/105's rule) plus every unit of a merged part. Everything else is the
+    # dropped copy whose net 107 files as unproven.
+    kept: set[int] = set()
+    first_of: dict[str, int] = {}
+    for index, (_inst, component, _pins) in enumerate(placed):
+        first_of.setdefault(component.designator, index)
+    kept.update(first_of.values())
+    for indexes in merged_units.values():
+        kept.update(indexes)
+
+    # (designator, pin number) -> page + posed point. Only the placement the
+    # model **keeps** writes here, the same rule 049/105 set for net members: a
+    # second placement of one designator that is not a unit of the same part is
+    # not in this netlist, so it must not claim the pin's position either.
+    # ``setdefault`` states that: the first placement seen wins, exactly as
+    # ``components`` does -- and for the units of one part a shared pin number is
+    # one physical pin, so its first drawn position is the reading.
+    pin_points: dict[tuple[str, str], tuple[str, float, float]] = {}
+    for placement, (inst, component, pins) in enumerate(placed):
+        if placement not in kept:
+            continue
+        for number, point, _ez, _pin_name in pins:
+            pin_points.setdefault(
+                (component.designator, number), (inst.page, point[0], point[1])
+            )
+    model.pin_wires = {
+        "binding": "endpoint",
+        "pins": pin_points,
+        "wires": wires_by_page,
+    }
+
     # --- fill Pin.net and reverse-build nets
     nets: dict[str, Net] = {}
     # 107: net name -> the repeated designators whose dropped placement would
@@ -2715,15 +2866,26 @@ def _fill_board_model(
     # classified (the kind of repeat is only known there).
     dropped_on: dict[str, list[str]] = {}
     for placement, (inst, component, pins) in enumerate(placed):
+        # 552: a unit of a merged part writes onto the designator's **root**
+        # component -- the one the model keeps -- because the part is one part.
+        # Every other placement keeps writing on its own object, exactly as
+        # before (a dropped copy's readings were never reachable by a consumer).
+        root = components.get(component.designator)
+        target = root if (root is not None and placement in kept) else component
         for number, point, ez, pin_name in pins:
             # the pin's own page and its own placement (040 §WI-1, 049 P1): the
             # same node the union pass above attached.
             node = (inst.page, component.designator, number, placement)
             name = labels.get(uf.find(node), "")
             is_nc = (inst.container_id, ez) in nc_set
-            component.pins.append(
-                Pin(number=number, name=pin_name, net=None if is_nc else (name or None))
-            )
+            # One pin per number: the units of one part may agree on a power pin,
+            # and a number written twice would make ``pins`` ambiguous for every
+            # consumer that looks a pin up by number.
+            if not any(existing.number == number for existing in target.pins):
+                target.pins.append(
+                    Pin(number=number, name=pin_name,
+                        net=None if is_nc else (name or None))
+                )
             if is_nc or not name:
                 continue
             net = nets.setdefault(name, Net(name=name))
@@ -2737,30 +2899,24 @@ def _fill_board_model(
             # designator up in ``components``, decap's bridging test, checkup's
             # module union, the netlist export) read it as if it were.
             #
-            # A dropped placement is not *hidden* by this: it is the placement
-            # `components.setdefault` already discarded in the instances pass,
-            # and the sheet's own statement — two parts answer to one name — is
+            # Only unresolved duplicate placements are dropped. Their names are
             # still recorded in ``duplicate_designators`` /
-            # ``cross_page_designators`` below and reported as an ERROR. What it
-            # may not do is claim a membership. This follows the choice that
-            # pass made — the first placement, which 049 measured the copper
-            # layer agreeing with (U15/U16 on the 毕设 board).
+            # ``cross_page_designators`` below and reported as an ERROR, but they
+            # cannot claim membership under 049/105's first-placement fallback.
+            # All placements of a 552 multi-unit part are in ``kept`` and never
+            # take this branch.
             #
             # The net itself is still created above — deliberately, *before* this
             # line: dropping the net as well would leave ``Pin.net`` naming a net
             # ``model.nets`` does not carry, which is a worse inconsistency for a
             # consumer than a net whose member list came out empty.
-            if components.get(component.designator) is not component:
+            if placement not in kept:
                 # 107: the net is created, the member is not written — and the
-                # net is now one whose member list came out **short**: this
-                # placement is drawn on the sheet, it does connect to ``name``,
-                # and the only reason it is not a member is 049's
-                # one-designator-one-component contract keeping the first copy.
-                # That is a knowledge gap, not a reading, so it is filed where a
-                # rule can refuse on it (``unproven_nets``) instead of being left
-                # implicit in a missing member. The name the pin reads is known
-                # here — it is this placement's own cluster — which is what makes
-                # the fact collectable at all.
+                # net is now one whose member list came out **short**. That is a
+                # knowledge gap, not a reading, so it is filed where a rule can
+                # refuse on it (``unproven_nets``) instead of being left implicit
+                # in a missing member. The name the pin reads is known here — it
+                # is this placement's own cluster — which makes it collectable.
                 dropped = dropped_on.setdefault(name, [])
                 if component.designator not in dropped:
                     dropped.append(component.designator)
@@ -2772,6 +2928,11 @@ def _fill_board_model(
 
     # --- how a repeated designator reads **within this board** (040 §WI-3, 040b)
     for designator in sorted(placements_seen):
+        if designator in merged_units:
+            # 552: the units of one physical part are not two parts answering to
+            # one name -- their pins are on the nets the drawing puts them on, so
+            # there is no clash to report and no placement left out.
+            continue
         pages_of = placements_seen[designator]
         if sum(pages_of.values()) < 2:
             continue

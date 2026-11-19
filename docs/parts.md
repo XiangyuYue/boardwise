@@ -200,6 +200,74 @@ boardwise parts hunt --file board.epro2 --out .tmp_hunt \
 boardwise parts hunt --file board.epro2 --out .tmp_hunt --shelf ~/.boardwise/parts.json
 ```
 
+**Two entries added in 555: the live board, and the report's own worklist.**
+Neither is a second pipeline — both end in the same `hunt.execute`.
+
+```bash
+# address the project open in the editor (same tier ladder as checkup / review --live)
+boardwise parts hunt --live --out .tmp_hunt
+boardwise parts hunt --live --project myBoard --out .tmp_hunt
+
+# address only the parts a checkup report says it could not judge
+boardwise parts hunt --live --from-report .tmp_checkup/report.json --out .tmp_hunt
+```
+
+`--live` reads through `_load_model_online`, the ladder `checkup` and
+`review --live` already use, so the model this batch addresses is the model those
+commands just reviewed. Only the **`project-file`** and **`per-page`** tiers are
+accepted: the `netlist` tier carries connectivity and nothing else — no MPN, no
+C-number — so hunting it would write one `no-identity` row per part, a false
+statement about parts the editor itself identifies. It exits **3** and names the
+two grants that do answer the question (`工程管理 > 下载工程`,
+`工程设计图 > 文件导出`) instead. A live report's `board` gains `source`
+(`{kind, tier, tierLabel, project, attempts}`); an offline report gains no field
+and no byte shape.
+
+`--from-report` takes the worklist a checkup report **already wrote down**
+(`needs_datasheet[]`; the row spells its designator under `part`, the seeding
+`unreviewed_parts[]` spells it under `designator` — both are read, `designator`
+first). An empty worklist is a zero-part report with zero outbound calls, which is
+the right answer to "nothing is missing". Everything else is exit **2** rather
+than a fallback to the whole board: a report without the key, a section that is
+not a list, a row naming nothing, a `--from-report` file that is not JSON, or a
+designator this board does not have (report and project disagree — the cost of
+guessing is forty outbound calls nobody asked for). `--limit` applies **after**
+the filter, so `--limit 1` answers about the first *missing* part, not the first
+part on the board.
+
+**A designator is a placement, not a part** (555 follow-up; measured on a real
+two-board project: a report folded 23 unreviewed placements into 15 designators,
+and `U1` is an MCU on 控制板 and a *different* part on 驱动板). Rows are therefore
+keyed by `(board, designator, identity)` — the identity being
+`hunt.identity_of`'s C-number + MPN pair:
+
+* the **same** identity on two boards is one part: one row, one lookup, one
+  datasheet (dedupe is kept where it is true);
+* **different** identities under one name are two parts: two rows, each asking
+  its own C-number and each labelled with its own `manufacturer MPN` in the
+  facts' provenance. Collapsing them wrote a report about 15 parts where 16 were
+  placed — the 16th was never addressed;
+* `parts[]` in the report may therefore carry the same `designator` twice;
+  `counts` counts **parts**, not names, and `notes` says which boards disagree;
+* an `--apply` / `--apply-facts` record keyed by **designator only** is refused
+  (`unknown-designator`) when two parts answer to that name — a wrong landing is
+  worse than a question. Address the part instead (`lcsc` / `mpn`), which lands
+  on exactly one identity.
+
+**Candidate sidecars follow the identity.** `<designator>.candidate.json` is the
+file a curator hands to `parts add --facts`, and it used to be named by designator
+alone — so once two parts share a name, the second identity's file silently
+replaced the first's. A designator carrying **one** writable identity keeps that
+filename (a single-part board is unchanged); two or more now append the identity
+(`U1.C1111111.candidate.json`, `U1.C2222222.candidate.json`), and a name
+collision that survives the suffix gets `-2`, `-3` rather than an overwrite. Both
+files are written, each with its own facts and its own `manufacturer MPN` label.
+
+The flag combinations are refusals, not silent choices: `--file` and `--live` are
+exclusive, at least one is required, `--project` / `--instance` only go with
+`--live`, and `--live --offline` is exit 2 — "read the editor" and "not one
+outbound call" are two different claims and a run may not make both.
+
 **The three channels.** Every component is classified by its *own identity field*
 (`c-number` / `mpn-only` / `no-identity`). The C-number is matched by shape
 (`^C\d{4,}$`), never trusted: measured on `tests/fixtures/llc_board.epro2`, 4 of

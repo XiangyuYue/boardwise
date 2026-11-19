@@ -432,9 +432,12 @@ def test_the_bishe_boards_a_section_is_detected_and_explained():
     """The A1/A2 landing, measured (011e sec.3 rulings of 2026-09-19), signed
     under the 2026-09-20 final rulings (task 014), then paid off by task 015.
 
-    Two numbers, two different meanings. The 30 duplicates are **detected**
-    (30/30): a real board, caught by a parser-level check that never had a
-    real board to prove itself on before. The value/MPN contradictions were
+    Two numbers, two different meanings. The 30 duplicates were the A1
+    measurement's centrepiece (**detected** 30/30: a real board, caught by a
+    parser-level check that never had a real board to prove itself on before).
+    Both rulings that came after the signature took that detection away, and
+    this test measures the cost instead of hiding it — see the per-rule block
+    below for the 552/553 reading. The value/MPN contradictions were
     the rule's own false positives -- 10 of them on the board, all ruled
     exception, the A2a three (R43, C115, C116) because the *decoder* was
     reading the part number wrong and the A2b seven because the oracle read
@@ -473,11 +476,32 @@ def test_the_bishe_boards_a_section_is_detected_and_explained():
     assert len(evaluation.unregistered) == 1
     assert "U1" in evaluation.unregistered[0]
     assert "conn-osc-pin-net" in evaluation.unregistered[0]
-    assert evaluation.cross_matches == []
+    # 554: this is the *re-measurement* of the old signed set against the
+    # post-552/553 rules, and it is deliberately worse than 011e's 30/30. The
+    # records were left exactly as signed, so a rule that stopped reporting them
+    # can only show up as `missed`:
+    #
+    # * 553 (岳 2026-11-19): a name on another board is not a defect, so the 28
+    #   cross-board records no longer have a finding to pair with;
+    # * 552: U15/U16 are two units of one TLV9062IDR each, so the two same-page
+    #   records do not either.
+    #
+    # `detected` is therefore 0 and `missed` is 26 — not 30, because the harness
+    # cross-explains 4 of them: another rule names the same ref and the same
+    # board (U1 by arch-nrst-closure, U14 by param-rc-cutoff, R8/R18 by
+    # shunt-sense-link). That is a reading of this set, not a pass: a cross
+    # match says "looked at from another rule", and the column it lands in is
+    # `cross_matches`, not the detection numerator.
     duplicate = _metrics(evaluation, "conn-duplicate-designators")
     assert (duplicate.defects_hinted, duplicate.detected, duplicate.missed) == (
-        30, 30, 0,
+        30, 0, 26,
     )
+    assert sorted(evaluation.cross_matches) == [
+        "R18: hinted conn-duplicate-designators, caught by shunt-sense-link",
+        "R8: hinted conn-duplicate-designators, caught by shunt-sense-link",
+        "U14: hinted conn-duplicate-designators, caught by param-rc-cutoff",
+        "U1: hinted conn-duplicate-designators, caught by arch-nrst-closure",
+    ], "30 records = 0 detected + 26 missed + these 4 cross-explained"
     mpn = _metrics(evaluation, "param-value-mpn-match")
     # 10 exception records, all 10 of them pairing no finding: batch 1 made the
     # A2a three UNKNOWN (no finding to pair) and batch 2 waived the A2b seven
@@ -527,7 +551,12 @@ def test_the_bishe_boards_a_section_is_detected_and_explained():
         (metric.hp_tp for metric in evaluation.metrics),
         start=0,
     )
-    assert board_hp == 31, "30 duplicates + the B1 bulk-cap shortfall"
+    # 554: 31 -> 1. The 30 duplicates used to supply 30 of these true positives;
+    # 552 (U15/U16, one part each) and 553 (cross-board names are facts, not
+    # defects) took them away, and nothing replaced them — a retired finding
+    # class cannot show up as a true positive. What is left is the one real
+    # catch on this board, B1's bulk-cap shortfall.
+    assert board_hp == 1, "only the B1 bulk-cap shortfall is left"
 
 
 # --------------------------------------------------------------------------

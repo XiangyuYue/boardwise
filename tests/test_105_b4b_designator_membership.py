@@ -397,13 +397,13 @@ def test_every_member_agrees_with_the_kept_placements_own_pin_reading():
 
 
 # --- BEGIN generated nail table (outputs/105/scratch/nail_table.py) ---------
-# Recorded on the **pre-fix** tree (`.tmp_105_before`, `outputs/105/probe_before
-# .json`). ``UNTOUCHED_BOARDS`` are the boards with no repeated designator at
-# all: the guard this batch adds never fires on them, so their whole member
-# reading (net -> sorted members) must be what it was. ``REPEATED_NET_KEYS`` are
-# the boards that do repeat: their membership is expected to shrink (that is the
-# fix), but the **net keys** may not — a net whose every member belonged to a
-# dropped placement would otherwise vanish while ``Pin.net`` still named it.
+# 552 re-pinned: the boards that repeat a designator are now only the two
+# the units rule cannot touch -- the DCDC copies (all four `100NF` and both
+# `10UF` carry the *same* partId, so they are four and two parts) and the
+# injected `R24` cross-page copy. Four boards moved into the untouched set
+# because their repeats were the dual units of one op-amp each: the 1.1.0
+# and 1.0.0 毕设FOC Board1, the 高速电机控制器 控制板 and 毕设滤波采样.
+# Digests re-recorded on the delivered tree (`.tmp_552/measure.py`).
 UNTOUCHED_BOARDS = {
     "reviewsets/injected/fixed-base.epro2": {
         "Board1": "c9535d937a93806d16f96310c522f7feb1d59c617ee8118d3ad220c6f29345bf",
@@ -436,17 +436,16 @@ UNTOUCHED_BOARDS = {
         "Board1": "051bcd2036c9d493a6fe61612e632356fbbb109d12d55e1e4dbfe4389b9fd542",
     },
     "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2": {
+        "Board1": "abb0764c8c8813e1105b42e138c8d5c71def6b41b9fa832785f08da9f3b8aa26",
         "Board2": "ed500df68cc3da383ebfb019076ac0484c1b00b3b7a154f51e01471240a25639",
-        # 038g2 re-pinned: nine one-member stub nets (the driver's six
-        # ``SH*``/``SL*`` feet and three sense-negative feet) are aliases of the
-        # nets their jumpers bridge, and all nine feet agree with PCB3's own
-        # PAD_NET. Member-only semantics unchanged; see the nail's docstring.
         "Board3": "0d755edb431e04a2d1fc21d2c7e6723eac8ae73bfd267d8e17c9be46f9b2ad96",
     },
+    "tests/fixtures/ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2": {
+        "Board1": "b49f9db942213810f4ede64461cf55925989e354b075ed0ecdf5d3c36e83a6ad",
+        "Board2": "a816cc509c39961b381d38b96d84f42040e5da3da679a881ee597892d561f2e3",
+    },
     "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2": {
-        # 038g2 re-pinned, same shape and same evidence: nine feet (six driver
-        # ``SH*``/``SL*`` + three sense-negative) now read the nets the jumper
-        # aliases name, 9/9 agree with PCB2's PAD_NET.
+        "控制板": "cf46ba765a6e00aa2678b774d69af568225f17a07617f37b33e9e036e9611f75",
         "驱动板": "58755ba3ca2f314e541b40654401ee86623b170744fc37c04f76810f6844a5ad",
     },
     "tests/fixtures/board24v.enet": {
@@ -458,6 +457,9 @@ UNTOUCHED_BOARDS = {
     "tests/fixtures/llc_board.epro2": {
         "Board1": "f55f930c9914cc2509fc08f61b558e786fa20a15fe85cdde8aed31778923220e",
     },
+    "tests/fixtures/毕设滤波采样_2026-09-27.epro2": {
+        "Board1": "58f8f20a18f51ad55c733a1aea7b45ec61e8aa468eb5ffacb06363972f62204d",
+    },
     "tests/fixtures/级联多电平-主拓扑_2026-09-27.epro2": {
         "Board1": "87ced66f9d40a9b8c22b6ecb4765afc67807a237e2d3876ebb862836f895f75b",
     },
@@ -468,7 +470,6 @@ UNTOUCHED_BOARDS = {
         "Board1": "ca422bb6a0a387d0ad4d3e058cd97b87ad3be0f756a908d911ccd3bb1c35acd2",
     },
 }
-
 REPEATED_NET_KEYS = {
     "reviewsets/injected/duplicate-designator.epro2": {
         "Board1": ["+5V", "D+", "D-", "GND", "NET1", "NET18", "NET19", "NET2", "NET3", "NET4", "NET5", "RX", "TX", "VCC"],
@@ -476,19 +477,7 @@ REPEATED_NET_KEYS = {
     "tests/fixtures/DCDC-12V9V转5V3V3_2026-09-27.epro2": {
         "Board1": ["+12V", "+5V", "GND", "NET1", "NET10", "NET2", "NET5", "NET6", "NET7", "NET8", "NET9", "VCC", "VCCA"],
     },
-    "tests/fixtures/ProPrj_毕设FOC驱动板_2026-09-17.epro2": {
-        "Board1": ["+24V", "+5V", "5VA", "AGND", "CAN_H", "CAN_L", "CAN_RX", "CAN_TX", "D+", "D-", "DRV_EN", "GHA", "GHB", "GHC", "GLA", "GLB", "GLC", "GND", "IA", "IA+", "IA-", "IB", "IB+", "IB-", "IC", "IC+", "IC-", "IIC1_SCL", "IIC1_SDA", "INHA", "INHB", "INHC", "INLA", "INLB", "INLC", "MISO", "MOSI", "NET1", "NET10", "NET11", "NET12", "NET13", "NET14", "NET15", "NET16", "NET17", "NET18", "NET19", "NET2", "NET22", "NET23", "NET24", "NET25", "NET26", "NET27", "NET28", "NET29", "NET3", "NET30", "NET31", "NET4", "NET5", "NET6", "NET7", "NET8", "NET87", "NET88", "NET89", "NET9", "NET90", "NET91", "NET92", "NET96", "NFAULT", "NRST", "NSCS", "OSC-IN", "OSC-OUT", "PGND", "RX", "SCK", "SHA", "SHB", "SHC", "SLA", "SLB", "SLC", "SPI3_MISO", "SPI3_MOSI", "SPI3_NSS", "SPI3_SCK", "SWCLK", "SWDIO", "TX", "VBUS", "VCC", "VCC/2", "VCCA", "VREF"],
-    },
-    "tests/fixtures/ProPrj_高速电机控制器_2026-09-16.epro2": {
-        "控制板": ["+5V", "5VA", "AGND", "CAN_H", "CAN_L", "CAN_RX", "CAN_TX", "D+", "D-", "DRV_EN", "GND", "IA", "IA+", "IA-", "IB", "IB+", "IB-", "IC", "IC+", "IC-", "IIC1_SCL", "IIC1_SDA", "INHA", "INHB", "INHC", "INLA", "INLB", "INLC", "MISO", "MOSI", "MOTA", "MOTB", "MOTC", "NET1", "NET10", "NET105", "NET106", "NET107", "NET108", "NET109", "NET11", "NET110", "NET12", "NET13", "NET14", "NET15", "NET16", "NET19", "NET2", "NET20", "NET21", "NET22", "NET23", "NET24", "NET25", "NET26", "NET27", "NET28", "NET29", "NET3", "NET30", "NET31", "NET32", "NET33", "NET34", "NET4", "NET5", "NET6", "NET7", "NET8", "NET86", "NET87", "NET88", "NET89", "NET9", "NET90", "NET91", "NET92", "NET94", "NET95", "NFAULT", "NRST", "NSCS", "OSC-IN", "OSC-OUT", "PGND", "RX", "SCK", "SPI3_MISO", "SPI3_MOSI", "SPI3_NSS", "SPI3_SCK", "SWCLK", "SWDIO", "TX", "UA", "UB", "UBUS", "UC", "VCC", "VCC/2", "VCCA", "VM", "VREF"],
-    },
-    "tests/fixtures/毕设滤波采样_2026-09-27.epro2": {
-        "Board1": ["1V65", "A5V", "AGND", "INNA", "INPA", "IN_A", "IN_B", "NET10", "NET11", "NET12", "NET13", "NET14", "NET15", "NET16", "NET17", "NET18", "NET19", "NET20", "NET21", "NET22", "NET23", "NET24", "NET25", "NET26", "NET27", "NET28", "NET29", "NET3", "NET30", "NET4", "NET5", "NET6", "NET7", "NET8", "NET9", "OUTNA", "OUTN_A", "OUTPA", "OUTP_A", "UAB+", "UAB-"],
-    },
 }
-# --- END generated nail table ----------------------------------------------
-
-
 def test_the_boards_without_a_repeated_designator_match_their_pinned_reading():
     """The zero-movement nail, board by board — re-pinned once, with evidence.
 
@@ -520,7 +509,7 @@ def test_the_boards_without_a_repeated_designator_match_their_pinned_reading():
                 f"{key} [{title}]: a board with no repeated designator moved"
             )
             checked += 1
-    assert checked == len(recorded) == 19, (
+    assert checked == len(recorded) == 24, (
         f"the untouched set is {len(recorded)} boards, {checked} were checked"
     )
 
@@ -535,7 +524,7 @@ def test_a_repeated_boards_nets_are_all_still_there():
     recorded = {
         (key, title) for key, titles in REPEATED_NET_KEYS.items() for title in titles
     }
-    assert len(recorded) == 5, f"the repeated set is 5 boards, got {len(recorded)}"
+    assert len(recorded) == 2, f"the repeated set is 2 boards, got {len(recorded)}"
     checked = 0
     for key, title, board in _loaded_boards():
         if (key, title) not in recorded:
@@ -558,10 +547,6 @@ def test_the_boards_the_audit_named_are_the_ones_that_repeat():
             facts.setdefault(Path(key).name, []).append(title)
     named = {
         "DCDC-12V9V转5V3V3_2026-09-27.epro2": ["Board1"],
-        "ProPrj_高速电机控制器_2026-09-16.epro2": ["控制板"],
-        "ProPrj_毕设FOC驱动板_2026-09-17.epro2": ["Board1"],
-        "ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2": ["Board1"],
-        "毕设滤波采样_2026-09-27.epro2": ["Board1"],
         "duplicate-designator.epro2": ["Board1"],
     }
     assert facts == named, facts

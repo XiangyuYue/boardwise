@@ -19904,36 +19904,141 @@ def _hunt_cache(args: argparse.Namespace) -> "hunt.Cache":
 
 
 def _hunt_parts(model: object) -> tuple[list[tuple[str, object]], list[str]]:
-    """``([(designator, component)], notes)`` for every board of a model.
+    """``([(designator, component)], notes)`` — one row per **part**, not per name.
 
     Board order, designators sorted inside a board — the same order `parts
     missing` prints, so a reader diffing the two lists is not also diffing two
-    orderings. A designator placed on **two boards** is hunted once and said so in
-    the notes: the identity is the same part either way, and a second row would
-    double the counts for one datasheet.
+    orderings.
+
+    **A designator is not a part** (555 follow-up; measured on a real two-board
+    project: 23 unreviewed placements folded into 15 designators, and `U1` is an
+    MCU on 控制板 and a different part on 驱动板). Placements sharing a name are
+    therefore grouped by identity (`hunt.identity_of`: C-number + MPN), and:
+
+    * the **same** identity on two boards is one part, hunted once — a second row
+      would double the counts for one datasheet, which is what "one part, one
+      datasheet" is about;
+    * **different** identities under one designator are different parts and keep
+      one row each, carrying their own component. Collapsing them addressed 15
+      parts where 16 were placed: the second part was never asked about, and its
+      own C-number never looked up.
     """
+    from boardwise.engines.hunt import identity_of
+
     notes: list[str] = []
-    seen: dict[str, list[str]] = {}
     rows: list[tuple[str, object]] = []
     boards = list(getattr(model, "boards", None) or [])
-    if boards:
-        for board in boards:
-            title = getattr(getattr(board, "board", None), "title", "") or ""
-            for designator in sorted(board.components):
-                if designator in seen:
-                    seen[designator].append(title)
-                    continue
-                seen[designator] = [title]
-                rows.append((designator, board.components[designator]))
-    else:
+    if not boards:
         for designator in sorted(getattr(model, "components", {}) or {}):
             rows.append((designator, model.components[designator]))
-    for designator, titles in seen.items():
-        if len(titles) > 1:
-            notes.append(
-                f"位号 {designator} 出现在多块板（{'、'.join(t for t in titles if t)}），只寻了一次"
+        return rows, notes
+
+    placements: dict[str, list[tuple[str, object]]] = {}
+    order: list[str] = []
+    for board in boards:
+        title = getattr(getattr(board, "board", None), "title", "") or ""
+        for designator in sorted(board.components):
+            if designator not in placements:
+                placements[designator] = []
+                order.append(designator)
+            placements[designator].append((title, board.components[designator]))
+
+    def identity_key(component: object) -> tuple[str, str]:
+        identity = identity_of(component)
+        return (identity["lcsc"], identity["mpn"])
+
+    for designator in order:
+        found = placements[designator]
+        groups: dict[tuple[str, str], list[tuple[str, object]]] = {}
+        for title, component in found:
+            groups.setdefault(identity_key(component), []).append((title, component))
+        if len(groups) == 1:
+            titles = [title for title, _component in found]
+            rows.append((designator, found[0][1]))
+            if len(titles) > 1:
+                notes.append(
+                    f"位号 {designator} 出现在多块板（{'、'.join(t for t in titles if t)}），只寻了一次"
+                )
+            continue
+        described: list[str] = []
+        for members in groups.values():
+            titles = "、".join(title for title, _component in members if title) or "未命名板"
+            identity = identity_of(members[0][1])
+            described.append(
+                f"{titles}={identity['lcsc'] or identity['mpn'] or '无身份'}"
             )
+        notes.append(
+            f"位号 {designator} 在多块板上是不同器件（{'、'.join(described)}），"
+            f"按各自身份各寻一次（{len(groups)} 行）—— 位号只在一张板上唯一，"
+            "不是在整个工程里唯一"
+        )
+        for members in groups.values():
+            rows.append((designator, members[0][1]))
+            titles = [title for title, _component in members if title]
+            if len(titles) > 1:
+                notes.append(
+                    f"位号 {designator} 的这一身份也出现在多块板（{'、'.join(titles)}），"
+                    "只寻了一次"
+                )
     return rows, notes
+
+
+def _hunt_report_designators(path: str) -> tuple[list[str], str]:
+    """``(designators, problem)`` — the worklist a checkup report left behind.
+
+    555: `parts hunt --from-report` addresses only the parts the review said it
+    could not judge, so the report's own list is the input — there is no second
+    idea of "missing" here.
+
+    The row spells its designator under ``part`` (058's `needs_datasheet[]`,
+    185-中1's fold) while the seeding section spells the same thing under
+    ``designator`` (`unreviewed_parts[]`); both are read, ``designator`` first, so
+    a real report and a hand-built one both work and neither is guessed at. The
+    report's own order is kept and duplicates collapse: one part, one datasheet.
+
+    Everything that is *not* a worklist is a refusal, never a fallback. A report
+    missing the key, or one row naming nothing, would otherwise turn "hunt the
+    four parts I could not judge" into "hunt the whole board" — the one
+    misreading this flag exists to prevent, and the expensive one (a batch of
+    outbound calls nobody asked for).
+    """
+    import json
+
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return [], f"读不了 --from-report {path}（{exc}）"
+    if not isinstance(document, dict):
+        return [], (
+            f"--from-report {path}: 顶层不是对象（{type(document).__name__}），"
+            "读不出 needs_datasheet"
+        )
+    if "needs_datasheet" not in document:
+        return [], (
+            f"--from-report {path}: 报告里没有 needs_datasheet 一节 —— 这不是一份 "
+            "checkup（/6 及以上）报告，或它被裁掉了；不拿整板代替它"
+        )
+    section = document["needs_datasheet"]
+    if not isinstance(section, list):
+        return [], (
+            f"--from-report {path}: needs_datasheet 不是数组"
+            f"（{type(section).__name__}），形状不支持"
+        )
+    wanted: list[str] = []
+    for row in section:
+        if not isinstance(row, dict):
+            return [], (
+                f"--from-report {path}: needs_datasheet 里有一行不是对象（{row!r}）"
+            )
+        name = str(row.get("designator") or row.get("part") or "").strip()
+        if not name:
+            return [], (
+                f"--from-report {path}: needs_datasheet 里有一行既没有 designator 也没有 "
+                "part，认不出是哪颗器件"
+            )
+        if name not in wanted:
+            wanted.append(name)
+    return wanted, ""
 
 
 def _hunt_answers(path: str) -> tuple[list[dict], str]:
@@ -20076,25 +20181,45 @@ def _hunt_match(
     C-number case-folded — the same identity discipline `core.parts.find_facts`
     applies, for the same reason: a near-miss here attaches one part's datasheet
     to another part.
+
+    **A designator only names a part inside one board** (555 follow-up). When the
+    project places two different parts under one name, returning the first row
+    would hang one part's datasheet on the other — the failure this function
+    exists to prevent, so the answer is refused instead: ``None``, which the
+    caller writes as an `unknown-designator` row (a question to the reader, never
+    a wrong landing). A record that also names a C-number or an MPN is not
+    ambiguous — that identity is the precise hit, and the caller's way out.
     """
-    if "designator" in locators:
-        wanted = locators["designator"]
-        for index, (designator, _component) in enumerate(rows):
-            if designator == wanted:
-                return index, "designator"
-        return None
     from boardwise.engines.hunt import identity_of
 
-    if "lcsc" in locators:
-        wanted = locators["lcsc"].upper()
-        for index, (_designator, component) in enumerate(rows):
-            if identity_of(component)["lcsc"] == wanted:
-                return index, "lcsc"
+    def identity_hit(pool: list[int]) -> tuple[int, str] | None:
+        if "lcsc" in locators:
+            wanted = locators["lcsc"].upper()
+            for index in pool:
+                if identity_of(rows[index][1])["lcsc"] == wanted:
+                    return index, "lcsc"
+            return None
+        if "mpn" in locators:
+            wanted = locators["mpn"].casefold()
+            for index in pool:
+                if (identity_of(rows[index][1])["mpn"] or "").casefold() == wanted:
+                    return index, "mpn"
         return None
-    wanted = locators["mpn"].casefold()
-    for index, (_designator, component) in enumerate(rows):
-        if (identity_of(component)["mpn"] or "").casefold() == wanted:
-            return index, "mpn"
+
+    pool = list(range(len(rows)))
+    if "designator" in locators:
+        wanted = locators["designator"]
+        hits = [index for index in pool if rows[index][0] == wanted]
+        if len(hits) == 1:
+            return hits[0], "designator"
+        if not hits:
+            return None
+        # Several parts answer to this name: only a C-number / MPN says which.
+        if "lcsc" not in locators and "mpn" not in locators:
+            return None
+        pool = hits
+    if "lcsc" in locators or "mpn" in locators:
+        return identity_hit(pool)
     return None
 
 
@@ -20112,6 +20237,14 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
 
     Nothing here verifies anything. Every entry this writes carries
     `facts_verified: false`, and the report says so in as many words: 喂 PDF ≠ 清闸.
+
+    555 added two things and kept the pipeline: **which board** (`--live` reads
+    the editor through `checkup`'s own tier ladder, so the batch addresses the
+    model `review`/`checkup` just reviewed) and **which parts** (`--from-report`
+    takes the worklist a checkup report already wrote down). Neither is a second
+    downloader, a second extractor or a second trust call — both end in the same
+    `hunt.execute`, which is why the four artefacts, the audit and the three
+    fact tiers are unchanged.
     """
     import json
 
@@ -20129,14 +20262,134 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
     if fetch_detail is None:
         from boardwise.engines.catalog import urllib_product_fetcher as fetch_detail
 
-    project = Path(args.file)
-    try:
-        model, _board = _load_model(project, view="schematic")
-    except (EncryptedProjectError, ValueError, OSError) as exc:
-        print(f"boardwise parts hunt: cannot read {project}: {exc}", file=sys.stderr)
+    # 555: two inputs, one pipeline. `--file` is the archive 520 shipped with;
+    # `--live` reads the project open in the editor through the *same* ladder
+    # `checkup` / `review --live` use (`_load_model_online`), so the model this
+    # batch addresses is the model those commands reviewed — a second reader here
+    # would be a second set of identity failures. The two are mutually exclusive
+    # because "which board is this" has to have one answer.
+    live = bool(getattr(args, "live", False))
+    file_arg = str(getattr(args, "file", "") or "")
+    if live and file_arg:
+        print(
+            "boardwise parts hunt: --live 读编辑器里开着的工程，--file 读归档 —— "
+            "两个来源只能给一个",
+            file=sys.stderr,
+        )
+        return 2
+    if not live and not file_arg:
+        print(
+            "boardwise parts hunt: 没有输入 —— 给 --file <归档>，或 --live "
+            "读编辑器里开着的工程",
+            file=sys.stderr,
+        )
+        return 2
+    if not live and (getattr(args, "project", "") or getattr(args, "instance", "")):
+        print(
+            "boardwise parts hunt: --project / --instance 指的是编辑器里的窗口，只能配 "
+            "--live；离线 --file 没有窗口可选",
+            file=sys.stderr,
+        )
+        return 2
+    if live and args.offline:
+        print(
+            "boardwise parts hunt: --live 与 --offline 是相反的两句话 —— 前者读在线工程，"
+            "后者保证一次外呼都没有；只要分类与工单请离线跑 --file --offline",
+            file=sys.stderr,
+        )
         return 2
 
-    rows, board_notes = _hunt_parts(model)
+    live_source: dict = {}
+    if live:
+        live_notes: list[str] = []
+        live_attempts: list[dict] = []
+        loaded = _load_model_online(args, notes=live_notes, attempts=live_attempts)
+        if loaded is None:
+            print(
+                "boardwise parts hunt: 在线状态不可陈述 —— no tier produced a model；"
+                "一颗器件都没寻",
+                file=sys.stderr,
+            )
+            for note in live_notes:
+                print(f"  note: {note}", file=sys.stderr)
+            return 3
+        model, _board, tier, source_meta, _attribution = loaded
+        if tier not in ("project-file", "per-page"):
+            # The netlist tier is connectivity and nothing else: no MPN, no
+            # C-number. Hunting it would write one `no-identity` row per part —
+            # a false statement about parts the editor itself identifies — so it
+            # is refused by name instead (tier 3: the online state cannot be
+            # stated for this question), with the two grants that do answer it.
+            print(
+                f"boardwise parts hunt: --live 读到的是 {tier} 档 —— 只有连通性，没有 "
+                "MPN / C 号身份，批量寻资料认不出任何一颗器件，因此不跑；换 project-file"
+                "（工程管理 > 下载工程）或 per-page（工程设计图 > 文件导出）档再来",
+                file=sys.stderr,
+            )
+            for note in live_notes:
+                print(f"  note: {note}", file=sys.stderr)
+            return 3
+        project_meta = source_meta.get("project") or {}
+        project_label = (
+            project_meta.get("friendlyName") or project_meta.get("name") or ""
+        )
+        source_ref = (
+            f"live:{project_label}" if project_label else "live:(project unknown)"
+        )
+        # `board.source` is added **only** on this path: an offline report keeps
+        # every field and every byte shape it had (the old tests diff it).
+        live_source = {
+            "kind": "live",
+            "tier": tier,
+            "tierLabel": CHECKUP_TIERS.get(tier, ""),
+            "project": project_label,
+            "attempts": live_attempts,
+        }
+        board_notes = [*live_notes]
+    else:
+        project_path = Path(file_arg)
+        try:
+            model, _board = _load_model(project_path, view="schematic")
+        except (EncryptedProjectError, ValueError, OSError) as exc:
+            print(
+                f"boardwise parts hunt: cannot read {project_path}: {exc}", file=sys.stderr
+            )
+            return 2
+        source_ref = str(project_path)
+        board_notes = []
+
+    rows, part_notes = _hunt_parts(model)
+    board_notes = [*board_notes, *part_notes]
+
+    # --- 555: only what a checkup report said it was missing -----------------
+    #
+    # Filtering *before* `--limit` and before anything is dialled is the whole
+    # point: a board of forty parts with four missing datasheets must cost four
+    # lookups, and `--limit 1` must answer about the first *missing* one rather
+    # than the first part on the board.
+    report_arg = str(getattr(args, "from_report", "") or "")
+    if report_arg:
+        wanted, problem = _hunt_report_designators(report_arg)
+        if problem:
+            print(f"boardwise parts hunt: {problem}", file=sys.stderr)
+            return 2
+        known = [designator for designator, _component in rows]
+        missing = [name for name in wanted if name not in known]
+        if missing:
+            print(
+                "boardwise parts hunt: 报告点名的位号这块板上没有："
+                f"{'、'.join(missing)} —— 报告与工程对不上（读了别的工程，或报告是旧"
+                "版本）；不静默跳过，也不退回整板扫描",
+                file=sys.stderr,
+            )
+            return 2
+        keep = set(wanted)
+        rows = [row for row in rows if row[0] in keep]
+        board_notes.append(
+            f"--from-report: 只处理 {report_arg} 的 needs_datasheet 点名的 "
+            f"{len(wanted)} 颗器件（清单为空 = 一颗都不寻）"
+        )
+
     if args.limit and args.limit > 0:
         rows = rows[: args.limit]
 
@@ -20221,7 +20474,7 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
                 executor,
                 cache=cache,
                 audit=audit,
-                label=_hunt_label(model, item.designator),
+                label=_hunt_label(model, item.designator, item.identity),
                 offline=bool(args.offline),
             )
         )
@@ -20342,7 +20595,7 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
     plan, plan_notes = hunt.plan_rows(outcomes)
 
     board = {
-        "file": str(project),
+        "file": source_ref,
         "title": _hunt_board_title(model),
         "boards": len(getattr(model, "boards", None) or []) or 1,
         "parts": len(outcomes),
@@ -20350,6 +20603,11 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
         "out": str(out_dir),
         "cache": str(cache.root),
     }
+    if live_source:
+        # Which editor window, which tier, and what the ladder tried — so a
+        # reader can tell a whole-project read from a per-page merge without
+        # asking the terminal that produced it. Offline reports gain nothing.
+        board["source"] = live_source
 
     report = {
         "board": board,
@@ -20364,7 +20622,7 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
     )
     (out_dir / "hunt-plan.json").write_text(
         json.dumps(
-            {"board": {"file": str(project), "title": board["title"]}, "parts": plan},
+            {"board": {"file": source_ref, "title": board["title"]}, "parts": plan},
             ensure_ascii=False,
             indent=2,
         )
@@ -20391,13 +20649,40 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
     # file that walks past the gate it just failed.
     candidates = out_dir / "candidates"
     written_sidecars: list[Path] = []
+    # 555 follow-up: two placements can share a designator (see `_hunt_parts`), so
+    # `<designator>.candidate.json` is no longer unique — the second identity's
+    # sidecar replaced the first's, silently, in the one file a curator hands to
+    # `parts add --facts`. A designator with **one** writable identity keeps the
+    # old filename (a single-part board is unchanged); two or more carry the
+    # identity in the name, because which part a sidecar belongs to has to survive
+    # the filename.
+    identities_by_designator: dict[str, set[tuple[str, str]]] = {}
     for item in outcomes:
         if not item.facts or item.outcome == hunt.FACTS_REJECTED:
             continue
-        sidecar = candidates / f"{_hunt_slug(item.designator)}.candidate.json"
+        identities_by_designator.setdefault(item.designator, set()).add(
+            (item.identity.get("lcsc", ""), item.identity.get("mpn", ""))
+        )
+    for item in outcomes:
+        if not item.facts or item.outcome == hunt.FACTS_REJECTED:
+            continue
+        stem = _hunt_slug(item.designator)
+        if len(identities_by_designator.get(item.designator, ())) > 1:
+            token = _hunt_slug(item.identity.get("lcsc") or item.identity.get("mpn") or "")
+            if token:
+                stem = f"{stem}.{token}"
+        sidecar = candidates / f"{stem}.candidate.json"
+        # Belt and braces on the suffix: two identities sharing a C-number but not
+        # an MPN would produce the same token, and a second overwrite is exactly
+        # the failure this section is about.
+        suffix = 2
+        while sidecar in written_sidecars:
+            sidecar = candidates / f"{stem}-{suffix}.candidate.json"
+            suffix += 1
         sidecar.parent.mkdir(parents=True, exist_ok=True)
         body = {
-            "label": _hunt_label(model, item.designator) or item.designator,
+            "label": _hunt_label(model, item.designator, item.identity)
+            or item.designator,
             "url": item.url,
             "facts": item.facts,
             "designator": item.designator,
@@ -20419,7 +20704,10 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
         shelf_note = _hunt_write_shelf(args.shelf, outcomes)
 
     # --- the terminal -------------------------------------------------------
-    print(f"{project}: {len(outcomes)} part(s) addressed, {audit.outbound} outbound call(s)")
+    print(
+        f"{source_ref}: {len(outcomes)} part(s) addressed, "
+        f"{audit.outbound} outbound call(s)"
+    )
     for outcome in hunt.OUTCOMES:
         if counts.get(outcome):
             print(f"  {outcome:20} {counts[outcome]}")
@@ -20475,33 +20763,58 @@ def _hunt_board_title(model: object) -> str:
     return str(getattr(getattr(boards[0], "board", None), "title", "") or "")
 
 
-def _hunt_label(model: object, designator: str) -> str:
-    """``"<manufacturer> <MPN>"`` for a designator — what a fact's provenance names.
+def _hunt_label(
+    model: object, designator: str, identity: dict | None = None
+) -> str:
+    """``"<manufacturer> <MPN>"`` for **the part this row addressed**.
 
     Read back off the model rather than carried alongside, because the label is
     prose for a human and the identity is the structured pair every decision uses;
     keeping one copy of the second is what keeps them from disagreeing.
+
+    A designator alone does not name a part on a multi-board project (555
+    follow-up): two boards may place different parts under `U1`, and reading the
+    first one's maker/MPN wrote 驱动板's datasheet provenance as 控制板's part. The
+    identity the row was built from picks the placement — and when it is not
+    given, an ambiguous designator gets **no** label rather than a borrowed one
+    (`""`; `hunt.execute` falls back to the row's own PartNumber).
     """
-    for board in list(getattr(model, "boards", None) or []):
-        component = board.components.get(designator)
+    from boardwise.engines.hunt import identity_of
+
+    candidates: list[object] = [
+        board.components[designator]
+        for board in list(getattr(model, "boards", None) or [])
+        if board.components.get(designator) is not None
+    ]
+    if not candidates:
+        component = (getattr(model, "components", {}) or {}).get(designator)
         if component is None:
-            continue
-        parts = [
-            str(getattr(component, "manufacturer", "") or "").strip(),
-            str(getattr(component, "mpn", "") or "").strip(),
+            return ""
+        candidates = [component]
+
+    if identity:
+        wanted = {
+            "lcsc": str(identity.get("lcsc") or ""),
+            "mpn": str(identity.get("mpn") or ""),
+        }
+        candidates = [
+            component for component in candidates if identity_of(component) == wanted
         ]
-        return " ".join(part for part in parts if part)
-    component = (getattr(model, "components", {}) or {}).get(designator)
-    if component is None:
-        return ""
-    return " ".join(
-        part
-        for part in (
-            str(getattr(component, "manufacturer", "") or "").strip(),
-            str(getattr(component, "mpn", "") or "").strip(),
+
+    labels = {
+        " ".join(
+            part
+            for part in (
+                str(getattr(component, "manufacturer", "") or "").strip(),
+                str(getattr(component, "mpn", "") or "").strip(),
+            )
+            if part
         )
-        if part
-    )
+        for component in candidates
+    }
+    if len(labels) != 1:
+        return ""
+    return labels.pop()
 
 
 def _hunt_candidate_key(mpn: str, lcsc: str, taken: dict) -> str:

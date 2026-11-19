@@ -494,7 +494,7 @@ def test_no_board_without_a_repeated_designator_files_a_truncation_fact():
         assert board.unproven_nets == {}, f"{key} [{title}]"
         assert board.unproven_reasons == {}, f"{key} [{title}]"
         checked += 1
-    assert checked == 20, f"the untouched set is 20 boards, {checked} were checked"
+    assert checked == 24, f"the untouched set is 24 boards, {checked} were checked"
 
 
 #: Which boards file the fact, and which nets — measured on the delivered tree
@@ -510,16 +510,17 @@ def test_no_board_without_a_repeated_designator_files_a_truncation_fact():
 #: 排针 (127b's evidence that the审查对象 was wrong, not the parser).
 REPEATED_BOARDS = {
     "DCDC-12V9V转5V3V3_2026-09-27.epro2": {"Board1": 5},
-    "ProPrj_毕设FOC驱动板_2026-09-17.epro2": {"Board1": 10},
-    "ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2": {"Board1": 9},
-    "ProPrj_高速电机控制器_2026-09-16.epro2": {"控制板": 17},
-    "毕设滤波采样_2026-09-27.epro2": {"Board1": 15},
     "duplicate-designator.epro2": {"Board1": 2},
 }
 
 
-def test_only_the_five_repeated_boards_file_a_fact_and_the_counts_are_pinned():
-    """The declared surface, named — so a sixth board appearing is a test failure."""
+def test_only_the_two_repeated_boards_file_a_fact_and_the_counts_are_pinned():
+    """The declared surface, named — so a third board appearing is a test failure.
+
+    552 moved four of the six boards named here into the untouched set: their
+    repeats were the units of one dual op-amp each (see 552's evidence), so no
+    placement is dropped and no net is truncated on them.
+    """
     found: dict[str, dict[str, int]] = {}
     for key, title, board in _loaded_boards():
         if board.unproven_reasons:

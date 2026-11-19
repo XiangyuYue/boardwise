@@ -912,16 +912,17 @@ FOC = FIXTURES / "ProPrj_毕设FOC驱动板_2026-09-17.epro2"
 MOTOR = FIXTURES / "ProPrj_高速电机控制器_2026-09-16.epro2"
 GOLDEN = FIXTURES / "ch340_golden.epro2"
 
-#: The two numbers this fixture measures today: the review's 45 rows / 30-1-14
-#: and checkup's **242** rows / 50-20-172 with `incomplete`. A declaration is
-#: disclosure only, so not one of them may move.
+#: The two numbers this fixture measures today (after the 553/552 re-baseline at
+#: the bottom of this block): the review's 15 rows / 0-1-14 and checkup's **212**
+#: rows / 20-20-172 with `incomplete`. A declaration is disclosure only, so not
+#: one of them may move.
 #:
 #: 241 / 50-21-170 was S1's reading and is **no longer** the fixture's: 529 put
 #: the mid-distance decoupling band in (2.2 µF / 4.7 µF count as mid-range caps
 #: now), so one `decap-required-caps` WARN and the INFO that carried it left the
 #: run — **239 = 50 E + 20 W + 169 I**. That move belongs to 529's rule change,
 #: and S2's own claim is narrower: the declaration neither adds a row nor moves
-#: one, which is why the review reading (30/1/14) is untouched.
+#: one, which is why the review reading (30/1/14 at the time) was untouched.
 #:
 #: 242 = 50 E + 20 W + 172 I is 038Y's reading, not 038G2's: 038Y landed
 #: `pcb-silk-on-foreign-pad`, whose approximation disclosure emits **at most one
@@ -929,14 +930,29 @@ GOLDEN = FIXTURES / "ch340_golden.epro2"
 #: instead of arcs). Three boards, three INFOs, so 169 -> 172 — ERROR and WARN
 #: do not move at all. 038G2's jumper aliases only moved the *shared-name* count
 #: (39 -> 30, see the cross-board test); they never added a finding.
-REVIEW_SUMMARY = {"ERROR": 30, "WARN": 1, "INFO": 14}
-CHECKUP_COUNTS = (50, 20, 172)
+#:
+#: **553 + 552 re-baseline (2026-11-19, batch 554 measured these on this tree).**
+#: 553 retires the cross-board duplicate ERROR; 552 restores the multi-unit
+#: netlists. The three-board archive went 242 = 50 E + 20 W + 172 I ->
+#: **212 = 20 E + 20 W + 172 I**: the 28 cross-board names plus U15/U16 (552
+#: proved them one physical part's units) left, and the 20 remaining ERRORs are
+#: still `pcb-footprint-consistency` (6 parts unplaced on Board3, 14 footprint
+#: size-code mismatches) — the packaging ERRORs 553 must not touch, which is why
+#: `checkup` keeps exit 1. The review reading lost the same 30 rows:
+#: 30/1/14 -> **1 WARN / 14 INFO = 15 rows**, exit 0.
+REVIEW_SUMMARY = {"ERROR": 0, "WARN": 1, "INFO": 14}
+CHECKUP_COUNTS = (20, 20, 172)
 
 #: The two-board fixture's review reading, frozen by S1 in
-#: `test_041_cross_board_nets.py` (22 ERROR / 1 WARN / 48 INFO = 71 rows). Its
-#: checkup numbers are *not* written down here: only the declaration path is new,
-#: and the test compares the two checkup runs instead of guessing a constant.
-REVIEW_MOTOR_SUMMARY = {"ERROR": 22, "WARN": 1, "INFO": 48}
+#: `test_041_cross_board_nets.py` (22 ERROR / 1 WARN / 48 INFO = 71 rows), then
+#: re-measured under 552/553: the 18 cross-board ERRORs and 4 same-page rows
+#: (U15, U16, U17, U20 — 552's multi-unit parts) left, while 552's restored net
+#: membership added 19 `param-rc-cutoff` INFOs, giving **1 WARN / 67 INFO = 68
+#: rows**. Its checkup numbers are still *not* written down here: only the
+#: declaration path is new, and the test compares the two checkup runs instead
+#: of guessing a constant. Without a single ERROR its `checkup` exit is 3 (18
+#: untriaged WARNs), so the test pins that code, not a guessed one.
+REVIEW_MOTOR_SUMMARY = {"ERROR": 0, "WARN": 1, "INFO": 67}
 
 
 @pytest.fixture(scope="module")
@@ -998,9 +1014,11 @@ def _section_text(markdown: str) -> str:
 def test_a_declared_tie_reaches_both_reports_and_moves_no_number(tmp_path, foc_model):
     """Requirement 1: one declaration, two products, the same reading.
 
-    ``checkup --file`` keeps its exit 1, its 242 findings and its 50/20/172 with
-    ``completion.verdict == incomplete``; ``review`` keeps its exit 1 and its 45
-    findings with 30/1/14. What is *added* is ``provenCount: 1`` and one row
+    ``checkup --file`` keeps its exit 1, its 212 findings and its 20/20/172 with
+    ``completion.verdict == incomplete`` (553/552 took 30 ERRORs out — every
+    duplicate-designator row — and the 20 `pcb-footprint-consistency` ERRORs
+    stay); ``review`` is now exit 0 with its 15 findings and 1/14. What is
+    *added* is ``provenCount: 1`` and one row
     naming both real ends — in `report.json`, in `report.md` and in
     `review --md`, while `review --json` grows no field at all.
     """
@@ -1026,7 +1044,10 @@ def test_a_declared_tie_reaches_both_reports_and_moves_no_number(tmp_path, foc_m
     ) == 1, "exit 1 = ERROR findings present, measured on this fixture before S2"
 
     report = json.loads((out / "report.json").read_text(encoding="utf-8"))
-    assert len(report["findings"]) == 242, "041 adds a channel, not findings"
+    assert len(report["findings"]) == 212, (
+        "041 adds a channel, not findings; 553/552 removed the 30 duplicate-"
+        "designator ERRORs (28 cross-board names + U15/U16), so 242 -> 212"
+    )
     summary = report["summary"]
     assert (summary["errorCount"], summary["warnCount"], summary["infoCount"]) == (
         CHECKUP_COUNTS
@@ -1067,13 +1088,13 @@ def test_a_declared_tie_reaches_both_reports_and_moves_no_number(tmp_path, foc_m
     assert cli.main([
         "review", str(FOC), "--md", str(md), "--json", str(js),
         "--interconnect", str(decl),
-    ]) == 1
+    ]) == 0, "553/552 left no ERROR for the schematic-only review"
     payload = json.loads(js.read_text(encoding="utf-8"))
     assert set(payload) == {"findings", "summary"}, (
         "review --json is still the findings array — the declaration is not a field"
     )
     assert payload["summary"] == REVIEW_SUMMARY
-    assert len(payload["findings"]) == 45
+    assert len(payload["findings"]) == 15
 
     review_md = md.read_text(encoding="utf-8")
     assert _section_text(review_md) == _section_text(markdown), (
@@ -1086,7 +1107,7 @@ def test_real_two_board_declaration_preserves_both_report_baselines(tmp_path, mo
 
     The FOC project is three boards, so its section mixes 25 pairs with 5 triples
     (038g2: 34 pairs before nine Board3 alias names left the shared set).
-    This one is the pure pair case (2 boards, 147 instances, 35 shared names, 35
+    This one is the pure pair case (2 boards, 139 instances, 35 shared names, 35
     unproven edges), and the declared pair is read out of the model — never a
     literal uuid or net name — so a changed fixture cannot pass by coincidence.
 
@@ -1120,7 +1141,9 @@ def test_real_two_board_declaration_preserves_both_report_baselines(tmp_path, mo
         "review", str(MOTOR), "--md", str(review_md), "--json", str(declared_json),
         "--interconnect", str(decl),
     ])
-    assert plain_rc == declared_rc == 1, "ERROR findings present either way"
+    assert plain_rc == declared_rc == 0, (
+        "553/552 left no ERROR either way, so a declaration cannot move the code"
+    )
     assert declared_json.read_bytes() == plain_json.read_bytes(), (
         "review --json is still the findings array: a declaration adds no field "
         "and no row, so the two runs must agree byte for byte"
@@ -1128,7 +1151,11 @@ def test_real_two_board_declaration_preserves_both_report_baselines(tmp_path, mo
     payload = json.loads(declared_json.read_text(encoding="utf-8"))
     assert set(payload) == {"findings", "summary"}
     assert payload["summary"] == REVIEW_MOTOR_SUMMARY
-    assert len(payload["findings"]) == 71, "22 + 1 + 48, the pre-S2 row count"
+    assert len(payload["findings"]) == 68, (
+        "1 WARN + 67 INFO after 552/553 (22 + 1 + 48 was the pre-S2 count): "
+        "the 18 cross-board rows and U15/U16/U17/U20 left, and 552's "
+        "restored net membership added 19 `param-rc-cutoff` INFO"
+    )
 
     declared_rows = [
         line
@@ -1148,11 +1175,14 @@ def test_real_two_board_declaration_preserves_both_report_baselines(tmp_path, mo
     out_declared = tmp_path / "checkup-declared"
     assert cli.main(
         ["checkup", "--file", str(MOTOR), "--out", str(out_plain)]
-    ) == plain_rc
+    ) == 3, (
+        "no ERROR left on this fixture, so checkup reports 3 (18 untriaged "
+        "WARNs) — a checkup code, never the review code"
+    )
     assert cli.main([
         "checkup", "--file", str(MOTOR), "--interconnect", str(decl),
         "--out", str(out_declared),
-    ]) == declared_rc, "a declaration is disclosure, not a re-measurement"
+    ]) == 3, "a declaration is disclosure, not a re-measurement"
 
     plain = json.loads((out_plain / "report.json").read_text(encoding="utf-8"))
     declared = json.loads((out_declared / "report.json").read_text(encoding="utf-8"))

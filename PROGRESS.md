@@ -1893,3 +1893,22 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
   不为凑通过放宽规则。
 - 身边设备均已升级 V4，V3 宿主验收转为等待其他用户反馈；`.eprj2` 在 4.1.100 上的读数不冒充
   3.2.x 宿主兼容，仍标未验证。
+
+## 2026-11-19 · 审查线：552/553/554 位号误报与真实网表修复
+
+- DSH 会话与原始归档证明，所谓同页两颗同位号料实际是一颗料的两个单元。parser 此前同时丢掉 `PIN.partId` 并只保留首个 placement，既误报又截断网表。现按单元恢复引脚；只有相同非空 Unique ID/Device 且不同 partId 才合并，缺身份、同 partId 复制件、NC/网络冲突继续走重号与未证实路径。
+- 岳裁定跨板共用位号不算问题。`cross_board_designators` 与项目级歧义读数保留，跨板 ERROR 取消；同板同页/跨页重号不变。
+- 宿主网表对拍覆盖 4 件、32 脚：逐脚对应网络的完整 `(designator,pin)` 成员集合全部相等，自动网名差异不冒充电气差异。DSH 实际调用路径上的 CLI 对同一归档复跑为 **0 ERROR / 1 WARN / 67 INFO**，位号 finding=0；原 DSH 旧报告未改写。
+- 派生基线 A 域 80 passed、B 域 188 passed；最终综合 **552 passed**，合同/文档/卫生另 **127 passed**。综合命令另有 4 条绘制线 CLI 合同漂移；layer 另有 1 条来自其他未提交文件的私有跨层 import，均非本批文件域，未越线处理。没有跑全量 pytest，不称全量全绿。
+- 主代理独立变异：去掉单元引脚映射得 2 failed 后恢复 SHA；把跨板名重新纳入重号得 5 failed / 2 passed 后恢复 SHA。差分合同由官方渲染器临时生成后审 diff，`cases.json` 不变，只同步报告元数据、规则指纹及其哈希。
+- 任务书 `tasks/552_multi_unit_designators.md`、`tasks/553_cross_board_designators.md`、`tasks/554_designator_integration.md`；证据 `evidence/552/`、`evidence/553/`、`evidence/554/`。当前全部为本仓工作树改动，未提交、未推送、未发布；绘制线与其他未提交文件未清理、未回退。
+
+## 2026-11-19 · 审查线：555 批量手册链 live/DSH 集成与真实试点
+
+- 在既有三阶段 `parts hunt` 上新增 `--live`、`--from-report`，不重写下载/提取/信任判定。只接受 project-file/per-page 全身份读数；netlist 档拒绝，不把缺 MPN 的降级读数写成整板 no-identity。报告过滤后才应用 limit，空清单零外呼，坏报告/位号对不上拒绝。
+- 真实试点暴露跨板同位号不同料：`_hunt_parts` 原只取第一板。现按 `(board,designator,identity)` 展开，同身份去重、不同身份分别处理；designator 歧义不选第一颗，lcsc/mpn 消歧；多身份 candidate sidecar 加身份后缀，避免互相覆盖。真实报告由 15 个折叠位号展开为 **18 个身份行**。
+- 实际分布 cached 4 / no-facts 9 / service-unknown 1 / no-identity 4。电源/驱动 3 份 claims 和 CH340 1 份 claims 经生产 `--apply-facts` 全部 accepted、0 rejected。三颗从真缺资料转为机器核验待签；CH340 原已 verified，不重复计清闸。`unreviewedByClass` 从 3/20/0（工具读不懂/真缺资料/机器待签）变为 **3/17/3**，needs_datasheet 仍 15、unreviewed_parts 仍 23、verdict 仍 incomplete，未把机器档冒充 complete。
+- 连接器七行没有可表达的引脚义务 facts；采样电阻值属于 params，不硬塞七类 IC facts。未知 C 号无官方同型号 PDF、一类 PDF 只有图片文字层、四个机械件无身份、部分连接器无脚表，全部保留人工项，未编造过闸。
+- DSH 新工具 `boardwise_parts_hunt` 位于旧八工具后、draw 前；fromReport、answers、claims、显式 shelf 和四产物已接入。真实适配层 offline 冒烟 exit 0、四产物 present、0 outbound；插件包 `.tmp_555/boardwise-dsh-0.6.3-beta.3.tgz` 已生成并验证 parts-hunt 三处内容，未部署未发布。
+- 聚焦 Python **218 passed**；DSH **207 passed / 1 skipped**，typecheck/build 通过；两份 SKILL 字节一致且各 320 行，diff --check 通过。主代理两组独立变异均先红后 cp+SHA 恢复。未跑全量；CLI 合同快照原本已有绘制线/bridge 漂移，本批 hunt 新增项留待 shared 集成，未把他人 hunks 烘进快照。
+- 试点货架与缓存均在 `.tmp_555/`，全局货架和真实设计未写。临时 daemon 已停止，61190 无 listener。未提交、未推送、未发布。任务书 `tasks/555_datasheet_hunt_integration.md`，证据 `evidence/555/trial-summary.md`。

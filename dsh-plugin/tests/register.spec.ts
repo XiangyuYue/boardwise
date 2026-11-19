@@ -45,12 +45,13 @@ function registered(): Map<string, CapturedTool> {
   return tools
 }
 
-/** The four tools that answer with one formatted text block. */
+/** The tools that answer with one formatted text block. */
 const TEXT_TOOLS = [
   'boardwise_checkup',
   'boardwise_arch',
   'boardwise_doctor',
   'boardwise_bridge',
+  'boardwise_parts_hunt',
 ] as const
 
 /** The tools that answer with a canonical JSON object (537D1b2 / 537D3a). */
@@ -76,7 +77,7 @@ describe('boardwise-dsh: plugin registration contract', () => {
     expect(typeof apply).toBe('function')
   })
 
-  it('keeps the eight old tools in order, then appends the offline draw tools', () => {
+  it('keeps the eight old tools in order, then parts hunt, then the offline draw tools', () => {
     expect([...registered().keys()]).toEqual([
       'boardwise_checkup',
       'boardwise_arch',
@@ -86,6 +87,7 @@ describe('boardwise-dsh: plugin registration contract', () => {
       'boardwise_review_evidence',
       'boardwise_triage_batch',
       'boardwise_review_finalize',
+      'boardwise_parts_hunt',
       'boardwise_draw_compile',
       'boardwise_draw_lint',
       'boardwise_draw_v4_facts',
@@ -129,7 +131,7 @@ describe('boardwise-dsh: plugin registration contract', () => {
       expect(tool.output.schema.type).toBe('object')
       const value = { schema: 'x', payload: { answer: 42 } }
       expect(tool.output.render({}, value)).toEqual([
-        { type: 'text', text: JSON.stringify(value, null, 2) },
+        { type: 'text', text: JSON.stringify(value) },
       ])
     }
   })
@@ -206,6 +208,30 @@ describe('boardwise-dsh: plugin registration contract', () => {
     expect(tool.description).toMatch(/report\.conclusion/)
     expect(tool.description).toMatch(/not a board verdict/)
     expect(tool.description).toMatch(/plugin:boardwise-dsh\/review-finalized/)
+  })
+
+  it('declares parts hunt between finalize and draw, with the three-way design source and out', () => {
+    const tool = registered().get('boardwise_parts_hunt') as CapturedTool
+    expect(Object.keys(tool.parameters)).toEqual([
+      'file', 'project', 'instance', 'out',
+      'fromReport', 'offline', 'limit', 'cache', 'noCache', 'shelf', 'answers', 'claims',
+    ])
+    // The CLI refuses a missing `out`; it is required here so the refusal is
+    // before the spawn rather than after a half-written hunt.
+    expect(tool.parameters['out']?.required).toBe(true)
+    for (const field of ['file', 'project', 'instance', 'fromReport', 'offline', 'limit', 'cache', 'noCache', 'shelf']) {
+      expect(tool.parameters[field]?.required).toBeUndefined()
+    }
+    // Arrays, never JSON strings: the plugin writes them to its own transport
+    // file, and Python owns every verdict about them.
+    expect(tool.parameters['answers']?.type).toBe('array')
+    expect(tool.parameters['claims']?.type).toBe('array')
+    // Batches run long, but thirty minutes is the ceiling the contract allows.
+    expect(tool.timeoutMs).toBe(1_800_000)
+    // No default shelf write and no automatic verified: both promises are in
+    // the description the model reads, not just in the argv.
+    expect(tool.description).toMatch(/never writes a shelf by default|no shelf by default/)
+    expect(tool.description).toMatch(/facts_verified: false/)
   })
 
   it('declares only offline draw compile/lint, with no live-page or apply surface', () => {

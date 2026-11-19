@@ -339,7 +339,21 @@ PCB DRC 叶子和自有规则 WARN 是带文本的。
 自动从库条目链接下载并提取候选事实；官网通道永远是你的活
 （`channels.official.suggestedQueries` 给了查询词，WebSearch 找规格书，核**周边配置**：
 去耦/上下拉/限流/耐压，顺手确认可用型号）。拿到手册当场核完继续审，**三通道全灭**
-才让它留在未审器件里。**该节非空时不得宣称"审查通过"**——结论只能用
+才让它留在未审器件里。
+
+**整板批量入口（555）**：几十颗未知不要逐颗重复找。首轮 checkup 后，用
+`boardwise parts hunt --file <归档> --from-report <checkup/report.json> --out <hunt目录>`，
+live 则把 `--file <归档>` 换成 `--live [--project/--instance]`；`--from-report` 只处理
+`needs_datasheet` 点名的器件，空清单零外呼，坏报告/报告与工程对不上为 2，不退回全板扫描。
+DSH 对应 `boardwise_parts_hunt`（`file` 或 `project`/`instance` 三选一，`out` 必填，
+`fromReport` 同一路径）。三阶段仍是同一条既有链：C 号自动下载/缓存 → MPN-only 搜索后以
+`answers` 回灌 URL → AI 每批 3–5 颗只读引脚/供电/推荐外围/额定值等相关章节，以
+`claims` 回灌 facts+quotes 过逐字引文闸。四个产物是 hunt-report.json / hunt-plan.json /
+hunt-report.md / hunt-audit.jsonl；PDF 正文留缓存，不把几十份全文塞进上下文。
+`shelf` 只有显式给路径才写，默认不改用户架；机器档只驱动计算且仍待人工签核，
+不得把机器核验写成 `verified` 或 `complete`。
+
+**该节非空时不得宣称"审查通过"**——结论只能用
 `summary.conclusion` 那句（"DRC/连接性已审，N 颗器件缺手册未审；另有 M 项管脚待手册（已标记）"），
 `summary.mayClaimPassed` 就是这道闸（**窄义**：只回答"有没有器件缺手册未审"——没别的意思）；
 **完整结论/总闸看 `completion.verdict`**（`needsDatasheet > 0` ⇒ `incomplete`，与

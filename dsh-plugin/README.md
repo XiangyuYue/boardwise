@@ -55,6 +55,7 @@ review_read/finalize/doctor 始终可收尾，已派发命令不被取消。541R
 | `boardwise_review_evidence` | `review-evidence --out D [--project P] [--page U ...] [--pcb U ...]` | `out` 必填，`page`/`pcb` 可重复 | 600 000 |
 | `boardwise_triage_batch` | `triage-batch --out D --input BATCH --json RESULT` | `out` / `entries` 必填，整批原子应用 | 120 000 |
 | `boardwise_review_finalize` | `review finalize --out D [--strict-partial]` | `out` 必填；可选 `stage=initial/partial` | 120 000 |
+| `boardwise_parts_hunt` | `parts hunt --file F \| --live [--project P \| --instance I] --out D [--from-report R] [--offline] [--limit N] [--cache C \| --no-cache] [--shelf S] [--apply A] [--apply-facts F]` | `file`/`project`/`instance` 三选一，`out` 必填；`answers`/`claims` 数组写插件自己的 transport 临时文件 | 1 800 000 |
 | `boardwise_draw_compile` | `draw compile --circuit C --presentation P --profiles S --out D --json J` | 三个输入必填，`pageBox`/`intent`/`out` 可选；整份 JSON 返回：单模块 `candidates`，页级 `pages`（见下） | 600 000 |
 | `boardwise_draw_lint` | `draw lint --snapshot S --render R [--bodies B] --json J` | `snapshot`/`render` 必填，仅离线回放；完整 JSON 返回 | 120 000 |
 | `boardwise_draw_plan` | `draw plan --layout L --circuit C --presentation P --profiles S --out D/plan.json --json J` | 四个现有文件必填，仅离线预检保存的PageLayoutPlan；`out`目录可选，默认独立持久临时目录；完整CLI JSON返回 | 120 000 |
@@ -64,6 +65,16 @@ review_read/finalize/doctor 始终可收尾，已派发命令不被取消。541R
 - **参数原样透传**，插件不解释。唯一的前置校验：`file` 路径必须存在（不存在 → 执行前拒绝，
   不 spawn）；`bridge` 的 `params` 必须是合法 JSON 对象字面量；`checkup` 必须恰好指定
   一个目标（`file` 或 `project`/`instance`），不替模型猜窗口。
+- **`boardwise_parts_hunt`（555）是 checkup 的批量手册入口**，只做 argv 与文件传输，判断全留
+  Python：三阶段 = ① 现状分类（C 号问 C 号、MPN 只出工单）→ ② `answers` 回灌手找 URL
+  （写 transport 临时文件后传 `--apply`）→ ③ `claims` 回灌 AI/人读到的事实与引文
+  （传 `--apply-facts`，逐字引文闸与三档 trust 都在 CLI）。`fromReport` 只处理报告
+  `needs_datasheet` 选中的位号；`offline` 零外呼。只回文本摘要 + 四个产物路径
+  （`hunt-report.json` / `hunt-plan.json` / `hunt-report.md` / `hunt-audit.jsonl`），
+  **几十份 PDF 正文不进模型上下文**。`shelf` 只有显式给路径才传——**从不默认写架**，
+  更不隐式改全局 `parts.json`；正则提取是 candidate，过引文闸是 `machine_verified`
+  （仅计算，仍待人工确认），**插件不代签 verified**（喂 PDF ≠ 清闸）。`cache` 与 `noCache`
+  同时给 → 执行前拒绝，不 spawn。
 - **只读优先**：所有工具都不修改设计。`boardwise_bridge` 强制 `--read-only`；CLI 目录闸拒绝
   非 read/未知动作时，结果前附 `tool-gap`，原文与 exit 保留。分诊与 finalize 只更新审查报告和
   交付收据，真实工程的设计写仍走 CLI 的身份与权限闸。
@@ -79,7 +90,7 @@ review_read/finalize/doctor 始终可收尾，已派发命令不被取消。541R
   `boardwise_draw_plan` 直接复用保存的页候选，exit 0 / 5有完整JSON才返回，拒绝缺失/坏JSON与其他退出码；
   不再编译，不暴露page/project/instance/apply参数。预检通过不等于已画完、逐脚回读或视觉通过。
   返回的`pageDocument`与`plan.json`同目录；需要当前源码CLI支持`draw plan --layout`，
-  本仓库构建成功不代表已安装到运行中的DSH。原compile/lint接口保留；本地beta包版本为0.6.3-beta.2。
+  本仓库构建成功不代表已安装到运行中的DSH。原compile/lint接口保留；本地beta包版本为0.6.3-beta.3。
   `draw compile` 有两种负载：单模块 presentation 返回 `candidates` + `failureRounds`，
   页级 presentation（CLI 标 `document: "page"`，即多模块 / 有 `flow` / 模块自带 `grammarRef` /
   page lock）返回 `pages` + `moduleFailureRounds`；两者都带 `failures` / `categories` /
@@ -161,10 +172,10 @@ npm pack                       # 产出 boardwise-dsh-<version>.tgz
 ### 装进 profile
 
 ```sh
-dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.2.tgz
-dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.2.tgz
+dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.3.tgz
+dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.3.tgz
 # desktop / web / headless 是**不同** profile，各装一次
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.2.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.3.tgz
 ```
 
 也可以从 GitHub 装（要求仓库根的 shim 已提交，见下节）：

@@ -240,34 +240,74 @@ def test_a_page_whose_title_is_not_unique_is_named_with_its_uuid(report_and_page
 
 
 def test_a_findings_pages_never_cross_into_another_board(report_and_pages):
-    """The `conn-duplicate-designators` case, which is the one that gets it wrong.
+    """A *legacy* cross-board duplicate finding cannot leak another board's page.
 
-    A cross-board duplicate (`C1` is on Board1 *and* Board2) matches modules of
-    both boards. Printing both pages under a `Board1 →` link would send the reader
-    to Board2's sheet for a finding that is about Board1's placement. The board
-    link narrows the page lookup, and the test measures that it does.
+    This is the one rule that got the page link wrong: a cross-board duplicate
+    (`C1` is on Board1 *and* Board2) matches modules of both boards, and printing
+    both pages under a `Board1 →` link sends the reader to Board2's sheet.
+
+    553 (岳 2026-11-19) retired that finding class, so this fixture no longer
+    produces one — the production assertion below is the causal pin. A report
+    written *before* the ruling still lands in `finding_chains`, though, and a
+    reader must still get the right page out of it. So the legacy row is injected
+    **in memory** (the message is the pre-553 rule's own wording, verbatim), and
+    the board link has to narrow the lookup to Board1's pages.
     """
+    import copy
+
     report, _out = report_and_pages
-    cross = [
+    assert not [
         chain for chain in finding_chains(report)
+        if chain["rule_id"] == "conn-duplicate-designators"
+    ], "553 retired the cross-board class; production must not report it again"
+    # The shape the old reports carry: one finding per name, from the first board
+    # that carries it, with the project-scoped claim and that board's stamp.
+    legacy = {
+        "rule_id": "conn-duplicate-designators",
+        "severity": "ERROR",
+        "level": "L2-connectivity",
+        "message": (
+            "C1 is placed on more than one board (Board1、Board2); the "
+            "project's netlist, BOM and layout share one name for two parts "
+            "(oracle ruling A1, 2026-09-19)"
+        ),
+        "refs": ["C1"],
+        "board": "Board1",
+        "target": {"component_ref": "C1", "net_refs": []},
+    }
+    copied = copy.deepcopy(report)
+    copied["findings"] = [*(copied.get("findings") or []), legacy]
+
+    cross = [
+        chain for chain in finding_chains(copied)
         if "more than one board" in chain["problem"]
     ]
-    assert cross, "the fixture must have cross-board duplicates or this pins nothing"
-    board_of = {}
-    for module in report["modules"]:
-        for ref in module.get("components") or []:
-            board_of.setdefault(ref, set()).add(module.get("board"))
-    for chain in cross:
-        ref = chain["refs"]
-        if chain["board"] in board_of.get(ref, set()):
-            # Its pages must all belong to that board — checked by resolving each
-            # page uuid back through the modules.
-            owning = {
-                module.get("board") for module in report["modules"]
-                for uuid in (module.get("pages") or [])
-                if uuid[:8] in chain["page"]
-            }
-            assert owning <= {chain["board"]}, (chain["index"], chain["page"], owning)
+    assert len(cross) == 1, "the injected legacy row is the only cross-board one"
+    chain = cross[0]
+    assert chain["board"] == "Board1" and chain["refs"] == "C1"
+    assert "page" not in chain["missing"], chain
+    # Both boards list C1 on a page — that is what made the lookup cross boards.
+    board2_modules = [
+        module for module in copied["modules"]
+        if module.get("board") == "Board2"
+        and "C1" in (module.get("components") or [])
+        and module.get("pages")
+    ]
+    assert board2_modules, "Board2 must carry C1 on a page or this pins nothing"
+    # …and the chain names only Board1's pages: resolving every uuid it prints
+    # back through the module table must never land on another board.
+    owning = {
+        module.get("board") for module in copied["modules"]
+        for uuid in (module.get("pages") or [])
+        if uuid[:8] in chain["page"]
+    }
+    assert owning == {"Board1"}, (chain["page"], owning)
+    board2_pages = {
+        uuid[:8] for module in board2_modules for uuid in module["pages"]
+    }
+    assert not {uuid for uuid in board2_pages if uuid in chain["page"]}, (
+        "the board link must keep Board2's sheet out of a Board1 chain"
+    )
 
 
 def test_a_link_the_run_cannot_derive_is_reported_not_invented():

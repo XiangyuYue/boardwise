@@ -341,9 +341,12 @@ def _connector(designator: str, *, short_note: bool = True) -> Component:
 def test_the_same_cn_designator_is_not_interconnect_evidence():
     """Two ``CN1``s with different footprints are still not a mating pair.
 
-    The name collision remains A1's independent ERROR; it produces no net edge
-    and no new 041 finding. This is the exact negative control for reading a
-    connector-shaped designator as if it were board-to-board evidence.
+    The name collision used to be A1's independent ERROR; 553 retired that
+    verdict on 2026-11-19 (sharing a name across boards is normal), so the
+    collision now stays a project fact — ``cross_board_designators`` — and files
+    no finding. It still produces no net edge and no new 041 finding: the exact
+    negative control for reading a connector-shaped designator as if it were
+    board-to-board evidence.
     """
     first = _connector("CN1")
     second = _connector("CN1")
@@ -366,7 +369,13 @@ def test_the_same_cn_designator_is_not_interconnect_evidence():
         finding for finding in run_review(project)
         if finding.rule_id == "conn-duplicate-designators"
     ]
-    assert len(duplicates) == 1 and duplicates[0].severity == "ERROR"
+    assert duplicates == [], (
+        "553: a name shared across boards is a project fact, not a finding"
+    )
+    assert [board.cross_board_designators for board in project.boards] == [
+        {"CN1": ["Board1", "Board2"]},
+        {"CN1": ["Board1", "Board2"]},
+    ], "553 retires the verdict, not the fact it used to read"
     assert not [finding for finding in run_review(project) if "cross" in finding.rule_id]
 
 
@@ -467,8 +476,10 @@ def motor() -> ProjectModel:
 def test_the_real_three_board_project_yields_instances_groups_and_pairs(foc):
     assert foc.board_titles() == ["Board1", "Board2", "Board3"]
     assert all(board.board.uuid for board in foc.boards)
-    assert len(foc.net_instances()) == foc.net_count() == 137, (
-        "one instance per (addressable board, net name)"
+    assert len(foc.net_instances()) == foc.net_count() == 130, (
+        "one instance per (addressable board, net name); 137 -> 130 "
+        "under 552, whose unit merge joins the nets the two U15/U16 "
+        "placements used to file separately"
     )
     groups = foc.cross_board_net_instances()
     # 038g2 re-measured this pair: 39 -> 30 groups and 49 -> 40 edges, because
@@ -491,7 +502,10 @@ def test_the_real_three_board_project_yields_instances_groups_and_pairs(foc):
 def test_the_real_two_board_project_yields_instances_groups_and_pairs(motor):
     assert len(motor.boards) == 2
     assert all(board.board.uuid for board in motor.boards)
-    assert len(motor.net_instances()) == motor.net_count() == 147
+    assert len(motor.net_instances()) == motor.net_count() == 139, (
+        "147 -> 139 under 552: U15/U16/U17/U20 are one part each, so the nets "
+        "their second placement used to file separately are now one"
+    )
     # 038g2: 38 -> 35, the three sense-negative stub names that stopped being a
     # net of their own on the driver board (its nine moved feet are adjudicated
     # against PCB2's PAD_NET in `.tmp_038g2/motor-adjudication.out.txt`). One
@@ -504,11 +518,22 @@ def test_the_real_two_board_project_yields_instances_groups_and_pairs(motor):
 
 #: Severity counts per real multi-board fixture, measured on the pre-041 model
 #: (2026-11-05, `.venv/Scripts/python.exe -c` over `build_project_model` +
-#: `run_review`). 041 adds a data channel and no rule, so these must not move:
-#: a moved row here means the derivation reached into a rule.
+#: `run_review`). 041 adds a data channel and no rule, so 041 itself must not
+#: move these: a moved row here means the derivation reached into a rule.
+#:
+#: **Re-baselined 2026-11-19 (batch 554), only where 552/553 moved it.**
+#: 553 retired the cross-board duplicate-designator ERROR on 岳's ruling, and
+#: 552 proved U15/U16 (three-board archive) and U15/U16/U17/U20 (two-board
+#: archive) to be one physical part's units rather than duplicates. Measured
+#: row by row against a shadow tree: re-adding 553's cross-board loop puts back
+#: exactly 28 / 18 `conn-duplicate-designators` ERROR rows and nothing else;
+#: rolling 552's `schematic.py` back puts back exactly 2 / 4 same-page rows and
+#: 19 more `param-rc-cutoff` INFO (the restored unit pins put C2/C12/C24… on
+#: 'VCC/2'), with net_count 130 -> 137 / 139 -> 147. Every other rule keeps
+#: its rows, and no rule gained a verdict.
 _PRE_041_SEVERITIES = {
-    "foc": {"ERROR": 30, "WARN": 1, "INFO": 14},
-    "motor": {"ERROR": 22, "WARN": 1, "INFO": 48},
+    "foc": {"WARN": 1, "INFO": 14},
+    "motor": {"WARN": 1, "INFO": 67},
 }
 
 
@@ -683,13 +708,15 @@ def test_the_markdown_spells_short_uuids_with_titles_and_claims_nothing():
 def test_the_checkup_report_json_and_markdown_carry_the_section(tmp_path, foc):
     """End to end on the real three-board archive: `report.json` gets
     `source.crossBoardNets`, `report.md` gets its own section, and the findings
-    count is **242** — S1 measured 241, and 529's mid-distance decoupling band
+    count is **212** — S1 measured 241, and 529's mid-distance decoupling band
     (2.2 µF / 4.7 µF now count as mid-range caps) took one `pcb-decap-distance`
     WARN and the INFO beside it out of the run since, leaving 239; 038Y's
     `pcb-silk-on-foreign-pad` then added one approximation-disclosure INFO per
-    board (three boards, so three INFOs), which is the only reason this reads
-    242 rather than 239. This channel adds neither, and every row that moved
-    belongs to those rules' readings, not 041's."""
+    board (three boards, so three INFOs), taking it to 242. **553/552** then
+    took 30 ERROR rows out and moved nothing else (28 cross-board names
+    retired by 553, U15/U16 proved multi-unit by 552), so it reads 212; this
+    channel adds neither a row nor a name, which is what the section
+    assertions below still pin."""
     from boardwise import cli
 
     out = tmp_path / "checkup"
@@ -708,15 +735,21 @@ def test_the_checkup_report_json_and_markdown_carry_the_section(tmp_path, foc):
         (board.board.uuid, board.board.title) for board in foc.boards
     ]
     assert section["nonAddressablePages"] == []
-    assert len(report["findings"]) == 242, "041-S1 adds a channel, not findings"
+    assert len(report["findings"]) == 212, (
+        "041-S1 adds a channel, not findings; 553 retired 28 cross-board "
+        "duplicate-designator ERRORs and 552 resolved U15/U16, so 242 -> 212"
+    )
     summary = report["summary"]
     assert (summary["errorCount"], summary["warnCount"], summary["infoCount"]) == (
-        50, 20, 172,
+        20, 20, 172,
     ), (
         "frozen from the 038Y checkup run on this fixture: 529 left 50-20-169 "
         "(S1 read 50-21-170) and 038Y's `pcb-silk-on-foreign-pad` added one "
         "approximation-disclosure INFO per board — three boards, three INFOs, "
-        "no ERROR and no WARN moved"
+        "no ERROR and no WARN moved. 553/552 then took exactly 30 ERRORs out "
+        "(50 -> 20); the 20 that stay are `pcb-footprint-consistency` — 6 "
+        "parts unplaced on Board3 and 14 footprint size-code mismatches — "
+        "which is why checkup's exit code is still 1"
     )
     assert report["completion"]["verdict"] == "incomplete", (
         "measured on this fixture: parts missing datasheets plus 20 untriaged "
@@ -763,15 +796,20 @@ def test_review_md_discloses_while_review_json_keeps_its_findings(tmp_path):
     md, js = tmp_path / "review.md", tmp_path / "review.json"
     assert cli.main([
         "review", str(FOC), "--md", str(md), "--json", str(js),
-    ]) == 1, "exit 1 = ERROR findings present, which is what this fixture has"
+    ]) == 0, (
+        "exit 0 = no ERROR left in the schematic-only review: 553 retired the "
+        "28 cross-board rows and 552 the U15/U16 rows; the fixture's remaining "
+        "ERRORs are `pcb-footprint-consistency`, which `review` does not run"
+    )
     text = md.read_text(encoding="utf-8")
     assert "## 跨板网络（未证明）" in text
     assert "`GND`" in text and "welded-by-name" in text
 
     payload = json.loads(js.read_text(encoding="utf-8"))
-    assert payload["summary"] == {"ERROR": 30, "WARN": 1, "INFO": 14}
-    assert len(payload["findings"]) == 45, (
-        "the same 45 run_review rows the model batch froze — 041 adds no finding"
+    assert payload["summary"] == {"ERROR": 0, "WARN": 1, "INFO": 14}
+    assert len(payload["findings"]) == 15, (
+        "the 15 run_review rows left after 553/552 (1 WARN + 14 INFO); 041 "
+        "adds no finding"
     )
 
     absent = tmp_path / "no-such-declaration.json"

@@ -403,11 +403,10 @@ class BoardModel(DesignModel):
 
     ``cross_board_designators`` is the one project-scoped fact a board model
     carries: for a designator placed on more than one board, the *titles of every
-    board that has it*, in project order (so the first entry is the board that
-    reports it — see :class:`boardwise.rules.connectivity.DuplicateDesignators`).
-    A rule that only ever sees one board can therefore still say "this name is
-    also used on Board3", which is the difference between a same-board repeat
-    and a cross-board one (040b §WI-3; the oracle's A1 ruling is unchanged).
+    board that has it*, in project order. It lets board-aware consumers resolve
+    project-level ambiguity without treating normal per-board numbering as a
+    defect. Since 553 it is not an input to ``DuplicateDesignators`` findings;
+    same-page and same-board-cross-page repeats remain distinct defects.
     """
 
     board: BoardRef = field(default_factory=BoardRef)

@@ -7,6 +7,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { isPendingRegistration } from './review-finalize.ts'
 import type { ReviewProjectionReader } from './review-finalize.ts'
 import { registerDrawTools } from './draw-tools.ts'
+import { registerPartsHunt } from './parts-hunt.ts'
 import { registerReviewDelivery } from './review-delivery.ts'
 import {
   hasPromiseFace,
@@ -66,6 +67,9 @@ function publish(
   finalizeReader: ReviewProjectionReader | undefined,
   stageReader: ReviewStageReader | undefined,
 ): void {
+  // 555: the batch datasheet hunt reads a design the way checkup does and
+  // draws nothing, so it lands after the old eight tools and before draw.
+  registerPartsHunt(ctx)
   registerDrawTools(ctx)
   registerReviewDelivery(ctx, finalizeReader)
   // The stage gate proves a checkpoint with **both** projections: a stage

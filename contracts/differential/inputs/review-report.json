@@ -1,7 +1,7 @@
 {
   "schema": "boardwise.checkup/7",
   "generatedAt": "<GENERATED_AT>",
-  "toolVersion": "0.6.1",
+  "toolVersion": "0.6.3-beta.2",
   "source": {
     "tier": "file",
     "tierLabel": "离线文件（--file）：不连编辑器",
@@ -1139,7 +1139,7 @@
   "shelfPath": "blocklib/parts.json",
   "environment": {
     "tier": "file",
-    "expectedConnectorVersion": "0.6.1",
+    "expectedConnectorVersion": "0.6.2",
     "runningConnectorVersion": null,
     "connectorVersionStatus": "not-applicable",
     "writeAllowed": false,
@@ -2003,7 +2003,7 @@
     },
     "sourceVersions": {
       "ruleset": "a0c5e0a0",
-      "rulebody": "1cc2bff3"
+      "rulebody": "dcc659a6"
     },
     "verdict": "incomplete",
     "verdictWhy": [

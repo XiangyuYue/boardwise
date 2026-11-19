@@ -172,42 +172,36 @@ class DecouplingPerIC(Rule):
 
 
 class DuplicateDesignators(OutcomeRule):
-    """CONN-1 (task 011c): one designator must mean exactly one part.
+    """CONN-1 (task 011c): one designator must mean exactly one part per board.
 
-    Three kinds of repeat, and 040b makes the parser tell them apart (the 毕设
-    project is the worked example: 3 boards, 30 refs, of which 28 are one name on
-    two or three boards and 2 — U15, U16 — repeat *within* one page):
+    Two kinds of repeat are defects:
 
     * **twice on one page** — two parts answer to one name inside one netlist.
       ``model.duplicate_designators``.
     * **once on each of two pages of one board** — one design drawn across
       sheets, so the name still resolves to two parts in one netlist.
       ``model.cross_page_designators``.
-    * **on more than one board** — ``model.cross_board_designators`` says which
-      boards, and the first one listed reports it, so a project-scoped claim is
-      made once instead of once per board.
 
-    All three are ERROR, which is the oracle's A1 ruling (2026-09-19) unchanged:
-    "the netlist, the BOM and the layout are all PROJECT-scoped, so two different
-    parts answer to one name". 040 left a switch here
-    (``CROSS_PAGE_REPEAT_IS_A_DEFECT``) because it could not tell the second kind
-    from the third; now that it can, the switch has no reading left to guard and
-    is gone. What 040b adds is not a verdict but a *subject*: the message says
-    which board(s) the name spans, so "same board, another sheet" and "another
-    board" read differently.
+    Both remain ERROR. The original A1 project-wide ruling is narrowed by 553:
+    only the cross-board defect class is retired, not either same-board class.
 
-    **Which placement the model keeps (049, measured: first).** One name cannot
-    hold two placements, so the model picks one — and since 049 it keeps the
-    **first** one in the document. The copper layer is what decided it: on the
-    thesis-FOC board both U15 and U16 are placed twice on one page, and the
-    *first* placement's pins are the ones the PCB agrees with (U15's V+ on VCCA
-    with its 100nF return, VEE/GND on AGND), while the later copy leaves those
-    power pins unwired. The rule therefore says so in the message, because a
-    reader who cannot tell which placement the netlist describes cannot use it.
+    **A name on another board is not a defect (553).** Each board numbers its
+    own parts. ``model.cross_board_designators`` and
+    ``ProjectModel.multi_board_designators()`` stay exactly as the parser records
+    them, so board-aware BOMs, reports and edit plans can still resolve project-
+    scoped ambiguity. 岳 ruled on 2026-11-19 that sharing a name across boards is
+    normal; those facts no longer produce findings.
+
+    **Unresolved duplicate placements (049/105).** The model keeps the first
+    placement deterministically, leaves later copies out of net membership and
+    records the resulting uncertainty. This fallback does not apply to 552's
+    multi-unit parts: a shared non-empty Unique ID and Device plus distinct
+    partIds prove one physical part, whose units all contribute their own pins
+    and nets instead of being duplicates.
     """
 
     id = "conn-duplicate-designators"
-    title = "Designators must be unique across the whole project"
+    title = "Designators must be unique on each board"
     level = LEVEL
     source = "house rule; the parser records the clashes (011c sec.3.2, 040 §WI-3)"
 
@@ -273,32 +267,9 @@ class DuplicateDesignators(OutcomeRule):
                 ),
                 "ERROR",
             ))
-        for designator, titles in sorted(
-            getattr(model, "cross_board_designators", {}).items()
-        ):
-            # One report per name, from the first board that carries it: the
-            # claim is project-scoped, so repeating it on every board would make
-            # one defect look like three.
-            board = getattr(model, "board", None)
-            if titles and board is not None and titles[0] != board.title:
-                continue
-            where = "、".join(titles)
-            rows.append((
-                Outcome(
-                    rule_id=self.id,
-                    state="VIOLATION",
-                    subject=designator,
-                    message=(
-                        f"{designator} is placed on more than one board ({where}); "
-                        "the project's netlist, BOM and layout share one name for "
-                        "two parts (oracle ruling A1, 2026-09-19)"
-                    ),
-                    evidence=[
-                        f"designator {designator} on boards: " + ", ".join(titles)
-                    ],
-                ),
-                "ERROR",
-            ))
+        # 553: `cross_board_designators` is deliberately not read here. It is a
+        # project fact (``ProjectModel.multi_board_designators()``), not a repeat
+        # inside any one netlist -- see the class docstring.
         if not rows:
             rows.append((
                 Outcome(
@@ -307,7 +278,7 @@ class DuplicateDesignators(OutcomeRule):
                     subject="designator uniqueness",
                     message=(
                         f"all {len(model.components)} designators are unique "
-                        "across the parsed pages"
+                        "on this board"
                     ),
                 ),
                 None,

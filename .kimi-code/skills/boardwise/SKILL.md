@@ -100,8 +100,8 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
   板上**只有器件名没有 MPN** 的器件，条目按器件名也能被认出来（报告标「按器件名匹配」）。
   口径见 `docs/review-sop.md` §3.1②。
   货架两架合读（用户架+内置架）：`parts list` 每行标来源；`parts add` 撞内置已核验件要 `--force`。
-- **工程师接受未审**（191A）：`parts accept-unknown <MPN|位号> --reason "<原话>" --file <工程>`；**不是审过**，
-  verdict 最多 `complete-with-open-items`，结论原样讲「另有 N 颗工程师接受未审」；**AI 不许替工程师接受**。
+- **整板缺几十份手册 → 批量 hunt（555）**：checkup 后 DSH 调 `boardwise_parts_hunt`（`file` 或 `project`/`instance` 三选一，`out` 必填，`fromReport` 指向该报告），只处理 `needs_datasheet` 点名的器件；CLI 对应 `parts hunt --file <归档> --from-report <报告> --out <目录>` 或 `--live`。三阶段：C 号下载/缓存 → MPN-only 搜索后以 `answers` 回灌 URL → AI 每批 3–5 颗读相关章节，以 `claims` 回灌 facts+quotes 过逐字引文闸。四产物 hunt-report.json / hunt-plan.json / hunt-report.md / hunt-audit.jsonl；PDF 正文留缓存。`shelf` 仅显式路径才写；过闸为 `machine_verified`（仅计算、仍待签核），不得写成 `verified`/`complete`。
+- **工程师接受未审**（191A）：`parts accept-unknown <MPN|位号> --reason "<原话>" --file <工程>`；**不是审过**，verdict 最多 `complete-with-open-items`，结论原样讲「另有 N 颗工程师接受未审」；**AI 不许替工程师接受**。
 - **无电压电源网**（`VCC`/`VCCA`/`VREF` 这类名字不带电压的轨）：`boardwise intent audit --file <导出.epro2>` 列待问清单（已答的列 settled 并点名出处）→ 逐条问工程师 →
   `boardwise intent set-rail <网名> --voltage <值> --file <合同>` 落设计意图合同，
   **问一次不再问**（065；口径与收据形态见 `docs/review-sop.md` §3.1b）。

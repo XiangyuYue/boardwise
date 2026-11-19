@@ -1083,13 +1083,64 @@ def register_parts_parser(sub: Any) -> None:
             "read) and hunt-audit.jsonl (one line per outbound call — the evidence that only "
             "a C-number or an MPN left the machine). `--apply answers.json` is the second "
             "stage: hand-found URLs come back in and go through the same download / extract "
-            "/ land path. Nothing here verifies anything: entries land with "
-            "facts_verified: false, so 喂 PDF ≠ 清闸 still holds. Exit 0 report written / "
-            "2 the input or an answers file cannot be read."
+            "/ land path. Nothing here is a human signature: regex extraction lands as candidate; "
+            "--apply-facts lands as machine_verified for calculations only. Only an engineer may "
+            "declare verified, so 喂 PDF ≠ 清闸 still holds. "
+            "555 adds two entries without a second pipeline: `--live` reads the project open "
+            "in the editor through checkup's own tier ladder (a netlist-tier read carries no "
+            "MPN/C-number identity, so it is exit 3 rather than a board of `no-identity` "
+            "rows), and `--from-report checkup/report.json` addresses only the "
+            "`needs_datasheet` worklist that report already wrote down (an empty worklist is "
+            "a zero-part report and zero calls; a report without the key is refused, never "
+            "read as the whole board). --file and --live are exclusive, --project/--instance "
+            "only go with --live, and --live --offline is refused (reading the editor and "
+            "'no outbound call' are two different claims). Exit 0 report written / "
+            "2 the input, an answers file or a --from-report file cannot be read or does not "
+            "match this board / 3 the live state cannot be stated for this question."
         ),
     )
     parts_hunt.add_argument(
-        "--file", required=True, help="The .epro2 / .eprj3 project to address (read-only)."
+        "--file", default="",
+        help=(
+            "The .epro2 / .eprj3 project to address (read-only). One of --file / --live; "
+            "omitting both is exit 2."
+        ),
+    )
+    parts_hunt.add_argument(
+        "--live", action="store_true",
+        help=(
+            "Address the project open in the editor instead of a file (555): the same offline "
+            "pipeline over a model loaded through checkup's tier ladder (project archive → "
+            "per-page archives). Only those two tiers are accepted — the netlist tier has no "
+            "MPN and no C-number, so it exits 3 instead of writing one `no-identity` row per "
+            "part. Mutually exclusive with --file and with --offline."
+        ),
+    )
+    parts_hunt.add_argument(
+        "--project", default="",
+        help=(
+            "With --live: which editor window to read, by project name or uuid (023). Needed "
+            "only when several windows are connected and none can be named by the daemon's "
+            "default."
+        ),
+    )
+    parts_hunt.add_argument(
+        "--instance", default="",
+        help=(
+            "With --live: the same choice spelled as the window key `bridge status` prints — "
+            "the way to reach one window when no project can be read yet."
+        ),
+    )
+    parts_hunt.add_argument(
+        "--from-report", default=None, metavar="PATH", dest="from_report",
+        help=(
+            "Address only the parts a checkup report says it could not judge: read "
+            "`needs_datasheet[].designator` (`part` is the same field's spelling in a real "
+            "report) and hunt exactly those designators. An empty worklist writes a zero-part "
+            "report with zero outbound calls; a report without the key, a row naming nothing, "
+            "or a designator this board does not have is exit 2 — never a silent whole-board "
+            "scan. --limit applies after this filter."
+        ),
     )
     parts_hunt.add_argument(
         "--out", required=True, help="Where the four artefacts and the candidate sidecars go."
@@ -1137,9 +1188,10 @@ def register_parts_parser(sub: Any) -> None:
             "Stage three: a JSON list of {designator|lcsc|mpn, facts, quotes} — what an "
             "AI or an engineer read out of the cached <C-number>.txt. Every quote must "
             "appear VERBATIM on the page it cites (whitespace runs folded) or the claim "
-            "is `facts-rejected` and nothing of it lands. Accepted claims still land as "
-            "candidates (facts_verified: false): the gate checks the evidence, not the "
-            "reading. Needs no network — the dump is already on disk."
+            "is `facts-rejected` and nothing of it lands. Accepted claims land as "
+            "machine_verified: the evidence chain is checked, not the reading, so they drive "
+            "calculations only and still need human confirmation. Needs no network — the dump "
+            "is already on disk."
         ),
     )
     parts_classify = parts_sub.add_parser(
