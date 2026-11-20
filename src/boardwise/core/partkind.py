@@ -162,6 +162,12 @@ NON_IC_DESIGNATOR_PREFIXES: frozenset[str] = frozenset(
 #: ``PZ254V-11-04P`` and ``HDR-TH_4P-P2.54`` on four different parts.
 CONNECTOR_WORDS: tuple[str, ...] = (
     "PZ2.54", "PZ254", "HDR", "HEADER", "CONN", "TYPE-C", "USB", "MX1.25", "XT60",
+    # 558B: ``EST026`` is the part's own catalogue name on 555's three ``U``
+    # terminals (「插件」 footprint, no MPN), and the public catalogue files it
+    # under *Through Hole Quick Connects/Disconnects*. The **family word**, not
+    # the ``EST`` prefix: three letters would swallow any EST-numbered IC, and
+    # the token-boundary read is what keeps this one exact.
+    "EST026",
 )
 
 #: Words that name a **transistor** (MOSFET / BJT). A power MOSFET's drain sits

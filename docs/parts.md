@@ -263,6 +263,62 @@ filename (a single-part board is unchanged); two or more now append the identity
 collision that survives the suffix gets `-2`, `-3` rather than an overwrite. Both
 files are written, each with its own facts and its own `manufacturer MPN` label.
 
+### What a part actually owes: the obligation (558)
+
+555's real pilot measured what one template costs. A mounting screw reached the
+hunt as `(没有 MPN) datasheet pdf` **and** the local-PDF matcher weakly matched it
+to an unrelated MCU's document (`M3螺丝`'s identity token is `m3`, a substring of
+`stm32…`), so the row reported 「engineer 有手册」 about a screw; U-designated
+connectors were asked for the seven IC facts. Both are the report inventing work.
+
+Every `unreviewed_parts[]` row now carries four additive keys:
+
+| key | values | meaning |
+|---|---|---|
+| `obligation` | `ic-facts` / `connector-pinout` / `identity-unresolved` / `no-ic-facts` | what this part is waiting for |
+| `obligationBasis` | `classify_part`'s basis (`shelf`/`metadata`/`prefix`/``""``) or `mechanical-declaration` | which read decided it |
+| `kind` | `classify_part`'s `kind` | never a new `PartKind` |
+| `pinoutSource` | `none` (connectors only) | the shelf holds no consumable pin table; **pins on the board are not the manufacturer's pin table** |
+
+Decisions, in this order:
+
+1. **Mechanical** — the part's own words declare it (`螺丝/螺母/铜柱/螺柱/安装孔/
+   固定孔`, or English `screw`/`standoff`/`spacer`/`mounting hole` **on a word
+   boundary**) → `no-ic-facts`. A part that names itself a terminal (`screw
+   terminal`, `螺丝端子`, `接线柱`) is a **connector**, whatever fastens it, and
+   nothing else declares a part mechanical: not the `SCREW` prefix, not a `U`
+   designator, not an `unknown` kind. Fields read: `device_name`, `Value`,
+   footprint. A **declared** connector identity (`classify_part` basis `metadata`
+   or `shelf`) outranks a mechanical word beside it — `Mounting Hole Header 2x3`
+   is `connector-pinout` — while a `prefix`-only reading is the same hint and
+   still yields (`H1 安装孔`, `M3螺丝` stay `no-ic-facts`; 560).
+2. **Connector** — `classify_part(component, library=…, pin_floor=False)` says
+   `connector` → `connector-pinout`, `pinoutSource: "none"`, `missingFacts: []`,
+   and the official queries ask **pinout/引脚定义/脚位图** instead of a datasheet.
+3. **Unidentifiable** — not mechanical, **no MPN and no shape-valid C-number**
+   (`engines.hunt.is_c_number`, shape only) → `identity-unresolved`, `missingFacts:
+   []`. Both halves are required: 555's `EST026` holds `C52878`, so "no MPN" alone
+   would file a catalog-associated part as unidentifiable. Whether the catalog
+   *knows* the number is the service's answer and is not claimed here.
+4. **Everything else** → `ic-facts`: the seven keys, the same queries, unchanged.
+
+A mechanical row also reports all three document channels as `ok: null` +
+`applicable: false` (there is no hunt to start), is not matched against
+`.tmp_datasheets/` at all, hands over **no** query, and its `question` points at
+`parts accept-unknown --reason …` — the honest close is a person writing down
+"unknown, accepted". `needs_datasheet[]` no longer carries a `no-ic-facts` facts
+seed (that list is what `parts hunt --from-report` consumes) while a reviewer's
+explicit `marked` entry for the same part stays; the fold propagates all four keys.
+
+The row is **not** cleared by any of this: `unreviewed_parts[]` keeps it and
+`completion.verdict` stays `incomplete`. What changes is the bucket —
+`unreviewedByClass` gains `无 IC facts 义务（待人工结案）` (printed first, because
+its next step is neither a document nor a reading), and mechanical rows leave
+`真缺资料`. `verdict`/`factsTrust` are untouched by this batch: the three
+`machine_verified` entries in the 558 pilot remained under
+`机器核验待人工确认` until 岳's later manual signoff; the obligation
+classification itself never promotes a facts record.
+
 The flag combinations are refusals, not silent choices: `--file` and `--live` are
 exclusive, at least one is required, `--project` / `--instance` only go with
 `--live`, and `--live --offline` is exit 2 — "read the editor" and "not one

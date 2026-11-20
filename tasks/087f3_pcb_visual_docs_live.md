@@ -1,5 +1,8 @@
 # 087F3：#87②⑤ 文档、热更与真实在线验收
 
+> 状态：**已落 `3d4a0d5`（origin/main）**；test V4 在线验收完成（2026-11-16），未发布。
+> 提交状态由 557 于 2026-11-19 校正；V3 / 生产非空板未覆盖与 #87 Issue 待提出人复验的边界不变，不因已落而关单。
+
 日期：2026-11-16。前置：087E、087F1、087F2 的离线实现与主代理复核完成。当前旧 connector 的 P43 readback 无 value/mpn，`capabilities` 缺键；PCB viewport 探针已证两块板图像真实不同。此任务分“候选在线验收”和“证据成立后文档”两段，热更必须另获岳当次批准，不自动执行。
 
 ## 1. 在线身份与边界
@@ -71,4 +74,4 @@
 
 - 文档已从“候选/未在线验收”改为“工作树实现、test V4 已在线验收、未发布”：SOP 标题为“PCB 目视复核：几何与 viewport 两级证据”，坑23与 `_PCB_VISUAL_MARKER` 同步；历史 60.01 s 边界、旧 connector 零 render、PNG≠视觉通过和 V3/生产板未覆盖均保留。
 - 主代理最终联合复验 **186 passed**（doc-claims + live_capture + review_evidence_cli + evidence_coverage），两 SKILL 副本 `cmp` 一致，diff-check 通过。文档测试继续回源码核 capabilities/channel/grade，并禁止“工作树候选/未在线验收/已上线”等过期或越界措辞。
-- 截止本段，#87②⑤ 工作树实现与 test V4 在线验收均完成，**未发布**。Issue 只准备复验说明，未经岳批准不评论、不关单。
+- 截止本段，#87②⑤ 实现与 test V4 在线验收均完成，**未发布**；该实现已在 `3d4a0d5`（`origin/main`）。SOP 与坑23 仍写作“工作树实现”，属同批历史措辞，另批校正。Issue 只准备复验说明，未经岳批准不评论、不关单。

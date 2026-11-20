@@ -3070,6 +3070,574 @@ export const sysProbe: ActionHandler = async (params, eda) => {
 };
 
 // --------------------------------------------------------------------------
+// 559: `pcb.connection_probe` — host evidence for one pad-to-pad connection
+// --------------------------------------------------------------------------
+
+/**
+ * What this action is, and what it deliberately is **not**.
+ *
+ * 550B measured the three instance methods on EDA 4.1.100
+ * (`getConnectedPrimitives`, `getEntireTrack`, `getAdjacentPrimitives`), but
+ * `sys.probe`'s `instances` mode answers primitive **ids** for primitives the
+ * caller already names — that is not a connection between two *named pads*, and
+ * it is not a net path either. This action takes the two ends the way a
+ * schematic caller thinks of them (`R1.3`), resolves each to its
+ * `IPCB_PrimitiveComponentPad` in **one** bounded component walk, and then
+ * collects what the host says those pads are **directly** connected to.
+ *
+ * **Direct-only, because `getEntireTrack` was measured and rejected** (559B).
+ * On one net the offline 550 model separates into six disconnected copper
+ * components, `getEntireTrack(true)` answered 76 ids with `truncated: true` and
+ * four of those ids belonged to other components (`evidence/559/entire-track-rejection.json`).
+ * An id set is therefore not a connected component, and membership in one is
+ * not proof of physical connectivity — so this action no longer calls
+ * `getEntireTrack` at all. What is left is directly measurable: both ends
+ * answering the same typed `Line`/`Arc`, or one end answering the other end's
+ * own pad id. Multi-hop copper would need an `getAdjacentPrimitives` graph
+ * contract and its own live validation; it is not claimed here.
+ *
+ * It collects **evidence only**: no `verdict`, no `path`, no `sharedIds`. The
+ * intersection that decides CONNECTED / NOT_PROVEN / INDETERMINATE is a pure
+ * function on the offline side, so the rule has one home and can be tested
+ * without an editor. Everything that could make a negative answer wrong — a
+ * truncated scan, an unreadable component/pin, an unnameable primitive, an
+ * unknown primitive type, any cap — is disclosed in `errors` / `unknown` /
+ * `ignored` / `coverage`, never swallowed and never guessed at.
+ *
+ * Read-only in the strong sense: the only host calls are `getAll`,
+ * `getAllPins`, `getState_*` and `getConnectedPrimitives(false)`. Nothing
+ * opens, focuses, writes or rearranges anything, and the 550B page guard
+ * refuses a focus that is not provably a PCB before the first read.
+ */
+
+/** The closed parameter set: both ends are `REF.PAD` and nothing else. */
+const CONNECTION_KEYS = ['from', 'to'] as const;
+
+/** How many directly connected primitives one end may report (host order). */
+const CONNECTION_DIRECT_CAP = 16;
+
+/**
+ * Every value `EPCB_PrimitiveType` declares on `IPCB_Primitive`, as the host
+ * spells them (`@jlceda/pro-api-types`). A returned primitive is classified by
+ * reading `getState_PrimitiveType`; a type outside this table is `unknown` and
+ * is **not followed**, because "which catalogue entry is this" would be a guess.
+ */
+const CONNECTION_PRIMITIVE_TYPES = new Set([
+  'Arc', 'Component', 'Pad', 'ComponentPad', 'Polyline', 'Pour', 'Fill',
+  'Region', 'Line', 'Via', 'Dimension', 'Image', 'Object', 'Poured', 'String',
+  'Attribute',
+]);
+
+/**
+ * The two types whose *direct* answer can be shared copper. `getEntireTrack` is
+ * not called on them (559B), so this set only classifies: a `Line`/`Arc` is
+ * neither a pad nor an unknown type.
+ */
+const CONNECTION_TRACK_TYPES = new Set(['Line', 'Arc']);
+
+/** The types that can be the *other pad* and therefore direct evidence on their own. */
+const CONNECTION_PAD_TYPES = new Set(['Pad', 'ComponentPad']);
+
+/** One end of the query, as the caller spelled it. */
+type ConnectionEnd = {
+  key: 'from' | 'to';
+  designator: string;
+  pad: string;
+  text: string;
+};
+
+/** What one end's pad resolution measured, gaps included. */
+type ConnectionPadRow = {
+  end: ConnectionEnd;
+  status: 'resolved' | 'absent' | 'ambiguous' | 'incomplete' | 'unavailable' | 'error';
+  error?: string;
+  pad: any | null;
+  primitiveId: string | null;
+  padNumber: string | null;
+  net: string | null;
+  type: string | null;
+  matches: number;
+  resolution: {
+    components: number;
+    matches: number;
+    candidates: string[];
+    readErrors: string[];
+    truncated: boolean;
+    complete: boolean;
+  };
+};
+
+/** Everything the collection stages share: gaps are appended, never replaced. */
+type ConnectionCollector = {
+  errors: string[];
+  unknown: Array<Record<string, unknown>>;
+  ignored: Array<Record<string, unknown>>;
+};
+
+/** One end's direct-call answer: ids and their types, or the failure that stood in for them. */
+type ConnectionDirect = {
+  ok: boolean;
+  count?: number;
+  ids?: string[];
+  items?: Array<{ primitiveId: string | null; type: string | null }>;
+  truncated?: boolean;
+  unreadable?: number;
+  error?: string;
+};
+
+/**
+ * `params.from` / `params.to`: one `"REF.PAD"` string.
+ *
+ * The split is at the **last** dot so a *designator that itself contains dots*
+ * still parses (the pad is always the trailing segment — a pad number that
+ * contains a dot cannot be expressed); a designator without a dot, or
+ * an empty side, is malformed and refused rather than scanned for.
+ */
+function connectionEnd(params: Record<string, unknown>, key: 'from' | 'to'): ConnectionEnd {
+  const raw = params[key];
+  if (typeof raw !== 'string') {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `pcb.connection_probe params.${key} must be a "REF.PAD" string (got ${probeValueShape(raw)})`,
+    );
+  }
+  const text = raw.trim();
+  const at = text.lastIndexOf('.');
+  const designator = at > 0 ? text.slice(0, at) : '';
+  const pad = at > 0 ? text.slice(at + 1) : '';
+  if (!designator || !pad) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `pcb.connection_probe params.${key} must be "REF.PAD" — a component designator, one dot, `
+        + `a pad number (got ${JSON.stringify(raw)})`,
+    );
+  }
+  return { key, designator, pad, text };
+}
+
+/** Both ends, with unknown keys refused before the host is touched. */
+function connectionParams(params: Record<string, unknown> | undefined): {
+  from: ConnectionEnd;
+  to: ConnectionEnd;
+} {
+  const box = params ?? {};
+  const allowed = new Set<string>(CONNECTION_KEYS);
+  const extra = Object.keys(box).filter((key) => !allowed.has(key));
+  if (extra.length) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `pcb.connection_probe takes only ${CONNECTION_KEYS.join(' | ')} — the allowed keys are `
+        + `${CONNECTION_KEYS.join(', ')}, and ${extra.join(', ')} is not one of them`,
+    );
+  }
+  return { from: connectionEnd(box, 'from'), to: connectionEnd(box, 'to') };
+}
+
+/**
+ * Resolve both ends in **one** bounded component scan.
+ *
+ * Matching is stricter than 550B's fallback on purpose: a component's
+ * `getState_Designator` **and** its pad's `getState_PadNumber` must both match
+ * the end the caller named, so `R1.3` cannot be answered by `R1`'s pad 3 of a
+ * different component or by `R10`'s pad 3. The pad's own public fields
+ * (`PrimitiveId`, `Net`, `PrimitiveType`, …) come from `snapshot`, the same
+ * reader `pcb.readback` uses — nothing is invented, nothing is written.
+ *
+ * Every failure keeps its own name and the scan continues: a component whose
+ * designator will not read could be the target, so its pads are not silently
+ * passed over; a component whose `getAllPins` is missing, throws or answers a
+ * non-array is one `readErrors` line. `matches` is the honest count, so a
+ * duplicated designator+pad pair is reported as ambiguous instead of the first
+ * match being taken.
+ */
+async function scanConnectionPads(eda: Eda, ends: ConnectionEnd[]): Promise<{
+  rows: ConnectionPadRow[];
+  components: number;
+  truncated: boolean;
+  readErrors: string[];
+  ignored: Array<Record<string, unknown>>;
+  unavailable?: string;
+  error?: string;
+}> {
+  const MANAGER = 'pcb_PrimitiveComponent';
+  const readErrors: string[] = [];
+  const ignored: Array<Record<string, unknown>> = [];
+  const rows: ConnectionPadRow[] = ends.map((end) => ({
+    end,
+    status: 'absent',
+    pad: null,
+    primitiveId: null,
+    padNumber: null,
+    net: null,
+    type: null,
+    matches: 0,
+    resolution: { components: 0, matches: 0, candidates: [], readErrors: [], truncated: false, complete: false },
+  }));
+  const result = { rows, components: 0, truncated: false, readErrors, ignored };
+  const refuse = (verdict: 'unavailable' | 'error', text: string) => {
+    for (const row of rows) {
+      row.status = verdict;
+      row.error = text;
+    }
+    return result;
+  };
+
+  const nsRead = readMember(eda, MANAGER);
+  const ns = nsRead.value;
+  if (nsRead.error !== undefined) {
+    return refuse('unavailable', `read ${MANAGER}: ${nsRead.error}`);
+  }
+  if (!ns || (typeof ns !== 'object' && typeof ns !== 'function')) {
+    return refuse('unavailable', `${MANAGER} is not available in this editor version (typeof ${typeof ns})`);
+  }
+  const getAll = readMember(ns, 'getAll');
+  if (typeof getAll.value !== 'function') {
+    return refuse(
+      'unavailable',
+      getAll.error !== undefined
+        ? `read ${MANAGER}.getAll: ${getAll.error}`
+        : `${MANAGER}.getAll is not a function on this build (typeof ${typeof getAll.value})`,
+    );
+  }
+
+  let components: unknown;
+  try {
+    components = await settle(getAll.value.call(ns));
+  } catch (error) {
+    return refuse('error', `${MANAGER}.getAll() threw ${probeErrorText(error)}`);
+  }
+  if (!Array.isArray(components)) {
+    return refuse(
+      'error',
+      `${MANAGER}.getAll() answered ${probeValueShape(components)}, not an array — an empty page `
+        + 'is [] and this is not that',
+    );
+  }
+  result.truncated = components.length > PROBE_COMPONENT_CAP;
+
+  let otherDesignators = 0;
+  for (const component of components.slice(0, PROBE_COMPONENT_CAP)) {
+    result.components += 1;
+    const at = `component #${result.components}`;
+    if (!component || (typeof component !== 'object' && typeof component !== 'function')) {
+      readErrors.push(`${at} is ${probeValueShape(component)}, not a component instance`);
+      continue;
+    }
+    const designator = await getState(component, 'Designator');
+    if (typeof designator !== 'string' || !designator) {
+      // It could be one of the two ends, so the scan is incomplete — the same
+      // reason a truncated scan cannot answer "no".
+      readErrors.push(`${at}: Designator read ${probeValueShape(designator)}`);
+      continue;
+    }
+    const targeted = rows.filter((row) => row.end.designator === designator);
+    if (!targeted.length) {
+      otherDesignators += 1;
+      continue;
+    }
+    const pins = readMember(component, 'getAllPins');
+    if (typeof pins.value !== 'function') {
+      readErrors.push(
+        `${at} (${designator}): getAllPins is not a function (typeof ${typeof pins.value})`
+          + (pins.error === undefined ? '' : ` — ${pins.error}`),
+      );
+      continue;
+    }
+    let list: unknown;
+    try {
+      list = await settle(pins.value.call(component));
+    } catch (error) {
+      readErrors.push(`${at} (${designator}): getAllPins() threw ${probeErrorText(error)}`);
+      continue;
+    }
+    if (!Array.isArray(list)) {
+      readErrors.push(`${at} (${designator}): getAllPins() answered ${probeValueShape(list)}, not an array`);
+      continue;
+    }
+
+    let otherPads = 0;
+    for (const pin of list) {
+      const pinErrors: string[] = [];
+      const fields = await snapshot(pin, 40, pinErrors);
+      for (const line of pinErrors) readErrors.push(`${at} (${designator}) pin: ${line}`);
+      const padNumber = fields.PadNumber;
+      const padText = typeof padNumber === 'string'
+        ? padNumber
+        : typeof padNumber === 'number' ? String(padNumber) : null;
+      if (padText === null) {
+        readErrors.push(
+          `${at} (${designator}): a pin's PadNumber read ${probeValueShape(padNumber)} — it could be `
+            + 'one of the asked-for pads, so this walk cannot answer "no"',
+        );
+        continue;
+      }
+      const matched = targeted.filter((row) => row.end.pad === padText);
+      if (!matched.length) {
+        otherPads += 1;
+        continue;
+      }
+      const primitiveId = typeof fields.PrimitiveId === 'string' && fields.PrimitiveId
+        ? fields.PrimitiveId
+        : null;
+      const net = typeof fields.Net === 'string' ? fields.Net : null;
+      const type = typeof fields.PrimitiveType === 'string' ? fields.PrimitiveType : null;
+      if (primitiveId === null) {
+        readErrors.push(
+          `${at} (${designator}) pad ${padText}: PrimitiveId read ${probeValueShape(fields.PrimitiveId)} `
+            + '— the pad cannot be named in the evidence',
+        );
+      }
+      for (const row of matched) {
+        row.matches += 1;
+        if (primitiveId !== null) row.resolution.candidates.push(primitiveId);
+        if (row.pad === null) {
+          row.pad = pin;
+          row.primitiveId = primitiveId;
+          row.padNumber = padText;
+          row.net = net;
+          row.type = type;
+        }
+      }
+    }
+    if (otherPads) {
+      ignored.push({ scope: 'scan', reason: 'other-pad-number', component: designator, pads: otherPads });
+    }
+  }
+  if (otherDesignators) {
+    ignored.push({ scope: 'scan', reason: 'other-designator', components: otherDesignators });
+  }
+
+  const complete = !result.truncated && readErrors.length === 0;
+  for (const row of rows) {
+    row.resolution.components = result.components;
+    row.resolution.readErrors = [...readErrors];
+    row.resolution.truncated = result.truncated;
+    row.resolution.complete = complete;
+    row.resolution.candidates = [...new Set(row.resolution.candidates)].sort();
+    row.resolution.matches = row.matches;
+    if (row.matches > 1) {
+      row.status = 'ambiguous';
+      row.pad = null;
+      row.error = `${row.matches} component pads answer ${row.end.text} (component ${row.end.designator}, `
+        + `pad ${row.end.pad}) — taking the first match would be a guess`;
+    } else if (row.matches === 1) {
+      row.status = 'resolved';
+    } else if (!complete) {
+      row.status = 'incomplete';
+      row.error = `no component pad answered ${row.end.text} in the ${result.components}-component walk, `
+        + `but the walk did not complete (${result.truncated ? `only the first ${PROBE_COMPONENT_CAP} `
+        + 'components were inspected' : `${readErrors.length} read(s) failed`}) — so "it is not on this `
+        + 'page" is not a claim this walk can support';
+    } else {
+      row.status = 'absent';
+      row.error = `the complete ${result.components}-component walk found no component pad for ${row.end.text}`;
+    }
+  }
+  return result;
+}
+
+/**
+ * One resolved ComponentPad's direct answer, classified.
+ *
+ * `getConnectedPrimitives(false)` is the measured call on
+ * `IPCB_PrimitiveComponentPad` (the base `IPCB_PrimitivePad` has no such
+ * method — that was 550B's finding). Each returned primitive is **typed** by
+ * reading `getState_PrimitiveType`:
+ *
+ * - `Line`/`Arc` → a typed item, and direct evidence when both ends name it;
+ * - `Pad`/`ComponentPad` → kept in `items` as direct evidence (the other end of
+ *   a pad-to-pad connection may answer exactly this way);
+ * - `Via`/`Fill`/`Pour`/`Polyline` and every other known type → listed in
+ *   `unknown` and never followed, because "copper that touches" is not the same
+ *   claim as "same direct primitive";
+ * - a type that will not read as one of the declared strings → also `unknown`.
+ *
+ * No `getEntireTrack` call is made here any more: 559B measured it returning ids
+ * from other, offline-disconnected copper components, so it proves nothing
+ * about connectivity and its id budget is gone with it.
+ */
+async function connectionDirect(
+  row: ConnectionPadRow,
+  collector: ConnectionCollector,
+): Promise<ConnectionDirect | null> {
+  if (row.pad === null) return null;
+  const end = row.end;
+  const member = readMember(row.pad, 'getConnectedPrimitives');
+  if (member.error !== undefined) {
+    const message = `read getConnectedPrimitives on the ComponentPad for ${end.text}: ${member.error}`;
+    collector.errors.push(`${end.key}: ${message}`);
+    return { ok: false, error: message };
+  }
+  if (typeof member.value !== 'function') {
+    const message = `getConnectedPrimitives is not a function on the ComponentPad resolved for `
+      + `${end.text} (typeof ${typeof member.value})`;
+    collector.errors.push(`${end.key}: ${message}`);
+    return { ok: false, error: message };
+  }
+  let answer: unknown;
+  try {
+    answer = await settle(member.value.call(row.pad, false));
+  } catch (error) {
+    const message = `getConnectedPrimitives(false) threw ${probeErrorText(error)}`;
+    collector.errors.push(`${end.key}: ${message}`);
+    return { ok: false, error: message };
+  }
+  if (!Array.isArray(answer)) {
+    const message = `getConnectedPrimitives(false) answered ${probeValueShape(answer)}, not an array — an `
+      + 'empty connection list is [] and this is not that';
+    collector.errors.push(`${end.key}: ${message}`);
+    return { ok: false, error: message };
+  }
+
+  const items: Array<{ primitiveId: string | null; type: string | null }> = [];
+  const seen = new Set<string>();
+  let unreadable = 0;
+  for (const entry of answer.slice(0, CONNECTION_DIRECT_CAP)) {
+    const id = await getState(entry, 'PrimitiveId');
+    const typeRead = await getState(entry, 'PrimitiveType');
+    const primitiveId = typeof id === 'string' && id ? id : null;
+    const type = typeof typeRead === 'string' && CONNECTION_PRIMITIVE_TYPES.has(typeRead) ? typeRead : null;
+    if (primitiveId === null) {
+      unreadable += 1;
+      collector.unknown.push({
+        end: end.key,
+        reason: 'primitive-id-unreadable',
+        primitiveId: null,
+        type,
+      });
+      continue;
+    }
+    if (type === null) {
+      collector.unknown.push({
+        end: end.key,
+        reason: 'primitive-type-unknown',
+        primitiveId,
+        type: typeof typeRead === 'string' ? typeRead : null,
+      });
+      continue;
+    }
+    if (seen.has(primitiveId)) {
+      collector.ignored.push({ end: end.key, reason: 'duplicate-primitive', primitiveId });
+      continue;
+    }
+    seen.add(primitiveId);
+    items.push({ primitiveId, type });
+    if (!CONNECTION_TRACK_TYPES.has(type) && !CONNECTION_PAD_TYPES.has(type)) {
+      collector.unknown.push({
+        end: end.key,
+        reason: 'not-a-track',
+        primitiveId,
+        type,
+      });
+    }
+  }
+  const ids = [...new Set(items.map((item) => item.primitiveId))].filter((id): id is string => !!id).sort();
+  return {
+    ok: true,
+    count: answer.length,
+    ids,
+    truncated: answer.length > CONNECTION_DIRECT_CAP,
+    items,
+    ...(unreadable ? { unreadable } : {}),
+  };
+}
+
+/**
+ * `pcb.connection_probe` — the host half of `boardwise pcb connection`.
+ *
+ * Two `REF.PAD` strings in, host evidence out:
+ * `{page, readOnly, from, to, errors, unknown, ignored, coverage}`. Each end
+ * carries its resolution evidence (designator, pad id, pad number, net, the
+ * honest match count and whether the scan completed) and its **direct**
+ * `getConnectedPrimitives(false)` answer. There is no `tracks[]`: 559B removed
+ * the `getEntireTrack` call after measuring it return ids from other
+ * offline-disconnected copper components, so the action collects no track
+ * membership at all. There is no verdict here by design — see the section
+ * comment above.
+ *
+ * The page guard is 550B's `requirePcbFocus`, called **before** the first read:
+ * the focused page must be exactly a PCB, "a PCB exists" and "a PCB is in
+ * front" are different facts, and a wrong-page read would answer primitives of
+ * another document. Nothing is opened or focused on the caller's behalf.
+ */
+export const pcbConnectionProbe: ActionHandler = async (params, eda) => {
+  const { from, to } = connectionParams(params);
+  const page = await requirePcbFocus(eda);
+  const scan = await scanConnectionPads(eda, [from, to]);
+  const collector: ConnectionCollector = {
+    errors: [],
+    unknown: [],
+    ignored: [...scan.ignored],
+  };
+
+  const ends: Array<Record<string, unknown>> = [];
+  const directTruncated: Record<string, boolean> = {};
+  const directReported: Record<string, number> = {};
+  for (const row of scan.rows) {
+    const direct = await connectionDirect(row, collector);
+    directTruncated[row.end.key] = direct?.truncated === true;
+    directReported[row.end.key] = direct?.ok === true ? (direct.items?.length ?? 0) : 0;
+    ends.push({
+      ref: { designator: row.end.designator, pad: row.end.pad },
+      status: row.status,
+      ...(row.error === undefined ? {} : { error: row.error }),
+      resolution: row.resolution,
+      pad: row.pad === null
+        ? null
+        : {
+          primitiveId: row.primitiveId,
+          padNumber: row.padNumber,
+          net: row.net,
+          type: row.type,
+        },
+      direct,
+    });
+  }
+
+  const errors = [...scan.readErrors.map((line) => `scan: ${line}`), ...collector.errors];
+  const scanComplete = scan.truncated === false && scan.readErrors.length === 0
+    && scan.unavailable === undefined && scan.error === undefined;
+  const resolved = scan.rows.every((row) => row.status === 'resolved');
+  const directOk = ends.every((end) => {
+    const direct = end.direct as ConnectionDirect | null;
+    return direct !== null && direct.ok === true;
+  });
+  const coverage = {
+    scan: {
+      manager: 'pcb_PrimitiveComponent',
+      cap: PROBE_COMPONENT_CAP,
+      components: scan.components,
+      truncated: scan.truncated,
+      readErrors: scan.readErrors.length,
+      complete: scanComplete,
+    },
+    direct: {
+      perEnd: CONNECTION_DIRECT_CAP,
+      reported: { from: directReported.from, to: directReported.to },
+      truncated: { from: directTruncated.from, to: directTruncated.to },
+    },
+    unknown: collector.unknown.length,
+    ignored: collector.ignored.length,
+    errors: errors.length,
+    // The one summary a caller may read as "nothing was withheld": complete
+    // identity resolution, no read gap, no unknown item, no cap hit.
+    complete: scanComplete && resolved && directOk
+      && collector.unknown.length === 0 && errors.length === 0
+      && !directTruncated.from && !directTruncated.to,
+  };
+  return {
+    page,
+    readOnly: true,
+    from: ends[0],
+    to: ends[1],
+    errors,
+    unknown: collector.unknown,
+    ignored: collector.ignored,
+    coverage,
+  };
+};
+
+// --------------------------------------------------------------------------
 // 006: schematic candidate-model reads
 // --------------------------------------------------------------------------
 
@@ -11309,6 +11877,16 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'lib.cbb.libraries': bind(libCbbLibraries),
     'sch.set_component_attribute': bind(schSetComponentAttribute),
     'pcb.readback': bind(pcbReadback),
+    // 559: host evidence for one pad-to-pad connection — two `REF.PAD` ends
+    // resolved by one bounded component scan, then `getConnectedPrimitives(false)`
+    // on each resolved ComponentPad and nothing else (559B removed the
+    // `getEntireTrack` call: its id set was measured to span other, disconnected
+    // copper components). Read-only, no verdict: the intersection rule lives
+    // offline. The catalogue entry
+    // (`protocol.py` ACTIONS) is the follow-up batch, which is why this handler
+    // is not on `PROBE_CALL_ACTIONS` — that list exists to reach a read through
+    // a daemon that has not been restarted, and this action is not one yet.
+    'pcb.connection_probe': bind(pcbConnectionProbe),
     'export.screenshot': bind(exportScreenshot),
     'export.render': bind(exportRender),
     'canvas.highlight': bind(canvasHighlight),

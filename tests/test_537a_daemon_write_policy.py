@@ -51,16 +51,29 @@ TOKEN = "test-token-not-a-real-secret"
 REAL_NAME = "我的真实工程"
 REAL_UUID = "uuid-real-0001"
 
-#: The five catalogue entries that are **not** design writes, and nothing else.
-#: Pinned as a set so adding a sixth is a review decision, not an accident.
+#: The six catalogue entries that are **not** design writes, and nothing else.
+#: Pinned as a set so adding a seventh is a review decision, not an accident.
 #: `pair.authorize` (549) is the exception that is not navigation: it changes
 #: *authority* — after it, a connector holding the code may write the pairing
 #: record — but no project byte, page or focus moves, which is why the
 #: catalogue files it `design_write=False`. Its `risk` stays `write` for
 #: exactly that authority change, so listing it here does not let a read-only
 #: caller mint the one grant the pairing gate rests on.
+#: `pcb.connection_probe` (559) is the plain read of the two beside it: two
+#: `REF.PAD` ends are resolved and `getConnectedPrimitives(false)` is asked on
+#: each resolved pad — no host byte moves, and the verdict is projected offline
+#: in `boardwise.core.connection`, so the catalogue files it `risk="read"` and
+#: `design_write=False`. It stayed unregistered here only because 559 landed the
+#: action and this list in the same batch; the omission was the red, not the flag.
 NOT_DESIGN_WRITES = frozenset(
-    {"doc.open", "doc.focus", "sys.self_update", "pair.authorize", "pcb.net_class.list"}
+    {
+        "doc.open",
+        "doc.focus",
+        "sys.self_update",
+        "pair.authorize",
+        "pcb.net_class.list",
+        "pcb.connection_probe",
+    }
 )
 
 

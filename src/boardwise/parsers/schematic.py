@@ -216,7 +216,7 @@ class _PageSplit:
     pages: dict[str, str] = field(default_factory=dict)
 
 
-def _page_y(stored: Any) -> float:
+def page_y(stored: Any) -> float:
     """A stored page y -> **canvas** y. This is the one negation (task 010c).
 
     Measured 2026-09-18 (task 010c, M1): the `.epro2` stores y *opposite* to the
@@ -230,6 +230,9 @@ def _page_y(stored: Any) -> float:
     canvas space and must not negate again.
     """
     return -float(stored or 0)
+
+
+_page_y = page_y  # compatibility alias: the parser's own callers keep this name
 
 
 def _page_box(

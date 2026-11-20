@@ -1,5 +1,8 @@
 # 087F2：PCB viewport 接入 live evidence（能力闸）
 
+> 状态：**已落 `3d4a0d5`（origin/main）**；test V4 在线验收完成（2026-11-16），未发布。
+> 提交状态由 557 于 2026-11-19 校正；V3 / 生产非空板未覆盖与 #87 Issue 待提出人复验的边界不变，不因已落而关单。
+
 日期：2026-11-16。前置：087F1 提供 `export.render channel=viewport / evidenceGrade=viewport`。旧 connector 没有该能力，不能为了探测而再进 schematic-only API 等 10 s。本批用显式能力旗帜接入采集，保持旧 connector 的零 PCB render 调用。
 
 ## 1. 公开合同与两个消费者

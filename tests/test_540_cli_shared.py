@@ -73,8 +73,12 @@ def test_shared_and_assembly_modules_have_their_declared_dependencies():
     # 550: assembly reaches `pcb_netpath.py` too — the offline `pcb net-path`
     # adapter, which is assembly-owned and keeps its judgement in the shared
     # `core/netpath.py`. Still no `cli.py` edge in either command module.
+    # 559 B2: assembly also reaches `pcb_connection.py` — the read-only online
+    # `pcb connection` adapter, which calls the closed `pcb.connection_probe`
+    # action and projects the printed answer through `core/connection.py`; the
+    # adapter is assembly-owned, the judgement is shared. Still no `cli.py` edge.
     assert _in_package_imports(PACKAGE / "commands" / "assembly.py") == {
-        "pcb_gate.py", "pcb_netpath.py", "skill_install.py",
+        "pcb_connection.py", "pcb_gate.py", "pcb_netpath.py", "skill_install.py",
     }
 
 
@@ -95,7 +99,9 @@ def test_owner_manifest_covers_the_final_command_modules():
     assert data["modules"]["core/netpath.py"] == "shared"
     assert data["modules"]["pcb_netpath.py"] == "assembly"
     #: beta 2 adds agentadjusted (draw), v4facts (draw), v4circuitspec (shared).
-    assert len(data["modules"]) == 157
+    #: 559 adds `core/connection.py` (shared judgement) and `pcb_connection.py`
+    #: (assembly adapter) — 159 rows.
+    assert len(data["modules"]) == 159
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

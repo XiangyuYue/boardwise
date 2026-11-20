@@ -1,5 +1,8 @@
 # 087E：#87⑤ `sch.readback` 可选 value / MPN 垂直切片
 
+> 状态：**已落 `3d4a0d5`（origin/main）**；test V4 在线验收完成（2026-11-16），未发布。
+> 提交状态由 557 于 2026-11-19 校正；V3 / 生产非空板未覆盖与 #87 Issue 待提出人复验的边界不变，不因已落而关单。
+
 日期：2026-11-16。前置：HEAD `504e766` 的 `sch.readback` 只提升 designator/name/footprint/supplier/supplierId/manufacturer 等字段；P43 真实只读回读证明 `ManufacturerId` 仅在 `fields` 内，`OtherProperty` 被 `snapshot()` 折叠成 `{object:true}`，顶层没有 value/mpn。本批实现在线字段提升，不用归档替代在线，不改 `pcb.readback`。
 
 ## 1. 公开合同与兼容

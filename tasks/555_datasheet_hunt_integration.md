@@ -1,4 +1,4 @@
-# 555：批量手册链接入 live 审查与 DSH（实现与试点完成，未提交）
+# 555：批量手册链接入 live 审查与 DSH（实现与试点完成，已本地提交 `14e8f39`，未推送）
 
 ## 1. 前因后果
 
@@ -8,7 +8,7 @@
 
 ## 2. 当前树与基线
 
-- 主仓 `E:/boardwise` 是混合工作树；552/553/554 位号修复及绘制线、bridge 等未提交改动均保留。
+- 主仓 `E:/boardwise` 当时是混合工作树；552/553/554 位号修复及绘制线、bridge 等未提交改动均保留（552–555 现随 `14e8f39` 提交，绘制线与 bridge 仍属其他线未提交改动）。
 - `src/boardwise/cli.py` 含其他线未提交 hunks；只允许改 `_cmd_parts_hunt` 必要段，禁止覆盖或还原整文件。
 - `commands/review.py`、`dsh-plugin/src/index.ts` 当前无本批前改动；绘制线 `dsh-plugin/src/draw-tools.ts` 和生成物不许碰。
 - 旧 `parts hunt --file --out` 行为、输出字段、缓存、审计、退出码、三档 trust 必须不变。
@@ -64,6 +64,6 @@ C（文档路由，后续小批）：两份同步 boardwise SKILL 与 `docs/revi
 
 ## 7. 实际交付与试点结论
 
-实现、真实试点和聚焦验收已完成，全部留在工作树，未提交、未推送、未发布。权威读数与边界见 `evidence/555/trial-summary.md`：18 个身份行，4 份 claims 全部 accepted、0 rejected；真缺资料桶 20→17、机器待签 0→3，但 needs_datasheet 仍 15、verdict 仍 incomplete。插件包为 `.tmp_555/boardwise-dsh-0.6.3-beta.3.tgz`，未部署到 DSH profile。
+实现、真实试点和聚焦验收已完成，并已本地提交 `14e8f39`；未推送、未发布。权威读数与边界见 `evidence/555/trial-summary.md`：18 个身份行，4 份 claims 全部 accepted、0 rejected；真缺资料桶 20→17、机器待签 0→3，但 needs_datasheet 仍 15、verdict 仍 incomplete。插件包为 `.tmp_555/boardwise-dsh-0.6.3-beta.3.tgz`，未部署到 DSH profile。
 
 真实试点后新增并验证两项身份约束：跨板同位号按 lcsc/mpn 分别寻址；多身份 sidecar 文件名带身份后缀。主代理两组独立变异均先红后 cp+SHA 恢复。未决人工项与 CLI 合同快照集成边界均按证据保留，未把机器档冒充人工 verified 或完整审查通过。

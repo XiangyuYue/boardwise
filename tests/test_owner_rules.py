@@ -192,6 +192,8 @@ def _package_edges() -> set[tuple[str, str]]:
 
 
 def test_the_scan_sees_the_package():
+    # 159 since 559 added `core/connection.py` (shared, the verdict projection)
+    # and `pcb_connection.py` (assembly, the online CLI adapter).
     # 157 for beta 2 integration: agentadjusted (draw), v4facts (draw) and
     # v4circuitspec (shared) each have an explicit manifest owner.
     # 154 since 550 added `core/netpath.py` (shared) and `pcb_netpath.py`
@@ -200,8 +202,8 @@ def test_the_scan_sees_the_package():
     # ``assembly`` owner line; 151 was 038Y4's count (``rules/pcb/silkbody.py``),
     # 150 was 038Y3B's (``rules/pcb/silkpad.py``), 149 was 038Y2's
     # (``rules/pcb/overlap.py``), 148 was 540B6's.
-    assert len(PATHS) == 157, (
-        f"found {len(PATHS)} modules, expected the 157 this batch owns — "
+    assert len(PATHS) == 159, (
+        f"found {len(PATHS)} modules, expected the 159 this batch owns — "
         "a new module needs an owner line in contracts/module-owners.json"
     )
     assert {"core", "parsers", "rules", "engines", "bridge"} <= {

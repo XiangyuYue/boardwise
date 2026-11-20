@@ -1,5 +1,8 @@
 # 087F1：`export.render` PCB viewport 分支
 
+> 状态：**已落 `3d4a0d5`（origin/main）**；test V4 在线验收完成（2026-11-16），未发布。
+> 提交状态由 557 于 2026-11-19 校正；V3 / 生产非空板未覆盖与 #87 Issue 待提出人复验的边界不变，不因已落而关单。
+
 日期：2026-11-16。前置：`tasks/087f_pcb_render.md` 已在 test V4 证明 EDA 4.1.93 上 PCB1/PCB2 的 `getCurrentRenderedAreaImage` 返回不同、真实且与当前板一致的 PNG。该通道只能是 viewport 级，不是 document render。本批实现 connector 动作，不把 `export.screenshot` 的全局缓存警告洗白。
 
 ## 1. 公开合同与两个消费者

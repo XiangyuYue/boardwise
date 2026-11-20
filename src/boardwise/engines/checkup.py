@@ -1470,6 +1470,86 @@ UNKNOWN_REASON_MACHINE_UNCONFIRMED = (
     "待人工确认 facts_trust 是否升到 verified"
 )
 
+# --------------------------------------------------------------------------
+# 558: 「这颗料到底欠什么」—— the obligation, said once per row
+# --------------------------------------------------------------------------
+#
+# 555's real pilot measured the cost of one template for every part: a mounting
+# screw was handed `(没有 MPN) datasheet pdf` and weakly name-matched an
+# unrelated MCU's PDF (its `M3` token is a substring of `stm32…`), and U-designated
+# connectors were asked for the seven IC facts. Both are the report claiming a
+# datasheet would help where it would not.
+#
+# So every `unreviewed_parts[]` row says which obligation it is under. The
+# vocabulary is four values, and **none of them is a verdict**: a `no-ic-facts`
+# row is still an open item, still `incomplete`, still named in the manual
+# worklist — it simply is not waiting for a PDF.
+
+#: The shelf owes facts a rule may act on: the seven `FACTS_KEYS`. Unchanged
+#: behaviour, unchanged queries — this is the default the other three carve out.
+OBLIGATION_IC_FACTS = "ic-facts"
+#: The part is a connector (`classify_part` said so): what the review owes is a
+#: **pin table**, never IC facts — 555 measured the other answer on a U-designated
+#: terminal block asked for `ldo`/`required_caps`. `pinoutSource` travels beside
+#: it — see :data:`PINOUT_SOURCE_NONE`.
+OBLIGATION_CONNECTOR_PINOUT = "connector-pinout"
+#: Neither mechanical nor a connector, and no identity this project can search:
+#: no MPN (025's own signal) **and** no C-number by shape (:func:`hunt.is_c_number`).
+#: Listing seven missing IC facts would be asking for facts about a part nobody
+#: can name — the honest row is "find out what this is first".
+OBLIGATION_IDENTITY_UNRESOLVED = "identity-unresolved"
+#: 558's fourth class: the part declares itself **mechanical** (a fastener, a
+#: standoff, a mounting hole). It has no datasheet obligation at all, so the row
+#: reports `ok: null` + `applicable: false` on the document channels and points
+#: at `parts accept-unknown --reason` — closing it is a human decision, not a find.
+OBLIGATION_NO_IC_FACTS = "no-ic-facts"
+
+#: Every obligation, in the order the vocabulary is documented. A reader that
+#: wants "which of the four" iterates this rather than re-spelling the strings.
+OBLIGATION_ORDER: tuple[str, ...] = (
+    OBLIGATION_NO_IC_FACTS,
+    OBLIGATION_CONNECTOR_PINOUT,
+    OBLIGATION_IDENTITY_UNRESOLVED,
+    OBLIGATION_IC_FACTS,
+)
+
+#: The `obligationBasis` a **mechanical declaration** carries. Every other basis
+#: is `classify_part`'s own (`shelf` / `metadata` / `prefix` / ``""``) — the
+#: contract says the basis comes from that read or from this batch's mechanical
+#: declaration, and this token is how a reader tells the two apart.
+BASIS_MECHANICAL_DECLARATION = "mechanical-declaration"
+
+#: What a connector row says about where its pin table would come from. 「none」
+#: is the measured truth (555): the shelf holds no consumable general pin table,
+#: and **the pins on the board are not the manufacturer's pin table** — a net
+#: name proves the board uses a pin, never what the vendor calls it.
+PINOUT_SOURCE_NONE = "none"
+
+#: What a mechanical row's `question` says. It is deliberately not the IC
+#: template above: no reading of any document would close this row, so the only
+#: honest next step is a person accepting it as unknown, in writing.
+MECHANICAL_PART_QUESTION = (
+    "机械件：无 datasheet 义务、也无 IC facts 可核。确认它只是结构件"
+    "（不是带电气功能的连接器/器件）后，用 `boardwise parts accept-unknown "
+    "<位号> --reason …` 记下接受未审的理由"
+)
+
+#: The words that **declare** a part mechanical. Chinese structural nouns are
+#: matched as substrings (they are unambiguous); the English ones on a word
+#: boundary, because `screw terminal` must not become a fastener (558 §4.5) —
+#: see :func:`mechanical_declaration` for the terminal veto.
+_MECHANICAL_CJK_KEYWORDS: tuple[str, ...] = (
+    "螺丝", "螺母", "铜柱", "螺柱", "安装孔", "固定孔",
+)
+_MECHANICAL_ENGLISH_RE = re.compile(
+    r"\b(?:screws?|standoffs?|spacers?|mounting\s+holes?)\b", re.IGNORECASE
+)
+#: A part that names itself a terminal is a **connector** however it is
+#: fastened: `screw terminal`, `螺丝端子`, `接线柱` all read as terminals first.
+_TERMINAL_VOCABULARY_RE = re.compile(
+    r"terminal|端子|接线柱|接线排", re.IGNORECASE
+)
+
 #: Designator prefixes whose MPN is expected to carry an EIA value code, i.e. the
 #: ones for which "the value cannot be known" is a real signal. An IC's MPN never
 #: carries one, so asking a decoder about it would put every IC on the list.
@@ -1971,12 +2051,21 @@ REASON_CLASS_MISSING_MATERIAL = "真缺资料"
 #: because sending a reader to hunt a PDF the shelf already holds is the mistake
 #: 186 §A spent a batch killing.
 REASON_CLASS_MACHINE_UNCONFIRMED = "机器核验待人工确认"
+#: 558's fourth class: a part with **no IC facts obligation** (a mechanical
+#: fastener). 186 §C's three classes all answer "what document or what reading is
+#: missing"; this one answers "neither" — so the row leaves 真缺资料 (where it was
+#: sending a reader to hunt a PDF that does not exist for an M3 screw) and lands
+#: here, where the next act is a person's `parts accept-unknown --reason`. The row
+#: itself stays: `unreviewed_parts[]` keeps it and the verdict stays incomplete.
+REASON_CLASS_NO_IC_FACTS = "无 IC facts 义务（待人工结案）"
 
-#: The order the three classes are printed in: the ones whose next step is **not**
+#: The order the four classes are printed in: the ones whose next step is **not**
 #: "fetch a datasheet" go first, so a reader does not start hunting for a PDF
 #: that would not have helped. 522's new bucket sits second — after the tool's own
-#: reading gap (nothing a person can close by reading) and before the hunt.
+#: reading gap (nothing a person can close by reading) and before the hunt; 558's
+#: bucket leads, because its parts are not waiting for any document at all.
 CLASS_ORDER: tuple[str, ...] = (
+    REASON_CLASS_NO_IC_FACTS,
     REASON_CLASS_UNDECODABLE,
     REASON_CLASS_MACHINE_UNCONFIRMED,
     REASON_CLASS_MISSING_MATERIAL,
@@ -2048,7 +2137,17 @@ def unreviewed_classes(row: dict) -> list[str]:
     A row with no reasons at all — an IC whose only problem is "the shelf has
     no facts for it" — is :data:`REASON_CLASS_MISSING_MATERIAL`: the work it
     needs is a datasheet.
+
+    558: a row whose ``obligation`` is ``no-ic-facts`` is
+    :data:`REASON_CLASS_NO_IC_FACTS` **alone**, whatever its reasons say. Its
+    reasons (「无 MPN」/「供应商字段为空」) are still true statements about the
+    part's fields, but they are not the reason it is on the list: it owes no
+    document, so counting it under 真缺资料 would send a reader hunting exactly
+    the PDF 555 spent a batch proving does not exist. Rows written before 558
+    carry no ``obligation`` key and keep the reason-based reading unchanged.
     """
+    if str(row.get("obligation") or "") == OBLIGATION_NO_IC_FACTS:
+        return [REASON_CLASS_NO_IC_FACTS]
     reasons = [str(reason) for reason in (row.get("reasons") or [])]
     classes = {unreviewed_reason_class(reason) for reason in reasons} or {
         REASON_CLASS_MISSING_MATERIAL
@@ -2258,6 +2357,15 @@ OFFICIAL_CHANNEL_DETAIL = (
     "CLI 不搜官网：这一通道由 AI 用 WebSearch 走，报告只给建议查询词与厂商名"
 )
 
+#: 558: what a **mechanical** row's three document channels say. All three are
+#: `ok: null` + `applicable: false` — the two-valued answer would have to claim
+#: either "we looked and found nothing" (a hunt that never should have started)
+#: or "not found yet" (work that does not exist).
+MECHANICAL_CHANNEL_DETAIL = (
+    "机械件：不适用 datasheet（无 IC facts 义务，也不做本地 PDF 匹配）——"
+    "结案走 `parts accept-unknown --reason`，由人写理由"
+)
+
 UNREVIEWED_DATASHEET_DIR = ".tmp_datasheets"
 
 
@@ -2418,6 +2526,130 @@ def shelf_unusable_reason(entry: object) -> str:
     return UNKNOWN_REASON_UNCATEGORISED
 
 
+def mechanical_declaration(component) -> str:
+    """The word that **declares** this part mechanical, or ``""`` (558 §2.1).
+
+    Three sources, all of them the part's own words — the placement's
+    ``device_name``, its ``Value`` and its footprint — because those are what the
+    library states. Nothing else is a declaration:
+
+    * **not** the designator prefix. `SCREW1` is a *name*, and 555's pilot has a
+      `SCREW1` on two boards whose identity the row must still report per
+      placement; the prefix is a hint at best (025's own rule for ICs).
+    * **not** an unknown kind. ``classify_part`` answers ``unknown`` for a
+      screw *and* for a part nobody has read yet (:data:`BASIS_NONE`), and
+      folding those two into "mechanical" would quietly drop real work.
+    * **not** the English word ``screw`` on its own when the part names itself a
+      terminal: `screw terminal` / `螺丝端子` / `接线柱` are **connectors**, and
+      their datasheet obligation is a pin table (558 §4.5's negative control).
+    * **not** a U designator: a connector placed at ``U3`` is still a connector.
+
+    The return value is the matched word (pasted into the row's evidence), so a
+    reviewer can argue with the reading rather than with a bare boolean.
+    """
+    props = getattr(component, "props", None) or {}
+    fields = [
+        str(props.get("device_name") or ""),
+        str(getattr(component, "value", "") or ""),
+        str(getattr(component, "footprint", "") or ""),
+    ]
+    if any(_TERMINAL_VOCABULARY_RE.search(text) for text in fields if text):
+        # A declared terminal wins over every fastener word beside it.
+        return ""
+    for text in fields:
+        for word in _MECHANICAL_CJK_KEYWORDS:
+            if word in text:
+                return word
+    for text in fields:
+        match = _MECHANICAL_ENGLISH_RE.search(text)
+        if match is not None:
+            return " ".join(match.group(0).lower().split())
+    return ""
+
+
+def datasheet_obligation(
+    component,
+    *,
+    library: object | None = None,
+    mpn: str = "",
+    supplier: str = "",
+) -> dict:
+    """``{obligation, obligationBasis, kind, pinoutSource}`` for one part (558).
+
+    The four answers, in the order they are decided — each one is a **different
+    next act** for the reader, which is the whole reason the row says it:
+
+    1. :data:`OBLIGATION_CONNECTOR_PINOUT` — ``classify_part(..., library=...,
+       pin_floor=False)`` says connector **on a declared basis** (``metadata`` /
+       ``shelf``). ``pin_floor=False`` is the gate's own reading (a part the
+       model counted two pins of is a part the shelf is being *asked about*),
+       and it carries :data:`PINOUT_SOURCE_NONE`. 560: this outranks a
+       mechanical word beside it — `Mounting Hole Header 2x3` is a `HEADER`.
+    2. :data:`OBLIGATION_NO_IC_FACTS` — a mechanical declaration
+       (:func:`mechanical_declaration`) with no such connector identity — an
+       `unknown` kind, or a ``prefix``-only connector reading, which is the hint
+       :func:`mechanical_declaration` itself refuses to trust (`H1 安装孔`).
+       Basis is :data:`BASIS_MECHANICAL_DECLARATION`; the part's ``kind`` is
+       still :func:`classify_part`'s answer, because this batch adds no
+       ``PartKind``.
+    3. :data:`OBLIGATION_IDENTITY_UNRESOLVED` — no MPN **and** no C-number by
+       shape (:func:`boardwise.engines.hunt.is_c_number`). Both halves are
+       needed: 555's EST026 holds a shape-valid supplier code (`C52878`), so
+       "no MPN" alone would have filed it as unidentifiable when the catalog
+       URL does associate it. Shape acceptance is not catalog identity, and this
+       function neither claims nor denies that (`is_c_number`'s own contract).
+    4. :data:`OBLIGATION_IC_FACTS` — everything else: the seven facts, the same
+       queries, unchanged behaviour.
+    """
+    from ..core.partkind import BASIS_PREFIX, KIND_CONNECTOR, classify_part
+    from .hunt import is_c_number
+
+    kind_read = classify_part(component, library=library, pin_floor=False)
+    words = mechanical_declaration(component)
+    # 560: a connector the part's **own words** declare (name, footprint, shelf)
+    # outranks a mechanical word sitting beside them — `Mounting Hole Header 2x3`
+    # names itself a `HEADER` and is a connector that owes a pin table, not a
+    # fastener. A designator-prefix reading is only a hint (`mechanical_declaration`'s
+    # own rule), so it still yields to a declared mechanical word: an `H1` `安装孔`
+    # and `SCREW1` `M3螺丝` keep `no-ic-facts` and stay out of the hunt.
+    if kind_read.kind == KIND_CONNECTOR and (not words or kind_read.basis != BASIS_PREFIX):
+        obligation, basis = OBLIGATION_CONNECTOR_PINOUT, kind_read.basis
+    elif words:
+        obligation, basis = OBLIGATION_NO_IC_FACTS, BASIS_MECHANICAL_DECLARATION
+    elif not (mpn or getattr(component, "mpn", "") or "").strip() and not is_c_number(
+        supplier or getattr(component, "lcsc_part", "") or ""
+    ):
+        obligation, basis = OBLIGATION_IDENTITY_UNRESOLVED, kind_read.basis
+    else:
+        obligation, basis = OBLIGATION_IC_FACTS, kind_read.basis
+    row = {
+        "obligation": obligation,
+        "obligationBasis": basis,
+        "kind": kind_read.kind,
+    }
+    if obligation == OBLIGATION_CONNECTOR_PINOUT:
+        row["pinoutSource"] = PINOUT_SOURCE_NONE
+    return row
+
+
+def connector_pinout_queries(mpn: str, manufacturer: str = "") -> list[str]:
+    """The queries a **connector** row hands over, instead of datasheet ones.
+
+    A pin table is what a connector owes (558 §2.2): the words asked for are
+    「pinout / 引脚定义 / 脚位图」, and no manufacturer site filter is added from
+    a family candidate nobody has confirmed — 555's `MX1.25-LT-3` has public
+    family neighbours and no exact match, so the row asks the question and does
+    not pretend to know the vendor.
+    """
+    text = (mpn or "").strip()
+    if not text:
+        return ["连接器 pinout 引脚定义 脚位图", "端子 引脚定义 图纸"]
+    queries = [f"{text} pinout 引脚定义", f"{text} 脚位图 引脚定义", f"{text} pinout"]
+    if manufacturer:
+        queries.append(f"{manufacturer} {text} pinout")
+    return queries
+
+
 def unreviewed_parts(
     model: DesignModel,
     *,
@@ -2537,20 +2769,61 @@ def unreviewed_parts(
                 else ["货架没有这颗料"]
             )
         mpn = (component.mpn or "").strip()
+        # 558: what this row actually owes, said before any channel is read.
+        obligation = datasheet_obligation(
+            component,
+            library=library,
+            mpn=mpn,
+            supplier=component.lcsc_part or "",
+        )
+        mechanical = obligation["obligation"] == OBLIGATION_NO_IC_FACTS
         manufacturer = (entry.manufacturer if entry is not None else "") or str(
             component.props.get("manufacturer") or ""
         )
-        local, local_by = _local_datasheet(
-            folder,
-            (mpn, IDENTITY_MPN),
-            (component.lcsc_part or "", IDENTITY_LCSC),
-            (name, IDENTITY_NAME),
+        # A mechanical part is not matched against the datasheet folder at all:
+        # 555's pilot had `M3螺丝` weakly name-matched (`m3` is a substring of
+        # `stm32…`) to an unrelated MCU's PDF, which reads as "the engineer
+        # already gave us this part's document". The channel says "not
+        # applicable" instead of guessing.
+        local, local_by = (
+            (None, "")
+            if mechanical
+            else _local_datasheet(
+                folder,
+                (mpn, IDENTITY_MPN),
+                (component.lcsc_part or "", IDENTITY_LCSC),
+                (name, IDENTITY_NAME),
+            )
         )
         entry_url = (entry.datasheetPdfUrl if entry is not None else "") or ""
         page_url = (entry.datasheetUrl if entry is not None else "") or ""
-        channels = {
-            CHANNEL_ENGINEER: {
+        if mechanical:
+            engineer = {
+                "ok": None,
+                "applicable": False,
+                "detail": MECHANICAL_CHANNEL_DETAIL,
+                "path": "",
+                "matchedBy": "",
+            }
+            lcsc = {
+                "ok": None,
+                "applicable": False,
+                "detail": MECHANICAL_CHANNEL_DETAIL,
+                "datasheetPdfUrl": entry_url,
+                "datasheetUrl": page_url,
+                "shelfKey": entry.key if entry is not None else "",
+            }
+            official = {
+                "ok": None,
+                "applicable": False,
+                "by": "ai",
+                "detail": MECHANICAL_CHANNEL_DETAIL,
+                "suggestedQueries": [],
+            }
+        else:
+            engineer = {
                 "ok": local is not None,
+                "applicable": True,
                 "detail": (
                     f"工作区有本地手册 {local.name}"
                     + (
@@ -2564,9 +2837,10 @@ def unreviewed_parts(
                 ),
                 "path": str(local) if local is not None else "",
                 "matchedBy": local_by,
-            },
-            CHANNEL_LCSC: {
+            }
+            lcsc = {
                 "ok": bool(entry_url or page_url),
+                "applicable": True,
                 "detail": (
                     "库条目自带 PDF 链接，`parts fetch` 可直接下载" if entry_url
                     else "库条目只有商品页链接（PDF 链接要回商品页取）" if page_url
@@ -2575,13 +2849,20 @@ def unreviewed_parts(
                 "datasheetPdfUrl": entry_url,
                 "datasheetUrl": page_url,
                 "shelfKey": entry.key if entry is not None else "",
-            },
-            CHANNEL_OFFICIAL: {
+            }
+            official = {
                 "ok": None,
+                "applicable": True,
                 "by": "ai",
                 "detail": OFFICIAL_CHANNEL_DETAIL,
                 "suggestedQueries": suggested_queries(mpn, manufacturer, component.value),
-            },
+            }
+        if obligation["obligation"] == OBLIGATION_CONNECTOR_PINOUT:
+            official["suggestedQueries"] = connector_pinout_queries(mpn, manufacturer)
+        channels = {
+            CHANNEL_ENGINEER: engineer,
+            CHANNEL_LCSC: lcsc,
+            CHANNEL_OFFICIAL: official,
         }
         out.append({
             "designator": designator,
@@ -2591,7 +2872,7 @@ def unreviewed_parts(
             "mpn": mpn,
             "supplier": component.lcsc_part,
             "reasons": reasons,
-            "question": UNKNOWN_PART_QUESTION,
+            "question": MECHANICAL_PART_QUESTION if mechanical else UNKNOWN_PART_QUESTION,
             "isIc": is_ic,
             "onShelf": entry is not None,
             "shelfKey": entry.key if entry is not None else "",
@@ -2606,9 +2887,17 @@ def unreviewed_parts(
                 getattr(entry, "facts_trust", "") if entry is not None else ""
             ),
             "factsPresent": sorted(facts),
+            # 558 §2: the seven IC keys are the **ic-facts** obligation's list and
+            # nobody else's. A connector owes a pin table (`connector-pinout`), an
+            # unidentifiable part owes an identity, and a mechanical part owes
+            # nothing — listing seven missing keys for any of them was 555's
+            # measured false worklist.
             "missingFacts": (
-                [key for key in FACTS_KEYS if key not in facts] if is_ic else []
+                [key for key in FACTS_KEYS if key not in facts]
+                if is_ic and obligation["obligation"] == OBLIGATION_IC_FACTS
+                else []
             ),
+            **obligation,
             "channels": channels,
             **_board_field(
                 boards,
@@ -3092,7 +3381,17 @@ def needs_datasheet_section(
         part = str(row.get("designator") or "")
         if not part:
             continue
+        # 558 §2: every unreviewed row is still **collected** here, mechanical
+        # ones included — the seed is what carries `mpn`/`channels`/`missingFacts`
+        # and, since this batch, the four obligation fields, and a reviewer's
+        # explicit `marked` entry for a screw must still be able to say what that
+        # screw owes. What a `no-ic-facts` row must not do is become a **facts
+        # trigger** of its own: that loop below skips it, because
+        # `needs_datasheet` is the worklist `parts hunt --from-report` consumes,
+        # and handing it a mounting screw is how 555's pilot ended up searching
+        # `(没有 MPN) datasheet pdf` and weakly name-matching an MCU's PDF.
         seed_by_part.setdefault(part, row)
+
         placements = boards_by_part.setdefault(part, [])
         # 191B: the seed row's own `boards` is already the canonical dict shape
         # on a 191B report; `board_rows` is the compatibility read for a title
@@ -3134,12 +3433,32 @@ def needs_datasheet_section(
             # — empty for a part on no shelf, and for the `marked` trigger a part
             # the reviewer wrote down before any reading existed.
             "shelfMatchedBy": (seed.get("shelfMatchedBy") or "") if seed is not None else "",
+            # 558: the obligation rides along with the fold, so a worklist row says
+            # «this part owes a pin table / an identity / seven facts» and the
+            # `pinoutSource` beside it says where a pin table would come from.
+            # Empty strings for the `marked` trigger with no seed — a person's own
+            # entry names its reason, not a template.
+            "obligation": (seed.get("obligation") or "") if seed is not None else "",
+            "obligationBasis": (
+                (seed.get("obligationBasis") or "") if seed is not None else ""
+            ),
+            "kind": (seed.get("kind") or "") if seed is not None else "",
+            "pinoutSource": (
+                (seed.get("pinoutSource") or "") if seed is not None else ""
+            ),
         }
 
     out: list[dict] = []
     for part, seed in seed_by_part.items():
         if part in grouped:
             continue  # marked wins; the seed's fields travel on that entry
+        # 558: the filtering happens **here**, at the facts-trigger output, not
+        # in the collection loop: a `no-ic-facts` part owes no document, so it
+        # produces no seed row of its own — while its collected seed keeps
+        # feeding the `marked` entry above (a person asking for a document
+        # outranks a template, and the row still has to say what the part owes).
+        if str(seed.get("obligation") or "") == OBLIGATION_NO_IC_FACTS:
+            continue
         out.append({
             "part": part,
             "pins": [],
@@ -6006,6 +6325,9 @@ def render_part_section(report: dict, *, rows: list[dict] | None = None) -> str:
             lines.append(
                 "两类的下一步相反：「工具读不懂」不是缺资料——再喂 PDF 也没用，"
                 "要补的是读法（板上 `Value` / 解码器）；「真缺资料」才轮到去要手册。"
+                f"「{REASON_CLASS_NO_IC_FACTS}」两者都不是：机械件没有手册义务，"
+                "结案要人写一句 `parts accept-unknown --reason …`（行仍留着，"
+                "评级仍是不完整）。"
             )
             meta_counts = report.get("metadataStateCounts")
             if isinstance(meta_counts, dict) and meta_counts:

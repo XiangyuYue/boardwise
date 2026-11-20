@@ -204,6 +204,80 @@ def register_pcb_parser(sub: Any) -> None:
         ),
     )
 
+    connection = pcb_sub.add_parser(
+        "connection",
+        help=(
+            "Online, read-only host evidence that two pads sit on the same copper "
+            "(0 CONNECTED / 2 NOT_PROVEN / 3 INDETERMINATE or refused)."
+        ),
+        description=(
+            "Read-only, online, no report file: did the running editor itself hand "
+            "back proof that these two named pads share copper? The answer is one "
+            "machine JSON on stdout (`schema` = `boardwise.pcbConnection/1`) and one "
+            "of three verdicts. `CONNECTED` means a **typed, sourced direct** "
+            "intersection was found — both ends' `getConnectedPrimitives(false)` "
+            "answers name the same Line/Arc, or one end's direct answer names the "
+            "other end's pad — and every `sharedId` names the calls it came from. "
+            "**This contract is direct-only**: it never reads `getEntireTrack`, "
+            "because on a real net that call answered ids belonging to copper "
+            "components the offline model separates (see the action's "
+            "`evidence/559/entire-track-rejection.json` entry), so an id set is not "
+            "a connected component. Multi-hop copper needs its own graph contract "
+            "and is not claimed. **`sharedIds` is intersection evidence, not a "
+            "path**: no hop order, net length or DRC conclusion is claimed. "
+            "`NOT_PROVEN` (exit 2) means the host gave no direct shared primitive "
+            "**and** nothing was withheld — it says 「在 direct 范围内两端没有共享图元」, "
+            "**not 「开路」**: via/fill/pour adjacency and multi-hop copper are "
+            "outside this contract and appear in `unknown`/`scope`. When the probe "
+            "answers, `INDETERMINATE` (exit 3) is a **measured** answer: an end that "
+            "did not resolve to exactly one pad, an empty or differing net, a failed "
+            "direct call, a directly connected primitive that is not a proof type "
+            "(`direct-non-proof-type`), a legacy `tracks[]` "
+            "(`entire-track-unsupported`), or any "
+            "other gap that could overturn a negative. A **refusal** is a different "
+            "thing and never prints a verdict: a focus that is not a read-only PCB "
+            "page, a missing connector, an older build without the action and a "
+            "malformed REF.PAD each write one line on stderr with an **empty stdout** "
+            "at exit 3, so an unasked question is never printed as a verdict. The "
+            "focused PCB **is** the board identity: there is no FILE, no `--board` "
+            "and no `--live`, the command never opens or switches a document, and "
+            "it never writes a design — the only two actions it reaches are "
+            "`sys.probe` (the version pair, whose unreadable half is named in "
+            "`missing` with a reason in `error`) and the `risk: read` "
+            "`pcb.connection_probe`."
+        ),
+    )
+    connection.add_argument(
+        "--from",
+        dest="from_ref",
+        required=True,
+        metavar="REF.PAD",
+        help="One end as DESIGNATOR.PAD, for example U9.2.",
+    )
+    connection.add_argument(
+        "--to",
+        dest="to_ref",
+        required=True,
+        metavar="REF.PAD",
+        help="The other end as DESIGNATOR.PAD, for example CN3.1.",
+    )
+    connection.add_argument(
+        "--project",
+        default="",
+        help=(
+            "Which editor project to ask, by name or uuid (023). Passed to the "
+            "daemon's router; a mismatch is refused there, never re-routed."
+        ),
+    )
+    connection.add_argument(
+        "--instance",
+        default="",
+        help="The same choice spelled as the window key `bridge status` prints.",
+    )
+    connection.add_argument(
+        "--port", type=int, default=None, help="Daemon port (default 61190)."
+    )
+
 
 def dispatch_pcb(
     args: argparse.Namespace,
@@ -211,6 +285,10 @@ def dispatch_pcb(
     bridge: Callable[[argparse.Namespace], Any],
 ) -> int:
     """Route `pcb` by its subcommand, keeping `gate` on its own adapter."""
+    if getattr(args, "pcb_command", "") == "connection":
+        from .. import pcb_connection
+
+        return pcb_connection.run_cli_connection(args, bridge=bridge)
     if getattr(args, "pcb_command", "") == "net-path":
         from .. import pcb_netpath
 

@@ -1,7 +1,8 @@
 # 550B — `sys.probe {instances: […]}`：在线只读实例探针
 
 > 批次：550B（0.6.2 后的在线只读能力探针批）
-> 状态：**代码、离线测试与 EDA 4.1.100 真机验证均已完成（2026-11-18）**。
+> 状态：**代码、离线测试与 EDA 4.1.100 真机验证均已完成（2026-11-18）**；
+> 已本地提交 `9f73ede`，**未推送、未发布**（提交状态 2026-11-19 台账校正，见 557）。
 > 本批不宣称 live net-path，不做设计写；V3 与其他样本边界见 §5。
 > 前置：550 离线 net-path 已发布；本批只回答「运行中的编辑器在那三个方法上到底答不答」。
 
@@ -225,4 +226,5 @@ Line/Via/Arc.getAdjacentPrimitives        undefined
   `onlyCentreConnection=false` 的 fill/polyline 语义仍需在后续 typed 工具合同中单独裁定。
 - **不自动选件、不做整板枚举**：`getAllPrimitiveId` 本批一律不碰；`getAll` 只在 pad.connected 基类缺方法时按 §2.5 作有界组件回退，且上限 512、截断披露。
 - 本批不新增 action、不改 connector 版本号、不动 review 规则 / parser / model / CLI / DSH；
-  当前 ROBOT 运行的是本批开发 bundle，版本串仍为 0.6.2，**未提交、未发布**。
+  当前的 ROBOT 当时运行的是本批开发 bundle，版本串仍为 0.6.2，**当时未提交**；
+  现已在本地提交 `9f73ede`，仍未推送、未发布。

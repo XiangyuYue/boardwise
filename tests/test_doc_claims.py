@@ -682,7 +682,7 @@ def test_the_sop_keeps_the_v4_pcb_document_render_60s_boundary_as_history():
 
 
 def test_the_sop_states_the_pcb_viewport_branch_as_accepted_but_unreleased():
-    """护 #87② 的新态定稿（087F3 §8）：**工作树实现、test V4 已在线验收、未发布**。
+    """护 #87② 的新态定稿（087F3 §8）：**已落 `3d4a0d5`（origin/main）、test V4 已在线验收、未发布**。
 
     087F1（PCB viewport 分支）与 087F2（`capabilities.pcbRenderViewport` 门）已由岳批准热更，
     2026-11-16 在 test V4 上跑完真机验收（PCB1/PCB2 直接出图、SVG 具名拒绝、默认全部页/板
@@ -707,7 +707,7 @@ def test_the_sop_states_the_pcb_viewport_branch_as_accepted_but_unreleased():
             f"the bullet must name what the PCB branch refuses ({token!r})"
         )
     # 在线验收读数：验收做过就要带读数，不能只说「验过了」
-    for token in ("已在线验收", "工作树实现", "0.6.1", "196764", "93676",
+    for token in ("已在线验收", "3d4a0d5", "0.6.1", "196764", "93676",
                   "exit 0", "capture.ok=true", "pcbImage.status=ok", "P43"):
         assert token in section, (
             f"the accepted-but-unreleased bullet lost the live reading {token!r}"
@@ -778,7 +778,7 @@ def test_pit_23_carries_the_pcb_boundary_without_growing_a_new_pit_number():
     PCB 边界是同一个坑的另一个面：新开坑号会让「导出挂死」在坑表里看起来像
     两个不同的病。锚点原文必须仍在 SOP 里（上一条测试钉着它）。087F3 起坑表要
     **同时**保留旧态（60.01 s schematic-only 历史 + 缺旗标零调用）与候选态
-    （viewport 分支：工作树实现、test V4 已在线验收、未发布），不许只跟新文案改字符串。
+    （viewport 分支：已落 `3d4a0d5`（origin/main）、test V4 已在线验收、未发布），不许只跟新文案改字符串。
     """
     pits = (REPO / "docs" / "pits.md").read_text(encoding="utf-8")
     rows = [line for line in pits.splitlines() if line.startswith("| 23 |")]
@@ -804,7 +804,7 @@ def test_pit_23_carries_the_pcb_boundary_without_growing_a_new_pit_number():
         "零 render 调用",
         "viewport",
         "PNG≠视觉通过",
-        "工作树实现",
+        "3d4a0d5",
         "已在线验收",
         "未发布",
         "exit 0",
@@ -1751,8 +1751,11 @@ def test_cli_tree_sees_pcb_gate_as_a_subcommand():
     every mention check below would pass without ever looking at `gate`. Asserted
     on the extraction itself, not through any document's readability. 550 adds
     `net-path` beside `gate`, so the pinned set is the pair: the same extraction
-    has to see both, and a third subcommand must come here deliberately.
+    has to see both, and a third subcommand must come here deliberately. 559
+    added that third one — `connection`, the online read-only pad-to-pad
+    evidence — so the pinned set is the three, and a fourth still has to come
+    here deliberately.
     """
     tops, tree = _cli_commands()
     assert "pcb" in tops, sorted(tops)
-    assert tree["pcb"] == {"gate", "net-path"}, tree["pcb"]
+    assert tree["pcb"] == {"gate", "net-path", "connection"}, tree["pcb"]

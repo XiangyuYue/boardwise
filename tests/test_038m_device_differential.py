@@ -408,9 +408,19 @@ V4_COPIES = "device-library-v4-copies"
 #: manifest together in `d422e7a`; that commit re-pinned neither this literal
 #: nor the two siblings, so the stale pin survived until this follow-up; only
 #: this row is re-pinned here. Same bounds: the other eight rows stay byte-identical.
+#:
+#: A **fourth** move of that same row, reviewed the same way: `14e8f39`
+#: (multi-unit netlists + batch datasheets) raised `toolVersion`
+#: 0.6.1 -> 0.6.3-beta.2, `expectedConnectorVersion` 0.6.1 -> 0.6.2 and
+#: `rulebody` 1cc2bff3 -> dcc659a6, and it **did** update both the input and
+#: `contracts/differential/manifest.json` (the manifest already carries
+#: 325be555…), but it re-pinned neither this literal nor its two siblings — the
+#: same omission as `d422e7a` above. Re-pinning to the value the manifest has
+#: carried since that commit restores the input/manifest agreement; it does not
+#: change the fixture, the row set or any other hash.
 PRE_EXISTING = {
     "review-report-projection": (
-        "f1713af652c8c6d2aa77b627271754309c820589c050d167f1208e89bb8080c7"
+        "325be5553178fb08e47374b7a58f91987523cf073a6eb4f50b7f43c627f838fa"
     ),
     "layout-plan-geometry": (
         "5241c07f5f0417ea8226720cfbd39f74c813c2a0513635fb1d83cf866f48a233"

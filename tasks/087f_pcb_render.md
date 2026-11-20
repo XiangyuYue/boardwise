@@ -1,5 +1,8 @@
 # 087F：#87② PCB `export.render` 宿主能力与实现验收
 
+> 状态：**已落 `3d4a0d5`（origin/main）**；test V4 在线验收完成（2026-11-16），未发布。
+> 提交状态由 557 于 2026-11-19 校正；V3 / 生产非空板未覆盖与 #87 Issue 待提出人复验的边界不变，不因已落而关单。
+
 日期：2026-11-16。前置：HEAD `504e766` 的 `exportRender` 固定调用 `sch_ManufactureData.getExportDocumentFile`；官方类型包没有 PCB 文档出图成员，`engines/liveevidence.py` 已记录 V4 PCB 60 s 超时后停用。不能用 geometry 或已知缓存帧冒充 render。本任务先做只读能力探针，再决定实现，不预设视口通道可接受。
 
 ## 1. 探针身份与动作

@@ -1,5 +1,24 @@
 # 交接记忆 —— 换 harness / 开新会话先读这份
 
+> **当前路由（2026-11-20，560 收尾 + 原生激活已成立；这条是唯一当前动作，下方 beta 2/等待试跑段降为历史基线）**：
+> 主仓 `E:/boardwise`，HEAD **`14e8f39`**，`main` 相对 `origin/main` **ahead 2**——`9f73ede`、`14e8f39` 均**未推送**。
+> 提交归属按事实读：**550B**（在线只读实例探针）在 `9f73ede`；**552/553/554/555**（多单元与跨板位号、派生基线、批量手册链）在 `14e8f39`；087E/F 在 `3d4a0d5`（已在 `origin/main`）。三者都**不是**“工作树未提交”，也**不是**“已推送”。
+> 批次在途：**556/557/558/558B/559/559B/560** 均**工作树完成、未提交未推送**。这些改动与本批文档同一棵树，不要整文件还原或格式化。
+> 556：`page_y` 公有化 + CLI 合同一次生成；父两变异（私有导入 1 红、去负号 4 红）后 **50 passed** 恢复。557：台账与 handoff 路由，文档/工作区 **67 passed**。
+> 558/558B：义务四类 + 机械三通道 + 连接器 pinout；真实重算 unreviewed **23→23**、needs **15→11**、`verdict=incomplete` 与三份 `machine_verified` 不变；父验 135 passed、变异 A 4 红 / B 2 红，558B 精确族词后 EST026 三行转 `connector-pinout`（父移除词 3 红、聚焦 68 passed）。三份机器档已由岳签核为 verified，U8 身份与 EST026 原始判类未伪造，机械件退出 hunt 工作清单**不等于**审查通过。
+> 559：纯投影 + `pcb connection` CLI + connector 只读 action；父 **268 Python + 43 Node**、typecheck 绿，两有效变异先红后恢复；真实**预验**（已激活 550B + 同会话归档身份）正反 verdict 与离线 550 一致，但原生 `pcb.connection_probe` 在旧 daemon 上 **exit 3 / stdout 空 / `unknown action`**——当时**未热更、未部署、未激活**，预验不等于完整宿主兼容（此失败史保留；2026-11-20 另行授权激活已成立，见下一条）。
+> 559B（同一议题的安全收窄，非扩张）：真实板上把一张离线 550 分成 **6 个分离铜分量**的网喂给 `getEntireTrack(true)`，回来 **76 ID 且 truncated**、含其他分量 4 个 ID（`evidence/559/entire-track-rejection.json`）⇒ **成员资格不能证明连通**。proof 只剩 direct 两类（`direct-shared-track` / `direct-other-pad`）；connector 不再调 entireTrack，响应无 `tracks[]`、无总 ID 预算与 `coverage.ids`；legacy 非空 `tracks[]` 记 `entire-track-unsupported` unknown、压否定、永不用于正证明；`NOT_PROVEN` 是「direct 范围内无共享图元」，**不是开路**，多跳铜要另立 `getAdjacentPrimitives` 图合同。P2 三项披露修复保留，反例与「entireTrack 调用为零」已入测试，`contracts/cli/v1.json` 官方重生成。当时“原生 action 未激活”的边界留作历史口径，已由 2026-11-20 激活成立取代。
+> 560：只做文档/台账收尾（#87 改已落 `3d4a0d5`、direct 与 last-dot 说明校正、556–560 入账）；**DSH 不新增 connection 工具**——typed CLI 底座先验收，原生激活另授权后再裁适配，本批只核既有 DSH 不回归、不 bump/pack（2026-11-20 激活已成立，DSH 适配仍未做，属另裁项）。
+> **560 最终验收（2026-11-19 第三轮全量已出；本条是当前唯一验收读数）**：第三轮只跑一次做确认，命令 `.venv/Scripts/python.exe -m pytest tests/ -q -n 4 --dist loadfile --basetemp=.tmp_pt_560_full_r3 --durations=50 --durations-min=1.0 --junitxml=.tmp_perf_pytest/junit-560-r3.xml` → **11 failed / 11921 passed / 26 skipped / 2 xfailed in 2593.86s (0:43:13)**；日志 `.tmp_560/full-pytest-r3.log`，UTF-8 快照 `.tmp_560/full-r3-final-utf8.log`。第二轮 19 failed 里 **9 处审查/shared 红（537A 2 / 540 4 / 038 3）在第三轮全部消失**（父聚焦 243 passed 后才启动第三轮），**剩余 11 处全部是绘制线**：`test_116_ordinal_consumption` 1（`test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline`）、`548m` 1、`543h2` 1、`548c7` 4、`548d_wifi_ground` 1、`543h3b` 1、`draw_plain_carrier` 1、`548k_stub_lane` 1；**无 537A/540/038 红**。相对二轮名单是 10 处同名延续 + 上述 116 一条，均按绘制线归属披露。**不写全仓全绿**：11 处不越线修、不隐藏，也无第四次全量计划。
+> 其余三线（同树独立读数）：connector **864 passed** + typecheck；DSH **207 passed / 1 skipped** + typecheck + build；Rust fmt/clippy 通过、**177 passed / 4 ignored**。
+> 合同父变异（放在第三轮全量之后做，避免全量与磁盘变异交叉）：移除 `pcb.connection_probe` 例外 → **2 failed**；owner 行数回退 → **4 failed**；038 旧 `review-report.json` hash 回退 → **3 failed**；`cp` + SHA-256 恢复后聚焦 **119 passed**。
+> 验收边界（2026-11-20 更订）：native `pcb.connection_probe` **已激活**——新实例 `inst-015644463-2wuenu0j`（`bootstrapAt`/`activateAt`=2026-11-20T01:56:44.463/465Z），正例 `LED1.2→U10.2` exit0 `CONNECTED`、唯一 `direct-shared-track` `2988899bbc9547de`，反例 `C22.1→C23.2` exit2 `NOT_PROVEN`、`proof=[]`，两例 unknown/errors 均 0，与离线 550 一致；权威证据 [`evidence/559/native-activation-success.json`](../evidence/559/native-activation-success.json)。**激活前**的旧 daemon（exit 3 / stdout 空 / `unknown action`）与旧 connector（`no handler`）失败史保留，559 的 direct-only 预验与正式激活不混为一谈。范围仍 **direct-only**：多跳铜要另立 `getAdjacentPrimitives` 图合同，`NOT_PROVEN` 不是开路。三份机器档已由岳签核为 verified，U8/EST026 身份未伪造；**不声称板卡 GREEN**。逐项汇总见 [`evidence/560/final-validation.md`](../evidence/560/final-validation.md)。
+>
+> **激活方式（2026-11-20，一次性账）**：仅 daemon 重启 + connector 写入 + 用户完整重启 EDA 后才生效；此前**菜单点击只增 `evaluations`、不改 `bootstrapAt`**，热更不成立。`designWrites=0`、焦点已恢复。本条只更新文档状态，不改生产代码、不碰绘制线。
+> 当前目标明确：**不推送、不部署、不发布**。`outputs/releases/0.6.3-beta.2/` 的包与三件套只作本地基线，未安装给用户环境；不重启 61190、不热更、不写真实工程。
+> 边界不变：真实设计写、人工签核、V3 宿主、生产非空板、真实 CBB 与“天然 GREEN”仍未覆盖；555 的 3 颗机器档已由岳签核为 verified；U8/EST026/机械件仍需人工，#87 待提出人复验不关单。台账状态校正不等于验收升级。
+> 本批（560）只改文档与必要状态钉：`tasks/560_goal_integration.md`、`tasks/review-line.md`、`tasks/TASKMAP.md`、`docs/review-sop.md`、`docs/pits.md`、`tests/test_doc_claims.py`、`bridge/protocol.py`（仅注释/returns 文字）、connector `connectionEnd` 注释；零 Git 写、零删除、零全量 pytest、零 bridge/EDA。
+
 > **本地beta 2集成（2026-11-19）**：用户授权打包`0.6.3-beta.2`及提交当前未提交源码/测试/文档，并重申**不要推送**，由本地DSH试跑。最终pytest **11756 passed/22 skipped/2 xfailed，34:46**；connector846 passed、DSH193 passed/1 skipped，两端typecheck/build及Rust fmt/clippy/test通过。owner/CLI合同漂移与三项审计P2已修；全量暴露的C2真实单脚网范围扩大已按root成员数收窄，原指纹/通道/跨岛接线合同均恢复，父独立变异检出。最终exe隔离daemon/skill同步及打包插件保存候选plan已验，包路径`outputs/releases/0.6.3-beta.2/boardwise-0.6.3-beta.2-windows.zip`。命令、误设30分钟及临时目录关键字导致重跑的记录见[打包任务](../tasks/063_beta2_local_package.md)、`PROGRESS.md`与`evidence/release-063-beta2/README.md`。实际DSH普通用户端到端、service名称冲突和新三件套真机激活仍待验；保留61190旧daemon，不重画药箱或恢复eprj2/P145。
 >
 > **可靠性A/B源码验收（2026-11-18）**：A任务/资产路由已校正；B1新增`draw plan --layout candN.page.json`，一次真实合成编译的8份候选预检新增编译调用为0，父验97 passed、两因果变异先红恢复，见[B1证据](../evidence/draw-reliability-b1/README.md)。B2新增离线`boardwise_draw_plan`，父验50 passed，typecheck/build通过、两父变异先红恢复，见[B2证据](../evidence/draw-reliability-b2/README.md)。实际DSH安装及真机/发布验收的当前覆盖以上方beta 2记录为准；当时遗留owner与CLI合同漂移现已在集成批修复。
@@ -450,7 +469,7 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   隔离 DSH 0.2.2-rc.3 已验文件收据不解锁、initial/partial 解锁、跨目录欠账与 tool-gap；
   桌面 profile 尚未部署，任意宿主文件解析仍不覆盖；见 `tasks/541r3_dsh_stage_gate.md`、
   `tasks/541r4_dsh_error_result_fold.md` 与 `.tmp_541_live/session-4-events.jsonl`。
-- **#87②⑤ 工作树实现与 test V4 在线验收（2026-11-16，未发布）**：087E 的 `sch.readback`
+- **#87②⑤ 已落 `3d4a0d5`（`origin/main`）与 test V4 在线验收（2026-11-16，未发布）**：087E 的 `sch.readback`
   可选 value/mpn 与来源已实现，P43 三器件与公开 ATTR 双源一致、11 netflag 为 null；087F1/F2
   PCB viewport、`capabilities` 能力闸与 liveevidence 已接入，旧 connector 缺 flag 零 render。
   主代理 F1 74、F2 Python 242、connector 809，独立变异均先红后恢复；直接 render 两板目检、SVG

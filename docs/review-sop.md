@@ -657,6 +657,40 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   （title 或 board uuid，逐字匹配；缺省、重名、错名一律拒绝，**绝不取第一块**）。首版**没有**
   `--through`/`--layer`/`--json`/`--project`，传了就是 argparse 用法错误（退 `2`），不会静默忽略。
   DSH 工具面本批不跟：离线单点证据先由 CLI 验证，确有必要再立适配。
+- **两个焊盘在宿主里是不是同一块铜**（559 起，在线只读，不写报告文件）：`boardwise pcb connection
+  --from REF.PAD --to REF.PAD [--project 工程名|uuid] [--instance 窗口] [--port N]`。没有 `FILE`、
+  没有 `--live`、没有 `--board`——**焦点 PCB 就是板身份**，它绝不自动选另一块板或第一块板。
+  动作面只有两个 `risk: read`：先 `sys.probe`（取宿主与 connector 版本，写进 `source.versions`，
+  读不到就是 `null` 并在 `missing` 里点名、`error` 里写原因——不编版本号，也不影响 verdict），
+  再 `pcb.connection_probe`（参数封闭为
+  `from`/`to` 两个 REF.PAD，多一个键就 `BAD_REQUEST`）。输出 stdout 一份
+  `schema=boardwise.pcbConnection/1` JSON；**前置拒绝**（没 connector、旧 connector 没有
+  这个 action、REF.PAD 不合法、焦点不是只读 PCB 页）→ stderr 一行理由、**stdout 为空**、退 `3`，
+  不会给你一份带 `verdict` 的 JSON 让你以为问过了——「非 PCB 焦点/非只读」属于这一类拒绝，
+  **不是**带 verdict 的 `INDETERMINATE`。三态（只在拿到 probe 响应后才有）：`CONNECTED` 退 `0`
+  （**只认 direct**：两端 `getConnectedPrimitives(false)` 报同一个有类型的 Line/Arc，
+  或一端 direct 明确是对方焊盘——**每个 `sharedId` 都带来源**）；`NOT_PROVEN` 退 `2`（两端与所有
+  相关调用都完整、无 unknown 时的「在这条 direct-only 范围内两端没有共享图元」）；
+  `INDETERMINATE` 退 `3`（某端没解析成唯一焊盘/空网或异网/direct
+  失败/direct 里出现非 proof 类型/legacy 非空 `tracks[]`，或任何可能翻转否定结论的证据缺口）。
+- **这个契约是 direct-only，永不读 `getEntireTrack`**：真实板上把一张离线 550 分成 6 个分离铜分量的网
+  喂给它，`getEntireTrack(true)` 返回 76 个 ID、`truncated=true`，其中 4 个 ID 属于其他分离分量
+  （`evidence/559/entire-track-rejection.json`）——**成员资格不能证明物理连通**，所以 connector 不调它、
+  响应里没有 `tracks[]`、没有 id 预算与 `coverage.ids`，Python 侧也不再有 track proof；旧载荷若仍带
+  非空 `tracks[]`，只记 `entire-track-unsupported` 的 unknown 并压住否定。多跳铜路径不在本契约承诺内，
+  要它得另立 `getAdjacentPrimitives` 图遍历合同并做真机语义验证。
+- **`sharedIds` 是集合证据，不是有序 path**：没有跳序；所以 JSON 里没有 `path`/`hopCount`/`viaCount`，
+  本命令也不声称阻抗、线长、间距或 DRC 结论。
+  **`NOT_PROVEN` 不等于开路**：via/fill/pour/polyline 的邻接语义未裁定，它们一律进 `unknown`
+  （`direct-non-proof-type`，宿主漏发 unknown 也照样由 Python 侧补出），而不是拿来补路，
+  引用否定结论前先看 `unknown[]`/`ignored[]`/`scope`。`coverage.complete` 只是
+  connector 自己的单字段摘要，**不是**否定结论的依据，所以 Python 侧逐项重算两端
+  resolved/唯一 pad/net、direct.ok、direct 的 ok/truncated/unreadable、scan/readErrors 和响应
+  errors/unknown。**不自动切页、不写设计**：
+  非 PCB 焦点直接 `PAGE_MISMATCH` 且什么都不读（CLI 侧表现为 refusal：stderr 一行、stdout 空、退 3，
+  不是 INDETERMINATE 载荷），没有 `doc.open`/`doc.focus`，没有任何宿主写动词。
+  DSH 工具面本批同样不跟，理由与 550 相同：先把 CLI 的 typed 底座验穿（typed 交集、缺口降级、
+  三退出码），确有必要再另立适配——不为凑工具数量把未定的能力位暴露出去。
 - **`sch.readback` 的 value/mpn 是 087E 起的可选键，缺键才走归档**（pits #3）：**新 connector** 的每行
   可选带 `value` / `mpn` / `valueSource` / `mpnSource`（`value` ← `OtherProperty['Value']`，`mpn` 先
   `ManufacturerId`、空则回退 `OtherProperty` 的料号键，空白是 `null` 不是空串）——这两项能对上，
@@ -698,7 +732,7 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   对 PCB 页不适用，是 schematic-only 的宿主能力边界。`timeoutMs` 的 1–60 s 夹取与 30 s 缺省是
   **上限设计**（防一个不 settle 的 promise 占住动作槽），不是修法 ⇒ 不给 60 s 盲重试，也不把一次
   `TIMEOUT` 写成板子的性质。
-  **新态：工作树实现、test V4 已在线验收（2026-11-16）、未发布**：connector 0.6.1 的热更实例
+  **新态：已落 `3d4a0d5`（`origin/main`）、test V4 已在线验收（2026-11-16）、未发布**：connector 0.6.1 的热更实例
   （`inst-121517427-g280bz4e`）上报 `capabilities.pcbRenderViewport=true`；对**已确认的 PCB 目标**，
   `export.render` 另走一条 viewport 分支——目标页 `doc.open` 之后经
   `dmt_SelectControl.getCurrentDocumentInfo` 回读确证（回读不确认就**不取图**、具名报错），

@@ -721,6 +721,64 @@ ACTIONS: tuple[Action, ...] = (
         risk="read",
         design_write=False,
     ),
+    # --- 559: the host half of `boardwise pcb connection` --------------------
+    Action(
+        name="pcb.connection_probe",
+        summary=(
+            "READ-ONLY 559: host evidence for 「are these two named pads on the "
+            "same copper?」, as two REF.PAD ends — the direct "
+            "`getConnectedPrimitives(false)` answer on each end's resolved "
+            "ComponentPad. **Direct-only (559B)**: `getEntireTrack` is not called at "
+            "all, because on a real net it answered 76 ids with `truncated: true` "
+            "while four of them belonged to copper components the offline 550 model "
+            "separates (evidence/559/entire-track-rejection.json) — membership in an "
+            "id set is not a connected component. What remains is directly "
+            "measurable: both ends naming the same typed Line/Arc, or one end naming "
+            "the other end's pad id. **No verdict and no path**: the verdict is "
+            "projected in Python (`boardwise.core.connection`) from the typed, "
+            "sourced intersections this action reports. Each end carries its "
+            "resolution (matches / candidates / readErrors / truncated / complete), "
+            "the resolved pad's own public fields (primitiveId, padNumber, net, "
+            "type) and `direct: {ok, count, ids, items, truncated, unreadable?, "
+            "error?}`; there is no `tracks[]`, nothing is guessed and nothing absent "
+            "is reported as an empty array. **Via / fill / pour / polyline adjacency "
+            "is not proof** and is reported under `unknown` instead of being read as "
+            "connectivity. "
+            "Focus discipline is 550B's `requirePcbFocus`: the focused page must be "
+            "exactly a PCB (PAGE_MISMATCH otherwise, with the focused document "
+            "named and nothing read), and no `doc.open`/`doc.focus` is ever "
+            "performed on the caller's behalf — the first board of a project is "
+            "never assumed. **No write is reachable**: the action only reads pad "
+            "identity and the one direct connection method; the caps it spends (512 "
+            "components, 16 direct primitives per end) are all disclosed in "
+            "`coverage` with a `truncated` bit rather than silently applied. "
+            "`coverage.complete` is the connector's own summary — a caller deciding "
+            "a **negative** must re-derive it from the individual readings."
+        ),
+        params=("from", "to"),
+        returns=(
+            "{page: {uuid, type}, readOnly: true, from, to, errors, unknown, "
+            "ignored, coverage: {scan, direct, unknown, ignored, errors, "
+            "complete}} — each end is {ref: {designator, pad}, status: "
+            "'resolved'|…, error?, resolution: {matches, candidates, components?, "
+            "readErrors, truncated, complete}, pad: {primitiveId, padNumber, net, "
+            "type} | null, direct: {ok, count, ids, items, truncated, "
+            "unreadable?, error?} | null}"
+        ),
+        params_schema=(
+            "from / to: each one `REF.PAD` as a single string — a component "
+            "designator, a separating dot, a pad number (e.g. `U9.2`), split at the "
+            "**last** dot so a *designator that itself contains dots* still parses "
+            "(the pad is always the trailing segment; a pad number that contains a "
+            "dot cannot be expressed). The key set is closed: any other key is "
+            "BAD_REQUEST, and a missing, non-string or dot-less end is refused "
+            "before the host is touched"
+        ),
+        risk="read",
+        # Reads two pads' identity and the two connection methods; no project
+        # byte, no page, no focus.
+        design_write=False,
+    ),
     # --- 026b: the promoted diagnostics action ------------------------------
     Action(
         name="sys.connector_status",
