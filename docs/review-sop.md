@@ -353,6 +353,19 @@ hunt-report.md / hunt-audit.jsonl；PDF 正文留缓存，不把几十份全文�
 `shelf` 只有显式给路径才写，默认不改用户架；机器档只驱动计算且仍待人工签核，
 不得把机器核验写成 `verified` 或 `complete`。
 
+**在线连通证据（559 / 559B，direct-only）**：要回答"这两个焊盘在 direct 范围内是否共享
+铜"，在焦点就是目标 PCB 时用 `boardwise pcb connection --from U9.2 --to CN3.1`
+（可选 `--project/--instance/--port`）；DSH 对应 `boardwise_pcb_connection`
+（`from`/`to` 必填，其余可选）。它**只认直接证据**：两端 `getConnectedPrimitives(false)`
+报同一根有类型 Line/Arc（`direct-shared-track`），或一端 direct 明确是对方焊盘
+（`direct-other-pad`）才是 `CONNECTED`。**不读 `getEntireTrack`**（真实板上它返回的 ID
+集合跨离线分离铜分量，见 `evidence/559/entire-track-rejection.json`），多跳/铺铜/过孔
+邻接不在本合同内。`NOT_PROVEN`（exit 2）只说「direct 范围内两端没有共享图元」，
+**不是开路**——引用否定结论前先看 JSON 的 `scope`/`unknown`；`INDETERMINATE` 与
+refusal（stderr 一行 + 空 stdout，含旧 daemon/connector 没这个 action）都是 exit 3，
+refusal 不是结论。命令不打开/切换文档、不写设计，焦点 PCB 就是板身份（没有 `--file`、
+`--board`、`--live`）。
+
 **该节非空时不得宣称"审查通过"**——结论只能用
 `summary.conclusion` 那句（"DRC/连接性已审，N 颗器件缺手册未审；另有 M 项管脚待手册（已标记）"），
 `summary.mayClaimPassed` 就是这道闸（**窄义**：只回答"有没有器件缺手册未审"——没别的意思）；
@@ -689,8 +702,9 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   errors/unknown。**不自动切页、不写设计**：
   非 PCB 焦点直接 `PAGE_MISMATCH` 且什么都不读（CLI 侧表现为 refusal：stderr 一行、stdout 空、退 3，
   不是 INDETERMINATE 载荷），没有 `doc.open`/`doc.focus`，没有任何宿主写动词。
-  DSH 工具面本批同样不跟，理由与 550 相同：先把 CLI 的 typed 底座验穿（typed 交集、缺口降级、
-  三退出码），确有必要再另立适配——不为凑工具数量把未定的能力位暴露出去。
+  DSH 对应工具 `boardwise_pcb_connection` 已由 561 接入同一 CLI（`from`/`to` 必填，
+  `project`/`instance`/`port` 可选）；适配只传 argv 与文本结果，不在 TS 复制 direct 判据，
+  部署与发版另批。
 - **`sch.readback` 的 value/mpn 是 087E 起的可选键，缺键才走归档**（pits #3）：**新 connector** 的每行
   可选带 `value` / `mpn` / `valueSource` / `mpnSource`（`value` ← `OtherProperty['Value']`，`mpn` 先
   `ManufacturerId`、空则回退 `OtherProperty` 的料号键，空白是 `null` 不是空串）——这两项能对上，

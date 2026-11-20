@@ -1759,3 +1759,15 @@ def test_cli_tree_sees_pcb_gate_as_a_subcommand():
     tops, tree = _cli_commands()
     assert "pcb" in tops, sorted(tops)
     assert tree["pcb"] == {"gate", "net-path", "connection"}, tree["pcb"]
+
+
+def test_pcb_connection_docs_name_the_dsh_adapter():
+    """561: the public docs and the actual DSH registration must move together."""
+    sop = (REPO / "docs" / "review-sop.md").read_text(encoding="utf-8")
+    readme = (REPO / "dsh-plugin" / "README.md").read_text(encoding="utf-8")
+    index = (REPO / "dsh-plugin" / "src" / "index.ts").read_text(encoding="utf-8")
+    for document in (sop, readme):
+        assert "boardwise_pcb_connection" in document
+    assert "DSH 工具面本批同样不跟" not in sop
+    assert "NOT_PROVEN" in readme and "不是开路" in readme
+    assert index.count("registerPcbConnection") == 2

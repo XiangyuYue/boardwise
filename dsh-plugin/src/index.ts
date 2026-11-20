@@ -8,6 +8,7 @@ import { isPendingRegistration } from './review-finalize.ts'
 import type { ReviewProjectionReader } from './review-finalize.ts'
 import { registerDrawTools } from './draw-tools.ts'
 import { registerPartsHunt } from './parts-hunt.ts'
+import { registerPcbConnection } from './pcb-connection.ts'
 import { registerReviewDelivery } from './review-delivery.ts'
 import {
   hasPromiseFace,
@@ -70,6 +71,9 @@ function publish(
   // 555: the batch datasheet hunt reads a design the way checkup does and
   // draws nothing, so it lands after the old eight tools and before draw.
   registerPartsHunt(ctx)
+  // 561: the direct-only PCB copper probe reads the live editor and writes
+  // nothing, so it lands right after the batch hunt and before draw.
+  registerPcbConnection(ctx)
   registerDrawTools(ctx)
   registerReviewDelivery(ctx, finalizeReader)
   // The stage gate proves a checkpoint with **both** projections: a stage

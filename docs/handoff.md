@@ -1,9 +1,10 @@
 # 交接记忆 —— 换 harness / 开新会话先读这份
 
-> **当前路由（2026-11-20，560 收尾 + 原生激活已成立；这条是唯一当前动作，下方 beta 2/等待试跑段降为历史基线）**：
-> 主仓 `E:/boardwise`，HEAD **`14e8f39`**，`main` 相对 `origin/main` **ahead 2**——`9f73ede`、`14e8f39` 均**未推送**。
-> 提交归属按事实读：**550B**（在线只读实例探针）在 `9f73ede`；**552/553/554/555**（多单元与跨板位号、派生基线、批量手册链）在 `14e8f39`；087E/F 在 `3d4a0d5`（已在 `origin/main`）。三者都**不是**“工作树未提交”，也**不是**“已推送”。
-> 批次在途：**556/557/558/558B/559/559B/560** 均**工作树完成、未提交未推送**。这些改动与本批文档同一棵树，不要整文件还原或格式化。
+> **当前路由（2026-11-20，561 DSH 适配已验收；下方 556–560 为历史验收记录）**：
+> 主仓 `E:/boardwise`，HEAD **`0ac8973`**，`main` 相对 `origin/main` **ahead 3**——`9f73ede`、`14e8f39`、`0ac8973` 均**未推送**。
+> 提交归属按事实读：550B 在 `9f73ede`；552–555 在 `14e8f39`；556–560 的审查/shared 归属在 `0ac8973`；087E/F 在 `3d4a0d5`（已在 `origin/main`）。绘制线 `v4facts` 特征 hunks 仍属绘制线工作树，没有夹带进 `0ac8973`。
+> **561 DSH `boardwise_pcb_connection` 工作树完成、未提交未推送**：14 工具注册，`TEXT_OUTPUT + executeCli`，direct-only 与 NOT_PROVEN≠开路不变；DSH **218 passed / 1 skipped** + typecheck/build，文档/同步 **58 passed**。父变异撤注册 **13 failed / 12 passed**、argv 换端 **4 failed / 7 passed**，均 cp+SHA 恢复并复绿。证据 `evidence/561/parent-validation.md`。
+> **562 多跳图合同已立、实现未开工**：任务书 `tasks/562_live_pcb_path_graph.md` 已定独立 `pcb.path_probe` / `pcb path` / `boardwise.pcbLivePath/1`、双向邻接 proof、固定预算与真实负例；不得恢复 entireTrack 正证据。DSH 部署/pack、推送与发布仍需岳逐次批准。
 > 556：`page_y` 公有化 + CLI 合同一次生成；父两变异（私有导入 1 红、去负号 4 红）后 **50 passed** 恢复。557：台账与 handoff 路由，文档/工作区 **67 passed**。
 > 558/558B：义务四类 + 机械三通道 + 连接器 pinout；真实重算 unreviewed **23→23**、needs **15→11**、`verdict=incomplete` 与三份 `machine_verified` 不变；父验 135 passed、变异 A 4 红 / B 2 红，558B 精确族词后 EST026 三行转 `connector-pinout`（父移除词 3 红、聚焦 68 passed）。三份机器档已由岳签核为 verified，U8 身份与 EST026 原始判类未伪造，机械件退出 hunt 工作清单**不等于**审查通过。
 > 559：纯投影 + `pcb connection` CLI + connector 只读 action；父 **268 Python + 43 Node**、typecheck 绿，两有效变异先红后恢复；真实**预验**（已激活 550B + 同会话归档身份）正反 verdict 与离线 550 一致，但原生 `pcb.connection_probe` 在旧 daemon 上 **exit 3 / stdout 空 / `unknown action`**——当时**未热更、未部署、未激活**，预验不等于完整宿主兼容（此失败史保留；2026-11-20 另行授权激活已成立，见下一条）。

@@ -63,6 +63,7 @@ const TOOL_ORDER = [
   'boardwise_triage_batch',
   'boardwise_review_finalize',
   'boardwise_parts_hunt',
+  'boardwise_pcb_connection',
   'boardwise_draw_compile',
   'boardwise_draw_lint',
   'boardwise_draw_v4_facts',

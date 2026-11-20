@@ -52,6 +52,7 @@ const TEXT_TOOLS = [
   'boardwise_doctor',
   'boardwise_bridge',
   'boardwise_parts_hunt',
+  'boardwise_pcb_connection',
 ] as const
 
 /** The tools that answer with a canonical JSON object (537D1b2 / 537D3a). */
@@ -77,7 +78,7 @@ describe('boardwise-dsh: plugin registration contract', () => {
     expect(typeof apply).toBe('function')
   })
 
-  it('keeps the eight old tools in order, then parts hunt, then the offline draw tools', () => {
+  it('keeps the eight old tools in order, then parts hunt and the PCB probe, then the offline draw tools', () => {
     expect([...registered().keys()]).toEqual([
       'boardwise_checkup',
       'boardwise_arch',
@@ -88,6 +89,7 @@ describe('boardwise-dsh: plugin registration contract', () => {
       'boardwise_triage_batch',
       'boardwise_review_finalize',
       'boardwise_parts_hunt',
+      'boardwise_pcb_connection',
       'boardwise_draw_compile',
       'boardwise_draw_lint',
       'boardwise_draw_v4_facts',

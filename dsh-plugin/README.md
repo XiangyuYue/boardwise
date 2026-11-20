@@ -56,6 +56,7 @@ review_read/finalize/doctor 始终可收尾，已派发命令不被取消。541R
 | `boardwise_triage_batch` | `triage-batch --out D --input BATCH --json RESULT` | `out` / `entries` 必填，整批原子应用 | 120 000 |
 | `boardwise_review_finalize` | `review finalize --out D [--strict-partial]` | `out` 必填；可选 `stage=initial/partial` | 120 000 |
 | `boardwise_parts_hunt` | `parts hunt --file F \| --live [--project P \| --instance I] --out D [--from-report R] [--offline] [--limit N] [--cache C \| --no-cache] [--shelf S] [--apply A] [--apply-facts F]` | `file`/`project`/`instance` 三选一，`out` 必填；`answers`/`claims` 数组写插件自己的 transport 临时文件 | 1 800 000 |
+| `boardwise_pcb_connection` | `pcb connection --from REF.PAD --to REF.PAD [--project P] [--instance I] [--port N]` | `from`/`to` 必填；无 file/board/live/json，焦点 PCB 即板身份，不切文档 | 120 000 |
 | `boardwise_draw_compile` | `draw compile --circuit C --presentation P --profiles S --out D --json J` | 三个输入必填，`pageBox`/`intent`/`out` 可选；整份 JSON 返回：单模块 `candidates`，页级 `pages`（见下） | 600 000 |
 | `boardwise_draw_lint` | `draw lint --snapshot S --render R [--bodies B] --json J` | `snapshot`/`render` 必填，仅离线回放；完整 JSON 返回 | 120 000 |
 | `boardwise_draw_plan` | `draw plan --layout L --circuit C --presentation P --profiles S --out D/plan.json --json J` | 四个现有文件必填，仅离线预检保存的PageLayoutPlan；`out`目录可选，默认独立持久临时目录；完整CLI JSON返回 | 120 000 |
@@ -75,6 +76,19 @@ review_read/finalize/doctor 始终可收尾，已派发命令不被取消。541R
   更不隐式改全局 `parts.json`；正则提取是 candidate，过引文闸是 `machine_verified`
   （仅计算，仍待人工确认），**插件不代签 verified**（喂 PDF ≠ 清闸）。`cache` 与 `noCache`
   同时给 → 执行前拒绝，不 spawn。
+- **`boardwise_pcb_connection`（561，559/559B 的 DSH 适配）是在线 direct-only 连通证据**，
+  只回答"焦点 PCB 上这两个 REF.PAD 在 direct 范围内是否共享铜"。复用 `TEXT_OUTPUT +
+  executeCli`（CLI 的答案是 stdout JSON，没有 `--json` 文件，插件不伪造结构化传输）：
+  exit 0 `CONNECTED`、**exit 2 `NOT_PROVEN`、exit 3 `INDETERMINATE` 或 refusal 都是 CLI 结果**，
+  原样返回、不转成 TS 异常；只有启动失败（ENOENT）与超时/取消才抛。判据全在 Python：
+  插件只把 `from`/`to` 的空白当输入错误（REF.PAD 语法与连通判断交给 CLI），`port` 必须是
+  有限正整数（否则执行前拒绝，不 spawn）。`CONNECTED` 只认两端 direct 报同一有类型
+  Line/Arc（`direct-shared-track`）或一端 direct 明确是对方焊盘（`direct-other-pad`）；
+  **`NOT_PROVEN` 只表示 direct 范围内没有共享图元，不是开路**（多跳/铺铜/过孔邻接在
+  `unknown`/`scope` 里）。不读 `getEntireTrack`，不在 TS 重写 verdict，没有 `--file` /
+  `--board` / `--live` / `--json`，不自动切页；旧 daemon 或 connector bundle 没有
+  `pcb.connection_probe` 时是 exit 3 + stderr 一行 + 空 stdout 的 refusal。
+  部署与发版另批；工具出现在这里不等于用户环境已安装或激活。
 - **只读优先**：所有工具都不修改设计。`boardwise_bridge` 强制 `--read-only`；CLI 目录闸拒绝
   非 read/未知动作时，结果前附 `tool-gap`，原文与 exit 保留。分诊与 finalize 只更新审查报告和
   交付收据，真实工程的设计写仍走 CLI 的身份与权限闸。
