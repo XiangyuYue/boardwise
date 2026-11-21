@@ -779,6 +779,66 @@ ACTIONS: tuple[Action, ...] = (
         # byte, no page, no focus.
         design_write=False,
     ),
+    # --- 562: the host half of `boardwise pcb path` --------------------------
+    Action(
+        name="pcb.path_probe",
+        summary=(
+            "READ-ONLY 562: multi-hop copper **graph evidence** between two named "
+            "pads — the host half of `boardwise pcb path`. Two `REF.PAD` ends in; "
+            "out comes the adjacency the host itself answered, keyed by primitive "
+            "identity: typed `nodes[]` (`type`, `primitiveId`, `net`), "
+            "**directed** `edges[]` (`from`, `to`, `method`, `kind`, `callIndex`, "
+            "`hostOrder` — one row per direction the host answered), `seeds[]`, "
+            "`frontier[]` (vertices that were never expanded), `coverage`, and its "
+            "own `unknown`/`ignored`/`errors`. **`getEntireTrack` is never "
+            "called**: 559B measured an id set to span copper components the "
+            "offline model separates "
+            "(evidence/559/entire-track-rejection.json), so an id set is not a "
+            "connected component and this action spends no id budget. What it "
+            "reads instead is the two seams a walk can be sourced from — each "
+            "resolved pad's `getConnectedPrimitives(false)` and each Line/Via's "
+            "`getAdjacentPrimitives()` — capped and disclosed in `coverage` with "
+            "its `truncated` bits. **No verdict and no path**: whether this graph "
+            "proves a connection is projected in Python "
+            "(`boardwise.core.livepath`), where a hop needs **reciprocal** "
+            "adjacency, only Line/Via may be walked, Arc / pad↔via contact / "
+            "poured copper are named `unknown`/`ignored`, and an unexpanded "
+            "`frontier`, a truncation or an error keeps a negative answer from "
+            "being claimed. Focus discipline is 550B's `requirePcbFocus`: the "
+            "focused page must be exactly a PCB (`PAGE_MISMATCH` otherwise, with "
+            "the focused document named and nothing read), and no "
+            "`doc.open`/`doc.focus` is ever performed on the caller's behalf. "
+            "**No write is reachable**: the action reads primitive identity, nets "
+            "and the two adjacency methods; params are closed to `from`/`to`."
+        ),
+        params=("from", "to"),
+        returns=(
+            "{page: {uuid, type}, readOnly: true, from, to, nodes: [{type, "
+            "primitiveId, net, layer?}], edges: [{from: {type, primitiveId}, "
+            "to: {type, primitiveId}, method, kind, callIndex, hostOrder}], "
+            "seeds: [{type, primitiveId, …}], frontier: [{type, primitiveId}], "
+            "coverage: {scan, direct, adjacent, nodes, edges, perCallTruncated, "
+            "budget, nets, seeds, frontier, complete}, unknown, ignored, errors} "
+            "— each end is {ref: {designator, pad}, status: 'resolved'|…, "
+            "resolution: {matches, candidates, readErrors, truncated, "
+            "complete}, pad: {primitiveId, padNumber, net, type} | null, "
+            "direct: {ok, count, ids, items, truncated, error?} | null}. Shape "
+            "only — the walk, the three states and every refusal are decided in "
+            "Python (`boardwise.core.livepath`) over these rows, never here."
+        ),
+        params_schema=(
+            "from / to: each one `REF.PAD` as a single string — a component "
+            "designator, a separating dot, a pad number (e.g. `U9.2`), split at "
+            "the **last** dot so a designator that itself contains dots still "
+            "parses. The key set is closed: any other key is BAD_REQUEST, and a "
+            "missing, non-string or dot-less end is refused before the host is "
+            "touched"
+        ),
+        risk="read",
+        # Reads two pads' identity, nets and the two adjacency methods; no
+        # project byte, no page, no focus.
+        design_write=False,
+    ),
     # --- 026b: the promoted diagnostics action ------------------------------
     Action(
         name="sys.connector_status",

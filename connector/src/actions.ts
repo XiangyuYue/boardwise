@@ -3638,6 +3638,848 @@ export const pcbConnectionProbe: ActionHandler = async (params, eda) => {
 };
 
 // --------------------------------------------------------------------------
+// 562A: `pcb.path_probe` — multi-hop adjacency evidence, no verdict
+// --------------------------------------------------------------------------
+
+/**
+ * The 562 contract asks a different question from 559: not "do these two pads
+ * name the same direct primitive", but "what does the host say each piece of
+ * copper is adjacent to", so a caller can walk several hops. 559 stays
+ * direct-only and untouched; this action is the graph collector beside it.
+ *
+ * What it collects, and what it deliberately does not decide:
+ *
+ * - **Vertices** are typed: `{primitiveId, type, net}` keyed by
+ *   `(type, primitiveId)`, because an id alone does not say which catalogue
+ *   entry it belongs to. `net` filters (`other-net` is ignored, a missing net is
+ *   unknown and is never expanded) and is never proof of connectivity.
+ * - **Edges** each point at one concrete host call: `{from, to, method,
+ *   callIndex, hostOrder}`. `callIndex` is the global order of the
+ *   `getConnectedPrimitives(false)` / `getAdjacentPrimitives()` invocation and
+ *   `hostOrder` the position inside that answer, so every hop is traceable.
+ * - **Each direction is recorded separately.** When A's answer names B, that is
+ *   one edge A→B from A's call; when B's answer names A, that is a second edge
+ *   B→A from B's call. The conservative 562 §5.2 rule ("only reciprocal
+ *   adjacency counts as proof") is a pure function on the Python side, so the
+ *   Connector neither drops a one-way edge nor promotes it: dropping it would
+ *   hide evidence, promoting it would be a verdict.
+ * - **`getEntireTrack` is never called** (559B: its id set spans other,
+ *   offline-disconnected copper components). `getAdjacentPrimitives()` is the
+ *   only expansion seam, and only `Line`/`Via` are expanded — `Arc` is
+ *   `unknown:arc-unverified` until a real sample unlocks it (562 §4.8), and a
+ *   `Pad`→`Via` answer is `unknown:pad-via-contact` and never a seed (§4.7).
+ * - **Budgets are fixed and disclosed**: 64 candidates per answer, 512 vertices,
+ *   512 adjacent calls, 2048 candidate edges, 120 s checked between host reads.
+ *   A cap hit is `unknown:budget-exhausted` with the budget that ran out, and
+ *   whatever was not expanded is `frontier[]` — never a silent truncation.
+ *
+ * There is no `verdict`, `path`, `hopCount`, `viaCount` or `sharedIds` here: the
+ * BFS, the reciprocity rule and the three-state answer are Python's work (562B).
+ * Read-only in the strong sense — the only host calls are `getAll`,
+ * `getAllPins`, `getState_*`, `get(id)` on the line/via managers,
+ * `getConnectedPrimitives(false)` and `getAdjacentPrimitives()`.
+ */
+
+/** How many candidates one direct/adjacent answer contributes (host order). */
+const PATH_PER_CALL_CAP = 64;
+
+/** How many vertices the collected graph may hold. */
+const PATH_VERTEX_CAP = 512;
+
+/** How many `getAdjacentPrimitives()` calls the collection may make. */
+const PATH_ADJACENT_CAP = 512;
+
+/** How many candidate edges may be recorded. */
+const PATH_EDGE_CAP = 2048;
+
+/** The time budget, checked between host reads (the host call itself is not cancellable). */
+const PATH_TIME_BUDGET_MS = 120000;
+
+/** The types that can be expanded through their manager. */
+const PATH_EXPANDABLE_TYPES = new Set(['Line', 'Via']);
+
+/** The managers that answer `get(id)` for those types. */
+const PATH_MANAGER_BY_TYPE: Record<string, string> = {
+  Line: 'pcb_PrimitiveLine',
+  Via: 'pcb_PrimitiveVia',
+};
+
+/**
+ * Poured copper. Excluded on purpose, exactly like the offline 550 model: it is
+ * not a bridge this action claims to prove (`ignored:pour-excluded`).
+ */
+const PATH_POUR_TYPES = new Set(['Fill', 'Pour', 'Poured', 'PLANE']);
+
+/** A vertex reference: the identity is `(type, primitiveId)`, never the id alone. */
+type PathRef = { primitiveId: string; type: string };
+
+/** One collected vertex, with the net it was read with. */
+type PathGraphNode = PathRef & {
+  net: string;
+  layer: string | number | null;
+  expandable: boolean;
+  seed: boolean;
+  expanded: boolean;
+  attempted: boolean;
+};
+
+/** One collected edge — one host call, one answer position. */
+type PathEdge = {
+  from: PathRef;
+  to: PathRef;
+  method: 'getConnectedPrimitives' | 'getAdjacentPrimitives';
+  kind: 'pad-direct' | 'pad-direct-other-pad' | 'adjacent' | 'adjacent-to-endpoint-pad';
+  callIndex: number;
+  hostOrder: number;
+};
+
+/** What one candidate read measured. */
+type PathReading = {
+  ok: boolean;
+  ref: PathRef | null;
+  net: string | null;
+  layer: string | number | null;
+  primitiveId: string | null;
+  type: string | null;
+  code?: string;
+  detail?: string;
+};
+
+/** Everything the collection stages share. */
+type PathGraph = {
+  nodes: Map<string, PathGraphNode>;
+  edges: PathEdge[];
+  unknown: Array<Record<string, unknown>>;
+  ignored: Array<Record<string, unknown>>;
+  errors: string[];
+  directCalls: number;
+  adjacentCalls: number;
+  nextCall: number;
+  perCallTruncated: number;
+  layerUnreadable: number;
+  nodesTruncated: boolean;
+  edgesTruncated: boolean;
+  stop: null | { budget: 'vertices' | 'adjacent-calls' | 'edges' | 'time'; detail: string };
+  startedAt: number;
+};
+
+function pathKeyOf(ref: PathRef): string {
+  return `${ref.type}\u0001${ref.primitiveId}`;
+}
+
+function pathRefOf(ref: PathRef): PathRef {
+  return { primitiveId: ref.primitiveId, type: ref.type };
+}
+
+/** The one order the contract allows: `(type, primitiveId)`, never host order. */
+function pathCompare(a: PathRef, b: PathRef): number {
+  if (a.type !== b.type) return a.type < b.type ? -1 : 1;
+  if (a.primitiveId !== b.primitiveId) return a.primitiveId < b.primitiveId ? -1 : 1;
+  return 0;
+}
+
+/** Record the first budget that ran out, and say which one it was. */
+function pathStop(
+  graph: PathGraph,
+  budget: NonNullable<PathGraph['stop']>['budget'],
+  at: string,
+  detail: string,
+): void {
+  if (graph.stop !== null) return;
+  graph.stop = { budget, detail };
+  graph.unknown.push({ code: 'budget-exhausted', budget, at, detail });
+}
+
+/** Between host reads: has the wall clock run out? */
+function pathBudgetOk(graph: PathGraph, at: string): boolean {
+  if (graph.stop !== null) return false;
+  const elapsed = Date.now() - graph.startedAt;
+  if (elapsed > PATH_TIME_BUDGET_MS) {
+    pathStop(
+      graph,
+      'time',
+      at,
+      `${elapsed} ms elapsed exceeds the ${PATH_TIME_BUDGET_MS} ms budget checked between host reads`,
+    );
+    return false;
+  }
+  return true;
+}
+
+/** Add one vertex, refusing to exceed the vertex budget silently. */
+function pathAddNode(
+  graph: PathGraph,
+  entry: { ref: PathRef; net: string; layer: string | number | null; expandable: boolean },
+): { node: PathGraphNode | null; added: boolean } {
+  const key = pathKeyOf(entry.ref);
+  const existing = graph.nodes.get(key);
+  if (existing) return { node: existing, added: false };
+  if (graph.nodes.size >= PATH_VERTEX_CAP) {
+    graph.nodesTruncated = true;
+    pathStop(
+      graph,
+      'vertices',
+      key,
+      `${graph.nodes.size} vertices is the cap; ${entry.ref.type} ${entry.ref.primitiveId} was not added`,
+    );
+    return { node: null, added: false };
+  }
+  const node: PathGraphNode = {
+    ...pathRefOf(entry.ref),
+    net: entry.net,
+    layer: entry.layer,
+    expandable: entry.expandable,
+    seed: false,
+    expanded: false,
+    attempted: false,
+  };
+  graph.nodes.set(key, node);
+  if (entry.layer === null) graph.layerUnreadable += 1;
+  return { node, added: true };
+}
+
+/** Add one edge, refusing to exceed the edge budget silently. */
+function pathAddEdge(
+  graph: PathGraph,
+  from: PathRef,
+  to: PathRef,
+  method: PathEdge['method'],
+  kind: PathEdge['kind'],
+  callIndex: number,
+  hostOrder: number,
+): void {
+  if (graph.edges.length >= PATH_EDGE_CAP) {
+    graph.edgesTruncated = true;
+    pathStop(
+      graph,
+      'edges',
+      pathKeyOf(from),
+      `${PATH_EDGE_CAP} candidate edges is the cap; ${from.type} ${from.primitiveId} → `
+        + `${to.type} ${to.primitiveId} was not recorded`,
+    );
+    return;
+  }
+  graph.edges.push({ from: pathRefOf(from), to: pathRefOf(to), method, kind, callIndex, hostOrder });
+}
+
+/**
+ * Read one candidate's identity: id, type, net and layer, all as the host
+ * spells them. A value that will not read is `unknown` — the caller never
+ * guesses the type from the id, and never expands a candidate whose net is
+ * missing (562 §4.2).
+ */
+async function pathReadPrimitive(entry: unknown): Promise<PathReading> {
+  const failed = (code: string, detail: string, extra: Partial<PathReading> = {}): PathReading => ({
+    ok: false,
+    ref: null,
+    net: null,
+    layer: null,
+    primitiveId: null,
+    type: null,
+    code,
+    detail,
+    ...extra,
+  });
+  if (!entry || (typeof entry !== 'object' && typeof entry !== 'function')) {
+    return failed(
+      'entry-not-an-instance',
+      `a candidate is ${probeValueShape(entry)}, not a primitive instance — its id and type cannot be read`,
+    );
+  }
+  const idRead = await getState(entry, 'PrimitiveId');
+  const typeRead = await getState(entry, 'PrimitiveType');
+  const primitiveId = typeof idRead === 'string' && idRead ? idRead : null;
+  const type = typeof typeRead === 'string' && CONNECTION_PRIMITIVE_TYPES.has(typeRead) ? typeRead : null;
+  if (primitiveId === null) {
+    return failed(
+      'primitive-id-unreadable',
+      `PrimitiveId read ${probeValueShape(idRead)} — the candidate cannot be named in the evidence`,
+      { type },
+    );
+  }
+  if (type === null) {
+    return failed(
+      'primitive-type-unknown',
+      `PrimitiveType read ${probeValueShape(typeRead)} — an id without a type is not a vertex`,
+      { primitiveId },
+    );
+  }
+  const netRead = await getState(entry, 'Net');
+  const net = typeof netRead === 'string' && netRead ? netRead : null;
+  const layerRead = await getState(entry, 'Layer');
+  const layer = typeof layerRead === 'string' || typeof layerRead === 'number' ? layerRead : null;
+  return { ok: true, ref: { primitiveId, type }, net, layer, primitiveId, type };
+}
+
+/**
+ * Read one answer's candidates in host order, never past the per-call cap.
+ *
+ * Reading and classifying are separate passes so the candidates can be
+ * **processed** in `(type, primitiveId)` order (562 §4.6) while `hostOrder`
+ * still remembers where the host put each one.
+ */
+async function pathReadAnswer(
+  graph: PathGraph,
+  answer: unknown[],
+  sourceRef: PathRef | null,
+  method: PathEdge['method'],
+  callIndex: number,
+  at: string,
+): Promise<Array<{ hostOrder: number; reading: PathReading }>> {
+  const reported = answer.length;
+  if (reported > PATH_PER_CALL_CAP) {
+    graph.perCallTruncated += 1;
+    graph.unknown.push({
+      code: 'per-call-truncated',
+      from: sourceRef === null ? null : pathRefOf(sourceRef),
+      method,
+      callIndex,
+      reported,
+      kept: PATH_PER_CALL_CAP,
+      detail: `${method} answered ${reported} candidates; only the first ${PATH_PER_CALL_CAP} are evidence`,
+    });
+  }
+  const readings: Array<{ hostOrder: number; reading: PathReading }> = [];
+  const keep = Math.min(reported, PATH_PER_CALL_CAP);
+  for (let hostOrder = 0; hostOrder < keep; hostOrder += 1) {
+    if (!pathBudgetOk(graph, at)) break;
+    readings.push({ hostOrder, reading: await pathReadPrimitive(answer[hostOrder]) });
+  }
+  return readings;
+}
+
+/**
+ * Classify one answer's candidates and record the vertices and edges they
+ * justify. `sourceNode` is null when the source end itself is not a vertex
+ * (missing net / unreadable type): then only the read failures are disclosed,
+ * and the raw items stay visible in the end's `direct` readout rather than being
+ * turned into edges a caller could mistake for a graph.
+ */
+async function pathClassifyAnswer(
+  graph: PathGraph,
+  sourceNode: PathGraphNode | null,
+  sourceRef: PathRef | null,
+  readings: Array<{ hostOrder: number; reading: PathReading }>,
+  method: PathEdge['method'],
+  callIndex: number,
+  endpoints: Map<string, PathRef>,
+): Promise<void> {
+  const from = sourceNode === null ? (sourceRef === null ? null : pathRefOf(sourceRef)) : pathRefOf(sourceNode);
+
+  for (const item of readings) {
+    if (item.reading.ok) continue;
+    graph.unknown.push({
+      code: item.reading.code ?? 'unreadable-candidate',
+      from,
+      method,
+      callIndex,
+      hostOrder: item.hostOrder,
+      primitiveId: item.reading.primitiveId,
+      type: item.reading.type,
+      detail: item.reading.detail ?? null,
+    });
+  }
+  if (sourceNode === null) return;
+
+  const resolved = readings
+    .filter((item) => item.reading.ok && item.reading.ref !== null)
+    .sort((a, b) => pathCompare(a.reading.ref as PathRef, b.reading.ref as PathRef));
+  const seen = new Set<string>();
+  for (const item of resolved) {
+    if (graph.stop !== null) return;
+    const ref = item.reading.ref as PathRef;
+    const reading = item.reading;
+    const key = pathKeyOf(ref);
+    const at = { from, to: pathRefOf(ref), method, callIndex, hostOrder: item.hostOrder };
+
+    if (seen.has(key)) {
+      graph.ignored.push({ code: 'duplicate-primitive', ...at });
+      continue;
+    }
+    seen.add(key);
+
+    if (reading.net === null) {
+      // 562 §4.2: a candidate without a net is not a vertex and is not expanded.
+      graph.unknown.push({ code: 'net-missing', ...at, detail: 'Net read as a non-string; the candidate is not expanded' });
+      continue;
+    }
+    if (reading.net !== sourceNode.net) {
+      graph.ignored.push({ code: 'other-net', ...at, net: reading.net });
+      continue;
+    }
+    if (PATH_POUR_TYPES.has(ref.type)) {
+      graph.ignored.push({ code: 'pour-excluded', ...at });
+      continue;
+    }
+    if (ref.type === 'Arc') {
+      // 562 §4.8: no real-board sample has pinned "adjacent call ↔ exported
+      // identity" for an arc, so it can be neither proof nor a followed vertex.
+      graph.unknown.push({ code: 'arc-unverified', ...at });
+      continue;
+    }
+    if (ref.type === 'Via' && !PATH_EXPANDABLE_TYPES.has(sourceNode.type)) {
+      // 562 §4.7: pad↔via contact is not a claim this batch may make, and the
+      // via is not a seed either — it can only be reached through adjacency.
+      graph.unknown.push({ code: 'pad-via-contact', ...at, to: pathRefOf(ref) });
+      continue;
+    }
+    if (PATH_EXPANDABLE_TYPES.has(ref.type)) {
+      const added = pathAddNode(graph, { ref, net: reading.net, layer: reading.layer, expandable: true });
+      if (method === 'getConnectedPrimitives' && added.added) added.node!.seed = true;
+      pathAddEdge(
+        graph,
+        sourceNode,
+        ref,
+        method,
+        method === 'getConnectedPrimitives' ? 'pad-direct' : 'adjacent',
+        callIndex,
+        item.hostOrder,
+      );
+      continue;
+    }
+    if (CONNECTION_PAD_TYPES.has(ref.type)) {
+      const endpoint = endpoints.get(ref.primitiveId);
+      if (endpoint === undefined) {
+        // 562 §4.4: an intermediate pad is not expanded in the first batch.
+        graph.unknown.push({ code: 'intermediate-pad-unsupported', ...at });
+        continue;
+      }
+      if (endpoint.type !== ref.type) {
+        graph.unknown.push({
+          code: 'instance-mismatch',
+          ...at,
+          detail: `the endpoint pad ${ref.primitiveId} resolved as ${endpoint.type} but this answer `
+            + `reports ${ref.type}`,
+        });
+        continue;
+      }
+      if (key === pathKeyOf(sourceNode)) {
+        graph.ignored.push({ code: 'self-reference', ...at });
+        continue;
+      }
+      pathAddEdge(
+        graph,
+        sourceNode,
+        ref,
+        method,
+        method === 'getConnectedPrimitives' ? 'pad-direct-other-pad' : 'adjacent-to-endpoint-pad',
+        callIndex,
+        item.hostOrder,
+      );
+      continue;
+    }
+    // 562 §4.6: anything else that could bridge (Polyline, Region, an unknown
+    // declared type) is unknown — never `ignored`, which would hide a gap.
+    graph.unknown.push({ code: 'unsupported-adjacent-type', ...at });
+  }
+}
+
+/**
+ * Expand one `Line`/`Via` through its manager, re-reading the identity first.
+ *
+ * The manager `get(id)` is not trusted on its own: 562 §4.1 requires the
+ * instance to answer the same id, type and net before a single neighbour is
+ * read, so a manager that hands back a different primitive cannot smuggle an
+ * edge into the graph.
+ */
+async function pathExpand(
+  graph: PathGraph,
+  node: PathGraphNode,
+  eda: Eda,
+  endpoints: Map<string, PathRef>,
+): Promise<void> {
+  if (graph.stop !== null || node.expanded || node.attempted) return;
+  node.attempted = true;
+  const at = `${node.type} ${node.primitiveId}`;
+  const disclose = (code: string, detail: string) => {
+    graph.unknown.push({ code, node: pathRefOf(node), detail });
+  };
+  if (!pathBudgetOk(graph, at)) return;
+  if (graph.adjacentCalls >= PATH_ADJACENT_CAP) {
+    pathStop(graph, 'adjacent-calls', at, `${PATH_ADJACENT_CAP} getAdjacentPrimitives() calls is the cap`);
+    return;
+  }
+
+  const manager = PATH_MANAGER_BY_TYPE[node.type];
+  const nsRead = readMember(eda, manager);
+  if (nsRead.error !== undefined) {
+    const message = `read ${manager}: ${nsRead.error}`;
+    graph.errors.push(`${at}: ${message}`);
+    disclose('manager-unreadable', message);
+    return;
+  }
+  const ns = nsRead.value;
+  if (!ns || (typeof ns !== 'object' && typeof ns !== 'function')) {
+    const message = `${manager} is not available in this editor version (typeof ${typeof ns})`;
+    graph.errors.push(`${at}: ${message}`);
+    disclose('manager-unavailable', message);
+    return;
+  }
+  const getter = readMember(ns, 'get');
+  if (getter.error !== undefined) {
+    const message = `read ${manager}.get: ${getter.error}`;
+    graph.errors.push(`${at}: ${message}`);
+    disclose('manager-unreadable', message);
+    return;
+  }
+  if (typeof getter.value !== 'function') {
+    const message = `${manager}.get is not a function on this build (typeof ${typeof getter.value})`;
+    graph.errors.push(`${at}: ${message}`);
+    disclose('manager-get-missing', message);
+    return;
+  }
+  let instance: unknown;
+  try {
+    instance = await settle(getter.value.call(ns, node.primitiveId));
+  } catch (error) {
+    const message = `${manager}.get(${JSON.stringify(node.primitiveId)}) threw ${probeErrorText(error)}`;
+    graph.errors.push(`${at}: ${message}`);
+    disclose('manager-get-failed', message);
+    return;
+  }
+  if (!instance || (typeof instance !== 'object' && typeof instance !== 'function')) {
+    const message = `${manager}.get(${JSON.stringify(node.primitiveId)}) answered ${probeValueShape(instance)}`;
+    graph.errors.push(`${at}: ${message}`);
+    disclose('instance-absent', message);
+    return;
+  }
+
+  if (!pathBudgetOk(graph, at)) return;
+  const idRead = await getState(instance, 'PrimitiveId');
+  const typeRead = await getState(instance, 'PrimitiveType');
+  const netRead = await getState(instance, 'Net');
+  if (idRead !== node.primitiveId || typeRead !== node.type || netRead !== node.net) {
+    disclose(
+      'instance-mismatch',
+      `${manager}.get(${JSON.stringify(node.primitiveId)}) answered PrimitiveId `
+        + `${JSON.stringify(idRead)}, PrimitiveType ${JSON.stringify(typeRead)}, Net `
+        + `${JSON.stringify(netRead)} — expected ${JSON.stringify(node.primitiveId)}, `
+        + `${JSON.stringify(node.type)}, ${JSON.stringify(node.net)}; the instance is not expanded`,
+    );
+    return;
+  }
+
+  const adjacent = readMember(instance, 'getAdjacentPrimitives');
+  if (adjacent.error !== undefined) {
+    const message = `read getAdjacentPrimitives on ${at}: ${adjacent.error}`;
+    graph.errors.push(`${message}`);
+    disclose('adjacent-unreadable', message);
+    return;
+  }
+  if (typeof adjacent.value !== 'function') {
+    const message = `getAdjacentPrimitives is not a function on ${at} (typeof ${typeof adjacent.value})`;
+    graph.errors.push(message);
+    disclose('adjacent-missing', message);
+    return;
+  }
+
+  const callIndex = graph.nextCall;
+  graph.nextCall += 1;
+  graph.adjacentCalls += 1;
+  let answer: unknown;
+  try {
+    answer = await settle(adjacent.value.call(instance));
+  } catch (error) {
+    const message = `getAdjacentPrimitives() on ${at} threw ${probeErrorText(error)}`;
+    graph.errors.push(message);
+    disclose('adjacent-error', message);
+    return;
+  }
+  if (!Array.isArray(answer)) {
+    const message = `getAdjacentPrimitives() on ${at} answered ${probeValueShape(answer)}, not an array — `
+      + 'an isolated primitive is [] and this is not that';
+    graph.errors.push(message);
+    disclose('adjacent-not-array', message);
+    return;
+  }
+
+  const readings = await pathReadAnswer(graph, answer, pathRefOf(node), 'getAdjacentPrimitives', callIndex, at);
+  await pathClassifyAnswer(graph, node, pathRefOf(node), readings, 'getAdjacentPrimitives', callIndex, endpoints);
+  node.expanded = true;
+}
+
+/** Walk every discovered expandable vertex in `(type, primitiveId)` order. */
+async function pathTraverse(graph: PathGraph, eda: Eda, endpoints: Map<string, PathRef>): Promise<void> {
+  for (;;) {
+    if (graph.stop !== null) return;
+    const next = [...graph.nodes.values()]
+      .filter((node) => node.expandable && !node.expanded && !node.attempted)
+      .sort((a, b) => pathCompare(a, b))[0];
+    if (next === undefined) return;
+    await pathExpand(graph, next, eda, endpoints);
+  }
+}
+
+/**
+ * One end's `getConnectedPrimitives(false)` answer: the 559 readout (ids, typed
+ * items, count, truncation, `unreadable`) plus the graph classification of the
+ * same single call — one host call per end, never two.
+ */
+async function pathDirectAnswer(
+  graph: PathGraph,
+  row: ConnectionPadRow,
+  sourceNode: PathGraphNode | null,
+  endpoints: Map<string, PathRef>,
+): Promise<{ readout: Record<string, unknown> | null; truncated: boolean; reported: number }> {
+  if (row.pad === null) return { readout: null, truncated: false, reported: 0 };
+  const end = row.end;
+  const fail = (message: string) => {
+    graph.errors.push(`${end.key}: ${message}`);
+    return { readout: { ok: false, error: message } as Record<string, unknown>, truncated: false, reported: 0 };
+  };
+  const member = readMember(row.pad, 'getConnectedPrimitives');
+  if (member.error !== undefined) {
+    return fail(`read getConnectedPrimitives on the ComponentPad for ${end.text}: ${member.error}`);
+  }
+  if (typeof member.value !== 'function') {
+    return fail(
+      `getConnectedPrimitives is not a function on the ComponentPad resolved for ${end.text} `
+        + `(typeof ${typeof member.value})`,
+    );
+  }
+  const callIndex = graph.nextCall;
+  graph.nextCall += 1;
+  graph.directCalls += 1;
+  let answer: unknown;
+  try {
+    answer = await settle(member.value.call(row.pad, false));
+  } catch (error) {
+    return fail(`getConnectedPrimitives(false) threw ${probeErrorText(error)}`);
+  }
+  if (!Array.isArray(answer)) {
+    return fail(
+      `getConnectedPrimitives(false) answered ${probeValueShape(answer)}, not an array — an empty `
+        + 'connection list is [] and this is not that',
+    );
+  }
+
+  const sourceRef: PathRef | null = row.primitiveId === null
+    ? null
+    : { primitiveId: row.primitiveId, type: row.type ?? '' };
+  const readings = await pathReadAnswer(
+    graph,
+    answer,
+    sourceRef === null || sourceRef.type === '' ? null : sourceRef,
+    'getConnectedPrimitives',
+    callIndex,
+    `from pad ${end.text}`,
+  );
+
+  const items: Array<{ primitiveId: string; type: string }> = [];
+  const seen = new Set<string>();
+  let unreadable = 0;
+  for (const item of readings) {
+    const reading = item.reading;
+    if (!reading.ok || reading.ref === null) {
+      unreadable += 1;
+      continue;
+    }
+    if (seen.has(reading.ref.primitiveId)) continue;
+    seen.add(reading.ref.primitiveId);
+    items.push({ primitiveId: reading.ref.primitiveId, type: reading.ref.type });
+  }
+  const readout: Record<string, unknown> = {
+    ok: true,
+    count: answer.length,
+    ids: [...new Set(items.map((item) => item.primitiveId))].sort(),
+    truncated: answer.length > PATH_PER_CALL_CAP,
+    items,
+    ...(unreadable ? { unreadable } : {}),
+  };
+  await pathClassifyAnswer(
+    graph,
+    sourceNode,
+    sourceRef,
+    readings,
+    'getConnectedPrimitives',
+    callIndex,
+    endpoints,
+  );
+  return { readout, truncated: answer.length > PATH_PER_CALL_CAP, reported: items.length };
+}
+
+/**
+ * `pcb.path_probe` — the host half of the 562 live path: adjacency evidence for
+ * a multi-hop copper walk between two `REF.PAD` ends, and nothing else.
+ *
+ * Same request shape, same page guard and the same single component scan as 559
+ * (`connectionParams` + `requirePcbFocus` + one `scanConnectionPads`), so an end
+ * is resolved by designator **and** pad number and a truncated or partly
+ * unreadable walk can never be reported as "not present". The answer adds
+ * `nodes` / `edges` / `seeds` / `frontier` / `coverage` and still carries no
+ * verdict: the Finder is Python's, and a one-way adjacency stays one-way here.
+ */
+export const pcbPathProbe: ActionHandler = async (params, eda) => {
+  const { from, to } = connectionParams(params);
+  const page = await requirePcbFocus(eda);
+  const scan = await scanConnectionPads(eda, [from, to]);
+  const graph: PathGraph = {
+    nodes: new Map(),
+    edges: [],
+    unknown: [],
+    ignored: [...scan.ignored],
+    errors: [...scan.readErrors.map((line) => `scan: ${line}`)],
+    directCalls: 0,
+    adjacentCalls: 0,
+    nextCall: 0,
+    perCallTruncated: 0,
+    layerUnreadable: 0,
+    nodesTruncated: false,
+    edgesTruncated: false,
+    stop: null,
+    startedAt: Date.now(),
+  };
+
+  // The endpoints are vertices of the walk, so a candidate naming one of them is
+  // an edge endpoint rather than an unsupported intermediate pad.
+  const endpoints = new Map<string, PathRef>();
+  const sourceByEnd = new Map<string, PathGraphNode>();
+  const endNets: Record<string, string | null> = {};
+  for (const row of scan.rows) {
+    endNets[row.end.key] = row.net;
+    if (row.status === 'resolved' && row.pad !== null) {
+      if (row.net === null) {
+        graph.unknown.push({
+          code: 'net-missing',
+          end: row.end.key,
+          primitiveId: row.primitiveId,
+          type: row.type,
+          detail: 'the resolved pad read no net, so it cannot anchor a walk (§4: every vertex carries the net)',
+        });
+        continue;
+      }
+      if (row.primitiveId === null || row.type === null || !CONNECTION_PAD_TYPES.has(row.type)) {
+        graph.unknown.push({
+          code: 'endpoint-type-unknown',
+          end: row.end.key,
+          primitiveId: row.primitiveId,
+          type: row.type,
+          detail: 'the resolved pad read no usable PrimitiveType, so its vertex identity is incomplete',
+        });
+        continue;
+      }
+      const ref: PathRef = { primitiveId: row.primitiveId, type: row.type };
+      const layerRead = await getState(row.pad, 'Layer');
+      const layer = typeof layerRead === 'string' || typeof layerRead === 'number' ? layerRead : null;
+      const added = pathAddNode(graph, { ref, net: row.net, layer, expandable: false });
+      endpoints.set(ref.primitiveId, ref);
+      if (added.node !== null) sourceByEnd.set(row.end.key, added.node);
+    } else if (row.status === 'unavailable' || row.status === 'error') {
+      if (row.error) graph.errors.push(`${row.end.key}: ${row.error}`);
+    }
+  }
+
+  const ends: Array<Record<string, unknown>> = [];
+  const directTruncated: Record<string, boolean> = { from: false, to: false };
+  const directReported: Record<string, number> = { from: 0, to: 0 };
+  for (const row of scan.rows) {
+    const direct = await pathDirectAnswer(graph, row, sourceByEnd.get(row.end.key) ?? null, endpoints);
+    directTruncated[row.end.key] = direct.truncated;
+    directReported[row.end.key] = direct.reported;
+    ends.push({
+      ref: { designator: row.end.designator, pad: row.end.pad },
+      status: row.status,
+      ...(row.error === undefined ? {} : { error: row.error }),
+      resolution: row.resolution,
+      pad: row.pad === null
+        ? null
+        : {
+          primitiveId: row.primitiveId,
+          padNumber: row.padNumber,
+          net: row.net,
+          type: row.type,
+        },
+      direct: direct.readout,
+    });
+  }
+
+  await pathTraverse(graph, eda, endpoints);
+
+  const byOrder = (a: PathGraphNode, b: PathGraphNode) => pathCompare(a, b);
+  const nodes = [...graph.nodes.values()].sort(byOrder).map((node) => ({
+    primitiveId: node.primitiveId,
+    type: node.type,
+    net: node.net,
+    layer: node.layer,
+  }));
+  const seeds = [...graph.nodes.values()]
+    .filter((node) => node.seed)
+    .sort(byOrder)
+    .map((node) => pathRefOf(node));
+  const frontier = [...graph.nodes.values()]
+    .filter((node) => node.expandable && !node.expanded)
+    .sort(byOrder)
+    .map((node) => pathRefOf(node));
+
+  const scanComplete = !scan.truncated && scan.readErrors.length === 0;
+  const resolvedEnds = scan.rows.every((row) => row.status === 'resolved');
+  const directOk = ends.every((end) => {
+    const direct = end.direct as Record<string, unknown> | null;
+    return direct !== null && direct.ok === true;
+  });
+  const fromNet = endNets.from ?? null;
+  const toNet = endNets.to ?? null;
+  const coverage = {
+    scan: {
+      manager: 'pcb_PrimitiveComponent',
+      cap: PROBE_COMPONENT_CAP,
+      components: scan.components,
+      truncated: scan.truncated,
+      readErrors: scan.readErrors.length,
+      complete: scanComplete,
+    },
+    direct: {
+      perCall: PATH_PER_CALL_CAP,
+      calls: graph.directCalls,
+      reported: { from: directReported.from, to: directReported.to },
+      truncated: { from: directTruncated.from, to: directTruncated.to },
+    },
+    adjacent: {
+      perCall: PATH_PER_CALL_CAP,
+      calls: graph.adjacentCalls,
+      cap: PATH_ADJACENT_CAP,
+    },
+    nodes: { count: graph.nodes.size, cap: PATH_VERTEX_CAP, truncated: graph.nodesTruncated },
+    edges: { count: graph.edges.length, cap: PATH_EDGE_CAP, truncated: graph.edgesTruncated },
+    perCallTruncated: graph.perCallTruncated,
+    budget: {
+      capMs: PATH_TIME_BUDGET_MS,
+      elapsedMs: Date.now() - graph.startedAt,
+      exhausted: graph.stop === null ? null : graph.stop.budget,
+    },
+    nets: { from: fromNet, to: toNet, same: fromNet !== null && fromNet === toNet },
+    layerUnreadable: graph.layerUnreadable,
+    seeds: seeds.length,
+    frontier: frontier.length,
+    unknown: graph.unknown.length,
+    ignored: graph.ignored.length,
+    errors: graph.errors.length,
+    // The one summary a caller may read as "nothing was withheld": a complete
+    // scan, both ends resolved and readable, every candidate classified without
+    // an unknown, no cap hit, no budget exhaustion and nothing left unexpanded.
+    complete: scanComplete && resolvedEnds && directOk
+      && graph.unknown.length === 0 && graph.errors.length === 0
+      && graph.perCallTruncated === 0 && !graph.nodesTruncated && !graph.edgesTruncated
+      && graph.stop === null && frontier.length === 0,
+  };
+
+  return {
+    page,
+    readOnly: true,
+    from: ends[0],
+    to: ends[1],
+    nodes,
+    edges: graph.edges,
+    seeds,
+    frontier,
+    coverage,
+    unknown: graph.unknown,
+    ignored: graph.ignored,
+    errors: graph.errors,
+  };
+};
+
+// --------------------------------------------------------------------------
 // 006: schematic candidate-model reads
 // --------------------------------------------------------------------------
 
@@ -11887,6 +12729,14 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     // is not on `PROBE_CALL_ACTIONS` — that list exists to reach a read through
     // a daemon that has not been restarted, and this action is not one yet.
     'pcb.connection_probe': bind(pcbConnectionProbe),
+    // 562A: the multi-hop sibling of the line above. Same closed request, same
+    // page guard, same single component scan, and the same refusal to answer
+    // with a verdict — it collects typed vertices and per-call adjacency edges
+    // (`nodes` / `edges` / `seeds` / `frontier` / `coverage`) so the Python side
+    // can run BFS and apply 562 §5.2's reciprocity rule. `getEntireTrack` is not
+    // called at all (559B), no design is written, and a cap or a read failure is
+    // disclosed as `unknown`/`frontier` instead of a silently partial graph.
+    'pcb.path_probe': bind(pcbPathProbe),
     'export.screenshot': bind(exportScreenshot),
     'export.render': bind(exportRender),
     'canvas.highlight': bind(canvasHighlight),

@@ -278,6 +278,92 @@ def register_pcb_parser(sub: Any) -> None:
         "--port", type=int, default=None, help="Daemon port (default 61190)."
     )
 
+    path = pcb_sub.add_parser(
+        "path",
+        help=(
+            "Online, read-only multi-hop copper path between two pads "
+            "(0 CONNECTED / 2 NOT_PROVEN / 3 INDETERMINATE or refused)."
+        ),
+        description=(
+            "Read-only, online, no report file: is there an ordered, hop-by-hop "
+            "sourced copper path between these two named pads of the focused PCB? "
+            "The answer is one machine JSON on stdout (`schema` = "
+            "`boardwise.pcbLivePath/1`) and one of three states. `CONNECTED` (exit "
+            "0) means a walk was found whose every hop is backed by a reciprocal "
+            "host answer — a pad's own `getConnectedPrimitives(false)` naming a "
+            "Line, or two vertices whose `getAdjacentPrimitives()` name each "
+            "other — and every hop carries the host call it came from. An "
+            "unrelated gap does not overturn a positive answer but is disclosed "
+            "beside it (`coverage.partial`). `NOT_PROVEN` (exit 2) means the whole "
+            "reachable legal graph was exhausted with no truncation, no error, no "
+            "unexpanded `frontier` and both ends complete — it says 「在这张已证图上"
+            "没有找到路径」, **not 「开路」**: Arc, pad↔via contact, poured copper and "
+            "every unproven type are named in `unknown`/`ignored`, so read `scope` "
+            "before quoting a negative. `INDETERMINATE` (exit 3) is the honest "
+            "default: an input that does not hold (an end that is not exactly one "
+            "pad, the same pad twice, two nets, a failed direct call) or any "
+            "evidence gap that could change a negative answer. `coverage.complete` "
+            "is the connector's own summary and is never a premise — every "
+            "truncation is re-derived from the individual readings. A **refusal** "
+            "is a different thing and never prints a verdict: a focus that is not "
+            "a read-only PCB page, a missing connector, an older build without the "
+            "action and a malformed REF.PAD each write one line on stderr with an "
+            "**empty stdout** at exit 3. The focused PCB **is** the board "
+            "identity: there is no FILE, no `--board` and no `--live`, the command "
+            "never opens or switches a document, and it never writes a design — "
+            "the only two actions it reaches are `sys.probe` (the version pair, "
+            "whose unreadable half is named in `missing` with a reason in `error`, "
+            "and which never changes the state) and the `risk: read` "
+            "`pcb.path_probe`. `--json PATH` writes that same JSON to PATH through "
+            "a sibling temporary file and `os.replace` and leaves stdout empty; a "
+            "write that fails names the reason at exit 3, prints no state and "
+            "discloses the temporary file it left behind (it is never deleted "
+            "here)."
+        ),
+    )
+    path.add_argument(
+        "--from",
+        dest="from_ref",
+        required=True,
+        metavar="REF.PAD",
+        help="One end as DESIGNATOR.PAD, for example U9.2.",
+    )
+    path.add_argument(
+        "--to",
+        dest="to_ref",
+        required=True,
+        metavar="REF.PAD",
+        help="The other end as DESIGNATOR.PAD, for example CN3.1.",
+    )
+    path.add_argument(
+        "--project",
+        default="",
+        help=(
+            "Which editor project to ask, by name or uuid (023). Passed to the "
+            "daemon's router; a mismatch is refused there, never re-routed."
+        ),
+    )
+    path.add_argument(
+        "--instance",
+        default="",
+        help="The same choice spelled as the window key `bridge status` prints.",
+    )
+    path.add_argument(
+        "--port", type=int, default=None, help="Daemon port (default 61190)."
+    )
+    path.add_argument(
+        "--json",
+        dest="json_path",
+        default="",
+        metavar="PATH",
+        help=(
+            "Write the same JSON to PATH instead of stdout, through a temporary "
+            "file in the same directory and an atomic replace. The parent "
+            "directory may be created; a failed write exits 3 without printing a "
+            "state and names the temporary file it left behind."
+        ),
+    )
+
 
 def dispatch_pcb(
     args: argparse.Namespace,
@@ -289,6 +375,10 @@ def dispatch_pcb(
         from .. import pcb_connection
 
         return pcb_connection.run_cli_connection(args, bridge=bridge)
+    if getattr(args, "pcb_command", "") == "path":
+        from .. import pcb_path
+
+        return pcb_path.run_cli_path(args, bridge=bridge)
     if getattr(args, "pcb_command", "") == "net-path":
         from .. import pcb_netpath
 

@@ -74,7 +74,9 @@ def test_owner_manifest_covers_the_two_command_modules():
     # count is pinned in all three command-module anchors on purpose.
     # 550 added two more (`core/netpath.py` shared, `pcb_netpath.py` assembly).
     # beta 2 adds agentadjusted (draw), v4facts (draw), v4circuitspec (shared).
-    assert len(data["modules"]) == 157
+    # 559 adds `core/connection.py` (shared) and `pcb_connection.py` (assembly) — 159.
+    # 562 adds `core/livepath.py` (shared) and `pcb_path.py` (assembly) — 161.
+    assert len(data["modules"]) == 161
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

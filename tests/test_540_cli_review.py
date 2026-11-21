@@ -76,7 +76,8 @@ def test_owner_manifest_covers_review_commands():
     # three command-module anchors on purpose.
     # beta 2 adds agentadjusted (draw), v4facts (draw), v4circuitspec (shared).
     # 559 adds `core/connection.py` (shared) and `pcb_connection.py` (assembly) — 159.
-    assert len(data["modules"]) == 159
+    # 562 adds `core/livepath.py` (shared) and `pcb_path.py` (assembly) — 161.
+    assert len(data["modules"]) == 161
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

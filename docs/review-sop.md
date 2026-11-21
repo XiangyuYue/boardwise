@@ -705,6 +705,25 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   DSH 对应工具 `boardwise_pcb_connection` 已由 561 接入同一 CLI（`from`/`to` 必填，
   `project`/`instance`/`port` 可选）；适配只传 argv 与文本结果，不在 TS 复制 direct 判据，
   部署与发版另批。
+- **两个焊盘之间有没有一条多跳铜路径**（562 起，在线只读，不写报告文件）：`boardwise pcb path
+  --from REF.PAD --to REF.PAD [--project 工程名|uuid] [--instance 窗口] [--port N] [--json PATH]`。
+  没有 `FILE`、没有 `--live`、没有 `--board`——**焦点 PCB 就是板身份**，不自动切页、不自动选板。
+  动作面同样只有两个 `risk: read`：先 `sys.probe`（版本对写进 `source.versions`，读不到就是 `null` 并
+  在 `missing`/`error` 点名，不编版本、也不改变三态），再 `pcb.path_probe`（参数封闭为 `from`/`to`，
+  只给**图证据**：`nodes[]`/`edges[]`（有向，逐跳带 `method`/`kind`/`callIndex`/`hostOrder`）/
+  `seeds[]`/`frontier[]`/`coverage`——**它自己没有任何 verdict，也永不调 `getEntireTrack`**）。
+  stdout 一份 `schema=boardwise.pcbLivePath/1` JSON；给 `--json PATH` 时同一份 JSON 走**同目录临时文件 +
+  `os.replace`** 原子写入 PATH、**stdout 为空**，写失败具名退 `3`、**不打印任何三态**，并如实披露留下的
+  临时文件路径（CLI 侧不 unlink/rm 清理，父目录允许创建）。三态只在拿到 probe 响应后才有：
+  `CONNECTED` 退 `0`（每一跳都有宿主自己的往返证据——焊盘的 `getConnectedPrimitives(false)`，或两端
+  `getAdjacentPrimitives()` 互相认到；**单向邻接不算**，网名也不是证据）；`NOT_PROVEN` 退 `2`（已证图
+  穷尽、无截断、无 unknown、无未展开 `frontier`、两端完整），它只说「在这张已证图上没有找到路径」，
+  **不是开路**——Arc、pad↔via 接触、铺铜和一切未裁定类型都在 `unknown`/`ignored` 里，引用否定前先看
+  `scope`；`INDETERMINATE` 退 `3`（某端不是唯一焊盘、两端同脚、异网、direct 失败，或任何可能翻转否定
+  结论的证据缺口）。前置拒绝（没 connector、旧 connector 没这个 action、REF.PAD 不合法、焦点不是只读
+  PCB 页）→ stderr 一行、**stdout 为空**、退 `3`，不会给你一份带三态的 JSON 让你以为问过了。
+  `coverage.complete` 只是 connector 自己的单字段摘要、**不是**否定结论的依据，Python 侧逐项重算。
+  DSH 工具面本批不跟。
 - **`sch.readback` 的 value/mpn 是 087E 起的可选键，缺键才走归档**（pits #3）：**新 connector** 的每行
   可选带 `value` / `mpn` / `valueSource` / `mpnSource`（`value` ← `OtherProperty['Value']`，`mpn` 先
   `ManufacturerId`、空则回退 `OtherProperty` 的料号键，空白是 `null` 不是空串）——这两项能对上，

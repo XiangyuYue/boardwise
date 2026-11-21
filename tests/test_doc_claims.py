@@ -1754,11 +1754,13 @@ def test_cli_tree_sees_pcb_gate_as_a_subcommand():
     has to see both, and a third subcommand must come here deliberately. 559
     added that third one — `connection`, the online read-only pad-to-pad
     evidence — so the pinned set is the three, and a fourth still has to come
-    here deliberately.
+    here deliberately. 562 added that fourth one: `path`, the online read-only
+    multi-hop copper path (`pcb.path_probe`), so the set is now four and a fifth
+    still has to come here deliberately.
     """
     tops, tree = _cli_commands()
     assert "pcb" in tops, sorted(tops)
-    assert tree["pcb"] == {"gate", "net-path", "connection"}, tree["pcb"]
+    assert tree["pcb"] == {"gate", "net-path", "connection", "path"}, tree["pcb"]
 
 
 def test_pcb_connection_docs_name_the_dsh_adapter():

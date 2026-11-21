@@ -1,9 +1,11 @@
 # 交接记忆 —— 换 harness / 开新会话先读这份
 
-> **当前路由（2026-11-20，561 DSH 适配已验收；下方 556–560 为历史验收记录）**：
-> 主仓 `E:/boardwise`，HEAD **`0ac8973`**，`main` 相对 `origin/main` **ahead 3**——`9f73ede`、`14e8f39`、`0ac8973` 均**未推送**。
-> 提交归属按事实读：550B 在 `9f73ede`；552–555 在 `14e8f39`；556–560 的审查/shared 归属在 `0ac8973`；087E/F 在 `3d4a0d5`（已在 `origin/main`）。绘制线 `v4facts` 特征 hunks 仍属绘制线工作树，没有夹带进 `0ac8973`。
-> **561 DSH `boardwise_pcb_connection` 工作树完成、未提交未推送**：14 工具注册，`TEXT_OUTPUT + executeCli`，direct-only 与 NOT_PROVEN≠开路不变；DSH **218 passed / 1 skipped** + typecheck/build，文档/同步 **58 passed**。父变异撤注册 **13 failed / 12 passed**、argv 换端 **4 failed / 7 passed**，均 cp+SHA 恢复并复绿。证据 `evidence/561/parent-validation.md`。
+> **当前路由（562A–D 与真机均完成，工作树待提交；下方 556–561 为历史验收记录）**：
+> 主仓 `E:/boardwise`，HEAD **`0b21342`** 与 `origin/main` 一致。550B=`9f73ede`、552–555=`14e8f39`、556–560=`0ac8973`、561=`0b21342` 均已推送；087E/F=`3d4a0d5`。绘制线与其他 owner 的未提交 hunks 仍保留，不整文件还原或格式化。
+> **562A Connector `pcb.path_probe` 工作树完成**：主代理三文件 **52 passed**，Arc/预算两项变异各 1 红后恢复；`getEntireTrack=0`，输出仅图证据，无 verdict/path。
+> **562B Python/CLI 工作树完成**：`core/livepath.py` 双向邻接+BFS，`boardwise pcb path`、protocol、owners=161 与 `--json` 原子写入已接通；十三文件 **376 passed**、Connector **876 passed**。父变异单向 2 红/截断16红、错action16红/写失败1红，均 cp+SHA 恢复并复绿。证据 `evidence/562a/`、`evidence/562b1/`、`evidence/562b2/`。
+> **562D 对抗审查三处小修完成**：两遍扫描消 `Pad` 伪 non-reciprocal、`calls > cap` 才额外判截断、JSON 写入覆盖 `OSError+ValueError`；主代理 **85 passed**，单遍与 `>= cap` 变异先红后恢复。跨层只留 562C 真机探针，没有新增 cross-layer 生产规则。
+> **562C 真机验收完成，DSH 适配明确不做**：新实例 `inst-001605508-glojp393` 激活后，direct 与多 Line＋Via 均 CONNECTED（8 hops/1 via、内部图元与离线一致），分离负例 NOT_PROVEN，U5.2 Pad↔Via 为 INDETERMINATE；20 组跨层候选直接边均为 0，Arc 未启用。非 PCB 焦点拒绝、原 P1 恢复、设计写零，开发态 daemon 已停止。最终 Python **35 failed / 11997 passed / 26 skipped / 2 xfailed / 3 errors**，差分仅移除 shared owner 计数红，其他归绘制线；DSH 218/1、Rust 177/4 ignored。证据 `evidence/562c/live-acceptance.md`，真实容器只留 `.tmp_562_live/`。未提交、未推送、未部署、未发布。
 > **562 多跳图合同已立、实现未开工**：任务书 `tasks/562_live_pcb_path_graph.md` 已定独立 `pcb.path_probe` / `pcb path` / `boardwise.pcbLivePath/1`、双向邻接 proof、固定预算与真实负例；不得恢复 entireTrack 正证据。DSH 部署/pack、推送与发布仍需岳逐次批准。
 > 556：`page_y` 公有化 + CLI 合同一次生成；父两变异（私有导入 1 红、去负号 4 红）后 **50 passed** 恢复。557：台账与 handoff 路由，文档/工作区 **67 passed**。
 > 558/558B：义务四类 + 机械三通道 + 连接器 pinout；真实重算 unreviewed **23→23**、needs **15→11**、`verdict=incomplete` 与三份 `machine_verified` 不变；父验 135 passed、变异 A 4 红 / B 2 红，558B 精确族词后 EST026 三行转 `connector-pinout`（父移除词 3 红、聚焦 68 passed）。三份机器档已由岳签核为 verified，U8 身份与 EST026 原始判类未伪造，机械件退出 hunt 工作清单**不等于**审查通过。
