@@ -315,3 +315,34 @@ def test_pair_authorize_is_a_daemon_owned_write_that_takes_a_code():
     assert action.design_write is False
     assert "confirm" not in action.params
     assert "pairCodeRequired" in action.summary
+
+
+def test_the_pin_nc_writer_is_a_narrow_parent_scoped_write():
+    """044: `sch.set_pin_no_connected` writes one pin flag and nothing else.
+
+    The F1 rebuild's real NC crosses need this write, and the entry is the whole
+    advertised surface. It must stay a `write` (it changes existing content, not
+    a document's lifecycle), must name the page, the parent and the pin, must
+    carry the two identity claims the handler checks, and must not advertise any
+    coordinate / net / generic property parameter — the handler refuses unknown
+    parameters by name, and the catalogue is where a caller reads that.
+    """
+    action = next(a for a in ACTIONS if a.name == "sch.set_pin_no_connected")
+    assert action.owner == "connector"
+    assert action.risk == "write", "setting a pin's NC flag changes the design"
+    assert action.params == (
+        "pageUuid", "parentPrimitiveId", "primitiveId",
+        "expectedPinNumber", "noConnected", "expectedNoConnected",
+    )
+    assert "mismatched" in action.returns, "an unconfirmed write must be reportable"
+    assert "applied" in action.returns, "the read-back verdict must be advertised"
+    assert "coordinatesBefore" in action.returns, (
+        "the V4.1.100 coordinate evidence must be part of the answer"
+    )
+    assert "coordinatesAfter" in action.returns, (
+        "an after-coordinate that moved must be reportable, not inferred"
+    )
+    for forbidden in ("x", "y", "net", "pinNumber", "rotation"):
+        assert forbidden not in action.params, (
+            f"{forbidden} must not be advertised — only noConnected is forwarded"
+        )

@@ -1032,6 +1032,46 @@ ACTIONS: tuple[Action, ...] = (
         risk="read",
     ),
     Action(
+        name="sch.set_pin_no_connected",
+        summary=(
+            "Write ONE placed pin's native NoConnected cross "
+            "(sch_PrimitivePin.modify). Only noConnected changes: the pin's "
+            "current x/y are read from the parent's own pin list and repeated in "
+            "the same modify so the host does not re-derive the position "
+            "(V4.1.100 measured an off-page NC cross otherwise; restoring the "
+            "flag restored the coordinate). The parent list must contain "
+            "primitiveId, the pin's PinNumber must equal expectedPinNumber and, "
+            "when given, its current NoConnected must equal expectedNoConnected — "
+            "otherwise nothing is written. Success is a fresh parent-pin read "
+            "equal to the request — both NoConnected and the coordinates; a "
+            "non-boolean/unequal read-back or an x/y that moved is "
+            "CONNECTOR_ERROR with applied:false and mismatched, because an NC "
+            "cross on a re-derived pin is not the requested edit. x/y/net and "
+            "every other property are not caller parameters and are refused by "
+            "name. Added for the F1/STM32G431 rebuild's real NC crosses."
+        ),
+        params=(
+            "pageUuid", "parentPrimitiveId", "primitiveId",
+            "expectedPinNumber", "noConnected", "expectedNoConnected",
+        ),
+        returns=(
+            "{pageUuid, parentPrimitiveId, primitiveId, pinNumber, before, "
+            "requested, after, coordinatesBefore, coordinatesAfter, applied, "
+            "mismatched, returned?, modifyError?, note?}"
+        ),
+        params_schema=(
+            "pageUuid, parentPrimitiveId, primitiveId, expectedPinNumber and "
+            "noConnected are required; expectedPinNumber is a string, noConnected "
+            "a strict boolean; expectedNoConnected is optional and, when present, "
+            "must be a strict boolean equal to the pin's pre-write value. The "
+            "pin's current x/y are not parameters: they are read internally (a "
+            "coordinate that cannot be read refuses the write before it) and "
+            "repeated unchanged so the host keeps the pin in place. Unknown "
+            "parameters are refused."
+        ),
+        risk="write",
+    ),
+    Action(
         name="lib.device.get",
         summary=(
             "Recon (read-only): one library device, dumped whole. Its "

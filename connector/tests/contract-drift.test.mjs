@@ -126,6 +126,20 @@ test('the catalogue and the connector registry list the same actions', () => {
   assert.deepEqual(registry, connectorOwned);
 });
 
+test('the pin NC write is registered, catalogued and documented', () => {
+  // 044 adds exactly one action, and this pins its three surfaces together in
+  // one place: the generic test above would catch a one-sided addition, but
+  // naming the action here makes a "the handler exists yet nobody can reach it"
+  // regression say which action went missing.
+  const name = 'sch.set_pin_no_connected';
+  const catalogue = catalogueEntries(read(PROTOCOL)).map((entry) => entry.name);
+  const registry = registryKeys(read(ACTIONS_TS));
+  const documented = documentedActions(read(BRIDGE_DOC));
+  assert.ok(catalogue.includes(name), 'missing from ACTIONS');
+  assert.ok(registry.includes(name), 'missing from the connector registry');
+  assert.ok(documented.includes(name), 'missing from docs/bridge.md §4');
+});
+
 test('the documentation table lists exactly the catalogue', () => {
   // `docs/bridge.md` is the fifth touchpoint of adding an action, and the one
   // a reader trusts. Measured 2026-09-16: eleven actions were missing from it

@@ -1506,6 +1506,444 @@ export const schComponentPins: ActionHandler = async (params, eda) => {
 };
 
 /**
+ * `sch.set_pin_no_connected` — one placed pin's NoConnected flag, nothing else.
+ *
+ * The F1/STM32G431 rebuild needs 22 real NC crosses on U1, and the bridge had
+ * no write for the flag: `sch.component_pins` reads `NoConnected`,
+ * `sch.modify_primitive` writes pose only, and `sch.set_component_attribute`
+ * reaches component attributes, not a 器件引脚图元. This is the narrow action
+ * the only property that changes is `noConnected` — one of the two writable
+ * members the type package declares on a pin (the other is `pinNumber`) —
+ * after the caller's identity claims have been checked against the **parent
+ * component's own** pin list.
+ *
+ * Why the parent read is mandatory: a bare id handed to `modify` writes
+ * whatever primitive that id names, and "the first pin" is not "the pin the
+ * caller meant". The handler re-reads
+ * `sch_PrimitiveComponent.getAllPinsByPrimitiveId(parentPrimitiveId)` and
+ * requires `primitiveId` to be one of its pins, that pin's `PinNumber` to equal
+ * `expectedPinNumber`, and — when given — its current `NoConnected` to equal
+ * `expectedNoConnected`. Any mismatch is an error with **zero writes**; a
+ * missing parent or pin is `NOT_FOUND`, and an unreadable pin id is
+ * `CONNECTOR_ERROR` because absence cannot be claimed from a failed read.
+ *
+ * The pin's **current x/y** are read from that same list and repeated in the
+ * `modify` property. That is a host workaround, not a caller-facing capability:
+ * V4.1.100 measured `modify(id, { noConnected: true })` recomputing the pin
+ * position — R pin2 moved (520,500) → (520,-500) and the NC cross rendered
+ * off-page, and restoring the flag restored the coordinate — so the pre-write
+ * values are passed back unchanged to keep the host from recalculating them.
+ * The caller still cannot pass x/y/net: those parameters are refused by name,
+ * and a pin whose coordinates cannot be read is refused *before* the write.
+ *
+ * `applied` is not the host's answer. `modify` may return `undefined` and land
+ * anyway (measured for components, 2026-09-13), so success is decided by a
+ * fresh parent-pin read: both the flag and the coordinates must read back
+ * equal. A moved pin is never success — the cross would be off-page — so an
+ * x/y mismatch is `CONNECTOR_ERROR` with `applied: false` and `mismatched`,
+ * alongside the non-boolean/unequal `NoConnected` case.
+ */
+export const schSetPinNoConnected: ActionHandler = async (params, eda) => {
+  const pageUuid = requiredString(params, 'pageUuid');
+  const parentPrimitiveId = requiredString(params, 'parentPrimitiveId');
+  const primitiveId = requiredString(params, 'primitiveId');
+  const expectedPinNumber = requiredString(params, 'expectedPinNumber');
+  const rawNoConnected = params?.noConnected;
+  // Strict: `0` / `'false'` / `null` are not "no connection". The flag is the
+  // whole request, so a coerced value would be a state nobody asked for.
+  if (typeof rawNoConnected !== 'boolean') {
+    throw new ActionError('BAD_REQUEST', 'params.noConnected must be a boolean', {
+      param: 'noConnected',
+      value: rawNoConnected === undefined ? null : rawNoConnected,
+    });
+  }
+  const noConnected = rawNoConnected;
+  let expectedNoConnected: boolean | undefined;
+  if ('expectedNoConnected' in (params ?? {})) {
+    const raw = params.expectedNoConnected;
+    if (typeof raw !== 'boolean') {
+      throw new ActionError(
+        'BAD_REQUEST',
+        'params.expectedNoConnected must be a boolean when provided',
+        { param: 'expectedNoConnected', value: raw === undefined ? null : raw },
+      );
+    }
+    expectedNoConnected = raw;
+  }
+  const allowed = new Set([
+    'pageUuid', 'parentPrimitiveId', 'primitiveId', 'expectedPinNumber',
+    'noConnected', 'expectedNoConnected',
+  ]);
+  const unexpected = Object.keys(params ?? {}).filter((key) => !allowed.has(key));
+  if (unexpected.length) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      `sch.set_pin_no_connected writes only noConnected — refusing ${unexpected.join(', ')}; `
+        + 'the pin coordinates are preserved internally, not accepted from the caller',
+      { unexpected },
+    );
+  }
+
+  await guardPage(eda, pageUuid);
+
+  const componentNsRead = readMember(eda, 'sch_PrimitiveComponent');
+  const componentNs = componentNsRead.value;
+  if (componentNsRead.error !== undefined || !componentNs || typeof componentNs !== 'object') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      `sch_PrimitiveComponent is not available (${componentNsRead.error ?? 'absent'})`,
+      { path: 'sch_PrimitiveComponent' },
+    );
+  }
+  const getAllRead = readMember(componentNs, 'getAllPinsByPrimitiveId');
+  const getAllPins = getAllRead.value;
+  if (typeof getAllPins !== 'function') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      `sch_PrimitiveComponent.getAllPinsByPrimitiveId is not available `
+        + `(${getAllRead.error ?? 'not a function'})`,
+      { path: 'sch_PrimitiveComponent.getAllPinsByPrimitiveId' },
+    );
+  }
+
+  // Parent existence is proved when the host exposes `get`; the pin list below
+  // is the membership proof either way, so a host without `get` is not asked
+  // to satisfy a stricter contract than `sch.component_pins` did.
+  const parentGetRead = readMember(componentNs, 'get');
+  const parentGet = parentGetRead.value;
+  if (typeof parentGet === 'function') {
+    let parent: any;
+    try {
+      parent = await settle(parentGet.call(componentNs, parentPrimitiveId));
+    } catch (error) {
+      throw new ActionError(
+        'CONNECTOR_ERROR',
+        `sch_PrimitiveComponent.get(${parentPrimitiveId}) threw: `
+          + `${String((error as Error)?.message ?? error)} — nothing was written`,
+        { pageUuid, parentPrimitiveId },
+      );
+    }
+    if (parent === undefined || parent === null) {
+      throw new ActionError(
+        'NOT_FOUND',
+        `component ${parentPrimitiveId} is not on page ${pageUuid} — nothing was written`,
+        { pageUuid, parentPrimitiveId },
+      );
+    }
+  }
+
+  const readParentPins = async (
+    phase: 'before' | 'after',
+  ): Promise<{ pins: any[] | null; error: string }> => {
+    let listed: any;
+    try {
+      listed = await settle(getAllPins.call(componentNs, parentPrimitiveId));
+    } catch (error) {
+      return {
+        pins: null,
+        error: `getAllPinsByPrimitiveId(${parentPrimitiveId}) threw during ${phase}: `
+          + `${String((error as Error)?.message ?? error)}`,
+      };
+    }
+    if (!Array.isArray(listed)) {
+      return {
+        pins: null,
+        error: `getAllPinsByPrimitiveId(${parentPrimitiveId}) answered `
+          + `${listed === undefined ? 'undefined' : typeof listed} instead of an array during ${phase}`,
+      };
+    }
+    return { pins: listed, error: '' };
+  };
+
+  /**
+   * Locate exactly `primitiveId` in the parent's list and read its identity
+   * fields plus the current coordinates the write must repeat unchanged.
+   */
+  const readPin = async (pins: any[]) => {
+    const errors: string[] = [];
+    const ids: string[] = [];
+    let target: any;
+    for (const pin of pins) {
+      const idRead = readMember(pin, 'getState_PrimitiveId');
+      if (typeof idRead.value !== 'function') {
+        errors.push(`getState_PrimitiveId unavailable${idRead.error ? `: ${idRead.error}` : ''}`);
+        continue;
+      }
+      let idValue: unknown;
+      try {
+        idValue = await settle((idRead.value as () => unknown).call(pin));
+      } catch (error) {
+        errors.push(`getState_PrimitiveId threw: ${String((error as Error)?.message ?? error)}`);
+        continue;
+      }
+      const id = String(idValue ?? '');
+      ids.push(id);
+      if (id === primitiveId) {
+        target = pin;
+        break;
+      }
+    }
+    if (!target) {
+      return { found: false, pinNumber: null, noConnected: null, x: null, y: null, errors, ids };
+    }
+
+    let pinNumber: string | null = null;
+    const numberRead = readMember(target, 'getState_PinNumber');
+    if (typeof numberRead.value === 'function') {
+      try {
+        const value = await settle((numberRead.value as () => unknown).call(target));
+        if (typeof value === 'string') pinNumber = value;
+        else errors.push(`PinNumber is ${value === undefined ? 'undefined' : typeof value}, not a string`);
+      } catch (error) {
+        errors.push(`getState_PinNumber threw: ${String((error as Error)?.message ?? error)}`);
+      }
+    } else {
+      errors.push(`getState_PinNumber unavailable${numberRead.error ? `: ${numberRead.error}` : ''}`);
+    }
+
+    let current: boolean | null = null;
+    const ncRead = readMember(target, 'getState_NoConnected');
+    if (typeof ncRead.value === 'function') {
+      try {
+        const value = await settle((ncRead.value as () => unknown).call(target));
+        if (typeof value === 'boolean') current = value;
+        else errors.push(`NoConnected is ${value === undefined ? 'undefined' : typeof value}, not a boolean`);
+      } catch (error) {
+        errors.push(`getState_NoConnected threw: ${String((error as Error)?.message ?? error)}`);
+      }
+    } else {
+      errors.push(`getState_NoConnected unavailable${ncRead.error ? `: ${ncRead.error}` : ''}`);
+    }
+
+    // V4.1.100: `modify(id, {noConnected})` re-derives the pin position. The
+    // pre-write x/y are read here, required to be finite, and passed back so
+    // the host keeps them; this is not a caller-writable coordinate.
+    const readCoord = async (state: string, label: string): Promise<number | null> => {
+      const member = readMember(target, state);
+      if (typeof member.value !== 'function') {
+        errors.push(`${state} unavailable${member.error ? `: ${member.error}` : ''}`);
+        return null;
+      }
+      try {
+        const value = await settle((member.value as () => unknown).call(target));
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+        errors.push(`${label} is ${value === undefined ? 'undefined' : String(value)}, not a finite number`);
+        return null;
+      } catch (error) {
+        errors.push(`${state} threw: ${String((error as Error)?.message ?? error)}`);
+        return null;
+      }
+    };
+    const x = await readCoord('getState_X', 'X');
+    const y = await readCoord('getState_Y', 'Y');
+
+    return { found: true, pinNumber, noConnected: current, x, y, errors, ids };
+  };
+
+  const beforePins = await readParentPins('before');
+  if (!beforePins.pins) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${beforePins.error} — the parent's pin set is unknown; nothing was written`,
+      { pageUuid, parentPrimitiveId },
+    );
+  }
+  const beforePin = await readPin(beforePins.pins);
+  if (!beforePin.found) {
+    if (beforePin.errors.length) {
+      throw new ActionError(
+        'CONNECTOR_ERROR',
+        `pin ${primitiveId} was not found in component ${parentPrimitiveId}, but `
+          + `${beforePin.errors.length} pin id(s) could not be read — absence cannot be `
+          + 'claimed; nothing was written',
+        { pageUuid, parentPrimitiveId, primitiveId, pinIds: beforePin.ids, readErrors: beforePin.errors },
+      );
+    }
+    throw new ActionError(
+      'NOT_FOUND',
+      `pin ${primitiveId} is not a pin of component ${parentPrimitiveId} on page ${pageUuid} `
+        + `(the parent lists ${beforePin.ids.length} pin(s)) — nothing was written`,
+      { pageUuid, parentPrimitiveId, primitiveId, pinIds: beforePin.ids },
+    );
+  }
+  const before = {
+    pinNumber: beforePin.pinNumber,
+    noConnected: beforePin.noConnected,
+    x: beforePin.x,
+    y: beforePin.y,
+  };
+  if (
+    before.pinNumber === null || before.noConnected === null
+    || before.x === null || before.y === null
+  ) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `pin ${primitiveId} of component ${parentPrimitiveId} cannot be identified, or its `
+        + `NoConnected / coordinates read (${beforePin.errors.join('; ')}) — nothing was written`,
+      { pageUuid, parentPrimitiveId, primitiveId, before, readErrors: beforePin.errors },
+    );
+  }
+  const identityMismatches: Array<{ field: string; expected: unknown; actual: unknown }> = [];
+  if (before.pinNumber !== expectedPinNumber) {
+    identityMismatches.push({
+      field: 'pinNumber', expected: expectedPinNumber, actual: before.pinNumber,
+    });
+  }
+  if (expectedNoConnected !== undefined && before.noConnected !== expectedNoConnected) {
+    identityMismatches.push({
+      field: 'noConnected', expected: expectedNoConnected, actual: before.noConnected,
+    });
+  }
+  if (identityMismatches.length) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `pin ${primitiveId} is not the one this call described `
+        + `(${identityMismatches.map((m) => `${m.field}: expected ${JSON.stringify(m.expected)}, `
+          + `found ${JSON.stringify(m.actual)}`).join('; ')}) — nothing was written`,
+      {
+        pageUuid, parentPrimitiveId, primitiveId, expectedPinNumber,
+        expectedNoConnected: expectedNoConnected ?? null, before,
+        mismatched: identityMismatches,
+      },
+    );
+  }
+
+  // `modify` is resolved *before* the write: a host without it must be refused
+  // as a structural fact, not take a call and report a hopeful answer. An old
+  // connector has no handler at all, so the daemon answers UNKNOWN_ACTION
+  // instead of this action claiming success.
+  const pinNsRead = readMember(eda, 'sch_PrimitivePin');
+  const pinNs = pinNsRead.value;
+  if (pinNsRead.error !== undefined || !pinNs || typeof pinNs !== 'object') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      `sch_PrimitivePin is not available (${pinNsRead.error ?? 'absent'}) — nothing was written`,
+      { path: 'sch_PrimitivePin' },
+    );
+  }
+  const modifyRead = readMember(pinNs, 'modify');
+  const modify = modifyRead.value;
+  if (typeof modify !== 'function') {
+    throw new ActionError(
+      'NOT_IMPLEMENTED',
+      `sch_PrimitivePin.modify is not available (${modifyRead.error ?? 'not a function'}) — `
+        + 'this connector cannot write NoConnected',
+      { path: 'sch_PrimitivePin.modify' },
+    );
+  }
+
+  let returned: any;
+  let modifyError = '';
+  try {
+    // One id and one property object. Only `noConnected` changes; x/y are the
+    // pre-write values repeated because the host re-derives the pose from a
+    // modify that omits them (V4.1.100 measured the pin jumping to -y). No net,
+    // no parent id, and nothing merged from `params`.
+    returned = await settle(modify.call(pinNs, primitiveId, {
+      noConnected,
+      x: before.x,
+      y: before.y,
+    }));
+  } catch (error) {
+    // A throw is not proof of "did not happen" — the fresh read below decides.
+    modifyError = `${(error as Error)?.name ?? 'Error'}: ${String((error as Error)?.message ?? error)}`;
+  }
+
+  const afterPins = await readParentPins('after');
+  const mismatched: Array<{ field: string; expected: unknown; actual: unknown; error?: string }> = [];
+  let after: boolean | null = null;
+  let afterCoordinates: { x: number | null; y: number | null } | null = null;
+  if (!afterPins.pins) {
+    mismatched.push({
+      field: 'noConnected', expected: noConnected, actual: null,
+      error: `${afterPins.error} — the write cannot be confirmed`,
+    });
+  } else {
+    const afterPin = await readPin(afterPins.pins);
+    if (!afterPin.found) {
+      mismatched.push({
+        field: 'noConnected', expected: noConnected, actual: null,
+        error: `pin ${primitiveId} is no longer in the parent's list`
+          + (afterPin.errors.length ? `; ${afterPin.errors.join('; ')}` : ''),
+      });
+    } else {
+      afterCoordinates = { x: afterPin.x, y: afterPin.y };
+      if (afterPin.noConnected === null) {
+        mismatched.push({
+          field: 'noConnected', expected: noConnected, actual: null,
+          error: `NoConnected is unreadable after the write (${afterPin.errors.join('; ')})`,
+        });
+      } else {
+        after = afterPin.noConnected;
+        if (after !== noConnected) {
+          mismatched.push({ field: 'noConnected', expected: noConnected, actual: after });
+        }
+      }
+      // The coordinate is half of the promise: V4.1.100 rendered an NC cross
+      // off-page when the pin moved, so a write that applies the flag but moves
+      // the pin is not success. Both values were read from the same after-list.
+      for (const axis of ['x', 'y'] as const) {
+        const want = before[axis];
+        const got = afterPin[axis];
+        if (got === null) {
+          mismatched.push({
+            field: axis, expected: want, actual: null,
+            error: `${axis.toUpperCase()} is unreadable after the write (${afterPin.errors.join('; ')})`,
+          });
+        } else if (got !== want) {
+          mismatched.push({ field: axis, expected: want, actual: got });
+        }
+      }
+    }
+  }
+  const applied = after !== null && after === noConnected && mismatched.length === 0;
+
+  let returnedKind: string | null = null;
+  try {
+    returnedKind = returned == null ? null : typeof returned;
+  } catch {
+    returnedKind = 'unreadable';
+  }
+  const result = {
+    pageUuid,
+    parentPrimitiveId,
+    primitiveId,
+    pinNumber: before.pinNumber,
+    before: before.noConnected,
+    requested: noConnected,
+    after,
+    coordinatesBefore: { x: before.x, y: before.y },
+    coordinatesAfter: afterCoordinates,
+    applied,
+    mismatched,
+    ...(returnedKind ? { returned: returnedKind } : {}),
+    ...(modifyError ? { modifyError } : {}),
+  };
+  if (!applied) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `pin ${primitiveId} did not take the requested state with its coordinates unchanged `
+        + `(NoConnected=${String(noConnected)}, x=${String(before.x)}, y=${String(before.y)}) `
+        + `(${mismatched.map((m) => `${m.field}: expected ${JSON.stringify(m.expected)}, `
+          + `read back ${JSON.stringify(m.actual)}`).join('; ')})`
+        + (modifyError ? `; modify reported ${modifyError}` : ''),
+      result,
+    );
+  }
+  return {
+    ...result,
+    ...(returned == null
+      ? { note: 'modify returned undefined, but a fresh parent-pin read shows the requested '
+        + 'NoConnected and the same coordinates — the write landed anyway' }
+      : {}),
+    ...(modifyError
+      ? { note: 'modify threw, but a fresh parent-pin read shows the requested NoConnected and '
+        + 'the same coordinates — not a failure' }
+      : {}),
+  };
+};
+
+/**
  * `lib.footprint.get` — one library footprint, dumped whole (read-only).
  *
  * The instrument §G asks for twice over: it turns the netlist's footprint
@@ -12697,6 +13135,14 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     'lib.footprint_file.get': bind(libFootprintFileGet),
     'lib.device.get': bind(libDeviceGet),
     'sch.component_pins': bind(schComponentPins),
+    // 044: write ONE placed pin's native NoConnected cross. A design write with
+    // a closed request: the parent must list the pin, its PinNumber and (when
+    // given) its current NoConnected must match, and the answer is decided by a
+    // fresh read — never by `modify`'s return value. Coordinates are not caller
+    // parameters: the pin's current x/y are re-sent internally so the host does
+    // not re-derive its position (V4.1.100); net and other properties are not
+    // forwarded.
+    'sch.set_pin_no_connected': bind(schSetPinNoConnected),
     'lib.footprint.get': bind(libFootprintGet),
     'lib.device.search': bind(libDeviceSearch),
     // 038Q1: the host's own reuse modules — one keyword page and one module's
