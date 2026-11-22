@@ -349,18 +349,19 @@ def test_h1_value_row_clears_the_ground_flag_lead(circuit, profiles):
     values = [text for text in plan.texts if text.part_id == "H1" and text.kind == "value"]
     assert len(values) == 1, [(text.part_id, text.kind) for text in plan.texts]
     value_box = tuple(float(item) for item in values[0].bbox)
-    lead = ((140.0, 450.0), (140.0, 425.0))
-    assert readability._box_run_gap(value_box, list(lead)) > 0.0, (
-        f"H1's value row {value_box} is crossed by the ground flag's lead {lead}"
-    )
+    # v47 is a native-attr page: the new seat plan may legally choose a
+    # different GND rung. The contract is that the actual ground lead exists
+    # and does not cross H1's value row, not that it keeps its old y=425.
     leads = [
-        segment for segment in plan.segments
-        if any(
-            abs(start[0] - 140.0) < 1e-6 and abs(stop[0] - 140.0) < 1e-6
-            and min(start[1], stop[1]) <= 425.0 and max(start[1], stop[1]) >= 450.0
-            for start, stop in readability._edges(
-                [tuple(point) for point in segment.points]
-            )
+        (start, stop)
+        for segment in plan.segments if segment.net == "GND"
+        for start, stop in readability._edges(
+            [tuple(point) for point in segment.points]
         )
+        if abs(start[0] - 140.0) < 1e-6 and abs(stop[0] - 140.0) < 1e-6
     ]
     assert leads, "the ground flag's lead at x = 140 is not in this page any more"
+    for lead in leads:
+        assert readability._box_run_gap(value_box, list(lead)) > 0.0, (
+            f"H1's value row {value_box} is crossed by the ground flag's lead {lead}"
+        )

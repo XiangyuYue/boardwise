@@ -6049,8 +6049,14 @@ def discard_selection(plan: ChangePlan, geometry: Any) -> DiscardSelection:
         to another of the plan's wires and claiming the row here would delete it too.
         """
         net, named, _line = wire
+        if row["net"] == net:
+            # An unnamed planned wire may still be reported by the host under
+            # the plan's own net name (measured on P5's seven GND wires). The
+            # name only admits the row to the per-point containment check below;
+            # it never lets a merged wire reach beyond the plan through it.
+            return True
         if named:
-            return row["net"] == net
+            return False
         return not (row["net"] and row["net"] in stated_names)
 
     matched_by_net: dict[str, list[dict[str, Any]]] = {}

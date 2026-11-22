@@ -377,6 +377,42 @@ def test_discard_matches_designator_position_and_value():
     assert selection.ids == ["w1", "f1", "c1"], "lines first, then flags, then parts"
 
 
+def test_discard_matches_a_flag_nets_wire_when_the_host_keeps_its_net_name():
+    """P5: a GND flag suppresses the *plan* name, not the host's `Net` field.
+
+    The host may still report `Net="GND"`. That row must reach the same full
+    containment check as every other wire, not be rejected just because a flag
+    of that net also exists.
+    """
+    geometry = _geometry()
+    geometry["wires"][0]["state"]["Net"] = "GND"
+    selection = drawapply.discard_selection(
+        _plan(
+            wires=[PlanDrawWire(net="GND", points=[(100, 250), (100, 300), (150, 300)])],
+            flags=[PlanDrawFlag(net="GND", kind="Ground", x=100, y=100)],
+        ),
+        geometry,
+    )
+    assert selection.wires == [("w1", "GND")]
+    assert not selection.mismatches
+
+
+def test_discard_still_refuses_a_same_net_wire_with_a_point_outside_the_plan():
+    """The exact-net admission is not permission to delete a merged wire."""
+    geometry = _geometry()
+    geometry["wires"][0]["state"]["Net"] = "GND"
+    geometry["wires"][0]["state"]["Line"].extend([9999, 9999])
+    selection = drawapply.discard_selection(
+        _plan(
+            wires=[PlanDrawWire(net="GND", points=[(100, 250), (100, 300)])],
+            flags=[PlanDrawFlag(net="GND", kind="Ground", x=100, y=100)],
+        ),
+        geometry,
+    )
+    assert selection.wires == []
+    assert any("merged" in line for line in selection.mismatches)
+
+
 @pytest.mark.parametrize(
     "part, fragment",
     [

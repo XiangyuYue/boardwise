@@ -7436,7 +7436,7 @@ def _chain_and_shelf_layout(
     # to leave the bay's members where they were put.
     bays = _place_clock_bays(ctx, origins, poses, boxes)
 
-    _share_one_bay(
+    bay_reseated = _share_one_bay(
         ctx,
         origins,
         poses,
@@ -7446,7 +7446,8 @@ def _chain_and_shelf_layout(
         residue,
     )
 
-    _align_branch_lanes(ctx, origins, poses, residue, exclude=bays | reseated)
+    _align_branch_lanes(ctx, origins, poses, residue,
+                        exclude=bays | reseated | bay_reseated)
 
     shelf_y = axial if ctx.chain else 0.0
     shelf_x = 0.0
@@ -8870,6 +8871,55 @@ def _declared_among(ctx: _Context, members: Sequence[str]) -> bool:
     return False
 
 
+def _declared_units(
+    ctx: _Context,
+    members: Sequence[str],
+    rungs: Mapping[str, _BranchRung],
+) -> tuple[tuple[str, ...], ...]:
+    """The group's **declared components**, each one a rigid sibling unit.
+
+    :func:`_declared_among` answers "did the spec speak about these two" for a
+    whole group, and the bay pass used that as an all-or-nothing veto: one
+    stated pair anywhere in a group of eleven sent all eleven back to the
+    staircase. Measured on the US-radar slice (548E): ``U63`` has eleven
+    siblings, the only stated pair is ``adjacent(Y61, C69)`` from the crystal's
+    own 098 cluster, and the veto handed the other nine — including the five
+    decoupling shunts that cannot fit the ladder at all — the ladder's
+    ``base + step*index``. The pair is a statement about **two** members; it is
+    not a statement about the group.
+
+    So the reading is per component: a maximal set of members joined by stated
+    relations is one unit, and the members no relation mentions are units of
+    one. :func:`_share_one_bay` seats a unit as **one rigid body** — the offset
+    the ladder gave its members is kept exactly — which is what makes "the
+    grammar stated this distance" true after the seat, while the unrelated
+    siblings are still answered by the bay's own one-band reading.
+
+    Units are ordered by their leader's ladder index, so the seating order is
+    the one the ladder used. A group whose every member is inside one component
+    is the old case in full: one unit, and the staircase stays.
+    """
+    parent = {part_id: part_id for part_id in members}
+
+    def root_of(part_id: str) -> str:
+        while parent[part_id] != part_id:
+            parent[part_id] = parent[parent[part_id]]
+            part_id = parent[part_id]
+        return part_id
+
+    for constraint in ctx.binding.constraints:
+        subject, object_ = constraint.subject, constraint.object
+        if subject in parent and object_ in parent:
+            left, right = root_of(subject), root_of(object_)
+            if left != right:
+                parent[max(left, right)] = min(left, right)
+
+    units: dict[str, list[str]] = {}
+    for part_id in sorted(members, key=lambda p: (rungs[p].index, p)):
+        units.setdefault(root_of(part_id), []).append(part_id)
+    return tuple(tuple(unit) for unit in units.values())
+
+
 def _declared_sibling_owners(ctx: _Context) -> frozenset[str]:
     """Owners whose own branches the grammar has already ordered (543G-2).
 
@@ -8929,6 +8979,8 @@ def _seat_branch_stack(
     boxes: Mapping[str, Box],
     rungs: Mapping[str, _BranchRung],
     residue: tuple[float, float],
+    propose: bool = False,
+    band: Mapping[str, _BranchRung] | None = None,
 ) -> frozenset[str]:
     """Give a text-starved sibling group one **row per branch** (548C6).
 
@@ -8968,10 +9020,15 @@ def _seat_branch_stack(
       own ``spread < lane`` guard), and a group the grammar ordered (``lane_groups``,
       ``_declared_among``) keeps that order. Both are skipped, so this pass cannot
       be undone by either;
-    * **not a service branch, and not a shared tap** — a stated service interval
+    * **not a service branch, and not a bay group** — a stated service interval
       (543B) is a distance to *that* pin, and two shunts on one host pin are
-      543E-2's perpendicular seats (:func:`_service_pin_gap` names both), so
-      ``spread <= BAY_SAME_PAD`` and any served member skip the group;
+      543E-2's perpendicular seats (:func:`_service_pin_gap` names both), so any
+      served member skips the group; a group whose pads span at least one ``lane``
+      is the bay pass's one band and is left to it. A group whose pads coincide
+      along the line (``spread <= BAY_SAME_PAD``) *is* taken, because the ladder's
+      index staircase is the only thing separating its members — but only when
+      that staircase itself does not fit inside ``near``, which keeps
+      power_entry_xt30's one-tap row exactly where it was;
     * **not a candidate by force** — the seat is applied only when every member
       stays inside ``near_limit`` (``hypot(distance, δ)``, the same two points the
       relation checker measures), nothing overlaps anything already placed, and
@@ -8982,6 +9039,27 @@ def _seat_branch_stack(
     The caller runs this **only** in the rescue round and hands the reseated parts
     to neither :func:`_share_one_bay` nor :func:`_align_branch_lanes`, so the
     seats measured here are the seats the page is graded on.
+
+    **Where on the line the block stands** (548H) is not the mean of the pads.
+    The line axis is also where the group's *other* members stand, and the bay
+    gives them one rung; a block centred on the pads lies across that band, and
+    the bay can then only answer by pushing each sibling outward — the axis
+    ``near`` charges — until the group is refused (measured on the radar slice:
+    the pair at 320 and ``C70`` at 230 against ``near_limit`` 300). So the block
+    is offered the few line sides the existing geometry names —
+    :func:`_stack_line_shift_candidates`, its own centred place plus the band's
+    two sides — and keeps the first one its own guards (escape, ``near``,
+    foreign pins, :func:`_stack_is_clear`) accept. ``band`` is the rest of the
+    group's rungs; the caller that bays the rest hands them in.
+
+    ``propose`` is the **reservation half of the joint seat** (548G/548H). A
+    same-pad subset inside a mixed group is proposed first (every guard above
+    except the final :func:`_stack_is_clear`, which would read siblings the bay
+    is about to move), the bay places the units around those rows as scenery,
+    and then the same pass runs again with no ``propose`` against the seats the
+    bay really took. A proposal writes no seat: when the second call does not
+    take the rows the whole group keeps the ladder's answer (see
+    :func:`_share_one_bay`).
     """
     grid = ctx.budget.grid
     groups: dict[tuple[str, tuple[float, float]], list[str]] = {}
@@ -9006,8 +9084,21 @@ def _seat_branch_stack(
         line = (-direction[1], direction[0])
         q = {part_id: _dot(rungs[part_id].anchor, line) for part_id in members}
         spread = max(q.values()) - min(q.values())
-        if spread <= BAY_SAME_PAD or spread >= ctx.budget.lane:
+        if spread >= ctx.budget.lane:
             continue
+        # A group on **one pad** has no line order to take from its anchors, and
+        # the two answers it has today are skipped above: the bay pass's one band
+        # (its own `spread < lane` term) and 543E-2's perpendicular seats (the
+        # served members are excluded by `_service_pin_gap`). What is left is the
+        # ladder's own **index** staircase — `lane + step*index`, the escape
+        # axis's answer and the distance `near` charges. Measured on the radar MCU
+        # slice: the shunts of one host pin reach 360 with `near_limit` 300, and
+        # the page was refused (`near(C75, U63)`) while the only remaining axis,
+        # the line, was skipped before this point. So a one-pad group is taken
+        # here when its staircase does not fit, and the escape test below is asked
+        # of the staircase rather than of the value rows (which do not separate a
+        # one-pad group: the index term does).
+        same_pad = spread <= BAY_SAME_PAD
         # The ladder's own order, as `_share_one_bay` takes it: which sibling
         # hangs nearest the owner is the grammar's answer, not this pass's.
         order = sorted(members, key=lambda part_id: (rungs[part_id].index, part_id))
@@ -9041,7 +9132,19 @@ def _seat_branch_stack(
             max(text_width(text) for text in lines[part_id]) + TEXT_GAP
             for part_id in order[:-1]
         )
-        if (max(rungs[part_id].base for part_id in members) + push
+        if same_pad:
+            # The escape axis's answer for one pad is the index staircase itself,
+            # not the text rows: each member is hung `base + step*index` out. When
+            # that already fits inside `near` the ladder has an answer and the
+            # pass adds nothing (power_entry_xt30's D1/C115/C116 in a row after the
+            # connector, and the five-shunt control this reading is pinned with).
+            escape_need = max(
+                rungs[part_id].base + rungs[part_id].step * rungs[part_id].index
+                for part_id in members
+            )
+            if escape_need <= ctx.budget.near_limit:
+                continue
+        elif (max(rungs[part_id].base for part_id in members) + push
                 <= ctx.budget.near_limit):
             # The escape axis can still hold the rows inside `near`: that is the
             # ladder's own answer and this pass has nothing to add (547A: 220 of
@@ -9058,74 +9161,202 @@ def _seat_branch_stack(
             part_id: base + sigma * (offset[part_id] - middle)
             for part_id in order
         }
-        trial: dict[str, tuple[float, float]] = {}
-        # The foreign pins are measured against what is placed **outside** this
-        # group: the group's own old ladder seats are not obstacles for its new
-        # rows, and the new seats are validated as one set below. Seated members
-        # are added back as they land, exactly as the ladder's own loop does.
-        others = {
-            part_id: origin
-            for part_id, origin in origins.items()
-            if part_id not in order
-        }
-        for part_id in order:
-            delta = seat[part_id] - q[part_id]
-            distance = rungs[part_id].base
-            root = (
-                rungs[part_id].anchor[0] + direction[0] * distance + line[0] * delta,
-                rungs[part_id].anchor[1] + direction[1] * distance + line[1] * delta,
-            )
-            # 114/117①: the run from the owner's pin to the seat is the run the
-            # ladder dodges, and a row seat moves its **endpoint** — so the dodge
-            # is taken again on the new root, not inherited from the old one.
-            root = _dodge_foreign_pins(
-                ctx, part_id, ctx.slots[part_id], rungs[part_id].anchor, root,
-                poses, others,
-            )
-            if (math.hypot(root[0] - rungs[part_id].anchor[0],
-                           root[1] - rungs[part_id].anchor[1])
-                    > ctx.budget.near_limit):
-                # The dodge moved the shared pad further from its host pin: the
-                # same two points `near` measures, so the group keeps the
-                # ladder's answer rather than buying a row with a broken relation.
-                trial = {}
-                break
-            # 548C6R: the dodge's walk is **bounded**, so "the dodge ran" is not
-            # "the run is clear" — it can come back with a foreign pin still on
-            # the stretch past the shared pad, where this branch's other pin
-            # lands. Ask the same ruler again on the root the seat produced and
-            # treat a residual pin like the `near` failure above: the whole
-            # group keeps the ladder's answer, never half of it.
-            shared_local = _pin_local(
-                ctx, part_id, ctx.slots[part_id].pin_shared, poses)
-            other_local = _pin_local(
-                ctx, part_id, ctx.slots[part_id].pin_other, poses)
-            far = None
-            if shared_local is not None and other_local is not None:
-                far = (root[0] + other_local[0] - shared_local[0],
-                       root[1] + other_local[1] - shared_local[1])
-            if (_foreign_pins_on_run(ctx, part_id, rungs[part_id].anchor, root,
-                                     poses, others)
-                    or (far is not None
-                        and _foreign_pins_on_run(ctx, part_id, root, far,
-                                                 poses, others))):
-                trial = {}
-                break
-            shared = rungs[part_id].shared
-            trial[part_id] = (
-                root[0] - (shared[0] if shared else 0.0),
-                root[1] - (shared[1] if shared else 0.0),
-            )
-            others[part_id] = trial[part_id]
-        if not trial:
-            continue
-        trial_origins = dict(origins)
-        trial_origins.update(trial)
-        if not _stack_is_clear(ctx, poses, trial_origins, trial):
-            continue
-        origins.update(trial)
-        seated.extend(trial)
+        # 548H: which line side the block takes. The mean above is the pads'
+        # answer; the band is the rung row the bay is about to hand the rest of
+        # the group. A block that takes a side leaves the bay no reason to push
+        # a sibling outward, which is the axis `near` charges.
+        shifts = _stack_line_shift_candidates(
+            ctx, boxes, rungs, order, seat, reach, direction, line, band,
+        )
+        for shift in shifts:
+            trial: dict[str, tuple[float, float]] = {}
+            # The foreign pins are measured against what is placed **outside**
+            # this group: the group's own old ladder seats are not obstacles for
+            # its new rows, and the new seats are validated as one set below.
+            # Seated members are added back as they land, exactly as the
+            # ladder's own loop does.
+            others = {
+                part_id: origin
+                for part_id, origin in origins.items()
+                if part_id not in order
+            }
+            for part_id in order:
+                delta = seat[part_id] + shift - q[part_id]
+                distance = rungs[part_id].base
+                root = (
+                    rungs[part_id].anchor[0] + direction[0] * distance + line[0] * delta,
+                    rungs[part_id].anchor[1] + direction[1] * distance + line[1] * delta,
+                )
+                # 114/117①: the run from the owner's pin to the seat is the run the
+                # ladder dodges, and a row seat moves its **endpoint** — so the dodge
+                # is taken again on the new root, not inherited from the old one.
+                root = _dodge_foreign_pins(
+                    ctx, part_id, ctx.slots[part_id], rungs[part_id].anchor, root,
+                    poses, others,
+                )
+                if (math.hypot(root[0] - rungs[part_id].anchor[0],
+                               root[1] - rungs[part_id].anchor[1])
+                        > ctx.budget.near_limit):
+                    # The dodge moved the shared pad further from its host pin: the
+                    # same two points `near` measures, so the group keeps the
+                    # ladder's answer rather than buying a row with a broken relation.
+                    trial = {}
+                    break
+                # 548C6R: the dodge's walk is **bounded**, so "the dodge ran" is not
+                # "the run is clear" — it can come back with a foreign pin still on
+                # the stretch past the shared pad, where this branch's other pin
+                # lands. Ask the same ruler again on the root the seat produced and
+                # treat a residual pin like the `near` failure above: the whole
+                # group keeps the ladder's answer, never half of it.
+                shared_local = _pin_local(
+                    ctx, part_id, ctx.slots[part_id].pin_shared, poses)
+                other_local = _pin_local(
+                    ctx, part_id, ctx.slots[part_id].pin_other, poses)
+                far = None
+                if shared_local is not None and other_local is not None:
+                    far = (root[0] + other_local[0] - shared_local[0],
+                           root[1] + other_local[1] - shared_local[1])
+                if (_foreign_pins_on_run(ctx, part_id, rungs[part_id].anchor, root,
+                                         poses, others)
+                        or (far is not None
+                            and _foreign_pins_on_run(ctx, part_id, root, far,
+                                                     poses, others))):
+                    trial = {}
+                    break
+                shared = rungs[part_id].shared
+                trial[part_id] = (
+                    root[0] - (shared[0] if shared else 0.0),
+                    root[1] - (shared[1] if shared else 0.0),
+                )
+                others[part_id] = trial[part_id]
+            if not trial:
+                continue
+            if not _stack_self_clear(ctx, poses, trial):
+                # The block's own rows may not fold onto one line, whatever
+                # their neighbours do: that is the block's arithmetic, asked in
+                # both halves of the joint seat.
+                continue
+            # A proposal is judged against everything except the band itself:
+            # those parts still stand on the ladder seats the bay is about to
+            # move, so they are not obstacles the rows ever had. Every other
+            # seat is real and is read as such — including an earlier subset's
+            # proposal, which is already in `origins` while the subsets are
+            # proposed one after another. The accepting call below passes no
+            # band: it judges the seats the bay really took, nothing exempt.
+            skip = set(band or ()) if propose else set()
+            trial_origins = {
+                part_id: origin
+                for part_id, origin in origins.items()
+                if part_id not in skip
+            }
+            trial_origins.update(trial)
+            if not _stack_is_clear(ctx, poses, trial_origins, trial):
+                continue
+            origins.update(trial)
+            seated.extend(trial)
+            break
     return frozenset(seated)
+
+
+def _stack_line_shift_candidates(
+    ctx: _Context,
+    boxes: Mapping[str, Box],
+    rungs: Mapping[str, _BranchRung],
+    order: Sequence[str],
+    seat: Mapping[str, float],
+    reach: Mapping[str, tuple[float, float]],
+    direction: tuple[float, float],
+    line: tuple[float, float],
+    band: Mapping[str, _BranchRung] | None,
+) -> list[float]:
+    """Line-axis shifts for a row block: centred first, then the band's sides.
+
+    A row block is one rigid staircase on the **line** axis (its internal pitch
+    is what the two rows really draw), so every candidate is one shift applied
+    to all of its rows. The centred seat — the mean of the group's pads — is
+    always tried first, which keeps every historical scene byte-for-byte: a
+    group whose block does not touch the band never sees a second candidate.
+
+    The band is the line span the bay is about to give the rest of the same
+    sibling group: each of them at its own first rung (``rung.base``), measured
+    with :func:`_bay_box`, which is the bay's own ruler (``GAP``-grown). A block
+    that sits clear of that span leaves the bay nothing to push outward, so the
+    siblings keep the one-rung seats ``near`` prices. The standoff is
+    :data:`GAP` — the bay inflates both sides by it, so anything less would let
+    the grown boxes touch and be pushed — snapped **outward** to the grid, which
+    is the only number this function adds and the lattice it must stay on.
+    """
+    grid = ctx.budget.grid
+    shared = {
+        part_id: (_dot(rungs[part_id].shared, line)
+                  if rungs[part_id].shared else 0.0)
+        for part_id in order
+    }
+    block_low = min(seat[part_id] + reach[part_id][0] - shared[part_id]
+                    for part_id in order)
+    block_high = max(seat[part_id] + reach[part_id][1] - shared[part_id]
+                     for part_id in order)
+    raw: set[float] = set()
+    if band:
+        lows: list[float] = []
+        highs: list[float] = []
+        for part_id, rung in band.items():
+            if part_id in seat:
+                continue
+            distance = _snap(rung.base, grid, 0.0)
+            root = (
+                rung.anchor[0] + direction[0] * distance,
+                rung.anchor[1] + direction[1] * distance,
+            )
+            base = (
+                root[0] - (rung.shared[0] if rung.shared else 0.0),
+                root[1] - (rung.shared[1] if rung.shared else 0.0),
+            )
+            _origin, grown = _bay_box(boxes[part_id], base, line)
+            low, high = _projection(grown, line)
+            lows.append(low)
+            highs.append(high)
+        if lows:
+            band_low = min(lows)
+            band_high = max(highs)
+            if block_low < band_high and block_high > band_low:
+                raw.add(band_high + GAP - block_low)
+                raw.add(band_low - GAP - block_high)
+    shifts: set[float] = set()
+    for value in raw:
+        steps = value / grid
+        shifts.add(
+            (math.ceil(steps) if value > 0.0 else math.floor(steps)) * grid
+        )
+    if not shifts:
+        return [0.0]
+    return sorted(shifts, key=lambda value: (abs(value), value))
+
+
+def _stack_self_clear(
+    ctx: _Context,
+    poses: Mapping[str, SymbolPose],
+    group: Mapping[str, tuple[float, float]],
+) -> bool:
+    """Do a proposed row block's **own** rows stay off one another?
+
+    The proposal half of the joint seat may not ask the *siblings* question —
+    they still stand on the ladder seats the bay is about to move — but the
+    block's arithmetic can still fold two rows onto one line: a
+    :func:`_dodge_foreign_pins` step is perpendicular to the run and can cancel
+    the row pitch, measured on the radar's three-unit same-pad subset, where
+    ``C71``/``R62`` came back on one coordinate and overlapped. That is a
+    property of the block, not of its neighbours, so both halves ask it.
+
+    """
+    ids = sorted(group)
+    for index, here in enumerate(ids):
+        left = _part_box(ctx.profile(here), poses[here], group[here])
+        for there in ids[index + 1:]:
+            right = _part_box(ctx.profile(there), poses[there], group[there])
+            if _overlaps(left, right):
+                return False
+    return True
 
 
 def _stack_is_clear(
@@ -9144,6 +9375,7 @@ def _stack_is_clear(
     walls. That second question is what makes the reservation a reservation: the
     pitch was computed from the left/right block, and this proves one of them
     really is free at the seat, instead of trusting the arithmetic.
+
     """
     ids = sorted(placed)
     for index, here in enumerate(ids):
@@ -9226,6 +9458,26 @@ def _share_one_bay(
     Nothing here is measured against the staircase: the pass reads only the pads
     and leaves the ladder's answer in place whenever it cannot place a bay
     cleanly, so a group that did not change is not a group that got worse.
+
+    **A one-pad fan-out inside a mixed group** (548F) is the one subset this
+    reading cannot answer. When the group's pads span a lane — which is what
+    puts it here instead of at the ladder — the members that share *one* pad
+    still coincide along the line, so the one-band loop sees them as rows of
+    one band: each collides with the band already placed and is pushed further
+    **out** the escape axis, one after another. That axis is what ``near``
+    charges, and the pile can hand the last member a distance no member's own
+    anchor ever asked for (measured on the US-radar slice, ``U63``'s five
+    decoupling shunts: bayed 210 -> 450 units out against a 300 budget, with
+    ``near(C75, U63)`` naming it). In the rescue round only, such a subset is
+    handed to the existing line-stack (:func:`_seat_branch_stack`) — the pass
+    that already answers a one-pad group on the **line** axis — and the members
+    it seats are kept out of this bay's pushes. The declared unit and the
+    distinct-pad siblings keep the bay reading; when the stack does not take
+    the subset (its own escape, overlap and text guards), the bay answers it
+    exactly as before.
+
+    Returns the parts the line-stack seated, so the caller can keep
+    :func:`_align_branch_lanes` off them as well.
     """
     groups: dict[tuple[str, tuple[float, float]], list[str]] = {}
     for part_id in sorted(rungs):
@@ -9233,6 +9485,7 @@ def _share_one_bay(
         groups.setdefault((rung.owner, rung.direction), []).append(part_id)
 
     grid = ctx.budget.grid
+    reseated: set[str] = set()
     for (owner, direction), members in sorted(groups.items()):
         if len(members) < 2:
             continue
@@ -9259,10 +9512,123 @@ def _share_one_bay(
             # The lane, not ``step``: the corridor is what a flag needs, and that
             # does not stretch with the variant's spacing.
             continue
-        if _declared_among(ctx, members):
+        units = _declared_units(ctx, members, rungs)
+        if len(units) == 1:
             # The grammar wrote down an order **between these siblings**, so the
             # staircase is that order's own distance and not a count: 534 sec.2.
+            # Only when the whole group is one declared component: a stated pair
+            # inside a larger group no longer vetoes the unrelated siblings
+            # (548E, `_declared_units`), which are then baying on their own.
             continue
+        # 548F: in the rescue round, a one-pad fan-out inside this mixed group
+        # gets the line-stack's answer instead of the bay's outward pile. The
+        # subset is read from the anchors and from `_declared_units`: only
+        # members the grammar left as units of one, all hanging off the **same**
+        # pad, are a fan-out; the declared unit and every distinct-pad sibling
+        # stay with the bay. `_seat_branch_stack` keeps its own guards (escape,
+        # overlap, text and foreign pins), so a subset it does not take leaves
+        # this group byte for byte the way it was.
+        bay_reseated: frozenset[str] = frozenset()
+        stack_subsets: list[list[str]] = []
+        placed: list[Box] = []
+        before = {part_id: origins[part_id] for part_id in members}
+        band_rungs = {part_id: rungs[part_id] for part_id in members}
+        if ctx.two_dimensional_seats:
+            singles = {unit[0] for unit in units if len(unit) == 1}
+            fan_out: dict[tuple[float, float], list[str]] = {}
+            for part_id in members:
+                if part_id not in singles:
+                    continue
+                anchor = rungs[part_id].anchor
+                key = (round(anchor[0], 6), round(anchor[1], 6))
+                fan_out.setdefault(key, []).append(part_id)
+            # The largest subset goes first: it is the block with the most
+            # rows, and the bay can still answer the smaller one cheaply by
+            # pushing it along the escape axis (that axis is what the band is
+            # priced in, and the smaller pile stays inside `near`).
+            stack_subsets = sorted(
+                (sorted(subset) for subset in fan_out.values() if len(subset) >= 2),
+                key=lambda subset: (-len(subset), subset),
+            )
+            if stack_subsets:
+                fan_members = {
+                    part_id for subset in stack_subsets for part_id in subset
+                }
+                # The bay's band is the rest of the group: the parts this pass
+                # will *not* seat on a line. A subset that is not taken below
+                # falls back into `members` and is bayed like any other unit.
+                proposal_band = {
+                    part_id: rung
+                    for part_id, rung in band_rungs.items()
+                    if part_id not in fan_members
+                }
+                # Phase 1 of the joint seat (548H): **propose** the rows. The
+                # proposal writes no seat (every guard it owns — escape, `near`,
+                # foreign pins, the line side — still applies), and it is the
+                # scenery the bay places the rest of the group around: a unit
+                # still standing in the rows is pushed outward, exactly as one
+                # standing on a sibling's box would be.
+                reserved = dict(origins)
+                seated_subsets: list[list[str]] = []
+                for subset in stack_subsets:
+                    seated = _seat_branch_stack(
+                        ctx,
+                        reserved,
+                        poses,
+                        boxes,
+                        {part_id: rungs[part_id] for part_id in subset},
+                        residue,
+                        propose=True,
+                        band=proposal_band,
+                    )
+                    if seated:
+                        # A subset the pass does not take keeps the bay's
+                        # reading, exactly as before: it stays in `members` and
+                        # no seat of it is scenery.
+                        seated_subsets.append(subset)
+                stack_subsets = seated_subsets
+                fan_members = {
+                    part_id for subset in stack_subsets for part_id in subset
+                }
+                placed = [
+                    _bay_box(boxes[part_id], reserved[part_id], line)[1]
+                    for part_id in sorted(fan_members)
+                ]
+                members = [
+                    part_id for part_id in members if part_id not in fan_members
+                ]
+                units = tuple(
+                    unit for unit in units if not fan_members.intersection(unit)
+                )
+                if not members:
+                    # Nothing left to bay: the rows are accepted here against
+                    # one another, with every guard of the same pass on.
+                    failed = False
+                    for subset in stack_subsets:
+                        seated = _seat_branch_stack(
+                            ctx,
+                            origins,
+                            poses,
+                            boxes,
+                            {part_id: rungs[part_id] for part_id in subset},
+                            residue,
+                            band={
+                                part_id: rung
+                                for part_id, rung in band_rungs.items()
+                                if part_id not in subset
+                            },
+                        )
+                        if not seated:
+                            failed = True
+                            break
+                        bay_reseated |= seated
+                    if failed:
+                        origins.update(before)
+                        reseated -= bay_reseated
+                        bay_reseated = frozenset()
+                    else:
+                        reseated |= bay_reseated
+                    continue
         # The ladder's own order, not a geometric one: which sibling hangs nearest
         # the owner is :func:`_branch_order`'s answer (it reads the grammar's
         # branch ranking), and re-sorting by where the anchors happen to sit moves
@@ -9305,35 +9671,71 @@ def _share_one_bay(
                 part_id: _snap(rungs[part_id].base, grid, 0.0)
                 for part_id in order
             }
-        before = {part_id: origins[part_id] for part_id in members}
-        placed: list[Box] = []
-        for part_id in order:
-            rung = rungs[part_id]
-            local = boxes[part_id]
-            band = band_of[part_id]
+        # The **proposed** rows are this bay's fixed scenery: they stand where
+        # the line-stack would seat them, so every unit still to be placed is
+        # pushed clear of them exactly as it is pushed clear of a sibling — and
+        # the second call below is what proves the rows really fit around the
+        # seats the bay then took.
+        bay_failed = False
+        # 548E: a declared component is seated as **one rigid body** — the
+        # leader takes the unit's band, every other member keeps the offset the
+        # ladder gave it (`before`), so a stated distance between two of them is
+        # the same distance after the seat. A unit of one is the old loop,
+        # member for member.
+        # Keep the 543K/543H-1b priority computed above: the nearest band and
+        # interchangeable pairs must be seated before single services. Iterating
+        # `units` in ladder order bypassed that contract and split the CC pair.
+        unit_of = {part_id: unit for unit in units for part_id in unit}
+        unit_rank: dict[list[str], int] = {}
+        for index, part_id in enumerate(order):
+            unit_rank.setdefault(unit_of[part_id], index)
+        for unit in sorted(units, key=lambda item: unit_rank[item]):
+            leader = min(unit, key=order.index)
+            rung = rungs[leader]
+            local = boxes[leader]
+            band = band_of[leader]
             for _attempt in range(len(order) + 4):
                 root = (
                     rung.anchor[0] + direction[0] * band,
                     rung.anchor[1] + direction[1] * band,
                 )
                 root = _dodge_foreign_pins(
-                    ctx, part_id, ctx.slots[part_id], rung.anchor, root, poses, origins,
+                    ctx, leader, ctx.slots[leader], rung.anchor, root, poses, origins,
                 )
                 base = (
                     root[0] - (rung.shared[0] if rung.shared else 0.0),
                     root[1] - (rung.shared[1] if rung.shared else 0.0),
                 )
                 origin, grown = _bay_box(local, base, line)
-                if len(bucket_of[part_id]) > 1:
-                    # 543H-1b: a paired column is separated by its *pads*, and
-                    # the bay's GAP inflation is this pass's own margin, not the
-                    # checker's. Two interchangeable parts one pad pitch apart are
-                    # not a collision; their real boxes decide that.
-                    grown = (
-                        grown[0] + GAP, grown[1] + GAP,
-                        grown[2] - GAP, grown[3] - GAP,
+                shift = (
+                    origin[0] - before[leader][0],
+                    origin[1] - before[leader][1],
+                )
+                seats = {leader: origin}
+                grows = {leader: grown}
+                for part_id in unit[1:]:
+                    member_origin = (
+                        before[part_id][0] + shift[0],
+                        before[part_id][1] + shift[1],
                     )
-                blockers = [other for other in placed if _overlaps(grown, other)]
+                    seats[part_id] = member_origin
+                    grows[part_id] = _bay_box(
+                        boxes[part_id], member_origin, line,
+                    )[1]
+                for part_id in unit:
+                    if len(bucket_of[part_id]) > 1:
+                        # 543H-1b: a paired column is separated by its *pads*, and
+                        # the bay's GAP inflation is this pass's own margin, not the
+                        # checker's. Two interchangeable parts one pad pitch apart are
+                        # not a collision; their real boxes decide that.
+                        grows[part_id] = (
+                            grows[part_id][0] + GAP, grows[part_id][1] + GAP,
+                            grows[part_id][2] - GAP, grows[part_id][3] - GAP,
+                        )
+                blockers = [
+                    other for other in placed
+                    if any(_overlaps(grows[part_id], other) for part_id in unit)
+                ]
                 if not blockers:
                     break
                 # A collision is answered **outward**, along the escape: that axis
@@ -9346,17 +9748,54 @@ def _share_one_bay(
                 # ``branch.en_branch``), and on 534, whose island went 324 wide but
                 # 398 tall with the trunk 670 -> 990.
                 clear = max(
-                    _projection(other, direction)[1] - _projection(grown, direction)[0]
+                    _projection(other, direction)[1]
+                    - _projection(grows[part_id], direction)[0]
                     for other in blockers
+                    for part_id in unit
                 )
                 band = _snap(band + max(clear, grid), grid, 0.0)
             else:
                 # No outward placement clears the row in the attempts allowed: the
                 # group keeps the ladder's answer rather than trading rows for width.
                 origins.update(before)
+                bay_failed = True
                 break
-            origins[part_id] = origin
-            placed.append(grown)
+            origins.update(seats)
+            placed.extend(grows[part_id] for part_id in unit)
+        if bay_failed:
+            # `origins.update(before)` already ran inside the loop, and no row
+            # was ever committed: the whole group stands on its ladder seats.
+            bay_reseated = frozenset()
+            continue
+        if not stack_subsets:
+            continue
+        # Phase 2 of the joint seat (548H): accept the rows against the seats
+        # the bay really took. The same pass, with its overlap and text guards
+        # on, decides — nothing is exempt, old or new. When a row block does not
+        # take, the **whole** group returns to the ladder: a bayed sibling may
+        # not be left standing on an old row seat, which is a real collision.
+        for subset in stack_subsets:
+            seated = _seat_branch_stack(
+                ctx,
+                origins,
+                poses,
+                boxes,
+                {part_id: rungs[part_id] for part_id in subset},
+                residue,
+                band={
+                    part_id: rung
+                    for part_id, rung in band_rungs.items()
+                    if part_id not in subset
+                },
+            )
+            if not seated:
+                origins.update(before)
+                reseated -= bay_reseated
+                bay_reseated = frozenset()
+                break
+            bay_reseated |= seated
+        reseated |= bay_reseated
+    return frozenset(reseated)
 
 
 # ----------------------------------- 116: every bound order, not just the owner's
@@ -9790,7 +10229,8 @@ def _order_step(
             return False
         if abs(current - target) <= ctx.budget.grid / 2.0:
             return False
-        return _shift_origin(ctx, walking, index, current, target, origins)
+        return _shift_origin(
+            ctx, walking, reference, index, current, target, origins, poses)
     index, sign = _order_asks(item.kind, walking == item.subject)
     if allowed_axis is not None and index != allowed_axis:
         # 520A2 (A2): this order names the axis the chain runs on, so moving
@@ -9865,7 +10305,8 @@ def _order_step(
         # had turns the stack back into a group; the order still holds, because
         # it states a side and the checker reads it with ``grid/2`` of slack.
         wanted = target + sign * (abs(current - target) + ctx.budget.grid)
-    return _shift_origin(ctx, walking, index, current, wanted, origins)
+    return _shift_origin(
+        ctx, walking, reference, index, current, wanted, origins, poses)
 
 
 def _contended_landing(
@@ -9893,13 +10334,80 @@ def _contended_landing(
     return False
 
 
+def _lands_on_sibling_host_box(
+    ctx: _Context,
+    part_id: str,
+    reference: str,
+    standing: tuple[float, float],
+    landing: tuple[float, float],
+    origins: Mapping[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+) -> bool:
+    """Would this landing put a decoupling shunt **onto a same-host sibling**?
+
+    The defect this refuses is the radar MCU slice's: ``near(C75, U63)`` trims
+    ``C75`` from -445 to -380, inside ``C74``'s box ``-393.5 .. -376.5``. Both
+    are decoupling shunts of the *same* host core (``served``, ``host_id=U63``),
+    so the pass is landing one branch of a service group on another branch of
+    the same group — a body on a body nobody asked the relation about. The
+    relation is left broken (the caller returns ``False``) for the relation
+    checker / refusal chain to name, never accepted as a stacked drawing.
+
+    **Narrow on purpose.** The wide reading — "do not land any body on any
+    body" — was measured against the flyback page and rewrote four parts that
+    are not decoupling branches at all (``.tmp_us_radar_owner_recon/REPORT.md``
+    sec.3: 14 refusals, 4 parts moved, every pair ``same_owner=false``). So the
+    gate fires only when **both** parts read ``STATUS_SERVED`` through
+    :meth:`_Context.services` (543A's numbers, not a second classifier) **and**
+    they name the same ``host_id``; a part with no host, a non-capacitor, or a
+    shunt of another owner keeps the historical behaviour byte for byte.
+
+    Two exclusions, each with a measured reason:
+
+    * the relation's own ``reference`` is skipped — landing next to the part a
+      relation names is what the relation asked for;
+    * only an overlap this landing **adds** is refused. A page whose parts
+      already overlap must still be allowed to walk *out* of the overlap: a
+      guard reading "my arriving box overlaps somebody" would freeze the stack
+      it is supposed to improve (``test_an_existing_overlap_does_not_block_a_walk_that_keeps_it_smaller``).
+
+    Reads the compiler's own :func:`_part_box` (body **and** pin tips) and
+    :func:`_overlaps`, so the test can never agree with the pass while
+    disagreeing with the gate.
+    """
+    mine = ctx.services().for_part(part_id)
+    if mine is None or mine.status != STATUS_SERVED or mine.host_id is None:
+        return False
+    pose = poses.get(part_id)
+    if pose is None:
+        return False
+    arriving = _part_box(ctx.profile(part_id), pose, landing)
+    before = _part_box(ctx.profile(part_id), pose, standing)
+    for other, origin in origins.items():
+        if other in (part_id, reference):
+            continue
+        theirs = ctx.services().for_part(other)
+        if (theirs is None or theirs.status != STATUS_SERVED
+                or theirs.host_id != mine.host_id):
+            continue
+        other_pose = poses.get(other)
+        if other_pose is None:
+            continue
+        box = _part_box(ctx.profile(other), other_pose, origin)
+        if _overlaps(arriving, box) and not _overlaps(before, box):
+            return True
+    return False
+
+
 def _shift_origin(
     ctx: _Context,
     part_id: str,
+    reference: str,
     index: int,
     measured_now: float,
     measured_wanted: float,
     origins: dict[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
 ) -> bool:
     """Move a part's **origin** by the delta its measured coordinate needs.
 
@@ -9907,6 +10415,15 @@ def _shift_origin(
     net, or the origin when the pair shares none — and applied to the origin,
     which is the only thing the layout stores. The two differ by the part's own
     pin offset, so the delta is the quantity that transfers.
+
+    ``walking``/``reference``/``poses`` are carried only for
+    :func:`_lands_on_sibling_host_box`, the narrow same-service-owner box gate:
+    the landing is computed first and refused **before** the origin is written,
+    so a refused walk leaves the coordinate exactly where it was and the
+    relation stays in :func:`_bound_orders` for the checker to name. A guard
+    that undid the move afterwards would leave ``True`` in the caller's hand and
+    a coordinate the drawing does not have (the honest-refusal rule 114 set for
+    axes it cannot use).
     """
     delta = measured_wanted - measured_now
     if not delta:
@@ -9916,7 +10433,11 @@ def _shift_origin(
     shifted[index] = origin[index] + _snap(delta, ctx.budget.grid, 0.0)
     if shifted[index] == origin[index]:
         return False
-    origins[part_id] = (shifted[0], shifted[1])
+    landing = (shifted[0], shifted[1])
+    if _lands_on_sibling_host_box(
+            ctx, part_id, reference, origin, landing, origins, poses):
+        return False
+    origins[part_id] = landing
     return True
 
 
@@ -10012,7 +10533,8 @@ def _order_step_near(
     # they were supposed to hug — ``R15`` -455 -> -550 -> -740 -> -1120 — and
     # ran the round budget out with a pair 200,000 units apart.
     sign = -1.0 if mine > theirs else 1.0
-    return _shift_origin(ctx, walking, index, mine, mine + sign * excess, origins)
+    return _shift_origin(
+        ctx, walking, reference, index, mine, mine + sign * excess, origins, poses)
 
 
 def _order_asks(kind: str, own: bool) -> tuple[int, float]:
@@ -11132,7 +11654,7 @@ def _expressions(ctx: _Context, placed: _Placement) -> dict[str, _Expression]:
         if (
             style == "wire"
             and cluster_radius > 0.0
-            and not _flag_grouping(ctx)
+            and not _flag_grouping_for_net(ctx, net.id)
         ):
             grouped = _gnd_clusters(points, cluster_radius)
             if len(grouped) > 1:
@@ -11243,8 +11765,8 @@ def _gnd_cluster_phrase(
 # ------------------------------------------------- 543I-2: one flag grouping
 
 
-def _flag_grouping(ctx: Any) -> bool:
-    """Is the explicit `native-attr` + `serviceLayout` construction stated?
+def _flag_grouping_baseline(ctx: Any) -> bool:
+    """The grouping opt-in this page states **without** a `flagShareGroups` key.
 
     543I-2 scopes the one grouping rule (ground and power alike) to the same
     explicit path 543I-1's visible labels use: ``textPlacement: native-attr``
@@ -11254,8 +11776,6 @@ def _flag_grouping(ctx: Any) -> bool:
     flags, all of it untouched.
     """
     presentation = getattr(ctx, "presentation", None)
-    if getattr(presentation, "flag_share_groups", ()) or ():
-        return True
     if getattr(presentation, "panel_groups", ()) or ():
         # 548D3X3C §34-2h: an explicit `panelGroups` declaration opts this page
         # into the same grouping — the panel's supply feet are one statement.
@@ -11263,9 +11783,42 @@ def _flag_grouping(ctx: Any) -> bool:
         return True
     return (
         _native_text_placement(ctx)
-        and getattr(getattr(ctx, "presentation", None), "service_layout", None)
-        is not None
+        and getattr(presentation, "service_layout", None) is not None
     )
+
+
+def _flag_grouping(ctx: Any) -> bool:
+    """Does this page state **any** grouping opt-in? (the page-level gate)
+
+    True for a `flagShareGroups` page as well as for the baseline below. Only
+    the pass gates that decide whether a grouping / audit pass runs at all ask
+    this question; everything that decides a **net's** expression asks
+    :func:`_flag_grouping_for_net`, so a declaration naming one net cannot move
+    the others.
+    """
+    presentation = getattr(ctx, "presentation", None)
+    if getattr(presentation, "flag_share_groups", ()) or ():
+        return True
+    return _flag_grouping_baseline(ctx)
+
+
+def _flag_grouping_for_net(ctx: Any, net_id: str) -> bool:
+    """Is the one flag-grouping rule on **this net**?
+
+    A `flagShareGroups` declaration is a statement about the nets it names, not
+    about the page: those nets take the one grouping rule, and every other net
+    keeps exactly the policy it had on a page that states no such key —
+    :func:`_flag_grouping_baseline` (a `panelGroups` declaration, or
+    `native-attr` + `serviceLayout`). A GND-only declaration therefore cannot
+    turn an undeclared high-fan-out rail from its per-pin flags into wire-style,
+    and it cannot move that rail's seats into a grouping it never asked for.
+    """
+    for declaration in (
+            getattr(getattr(ctx, "presentation", None),
+                    "flag_share_groups", ()) or ()):
+        if declaration.net == net_id:
+            return True
+    return _flag_grouping_baseline(ctx)
 
 
 def _flag_group_reach(ctx: _Context) -> float:
@@ -11637,6 +12190,12 @@ def _apply_flag_groups(
     for net_id in order:
         if only is not None and net_id not in only:
             continue
+        if not _flag_grouping_for_net(ctx, net_id):
+            # 548P-scope: a `flagShareGroups` declaration groups the nets it
+            # names and only those; every other net keeps the baseline it has
+            # on a page that states no such key (535's Euclidean clusters, or
+            # 053 sec.7's per-pin flags).
+            continue
         expression = expressions[net_id]
         if expression.style != "wire":
             continue
@@ -11718,6 +12277,11 @@ def _flag_group_audit(
     reach (no silent relaxation).
     """
     for net_id in order:
+        if not _flag_grouping_for_net(ctx, net_id):
+            # 548P-scope: only the nets the page grouped are measured here. An
+            # undeclared net's baseline clusters (535) were never audited, and
+            # a declaration for another net may not put them under this ruler.
+            continue
         expression = expressions[net_id]
         if expression.style != "wire" or not expression.clusters:
             continue
@@ -16503,14 +17067,17 @@ def _expression_style(
                 "bus across the page. A rail that reaches outside the module "
                 "keeps the per-pin answer below",
             )
-        if count > ctx.budget.high_fanout and not _flag_grouping(ctx):
+        if (
+            count > ctx.budget.high_fanout
+            and not _flag_grouping_for_net(ctx, net_id)
+        ):
             return (
                 "flag",
                 f"a rail with {count} members is a bus, not a local connection: "
                 f"above {ctx.budget.high_fanout} members it is expressed with its "
                 "flag at every pin (053 sec.7: labels wait for high fan-out)",
             )
-        if _flag_grouping(ctx):
+        if _flag_grouping_for_net(ctx, net_id):
             return (
                 "wire",
                 f"a rail is grouped before it is named (543I-2): its seats are "
@@ -17626,6 +18193,133 @@ def _own_escape_bands(
     return out
 
 
+def _flag_escape_bands(
+    ctx: _Context,
+    placed: _Placement,
+    expressions: Mapping[str, _Expression],
+    *,
+    solids: Sequence[Box] | None = None,
+    bodies: Sequence[Box] | None = None,
+    plan: Mapping[str, "_WireFlagSeat"] | None = None,
+) -> list[Box]:
+    """The first escape run of every pad that really carries a flag.
+
+    :func:`_own_escape_bands` protects a **part's own** horizontal pins only on a
+    `localSeats` page, because a page-wide reserve of *every* pin regressed 26
+    pages (h3 sec.6). This is the narrower statement that reserve was standing in
+    for: a flag seats by running :data:`FLAG_LEAD` out along the pad's own
+    direction and turning after the run (:func:`_flag_anchor`), so a text row
+    printed across that run costs the pad its whole ladder. Only pads that are
+    actually given a flag are listed — the members of a net the expressions
+    decided to express as a **flag** (`style == "flag"`: a ground, or a rail above
+    `high_fanout`, and only when the book carries its flag profile through
+    :func:`_flag_plan`). A pad with no placed pose and a flag whose profile the
+    library lacks add nothing, so a page with no such pad hands back an empty list
+    and keeps the obstacle table it always had.
+
+    The **wire-style** half below is the same statement for the rails whose own
+    flag is seated after the rows have landed — and 548D3D-H6 changes *which*
+    pads it names. It used to list every rung of :func:`_flag_seat_pins`' ladder
+    for the seat group, on the theory that any of them might be the pad the seat
+    pass ends on. Measured on the E page, that is ten corridors reserved per rail
+    and every one of them a row that may not print: C72/C76 were handed no free
+    side at all. The pad that matters is the one the seat **really takes**, so the
+    choice is made here, once, by running the production ladder
+    (:func:`_rail_flag_seat` / :func:`_flag_pin_lead`) on the obstacle tables the
+    page already has — part bodies and pin walls, exactly what the text pass was
+    handed — and only that seat's own lead strip and flag box are reserved
+    (:func:`_wire_flag_seat_plan`). The same map travels to
+    :func:`_seat_wire_flags` on the router, and the seat pass asks the planned rung
+    first, so the reservation and the symbol cannot part company: no second seat
+    model, no all-candidates reserve, and no "the first pad is the answer"
+    either — a blocked first rung moves the plan, and the reservation, to the next
+    pad that really holds a flag.
+
+    **A vertical pad gets its band too** (R67). The old assumption — a vertical
+    pin needs no reserve because the rows the text ladder prints travel along the
+    sides, not along its run — is false once a **neighbour's** row is what lands
+    there: measured on the E MCU, ``R67.1`` seats at ``(65, 0)`` escaping
+    ``(0, +1)``, and ``C73``'s free value row prints at ``61.5, -1.5 - 98.5,
+    7.5`` straight across the pad row. Every rung of the up ladder (30/10/60/120)
+    then dies in the lead's own span test, and length cannot help because the row
+    straddles ``y = 0`` — the corridor is occupied, not short. The band is the run
+    itself, :data:`FLAG_CLEARANCE` either side (``x ± FLAG_CLEARANCE``,
+    ``y = tip … far``), so the rows step off the pad before the flag's lead is
+    asked to leave it. :func:`_own_escape_bands` is unchanged: it stays the
+    narrower per-part, horizontal-only statement for a `localSeats` page, and a
+    page whose flag pads are vertical is not handed that page-wide reserve.
+
+    The point comes from the expression's own measured pad (`_pin_point` in
+    :func:`_expressions`), the direction from the placed pose through
+    :func:`_pin_escape`, and the size is the ladder's own :data:`FLAG_LEAD` /
+    :data:`FLAG_CLEARANCE` — the same ruler :func:`_own_escape_bands` uses, not a
+    second model of a flag's corridor.
+    """
+    out: list[Box] = []
+    for net_id in sorted(expressions):
+        expression = expressions[net_id]
+        if expression.style != "flag":
+            continue
+        flag_profile, _ref = _flag_plan(
+            ctx, net_id, _net_class(ctx, net_id) or "gnd"
+        )
+        if flag_profile is None:
+            continue
+        for member, point in expression.points:
+            part_id, _, token = member.partition(".")
+            if not part_id or not token:
+                continue
+            pose = placed.poses.get(part_id)
+            if pose is None:
+                continue
+            direction = _pin_escape(ctx.profile(part_id), token, pose)
+            if direction is None:
+                continue
+            if direction[0] != 0.0:
+                far = point[0] + direction[0] * FLAG_LEAD
+                out.append((
+                    min(point[0], far), point[1] - FLAG_CLEARANCE,
+                    max(point[0], far), point[1] + FLAG_CLEARANCE,
+                ))
+                continue
+            # R67: a vertical flag pad's corridor is the strip it leaves on, the
+            # same FLAG_LEAD run with FLAG_CLEARANCE either side — a row printed
+            # across the pad's own row is what closes all four rungs, and it need
+            # not be this part's row. Horizontal geometry above is unchanged.
+            far = point[1] + direction[1] * FLAG_LEAD
+            out.append((
+                point[0] - FLAG_CLEARANCE, min(point[1], far),
+                point[0] + FLAG_CLEARANCE, max(point[1], far),
+            ))
+    # 548D3D-H5: a **wire-style** rail's own flag is seated *after* the rows have
+    # landed (:func:`_seat_wire_flags`), so without a corridor here the pad the
+    # ladder reaches for first can be buried by a row before the seat pass is ever
+    # asked. Measured on the radar page's `+3V3` shared rail: `C75.1` at
+    # ``(75, 40)`` sits inside its own value row ``[71.5, 37.5, 93.5, 46.5]``, and
+    # every pair of the declared share group then walks ``inf`` — the walk starts
+    # inside a text box, which no length or coordinate can repair.
+    #
+    # The pads are the ones the seat pass will **take**, not every rung
+    # :func:`_flag_seat_pins` could reach: :func:`_wire_flag_seat_plan` runs the
+    # same ladder (:func:`_rail_flag_seat` / :func:`_flag_pin_lead`) on the
+    # obstacle tables this pass was handed and keeps the first pad that really
+    # holds a flag. A signal net, a wire net whose flag profile the book lacks and
+    # a net with no seat at all add nothing, so the bands stay scoped to rails
+    # that really carry a symbol. The strip is the settled lead's own run (its
+    # sideways clearance only, the shape this reservation always had) plus
+    # :func:`_flag_box` — the glyph and the name row the host prints — and
+    # nothing else: the other rungs of the ladder are not reserved, because no
+    # flag will stand on them (548D3D-H6; the E page's over-reserve).
+    if plan is None:
+        plan = _wire_flag_seat_plan(
+            ctx, placed, expressions, sorted(expressions), solids, bodies,
+        )
+    for seat in plan.values():
+        out.append(_wire_flag_lead_band(seat))
+        out.append(_flag_box(seat.profile, seat.rotation, seat.anchor, seat.net))
+    return out
+
+
 def _input_chain_s20_parts(ctx: _Context) -> set[str]:
     """Unmeasured input-chain arms eligible for the existing S-20 text rows.
 
@@ -17679,6 +18373,22 @@ def _input_chain_s20_parts(ctx: _Context) -> set[str]:
     return eligible
 
 
+class _FlagBandWalls(list):
+    """The text obstacle list, carrying the page's first flag runs.
+
+    :func:`_part_texts` is also wrapped by callers that forward its four
+    positional arguments only (the panel and label-wall tests do), so the bands
+    travel on the obstacle list those wrappers already receive instead of a
+    fifth argument. A plain list carries no bands, which is what keeps a page
+    with no flag run — and every caller that does not tag its walls — on the
+    historical path byte for byte.
+    """
+
+    def __init__(self, walls: Sequence[Box], flag_bands: Sequence[Box] = ()):
+        super().__init__(walls)
+        self.flag_bands = tuple(flag_bands)
+
+
 def _part_texts(
     ctx: _Context, placed: _Placement, occupied: list[Box], walls: list[Box]
 ) -> tuple[list[LayoutText], GrammarFailure | None]:
@@ -17728,6 +18438,9 @@ def _part_texts(
     panel_rows, panel_failure = _panel_text_map(ctx, placed)
     if panel_failure is not None:
         return [], panel_failure
+    # The page's flag runs, when the caller tagged the obstacle list with them
+    # (`_FlagBandWalls`); read before the service-wall merge below replaces it.
+    page_flag_bands = getattr(walls, "flag_bands", ())
     # §35D: on a page whose placement seated service cells, the channels the
     # placement already located are obstacles **for the free rows** — every
     # panel/service reserve and every panel host-path leg as a
@@ -17975,7 +18688,31 @@ def _part_texts(
                 if chosen is not None:
                     break
         if chosen is None:
-            chosen = _line_boxes(box, [text for _, text in lines], TEXT_SIDES[0])
+            # 548D3D-R67: the historical last resort — print at the first side
+            # and let the hard gate refuse the candidate — is **not** honest when
+            # that row would stand on a pad's first flag run. The row does not
+            # merely crowd that pad: it refuses every rung of its flag ladder, and
+            # the later refusal then names the flag ("no lead fits anywhere around
+            # that pad") instead of the text row that caused it, so the part that
+            # has no legal side for its own rows is never the named problem.
+            # Only the band-crossing fallback is refused; a page whose first side
+            # merely misses every band keeps the historical answer byte for byte.
+            blind = _line_boxes(box, [text for _, text in lines], TEXT_SIDES[0])
+            for band in page_flag_bands:
+                if any(_overlaps(candidate, band) for candidate in blind):
+                    return out, _joint_refusal(
+                        part_id,
+                        f"{part_id}'s reference and value rows have no free side "
+                        f"within {TEXT_ESCALATION_STEPS} rungs of their own body, "
+                        "and the historical first-side answer would print them "
+                        f"across the first flag run ({band[0]:g}, {band[1]:g})"
+                        f"-({band[2]:g}, {band[3]:g}) of a pad on this page — a "
+                        "row there refuses every rung of that pad's flag ladder",
+                        "leave one side of the part clear for its rows, shorten a "
+                        "value that makes the row too wide, or move the part whose "
+                        "pad the row would cross",
+                    )
+            chosen = blind
         for (kind, text), item in zip(lines, chosen):
             occupied.append(item)
             walls.append(item)
@@ -22756,9 +23493,44 @@ def _build_one_variant(
         # the obstacle table catching up with the gate rather than a new rule.
         solids.extend(_pin_walls(profile, pose, origin))
 
+    # 548D3D-H4's page-wide counterpart, scoped to the pads that really carry a
+    # flag (`_flag_escape_bands`): a row printed across a flag pad's first run
+    # costs that pad every rung of its ladder (measured on Board2 P5's U30.36 and
+    # U30.9: the part's own value row sat on the 3V3 pads' runs). The expressions
+    # are decided here — before the first row lands — and reused by the net loop
+    # below; `_expressions` reads the placement only, so this is one derivation,
+    # not a second one. A page with no such pad adds nothing and keeps `text_walls`
+    # exactly as it was handed over.
+    expressions = _expressions(ctx, placed)
+    # 548D3D-H6: **which** pad each wire-style rail will hang its symbol on is a
+    # decision, not a preference, and it is taken here — before the rows — by
+    # running the seat ladder on the page as it stands (parts and pin walls). The
+    # guess this replaces reserved every rung of the ladder, which on the E page
+    # left C72/C76 no side to print on. The same map is handed to
+    # `_seat_wire_flags` on the router below, so the symbol is hung where the
+    # reservation was made.
+    # The new seat plan and its text reservations are an explicit native-attr
+    # feature. Any other page keeps the legacy seat ladder, text walls and
+    # candidate ordering instead of being re-seated up front.
+    wire_flag_plan = {}
+    flag_bands = []
+    if ctx.presentation.text_placement == "native-attr":
+        wire_flag_plan = _wire_flag_seat_plan(
+            ctx, placed, expressions, sorted(expressions), solids, bodies,
+        )
+        flag_bands = _flag_escape_bands(
+            ctx, placed, expressions, solids=solids, bodies=bodies,
+            plan=wire_flag_plan,
+        )
+    if flag_bands:
+        text_walls = [*text_walls, *flag_bands]
+    text_obstacles: list[Box] = (
+        [*text_walls, *extra_text_walls] if extra_text_walls else text_walls
+    )
+    if flag_bands:
+        text_obstacles = _FlagBandWalls(text_obstacles, flag_bands)
     texts, text_refusal = _part_texts(
-        ctx, placed, occupied,
-        [*text_walls, *extra_text_walls] if extra_text_walls else text_walls,
+        ctx, placed, occupied, text_obstacles,
     )
     if text_refusal is not None:
         # 548D3 §24B: a declared arm kind whose rows no side holds is a refusal of
@@ -22808,7 +23580,6 @@ def _build_one_variant(
         # search would hit first. 053 sec.5 scenario 10: 空间不足 + 可选动作, and
         # the text is never squeezed to make it fit.
         return None, early, []
-    expressions = _expressions(ctx, placed)
     tap_nets = _tap_axis_by_net(ctx.circuit, ctx.binding)
     #: 543I: tap nets the document promises as one island-local conductor — no
     #: stub, no printed name (see :func:`_one_conductor_nets`).
@@ -22834,6 +23605,12 @@ def _build_one_variant(
              for _, point in expression.points],
         ),
     )
+    #: 548D3D-H6: the seats the text pass reserved a corridor for, by seat group
+    #: (see `_wire_flag_seat_plan`). `_seat_wire_flags` reads it off the router so
+    #: the pass's nine-argument shape is unchanged for every wrapper that spies on
+    #: it; a router with no plan (a direct caller, a label-replay build) keeps the
+    #: historical ladder order byte for byte.
+    router.wire_flag_plan = wire_flag_plan
     #: Nets the class says are flags but the library carries no symbol for, so
     #: they are drawn as wires instead (143 F1). They are remembered because the
     #: wire path's own "could not route it" answer is a *label*, and for these
@@ -23157,7 +23934,10 @@ def _build_one_variant(
                     ), []
                 elif (
                     _net_class(ctx, net_id) == "gnd"
-                    or (_flag_grouping(ctx) and _net_class(ctx, net_id) == "power")
+                    or (
+                        _flag_grouping_for_net(ctx, net_id)
+                        and _net_class(ctx, net_id) == "power"
+                    )
                 ):
                     # 530A, 岳's ground rule: 「GND 还有各类电源标识，不准给我摆
                     # 网络标签，必须是旗标！」 A ground the router cannot join is
@@ -25155,6 +25935,180 @@ def _wire_flag_seats(
     return out
 
 
+@dataclass(frozen=True)
+class _WireFlagSeat:
+    """One **wire-style** flag's seat, decided before the rows land (548D3D-H6)."""
+
+    net: str
+    member: str
+    point: tuple[float, float]
+    profile: SymbolProfile
+    ref: str
+    cls: str
+    vertical: bool
+    seat_key: str
+    anchor: tuple[float, float]
+    rotation: float
+    lead: tuple[tuple[float, float], ...]
+
+
+def _placed_flag_obstacles(
+    ctx: _Context, placed: _Placement
+) -> tuple[list[Box], list[Box]]:
+    """``(solids, bodies)`` as the page stands **before** a single row is printed.
+
+    The two tables the text pass is handed (part extents and pin walls; the bodies
+    a lead's span test may not cross), rebuilt from the placement when the caller
+    has no list of its own — the same two builders
+    (:func:`_body_box` / :func:`_pin_walls`) the build uses, so a direct caller
+    and the build decide the seats on the same page. Text is deliberately absent:
+    the rows are what this pass is about to place.
+    """
+    solids: list[Box] = []
+    bodies: list[Box] = []
+    for part_id in sorted(placed.origins):
+        origin = placed.origins[part_id]
+        profile = ctx.profile(part_id)
+        pose = placed.poses[part_id]
+        body = _body_box(profile, pose, origin)
+        if body is not None:
+            solids.append(body)
+            bodies.append(body)
+        solids.extend(_pin_walls(profile, pose, origin))
+    return solids, bodies
+
+
+def _wire_flag_seat_plan(
+    ctx: _Context,
+    placed: _Placement,
+    expressions: Mapping[str, _Expression],
+    net_order: Sequence[str],
+    solids: Sequence[Box] | None = None,
+    bodies: Sequence[Box] | None = None,
+) -> dict[str, _WireFlagSeat]:
+    """The seat each **seat group** of a wire-style net will really take (548D3D-H6).
+
+    The choice is the production ladder's, not a second one: for each
+    ``seat_key`` of :func:`_wire_flag_seats` the rungs are walked in the order
+    :func:`_flag_seat_pins` states, and the first rung at which the real seat
+    function (:func:`_rail_flag_seat` for 069 sec.7's vertical run, or
+    :func:`_flag_pin_lead` for 088b's outlet) returns a lead is the answer. A
+    rung the drawing already blocks — a part body, a pin wall — is passed over,
+    so a blocked first pad moves the plan to the next pad that holds a flag,
+    exactly as the seat pass would; the rest of the ladder is **not** kept as a
+    list of "maybe" corridors, which is what the text pass used to reserve.
+
+    Everything the probe sees is the page **before the rows are printed**: the
+    obstacle tables the text pass was handed (:func:`_placed_flag_obstacles` when
+    the caller has none), the same blocked points and the same lengths. Text rows
+    are therefore not in the answer — and that is the point of the reservation
+    this map feeds: the chosen run is kept out of the rows, so the row that would
+    have moved the seat cannot appear on it.
+
+    A seat taken here is also added to the probe's own obstacles
+    (:func:`_remember_lead`, the flag box), so two rails of one page are chosen as
+    they will be drawn — one probe, the ladder's own competition.
+    """
+    if solids is None or bodies is None:
+        derived_solids, derived_bodies = _placed_flag_obstacles(ctx, placed)
+        if solids is None:
+            solids = derived_solids
+        if bodies is None:
+            bodies = derived_bodies
+    points = [
+        point
+        for expression in expressions.values()
+        for _member, point in expression.points
+    ]
+    router = _Router(
+        grid=ctx.budget.grid,
+        residue=placed.residue,
+        boxes=list(solids),
+        bounds=_search_bounds(ctx, list(solids), points),
+    )
+    plan: dict[str, _WireFlagSeat] = {}
+    for net_id, member, point, profile, ref, cls, vertical, seat_key in (
+        _wire_flag_seats(ctx, expressions, net_order)
+    ):
+        if seat_key in plan:
+            # One symbol per seat group, the seat pass's own rule: the first rung
+            # that holds the flag answers for the group.
+            continue
+        blocked = _blocked_points(ctx, placed, net_id, [], [], [])
+        router.reserved_exempt = net_id
+        if vertical:
+            anchor, rotation, lead, _failure = _rail_flag_seat(
+                ctx, placed, net_id, member, point, profile, router, blocked,
+                solids, bodies,
+            )
+        else:
+            anchor, lead, hang, _crossings = _flag_pin_lead(
+                ctx, placed, net_id, profile, member, point, router, blocked,
+                solids, bodies,
+            )
+            rotation = _flag_rotation((0.0, hang), flag_glyph_kind(profile))
+        if lead is None:
+            continue
+        plan[seat_key] = _WireFlagSeat(
+            net=net_id, member=member, point=point, profile=profile, ref=ref,
+            cls=cls, vertical=vertical, seat_key=seat_key,
+            anchor=anchor, rotation=rotation, lead=tuple(lead),
+        )
+        router.boxes.append(_flag_box(profile, rotation, anchor, net_id))
+        _remember_lead(router, net_id, flag_glyph_kind(profile), lead)
+    router.reserved_exempt = ""
+    return plan
+
+
+def _wire_flag_lead_band(seat: _WireFlagSeat) -> Box:
+    """The strip a settled seat's lead runs on, ``FLAG_CLEARANCE`` sideways only.
+
+    A straight lead keeps the exact shape this reservation has always used — a
+    vertical run is ``x ± FLAG_CLEARANCE`` over its own ``y`` span, a horizontal
+    one the same statement turned a quarter turn — so a page whose seat is the
+    first rung it ever was keeps the byte-identical band. A **bent** lead (088b's
+    outlet) has no single run to stay on, so it is its bounding box grown by the
+    same clearance; the length is the settled lead's, not a second
+    :data:`FLAG_LEAD` guess.
+    """
+    xs = [point[0] for point in seat.lead]
+    ys = [point[1] for point in seat.lead]
+    if max(xs) - min(xs) <= 1e-9:
+        return (xs[0] - FLAG_CLEARANCE, min(ys), xs[0] + FLAG_CLEARANCE, max(ys))
+    if max(ys) - min(ys) <= 1e-9:
+        return (min(xs), ys[0] - FLAG_CLEARANCE, max(xs), ys[0] + FLAG_CLEARANCE)
+    return (
+        min(xs) - FLAG_CLEARANCE, min(ys) - FLAG_CLEARANCE,
+        max(xs) + FLAG_CLEARANCE, max(ys) + FLAG_CLEARANCE,
+    )
+
+
+def _planned_seat_order(rows, planned: Mapping[str, _WireFlagSeat]):
+    """Put each seat group's **planned** rung first, the rest of the ladder after.
+
+    The rows arrive in :func:`_flag_seat_pins`' own order and one seat group is a
+    contiguous run of them, so honouring the text pass's choice is a stable
+    reorder: the pad whose corridor the rows were kept off is asked first, and
+    every other rung stays behind it as the fallback the seat pass has always had
+    (a plan that turns out blocked by a later obstacle walks the same ladder — it
+    never invents a seat).
+    """
+    out = []
+    index = 0
+    while index < len(rows):
+        key = rows[index][7]
+        end = index
+        while end < len(rows) and rows[end][7] == key:
+            end += 1
+        group = rows[index:end]
+        seat = planned.get(key)
+        if seat is not None:
+            group = sorted(group, key=lambda row: row[1] != seat.member)
+        out.extend(group)
+        index = end
+    return out
+
+
 def _arm_terminal_members(ctx: _Context) -> frozenset[str]:
     """The feet a declared series arm **ends** on (548B3).
 
@@ -25549,9 +26503,19 @@ def _seat_wire_flags(
     #: grounds land in one neighbourhood and a per-cluster key for a split ground
     #: (`_wire_flag_seats`). One symbol per neighbourhood, not one per net.
     seated_nets: set[str] = set()
-    for net_id, member, point, profile, _ref, cls, vertical, seat_key in (
-        _wire_flag_seats(ctx, expressions, net_order)
-    ):
+    #: 548D3D-H6: the pad the text pass **reserved a corridor for**, per seat
+    #: group (:func:`_wire_flag_seat_plan`). Honouring it is what makes the
+    #: reservation mean something: the rows were kept off that pad's run, so that
+    #: is the pad the symbol is hung on — not whichever rung this pass would have
+    #: reached for on its own. The rest of the ladder stays behind the planned
+    #: rung as the fallback it always had, so a plan the drawing has since made
+    #: impossible still seats the net somewhere legal instead of refusing it; the
+    #: plan never names a pad outside the ladder.
+    planned = getattr(router, "wire_flag_plan", None) or {}
+    rows = list(_wire_flag_seats(ctx, expressions, net_order))
+    if planned:
+        rows = _planned_seat_order(rows, planned)
+    for net_id, member, point, profile, _ref, cls, vertical, seat_key in rows:
         if vertical and seat_key in seated_nets:
             continue
         # A rail flag reaches for 069 sec.7's straight vertical run first and only
@@ -25666,35 +26630,70 @@ def _flag_alternates(
 ) -> list[tuple]:
     """Every real grade :func:`_flag_pin_lead` would take for this pad, in order.
 
-    The ladder's own alternates, not a new shape family: each call is the same
-    function with the grades already answered added to ``blocked``, so the next
-    answer is the next rung the ladder itself would have drawn. The loop stops
-    when the ladder has no further rung — the rung space is finite — and each
-    answer is a real ``_flag_box`` measured with the compiler's own model.
+    Two passes over the **same** production ladder, not a new shape family:
+
+    * the **legacy** pass keeps the old suppression (previous grade's anchor,
+      lead lattice and flag box), so it returns exactly the list and order the
+      pre-548D3D compiler produced;
+    * the **expanded** pass suppresses only anchors, which reaches the rungs that
+      share an already-answered grade's first run and turn the other way at the
+      same corner — the degree of freedom Board2 P5 needs (U30.9's and U30.8's
+      leads both turn at ``x = -115``; only opposite hangs keep their vertical
+      legs apart).
+
+    The answer is the legacy list plus only those expanded candidates whose
+    ``lead[:2]`` equals a legacy candidate's and whose hang is the opposite,
+    de-duplicated. No new length, direction or location family enters, and the
+    legacy order is unchanged, so every page that never needed the extra rung
+    draws exactly its old bytes. The loop is still the ladder's own finite
+    rung space (64-rung cap).
     """
     family = flag_glyph_kind(profile)
-    extra: set[tuple[float, float]] = set()
-    out: list[tuple] = []
-    seen: set[tuple] = set()
-    while True:
-        anchor, lead, hang, _crossings = _flag_pin_lead(
-            ctx, placed, net_id, profile, member, point, router,
-            blocked | extra, solids, bodies,
-        )
-        if lead is None:
-            break
-        rotation = _flag_rotation((0.0, hang), family)
-        box = _flag_box(profile, rotation, anchor, net_id)
-        key = (anchor, tuple(lead), hang)
-        if key not in seen:
+
+    def walk(legacy: bool) -> list[tuple]:
+        extra: set[tuple[float, float]] = set()
+        out: list[tuple] = []
+        seen: set[tuple] = set()
+        while True:
+            anchor, lead, hang, _crossings = _flag_pin_lead(
+                ctx, placed, net_id, profile, member, point, router,
+                blocked | extra, solids, bodies,
+            )
+            if lead is None:
+                break
+            rotation = _flag_rotation((0.0, hang), family)
+            box = _flag_box(profile, rotation, anchor, net_id)
+            key = (anchor, tuple(lead), hang)
+            if key not in seen:
+                seen.add(key)
+                out.append((anchor, lead, hang, rotation, box))
+            extra.add(_key(anchor))
+            if legacy:
+                for start, end in zip(lead, lead[1:]):
+                    extra |= _lattice_nodes(router, start, end)
+                extra |= _nodes_in_box(router, box)
+            if len(out) > 64:
+                break
+        return out
+
+    old = walk(True)
+    if ctx.presentation.text_placement != "native-attr" and old:
+        # Legacy pages keep their exact candidate set and ranking. The expanded
+        # opposite-hang pass is native-attr or an empty-legacy rescue, never a
+        # default reorder of an already working ladder.
+        return old
+    out = list(old)
+    seen = {(item[0], tuple(item[1]), item[2]) for item in out}
+    for candidate in walk(False):
+        key = (candidate[0], tuple(candidate[1]), candidate[2])
+        if key in seen:
+            continue
+        if any(candidate[1][:2] == old_item[1][:2]
+               and candidate[2] != old_item[2] for old_item in old):
+            out.append(candidate)
             seen.add(key)
-            out.append((anchor, lead, hang, rotation, box))
-        extra.add(_key(anchor))
-        for start, end in zip(lead, lead[1:]):
-            extra |= _lattice_nodes(router, start, end)
-        extra |= _nodes_in_box(router, box)
-        if len(out) > 64:
-            break
+            if len(out) > 64:
+                break
     return out
 
 
@@ -27219,8 +28218,39 @@ def _flag_pins_seats(
             # looser one.
             anchor, rotation, lead = seat
             why: list[str] = []
+            # The stricter replay is an explicit native-attr feature, not a
+            # default behaviour change for every reserved seat. Other pages keep
+            # the legacy reservation check and their old seats.
+            strict_replay = bool(router.flag_walls) and (
+                ctx.presentation.text_placement == "native-attr"
+            )
+            blocked_here = blocked | _flag_ghosts(router) if strict_replay else blocked
+            inner = None
+            room = None
+            ruler = None
+            if strict_replay and ctx.budget.page_box is not None:
+                page = ctx.budget.page_box
+                if _inside((point[0], point[1], point[0], point[1]), page):
+                    inner = (
+                        page[0] + PAGE_MARGIN, page[1] + PAGE_MARGIN,
+                        page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
+                    )
+            if strict_replay:
+                room = _flag_room(router, solids, inner, blocked_here)
+                ruler = _flag_wire_ruler(ctx, net_id, profile, router)
+            boxes = (
+                (*bodies, *router.flag_walls) if router.flag_walls else bodies
+            )
+            if _key(anchor) in blocked_here:
+                why.append(
+                    f"its anchor {_point_text(anchor)} is no longer clear")
             for start, end in zip(lead, lead[1:]):
-                if not _span_free(router, start, end, blocked, wire=False):
+                free = (
+                    _span_free(router, start, end, blocked_here, boxes, wire=False)
+                    if strict_replay else
+                    _span_free(router, start, end, blocked, wire=False)
+                )
+                if not free:
                     why.append(f"its lead run {_point_text(start)}-{_point_text(end)} "
                                "is no longer free")
             crossing = _lead_crossing(router, lead)
@@ -27241,6 +28271,13 @@ def _flag_pins_seats(
                         f"({box[0]:g}, {box[1]:g})-({box[2]:g}, {box[3]:g}) overlaps "
                         f"({other[0]:g}, {other[1]:g})-({other[2]:g}, {other[3]:g})")
                     break
+            if strict_replay and not room(_flag_box(profile, rotation, anchor, net_id, margin=0.0), box):
+                why.append(
+                    "its flag box "
+                    f"({box[0]:g}, {box[1]:g})-({box[2]:g}, {box[3]:g}) is no longer free")
+            if strict_replay and not ruler(anchor, rotation):
+                why.append(
+                    f"its flag glyph at {_point_text(anchor)} is no longer clear of a wire")
             if why:
                 if notes is not None:
                     notes.append(
