@@ -136,9 +136,9 @@ describe('boardwise_review_read: structured read through --json', () => {
     expect(dirname(jsonPath).startsWith(join(tmpdir(), 'boardwise-dsh-'))).toBe(true)
     expect(jsonPath.startsWith(out)).toBe(false)
 
-    // The render is the whole canonical object, pretty-printed — no 32 KiB cap.
+    // The render is the whole canonical object, compact JSON — no field is removed.
     expect(tool('boardwise_review_read').output.render({}, value)).toEqual([
-      { type: 'text', text: JSON.stringify(envelope, null, 2) },
+      { type: 'text', text: JSON.stringify(envelope) },
     ])
   })
 
@@ -370,7 +370,7 @@ describe('boardwise_triage_batch: one atomic batch, judged by Python', () => {
     expect(inputText).toContain('测试点，未接任何负载\\n第二行保持原样')
 
     expect(tool('boardwise_triage_batch').output.render({}, value)).toEqual([
-      { type: 'text', text: JSON.stringify(result, null, 2) },
+      { type: 'text', text: JSON.stringify(result) },
     ])
   })
 

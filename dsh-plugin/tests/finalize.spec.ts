@@ -213,7 +213,7 @@ describe('boardwise_review_finalize: the receipt comes from the file and lands i
     // …and the real projection serves the same value.
     expect(stateOf(projections, session)).toEqual({ receipts: { [key]: expectedEntry } })
     expect(toolOf(tools).output.render({}, result)).toEqual([
-      { type: 'text', text: JSON.stringify(result, null, 2) },
+      { type: 'text', text: JSON.stringify(result) },
     ])
   })
 

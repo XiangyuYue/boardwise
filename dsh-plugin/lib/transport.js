@@ -29,7 +29,7 @@ export const TEXT_OUTPUT = {
 export const STRUCTURED_OUTPUT = {
     schema: { type: 'object', additionalProperties: true },
     render: (_args, value) => [
-        { type: 'text', text: JSON.stringify(value, null, 2) },
+        { type: 'text', text: JSON.stringify(value) },
     ],
 };
 /**
@@ -111,7 +111,11 @@ function parseJsonObject(tool, jsonPath, raw) {
         throw new Error(`${tool}: the --json file ${jsonPath} must contain a JSON object, got ${describeValue(parsed)}; ` +
             'refusing to return a non-object result.');
     }
-    return parsed;
+    // JSON.parse retains a numeric -0, while JSON.stringify emits 0. DSH checks
+    // the returned value against that round-trip with strict object comparison,
+    // so an otherwise valid CLI document containing -0 is rejected as lossy.
+    // Canonicalize the transport value once; this changes no Python judgement.
+    return JSON.parse(JSON.stringify(parsed));
 }
 /** A short, log-safe name for an unexpected JSON value. */
 export function describeValue(value) {

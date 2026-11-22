@@ -6,6 +6,7 @@ vi.mock('node:child_process', () => ({ spawn: vi.fn() }))
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { apply } from '../src/index.ts'
 import { installSpawn, spawnedCommand } from './fake-child.ts'
 
@@ -97,6 +98,26 @@ describe('boardwise_draw_plan: saved page preflight transport', () => {
     ])
     expect(existsSync(out)).toBe(true)
     expect(dirname(jsonPath)).not.toBe(out)
+  })
+
+  it('canonicalizes nested negative zero before the host lossless JSON round-trip', async () => {
+    const value = payload()
+    const plan = value['plan'] as { change: Record<string, unknown> }
+    plan.change = { ...plan.change, parts: [{ pins: [{ dx: 0, dy: 0 }, { dx: 0, dy: 0 }] }] }
+    installSpawn((child, _command, argv) => {
+      // The real P5 plan carries -0 in a pin nested through objects and arrays.
+      // JSON.parse preserves it, JSON.stringify emits 0, and DSH strictly
+      // compares the returned value with that round-trip.
+      const raw = JSON.stringify(value).replace(
+        '{"dx":0,"dy":0},{"dx":0,"dy":0}',
+        '{"dx":0,"dy":0},{"dx":-0,"dy":-0}',
+      )
+      writeFileSync(flag(argv, '--json'), raw, 'utf8')
+      child.finish(0)
+    })
+    const result = await tool().execute(inputs(), exec)
+    expect(result).toEqual(value)
+    expect(isDeepStrictEqual(result, JSON.parse(JSON.stringify(result)))).toBe(true)
   })
 
   it('keeps exit 5 refusal JSON unchanged', async () => {
