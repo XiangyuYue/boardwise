@@ -1,12 +1,14 @@
 # 交接记忆 —— 换 harness / 开新会话先读这份
 
-> **当前路由（562A–D 与真机均完成，工作树待提交；下方 556–561 为历史验收记录）**：
-> 主仓 `E:/boardwise`，HEAD **`0b21342`** 与 `origin/main` 一致。550B=`9f73ede`、552–555=`14e8f39`、556–560=`0ac8973`、561=`0b21342` 均已推送；087E/F=`3d4a0d5`。绘制线与其他 owner 的未提交 hunks 仍保留，不整文件还原或格式化。
+> **当前路由（2026-11-22 绘制线集成提交完成；下方 556–562 为历史验收记录）**：
+> 主仓 `E:/boardwise`，算法提交 **`319a76e`**；此前 `1344464`、`c6d7b25`、`0d989da`、`0364fbc`、`d665034` 已分别推送 NC 写入、删页/库检索、零候选恢复、关系锁策略和 transport 规范化。本文档及版本提交见后续 `git log`，不沿用旧 beta2 的 HEAD/未提交状态。
+> 本轮算法验收：原失败文件集 **243 passed / 2 skipped**，唯一 `test_193_secrecy_hooks` 的 POSIX `chmod: command not found` 为环境项；修复后全量 **12039 passed / 22 skipped / 2 xfailed**，仅该环境项失败。connector **893 passed**、DSH **218 passed / 1 skipped**，两端 typecheck/build 及 Rust fmt/clippy/test 均 exit 0。没有写成“全仓无红”，也没有用 skip/xfail 掩盖。
+> 核心修复：恢复最近带/成对桶的既有优先序；expanded 只在 `native-attr` 或 legacy 为空时启用；新旗座计划/文字墙只在 `native-attr` 页面生效；声明对保持刚性单位且不再全组否决。534z 的 native 新候选合法，测试改为核实实际 GND 引线不压 H1 文字，而非强钉旧 y 坐标。未改 20 单位重复载体地板、60 单位支路合同或黄金 hash 来掩盖回归。
+> 未纳入运行垃圾：`node_modules/`、pytest 临时目录、根 `tmp*`、lock、`docs/debug.log`、`blocklib/parts.json.tmp` 与探针 JSON 均未提交。无 git restore/checkout、无删除、无新真机写入；下文历史验收记录只作追溯。
 > **562A Connector `pcb.path_probe` 工作树完成**：主代理三文件 **52 passed**，Arc/预算两项变异各 1 红后恢复；`getEntireTrack=0`，输出仅图证据，无 verdict/path。
 > **562B Python/CLI 工作树完成**：`core/livepath.py` 双向邻接+BFS，`boardwise pcb path`、protocol、owners=161 与 `--json` 原子写入已接通；十三文件 **376 passed**、Connector **876 passed**。父变异单向 2 红/截断16红、错action16红/写失败1红，均 cp+SHA 恢复并复绿。证据 `evidence/562a/`、`evidence/562b1/`、`evidence/562b2/`。
 > **562D 对抗审查三处小修完成**：两遍扫描消 `Pad` 伪 non-reciprocal、`calls > cap` 才额外判截断、JSON 写入覆盖 `OSError+ValueError`；主代理 **85 passed**，单遍与 `>= cap` 变异先红后恢复。跨层只留 562C 真机探针，没有新增 cross-layer 生产规则。
 > **562C 真机验收完成，DSH 适配明确不做**：新实例 `inst-001605508-glojp393` 激活后，direct 与多 Line＋Via 均 CONNECTED（8 hops/1 via、内部图元与离线一致），分离负例 NOT_PROVEN，U5.2 Pad↔Via 为 INDETERMINATE；20 组跨层候选直接边均为 0，Arc 未启用。非 PCB 焦点拒绝、原 P1 恢复、设计写零，开发态 daemon 已停止。最终 Python **35 failed / 11997 passed / 26 skipped / 2 xfailed / 3 errors**，差分仅移除 shared owner 计数红，其他归绘制线；DSH 218/1、Rust 177/4 ignored。证据 `evidence/562c/live-acceptance.md`，真实容器只留 `.tmp_562_live/`。未提交、未推送、未部署、未发布。
-> **562 多跳图合同已立、实现未开工**：任务书 `tasks/562_live_pcb_path_graph.md` 已定独立 `pcb.path_probe` / `pcb path` / `boardwise.pcbLivePath/1`、双向邻接 proof、固定预算与真实负例；不得恢复 entireTrack 正证据。DSH 部署/pack、推送与发布仍需岳逐次批准。
 > 556：`page_y` 公有化 + CLI 合同一次生成；父两变异（私有导入 1 红、去负号 4 红）后 **50 passed** 恢复。557：台账与 handoff 路由，文档/工作区 **67 passed**。
 > 558/558B：义务四类 + 机械三通道 + 连接器 pinout；真实重算 unreviewed **23→23**、needs **15→11**、`verdict=incomplete` 与三份 `machine_verified` 不变；父验 135 passed、变异 A 4 红 / B 2 红，558B 精确族词后 EST026 三行转 `connector-pinout`（父移除词 3 红、聚焦 68 passed）。三份机器档已由岳签核为 verified，U8 身份与 EST026 原始判类未伪造，机械件退出 hunt 工作清单**不等于**审查通过。
 > 559：纯投影 + `pcb connection` CLI + connector 只读 action；父 **268 Python + 43 Node**、typecheck 绿，两有效变异先红后恢复；真实**预验**（已激活 550B + 同会话归档身份）正反 verdict 与离线 550 一致，但原生 `pcb.connection_probe` 在旧 daemon 上 **exit 3 / stdout 空 / `unknown action`**——当时**未热更、未部署、未激活**，预验不等于完整宿主兼容（此失败史保留；2026-11-20 另行授权激活已成立，见下一条）。
@@ -22,13 +24,22 @@
 > 边界不变：真实设计写、人工签核、V3 宿主、生产非空板、真实 CBB 与“天然 GREEN”仍未覆盖；555 的 3 颗机器档已由岳签核为 verified；U8/EST026/机械件仍需人工，#87 待提出人复验不关单。台账状态校正不等于验收升级。
 > 本批（560）只改文档与必要状态钉：`tasks/560_goal_integration.md`、`tasks/review-line.md`、`tasks/TASKMAP.md`、`docs/review-sop.md`、`docs/pits.md`、`tests/test_doc_claims.py`、`bridge/protocol.py`（仅注释/returns 文字）、connector `connectionEnd` 注释；零 Git 写、零删除、零全量 pytest、零 bridge/EDA。
 
+> **Board2 P5 已完成（2026-11-19）**：test V4 / Board2 / P5 已在原 pageUuid `52123f7fe6cac768` 落最终 cand2，**未创建或删除图页，只按 plan 清理并替换页内图元**。最终 `draw apply` applied/exit0（6件、18线、15旗），`draw lint` **0E/0W/0I**，独立宿主逐脚 **21/21、37/37 NC、0 problems**，原生渲染逐岛目检通过。P44：NRST 145/0、BOOT0 90/0、3V3 327.5/4、GND 415/4，框688.5×351、内容648.5×311。cand1因1.5文字接触判退，不选。0候选 recovery、空页复用、库搜索limit64、MCU关系锁、文字逃生带、混合alternates、flagShareGroups net作用域和删页create确认闸均已落地；ch343 **8/0**、最终聚焦130+2 skipped、discard139、删页219均通过并做独立变异。最终证据与持久化边界（saved_unverified）见 [`evidence/p5-audit/FINAL-ACCEPTANCE.md`](../evidence/p5-audit/FINAL-ACCEPTANCE.md)，图见 [`live-after.png`](../evidence/p5-audit/live-after.png)。
+>
+
+> **当前落点（2026-11-19，已交付，等用户本地DSH试跑）**：本地提交已完成，branch `main`，HEAD **`9f73edebaf3fda7b23a8ddb8132dc46b7236c547`**，57个文件；**未推送、未打tag、未公开发布**。交付包为[`boardwise-0.6.3-beta.2-windows.zip`](../outputs/releases/0.6.3-beta.2/boardwise-0.6.3-beta.2-windows.zip)，SHA-256 `c9404df9f5cf7107df213fea7867168e4bd0dfde7b20b500ee70a92fd8862c2a`，包内manifest已绑定本提交。最终三件套在`outputs/releases/0.6.3-beta.2/verified/`；其他构建目录保留追溯，不作交付入口。验收明细见[`evidence/release-063-beta2/README.md`](../evidence/release-063-beta2/README.md)。本次只补交接文档，开发与试跑结果以此提交为基线。
+>
+> **旧 eprj2 已物理封存（2026-11-19）**：11 个旧实验 worktree 的基线历史、tracked diff 与未跟踪源码已归档到 [`worktrees/eprj2-legacy-20261119`](https://github.com/XiangyuYue/boardwise-workspace-archive/tree/worktrees/eprj2-legacy-20261119)，commit `d7c2eb3dbada0451b8e86cb65eaaf702af4ed7de`；云端核对后目录全部进回收站，约释放 2.04 GB，另6个失效登记已移除。当前只剩主仓与 `.tmp_review_line` 两个 worktree。清单与恢复方法见 [`evidence/draw-assets/eprj2-archive-HANDOFF.md`](../evidence/draw-assets/eprj2-archive-HANDOFF.md)；旧实验不得直接覆盖当前 eprj3 工作树。
+>
+> **接续动作**：用户准备自行用本地DSH验证效果。先确认DSH使用新exe（`BOARDWISE_EXE`绝对路径、`--version`为`0.6.3-beta.2`）、安装本包tgz并重启DSH；现场桥接另需确认新connector及daemon实际激活，不能用同版本号证明新bundle已加载。安装说明随ZIP；本代理未替用户安装或切换现有环境。后续根据用户试跑的输入、会话日志和真实拒因分诊，再派最小修复；当前不自动启动新绘制开发，也不主动重启61190或改工程。用户“提交后不要推送”的约束继续有效。
+>
 > **本地beta 2集成（2026-11-19）**：用户授权打包`0.6.3-beta.2`及提交当前未提交源码/测试/文档，并重申**不要推送**，由本地DSH试跑。最终pytest **11756 passed/22 skipped/2 xfailed，34:46**；connector846 passed、DSH193 passed/1 skipped，两端typecheck/build及Rust fmt/clippy/test通过。owner/CLI合同漂移与三项审计P2已修；全量暴露的C2真实单脚网范围扩大已按root成员数收窄，原指纹/通道/跨岛接线合同均恢复，父独立变异检出。最终exe隔离daemon/skill同步及打包插件保存候选plan已验，包路径`outputs/releases/0.6.3-beta.2/boardwise-0.6.3-beta.2-windows.zip`。命令、误设30分钟及临时目录关键字导致重跑的记录见[打包任务](../tasks/063_beta2_local_package.md)、`PROGRESS.md`与`evidence/release-063-beta2/README.md`。实际DSH普通用户端到端、service名称冲突和新三件套真机激活仍待验；保留61190旧daemon，不重画药箱或恢复eprj2/P145。
 >
 > **可靠性A/B源码验收（2026-11-18）**：A任务/资产路由已校正；B1新增`draw plan --layout candN.page.json`，一次真实合成编译的8份候选预检新增编译调用为0，父验97 passed、两因果变异先红恢复，见[B1证据](../evidence/draw-reliability-b1/README.md)。B2新增离线`boardwise_draw_plan`，父验50 passed，typecheck/build通过、两父变异先红恢复，见[B2证据](../evidence/draw-reliability-b2/README.md)。实际DSH安装及真机/发布验收的当前覆盖以上方beta 2记录为准；当时遗留owner与CLI合同漂移现已在集成批修复。
 >
 > **可靠性C1/C2：普通标签载线源码已修，限显式reserve的合成合同**。3件2岛复现了compile绿/plan拒DATA_BUS；现在复用原预留与carrier输出、长度筛选和既有文字避让反馈。父验核心70 passed、local/paired/service邻域10 passed，40/60长度、改网名、模块平移与默认关闭四候选指纹均有证据；三项父独立磁盘变异检出并copy+SHA恢复。另一个方向覆盖变异仍5 passed，已删去该无必要性证据的6行，不为留代码倒造测试。见[C证据](../evidence/draw-reliability-c/README.md)。未安装DSH、未真机或原生视觉验收，不签任意新电路布局完成。
 >
-> **下一最小批**：用原会话失败输入做离线接缝回放，分别记录普通与service路径；ESP_RXD/ESP_EN名称盒冲突仍是未验子项，不能用本组合成通过代替。原包未校准profile只作失败证据，不作落图资产；真实符号新模块与DSH端到端另按既有三关。默认reserve关闭保持兼容，也保留原默认路径的失败；未强开开关、重画药箱、重启P145或做eprj2绘图开发。详见[方案](draw-reliability-plan.md)；入口为[tasks/draw-line.md](../tasks/draw-line.md)与[docs/draw-assets.md](draw-assets.md)。
+> **试跑后候选小批（尚未开工）**：按用户反馈决定是否用原会话失败输入做离线接缝回放，分别记录普通与service路径；ESP_RXD/ESP_EN名称盒冲突仍是未验子项，不能用本组合成通过代替。原包未校准profile只作失败证据，不作落图资产；真实符号新模块与DSH端到端另按既有三关。默认reserve关闭保持兼容，也保留原默认路径的失败；未强开开关、重画药箱、重启P145或做eprj2绘图开发。详见[方案](draw-reliability-plan.md)；入口为[tasks/draw-line.md](../tasks/draw-line.md)与[docs/draw-assets.md](draw-assets.md)。
 
 > **会话审计结论（2026-11-18，调查时暂停开发，现已授权分批修复）**：以下保留当时调查结果，实施以顶部当前派单为准。最新ZIP SHA `97101604…e3878` 含下午0.6.3-beta升级及晚间smartbox重绘；不能只按0.6.2解释。turn13落图耗103分32秒，约65分钟命令活动，至少21次plan无成功；每次CLI plan重新整页compile，同拒因六组重跑耗46分钟。初版绕开编译器逐脚桩+标签，后版用547A未校准profile（19/19、无texts），非P48真实几何；compile通过后plan仍exit5，reserve后又ESP_RXD压ESP_EN，没有三关合格成品。详情与逐调用计时见 [`evidence/dsh-session-37f77c38-audit/README.md`](../evidence/dsh-session-37f77c38-audit/README.md)。以下先前“只因插件没plan/apply”的说法不完整，不能覆盖这份新证据；代理实际上用shell调用了CLI plan。
 
@@ -38,7 +49,7 @@
 >
 > **根因与最小防复发**：547G4D校准脚本把原生GND负y bbox直接写入profile，而既有 `flag_glyph_box` 还会叠加Ground family 180°，与宿主自然姿态相反；正确canonical body在P30已有 `[-10.5,9.5,10.5,19.5]` 先例。`drawapply.load_library` 新增7行拒绝pinless Ground族负y body，明确要求输入适配；这是拒绝错误输入，**没有自动修正旧校准脚本或旧reference recipe**。聚焦 **81 passed**；主代理禁用检查变异 **2 failed/3 passed**、误推广全部旗族变异 **1 failed/4 passed**，cp+SHA恢复。
 >
-> **下一步边界**：沿P48已完成结果推进。待用户关闭重开 test V4 后只读核对持久化，再按需分诊历史DRC警告；不要重画智能药箱、不要继续 eprj2 自动绘图开发，也不重启U1.18/P145。用户指出本次耗时过长，后续局部朝向问题按最小因果改动处理，不再扩成新系统或整页算法批。HEAD `75347ab53068a5efe3c1cbce454474dff113e6d9`，混合未提交保留，未做Git写/全量；本批前台daemon已停止，61190无监听。
+> **P48沿用边界**：沿P48已完成结果推进。待用户关闭重开 test V4 后按需只读核对持久化、分诊历史DRC警告；不要重画智能药箱、不要继续 eprj2 自动绘图开发，也不重启U1.18/P145。用户指出局部朝向问题耗时过长，后续按最小因果改动处理，不再扩成新系统或整页算法批。该修复当时的旧HEAD、未提交与daemon停止记录仅属历史；当前提交/待办以顶部为准，61190状态须使用前重新只读核对。
 >
 
 > **历史交接（2026-11-17，548P144后，P145现暂停）：当时整图下一首拒为U1.18名称盒**。P142 detour+foreign和P143多成员度量通过，P144把固定terminal glyph纳入port-columns的scene，C1.2消失；P142旧下一首拒断言已按证据更新为U1.18。完整整图仍无候选。证据 `evidence/548P144/README.md`。
@@ -61,7 +72,7 @@
 > **这份文件是路由，不是规格。** 它只回答三件事：这是什么项目、三条线现在各在哪、
 > 干活要去读哪份权威文件。细节一律不在这里复制；两处说法冲突时以它指的文件为准。
 > 写它的场合：从 Kimi Code 迁到 DeepSeek Harness（dsh）这类**换 harness**、开新会话、
-> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-18**（DeepSeek 0.6.2 根因已确认；P48 GND已修并保存，未关闭重开验证）。
+> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-11-19**（beta 2已本地提交并交付、未推送，等待用户本地DSH试跑；P48持久化边界仍见上文）。
 
 > **P94/P96更新（2026-11-16）**：原S20分行已复用于严格声明的input链；父独立禁helper3红/去碰撞3红，cp+SHA恢复后63 passed, 1 warning in 60.23s (0:01:00)。drawcompiler当前c8c49503…29f07d，grammar618529e3…170c5。
 > 只完成合成机制：四器件文字standoff均26.5、8脚5网；真实LED/ATTR旋转/视觉未验，独立地旗仍开放。P95只是静态方案。根已接管用户要求的LCD人工调整起点（P97）；子链不再派实施、不碰bridge，写锁已交根。证据`evidence/548P94/`、`evidence/548P96/`。
@@ -74,7 +85,9 @@
 > P83的pair None是首选无冲突时的no-op，不能说明无解或直接修复rail入口。LCD同网旗重叠仍开放。
 > 证据：`evidence/548P82/`、`548P83/`、`548P84/`、`548P85/`、`548P86/`、`548P87/`、`548P89/`。P90正做一次生产版本真实输入消费；P88只读查语义输入与现有文字链。无新整页/真机/全量。
 >
-## 0. 状态通告（2026-11-16）
+## 0. 历史状态通告（2026-11-16，不构成当前派单）
+
+> 下列automatic探索状态保留追溯；P48已完成的参考与当前本地DSH试跑安排见顶部。不要据此重画药箱或恢复P145。
 
 > **智能药箱 automatic 整图与 LCD automatic 均未完成。** WiFi 三组页最新状态及P111拒因见本文首段和`evidence/548P111/README.md`；P44 是人工关系参考，不是 automatic 结果。
 > 548N2 是端口避让修复历史，不代表当前已通过；P44 是人工关系参考，不是 automatic 结果。LCD 当前唯一可接受的产物仍是 P47 人工参考，P108 候选不得当作 automatic 完成，细节见上方 P108/P109 条目。暂停历史见

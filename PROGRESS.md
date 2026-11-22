@@ -4,6 +4,19 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-11-22] 绘制线分线提交与算法回归收口
+
+- 按业务边界拆分并推送：`1344464` NC 引脚写入；`c6d7b25` 删页确认闸与库检索默认64；`0d989da` 零候选 recovery 与空页复用；`0364fbc` move-propose 关系锁策略；`d665034` DSH transport 紧凑 JSON/嵌套 `-0` 规范化。共享 transport 与算法未混批。
+- 算法提交 `319a76e fix(draw): preserve legacy layouts while rescuing flag seats`：恢复最近带/成对桶优先序，expanded 仅 native-attr 或空 legacy 时启用，新旗座计划只在 native-attr 生效，声明对保持刚性单位；P5 三个新测试文件和雷达座席自包含回归随提交。534z native 新候选合法，断言改钉实际 GND 引线与 H1 文字间距，未强改 hash 掩盖。
+- 验证读数：P5 三文件 **22 passed**；原失败文件集 **243 passed / 2 skipped**，仅 `test_193` 的 POSIX chmod 环境失败；修复后全量 **12039 passed / 22 skipped / 2 xfailed**，同样只剩该环境项。connector **893 passed**、DSH **218 passed / 1 skipped**，两端 typecheck/build、Rust fmt/clippy/test 均 exit 0。全量使用 `-n 4 --dist loadfile`、独立 basetemp 与 `.tmp_perf_pytest/junit-draw-final.xml`，未增加 worker 或隐藏红项。
+- 交接与版本随本批整理为 `0.6.3-beta.3`；`docs/handoff.md` 顶部已换成当前提交和真实边界。临时目录、lock、日志、缓存与探针 JSON 均未纳入，旧 beta2 的未推送/未提交说明不再作为当前状态。
+
+## [2026-11-19] beta 2 提交后交接收口
+
+- 按用户要求更新`docs/handoff.md`顶部：已完成本地提交`9f73edebaf3fda7b23a8ddb8132dc46b7236c547`（57文件）、最终ZIP/三件套路径、ZIP SHA-256与manifest绑定；明确未push/tag/公开发布，等待用户本地DSH试跑。
+- 当前下一步改为收集本地DSH实际结果，旧离线接缝回放标为试跑后候选，不自动续开发、安装、重启daemon或写工程。旧HEAD/未提交/daemon无监听及2026-11-16自动线通告明确标历史，保留P48完成参考与不做eprj2/P145边界；下游派单须先服从顶部当前落点。
+- Branch `main`；HEAD `9f73edebaf3fda7b23a8ddb8132dc46b7236c547`。本轮仅交接/进度文档修改，未新增Git提交或推送；beta 2包保持已交付字节。核对实际git log、包manifest与SHA文件；`run.py handoff-postcommit-docs`执行`tests/test_doc_claims.py -q --basetemp=.tmp_pt_handoff_postcommit` → **52 passed,1 warning in2.60s**（既有pytest cache权限警告），限定`git diff --check`通过。1个只读子代理核对路由，不改文件或运行测试。
+
 ## [2026-11-19] 0.6.3 beta 2 本地包与当前工作树提交
 
 - 用户授权打包beta 2并提交当前修复/未提交内容，随后明确禁止推送。57项源码/测试/文档纳入：A/B/C绘制可靠性、V4 facts/移动证据、移动/回放修复与550B只读实例探针；临时日志、lock、构建产物、工程容器不入库。CLI/根包/DSH统一`0.6.3-beta.2`，connector维持同系列0.6.2。

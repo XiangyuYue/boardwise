@@ -4,6 +4,10 @@
 > 当前派单见 [`tasks/draw-line.md`](../tasks/draw-line.md)。本文只做资产路由，不授权移动、删除或Git写。
 > [`manifest.json`](../evidence/draw-assets/manifest.json) 是2026-11-17整理时的机器元数据快照，**不是当前源码/资产指纹**；本批未改写该历史证据。
 
+## 0. 旧 eprj2 封存（2026-11-19）
+
+旧实验 worktree 已完成内容级封存、云端验证、本地回收与注册清理：11 个有效旧目录约 **2.04 GB** 已归档后回收，6 个失效登记已移除；当前只剩主仓与 `.tmp_review_line` 两个 worktree。归档为 `worktrees/eprj2-legacy-20261119`，commit `d7c2eb3dbada0451b8e86cb65eaaf702af4ed7de`，包含基础历史 bundle、tracked diff 与未跟踪源码，不是只推 HEAD。详见 [`evidence/draw-assets/eprj2-archive-HANDOFF.md`](../evidence/draw-assets/eprj2-archive-HANDOFF.md)。旧实验只读恢复须另建临时目录，不恢复旧算法开发。
+
 ## 1. 当前工作集（2026-11-18）
 
 | 资产 | 当前身份 | 权威位置 / 边界 |

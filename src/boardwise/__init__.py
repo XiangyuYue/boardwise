@@ -1,3 +1,3 @@
 """boardwise — AI harness for EasyEDA Pro. Stage 1: offline review."""
 
-__version__ = "0.6.3-beta.2"
+__version__ = "0.6.3-beta.3"

@@ -1,5 +1,7 @@
 # 绘制线派单入口（540B8）
 
+> **当前落点（2026-11-22，分线提交已完成）**：NC/共享bridge/recovery/关系锁/transport 已分别推送，算法提交为 `319a76e`。原生候选兼容修复保留最近带与成对桶顺序，expanded 仅 native-attr 或空 legacy 启用，新旗座计划仅 native-attr 生效；P5 与雷达座席回归随提交。修复后全量 **12039 passed / 22 skipped / 2 xfailed**，仅 `test_193` 的 POSIX chmod 环境失败；connector **893 passed**、DSH **218 passed / 1 skipped**，Rust/两端构建均通过。后续新功能仍须逐批验收，不以本次集成结果替代新页面三关。
+>
 > **当前派单（2026-11-19）：A/B及C普通标签窄修复已有源码验收，进入本地beta 2集成**。A入口已校正；B1保存page候选预检父验97 passed，B2 DSH工具父验50 passed、typecheck/build通过，见[B1](../evidence/draw-reliability-b1/README.md)、[B2](../evidence/draw-reliability-b2/README.md)。C1/C2用3件2岛复现并修显式reserve普通非service载线，父验70+10 passed、三独立因果变异检出并恢复；默认关闭四候选几何保持，见[C证据](../evidence/draw-reliability-c/README.md)。owner与CLI合同漂移现已修，打包和当前未提交内容提交已获用户授权，最终读数见[本地包任务](063_beta2_local_package.md)。下一批先离线回放原会话失败输入，service名称冲突与真实符号模块分别验收；未校准旧输入不落图。实际DSH端到端与新三件套真机激活仍待验。不夹带迁移，不把合成通过当任意布局质量已修复，见[方案](../docs/draw-reliability-plan.md)。
 >
 > **沿P48已完成结果继续**：`test V4/P48` 的30件/31网/5NC/8岛为agent-adjusted reference replay；GND已修为28枚0°、网表前后一致、lint 0E/0W/9I、原生图已目检。持久化仍saved_unverified，DRC历史206 WARN groups、passed=false。见[P48交接](../evidence/v4-fullpage/HANDOFF.md)。不要重画药箱、不重启U1.18/P145、不做eprj2绘图开发。
