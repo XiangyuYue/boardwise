@@ -3,9 +3,10 @@
 The judgement is B1's (`tests/test_562_live_path.py`); this file is about the
 **wiring**: which flags exist, which actions are called and in what order, what the
 route carries, how the version pair is disclosed, the three exit codes, the one
-refusal that must never print a state, and the one place this command may put its
+refusal that must never print a state, the one place this command may put its
 bytes — a file, written atomically, that a failed write does not turn into a
-verdict.
+verdict — and the daemon budget that has to outlast the connector's own walk
+(0.6.3: it did not, so a big board's 「budget ran out」 answer was dropped).
 
 `FakeBridge` stands in for ``cli._open_cli`` + ``BridgeClient`` exactly the way
 ``test_559_pcb_connection_cli``'s does — the adapter opens its own short
@@ -540,6 +541,70 @@ def test_the_catalogue_entry_is_a_closed_read_only_action() -> None:
     assert "entireTrack" not in action.returns, "the catalogue promises no entireTrack set"
     assert "No verdict" in action.summary
     assert "getEntireTrack` is never called" in action.summary
+
+
+# --------------------------------------------------------------------------
+# 0.6.3: the daemon's budget has to outlast the connector's own walk budget
+# --------------------------------------------------------------------------
+#: What the connector allows one walk: ``PATH_TIME_BUDGET_MS = 120000`` in
+#: `connector/src/actions.ts`, checked **between** host reads because the host
+#: call itself is not cancellable. Its own answer can therefore land after this
+#: and still be the answer — which is why the daemon may not hang up at 120 s,
+#: let alone at the 30 s default: it dropped the late frame and the caller saw
+#: TIMEOUT instead of the walk's own 「budget ran out」 evidence.
+CONNECTOR_WALK_BUDGET_S = 120.0
+
+
+def test_the_path_probe_budget_outlasts_the_connectors_own_walk_budget() -> None:
+    budget = protocol.timeout_for("pcb.path_probe")
+    assert budget == protocol.PATH_PROBE_TIMEOUT, (
+        "the daemon's path budget must come from its own named constant, not a "
+        f"literal that nothing can point at; got {budget!r}"
+    )
+    assert budget > CONNECTOR_WALK_BUDGET_S, (
+        f"a {budget:g} s daemon budget hangs up before the connector's own "
+        f"{CONNECTOR_WALK_BUDGET_S:g} s walk budget can report that it ran out, "
+        "so the late answer is discarded and a large board can never show its own "
+        "budget was what stopped the walk"
+    )
+    # Headroom, not just arithmetic: one host call inside a walk may legitimately
+    # spend the daemon's own default read budget, and the frame still has to
+    # travel back.
+    assert budget >= CONNECTOR_WALK_BUDGET_S + protocol.ACTION_TIMEOUT, (
+        f"{budget:g} s leaves less than one default read budget "
+        f"({protocol.ACTION_TIMEOUT:g} s) of room for the host call and the "
+        "transport above the connector's deadline"
+    )
+
+
+def test_the_widened_path_budget_moves_no_other_action() -> None:
+    # The default tier is untouched, and the sibling probe (559) stays on it: the
+    # widening is a statement about one walk, not about the bridge's patience.
+    assert protocol.ACTION_TIMEOUT == 30.0
+    assert protocol.timeout_for("pcb.connection_probe") == protocol.ACTION_TIMEOUT
+    for read in ("pcb.readback", "sch.readback", "sys.probe", "pcb.drc_check"):
+        assert protocol.timeout_for(read) == protocol.ACTION_TIMEOUT, read
+    # Every action that sits above the default, and the budget it sits at. A
+    # snapshot on purpose: a second action quietly inheriting the walk budget (or
+    # any other budget drifting) has to be an edit here, with a reason.
+    above_default = {
+        name: protocol.timeout_for(name)
+        for name in sorted(protocol.ACTION_NAMES)
+        if protocol.timeout_for(name) > protocol.ACTION_TIMEOUT
+    }
+    assert above_default == {
+        "export.screenshot": protocol.SCREENSHOT_TIMEOUT,
+        "export.render": protocol.SCREENSHOT_TIMEOUT,
+        "sch.place_component": protocol.PLACEMENT_TIMEOUT,
+        "pcb.place_component": protocol.PLACEMENT_TIMEOUT,
+        "sch.place_cbb": protocol.PLACEMENT_TIMEOUT,
+        "sch.place_project_cbb": protocol.PLACEMENT_TIMEOUT,
+        "sch.delete_primitives": protocol.DELETE_TIMEOUT,
+        "pcb.delete_primitives": protocol.DELETE_TIMEOUT,
+        "export.fab": protocol.FAB_TIMEOUT,
+        "lib.recommend": protocol.RECOMMEND_TIMEOUT,
+        "pcb.path_probe": protocol.PATH_PROBE_TIMEOUT,
+    }
 
 
 def test_main_routes_pcb_path_to_the_assembly_owned_adapter(

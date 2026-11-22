@@ -7,9 +7,16 @@ A work order is therefore always ``status=proposed`` with both proofs false.
 
 When the direct move is refused for an *attachment* (a flag or label the
 move-block planner will not re-attach), ``strategy="recompile-with-locks"`` adds
-the same group's module locks for the existing PresentationSpec compiler. That
+the same group's **page** locks for the existing PresentationSpec compiler. That
 segment is data for the existing guards — not a planner, not an automatic step,
 and the direct move stays the order's named ``nextCommand``.
+
+The locks are page locks because the pose the evidence carries is a page pose:
+``pagecompiler.page_presentation_view`` translates a *module* lock by its
+module's offset before the page's checks see it, so a module-scope segment would
+land every part at pose + delta + offset on any page whose module is not at the
+origin. A page lock (057 sec.3) is already in page coordinates and is passed as
+it is, and the pose it may not state stays the module drawing's.
 """
 from __future__ import annotations
 
@@ -25,14 +32,17 @@ EVIDENCE_SCHEMA = "boardwise.v4-presentation-evidence/1"
 STRATEGY_DIRECT = "direct-move"
 #: The opt-in alternative for when that direct move is *refused* for an
 #: attachment, because a lock cannot re-attach anything by itself: the group is
-#: recompiled under module locks instead.
+#: recompiled under page locks instead.
 STRATEGY_RECOMPILE_WITH_LOCKS = "recompile-with-locks"
 STRATEGIES: tuple[str, ...] = (STRATEGY_DIRECT, STRATEGY_RECOMPILE_WITH_LOCKS)
 
-#: A module lock's closed key set (057 sec.3): a page lock, which states
-#: `scope` and may not state a rotation, is a different shape and never this
-#: segment's.
-LOCK_KEYS: tuple[str, ...] = ("partId", "x", "y", "rotation")
+#: A page lock's closed key set (057 sec.3): `scope` says the coordinates are the
+#: page's and a page lock carries no rotation — the pose stays the module
+#: drawing's. This segment states page locks only: a module lock states a
+#: rotation and is translated by its module's offset on the page
+#: (``pagecompiler.page_presentation_view``), which would move a measured page
+#: pose a second time.
+PAGE_LOCK_KEYS: tuple[str, ...] = ("partId", "x", "y", "scope")
 
 
 def _number(value: Any) -> float:
@@ -68,6 +78,14 @@ def _recompile_with_locks(
     guards judge them. It states no new device and no narrower group — the
     caller's designators *are* the group.
 
+    Each lock is a **page** lock: the measured page pose plus the delta, in page
+    coordinates, exactly as ``presentation_evidence`` read them off the COMPONENT
+    record. A module lock would be the same numbers read in its module's drawing,
+    and the page would then translate them by the module's offset — the part
+    would land one module offset away from where it was measured. No rotation is
+    stated: a page lock pins a position, and the pose it lands in is the module
+    drawing's (057 sec.3).
+
     ``sources`` are the evidence instances the poses are read from: the work
     order's own ``instances`` keep the identity-and-rotation shape they always
     had and are never widened with coordinates.
@@ -77,7 +95,7 @@ def _recompile_with_locks(
         raise ValueError(
             "the evidence carries no x/y pose for "
             + ", ".join(unposed)
-            + ": a module lock without a measured pose would be fabricated (the "
+            + ": a page lock without a measured pose would be fabricated (the "
             "v4-facts sidecar copies x/y only when the COMPONENT record declares "
             "them and never infers them); supply evidence that states the "
             "instance poses"
@@ -96,7 +114,7 @@ def _recompile_with_locks(
             "partId": part["designator"],
             "x": pose_x + float(dx),
             "y": pose_y + float(dy),
-            "rotation": float(part["rotation"]),
+            "scope": "page",
         })
     page_uuid = pages[0] if pages else ""
     return {
@@ -112,16 +130,22 @@ def _recompile_with_locks(
         "partIds": [part["partId"] for part in selected],
         "pageUuid": page_uuid,
         "locks": locks,
-        "lockScope": "module",
+        "lockScope": "page",
         "lockContract": (
-            "Every lock is a PresentationSpec.userLocks module lock: "
-            "partId/x/y/rotation and no `scope` key. A page lock states "
-            "scope=page and may not carry a rotation, so this segment never "
-            "writes one; x/y are the measured instance pose plus the delta."
+            "Every lock is a PresentationSpec.userLocks page lock (057 sec.3): "
+            "partId/x/y/scope=page and no rotation — a page lock pins a position, "
+            "and the pose it lands in is the module drawing's, so this segment "
+            "never writes one. x/y are the measured page pose plus the delta, "
+            "already in page coordinates: the page compiler passes a page lock "
+            "through untranslated, derives the module's origin from it, and the "
+            "nine re-check it on the merged drawing. A module lock would be "
+            "translated by its module's offset and land one offset away."
         ),
         "presentationSpecReview": [
             "Add these locks to presentationSpec.userLocks of the PresentationSpec "
-            "that already describes this page.",
+            "that already describes this page. They are page locks: the page "
+            "passes them through untranslated and re-checks them on the merged "
+            "drawing.",
             "The group, not the MCU alone, is the unit: every service part, flag "
             "attachment and label relationship this group has goes through the "
             "recompile with it. `designators` is that whole group and no other "
@@ -195,7 +219,7 @@ def propose_agent_adjusted_move(
     move that the order has always named, and the returned document is then
     unchanged field for field. ``recompile-with-locks`` *adds* one segment
     (``recompileWithLocks``) for the case where the direct move is refused for an
-    attachment: the same designators, as module locks for the existing
+    attachment: the same designators, as page locks for the existing
     PresentationSpec compiler. It never replaces ``nextCommand``, is marked
     ``automatic: False`` and proves neither live guard.
     """

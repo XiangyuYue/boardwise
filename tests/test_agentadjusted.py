@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 
 from boardwise import cli
+from boardwise.core.presentationspec import PresentationSpec
+from boardwise.engines import pagecompiler
 from boardwise.engines.agentadjusted import (
-    LOCK_KEYS,
+    PAGE_LOCK_KEYS,
     STRATEGY_DIRECT,
     STRATEGY_RECOMPILE_WITH_LOCKS,
     propose_agent_adjusted_move,
@@ -127,9 +129,13 @@ def test_move_propose_cli_refuses_ambiguity_without_writing(tmp_path, capsys):
 #
 # The direct move is the order's own command and stays it. When the move-block
 # planner refuses that move because a flag/label is attached, the order may
-# carry one extra segment: the same group's module locks for the existing
-# PresentationSpec compiler. It is opted into, never automatic, and it proves
-# neither live guard.
+# carry one extra segment: the same group's **page** locks for the existing
+# PresentationSpec compiler. Page locks, because the measured pose is a page
+# pose: `pagecompiler.page_presentation_view` translates a module lock by its
+# module's offset and passes a page lock as it is, so a module-scope segment
+# would land the part at pose + delta + offset on every page whose module is not
+# at the origin. It is opted into, never automatic, and it proves neither live
+# guard.
 
 
 def _posed_evidence(instances=None):
@@ -193,21 +199,24 @@ def test_recompile_strategy_locks_the_whole_group_at_pose_plus_delta():
     )
     assert list(work) == [*DEFAULT_KEYS, "recompileWithLocks"]
     section = work["recompileWithLocks"]
-    # The moved parts, all of them, at the measured pose plus the delta.
-    assert [lock["partId"] for lock in section["locks"]] == ["U30", "R31"]
-    assert [(lock["x"], lock["y"], lock["rotation"]) for lock in section["locks"]] == [
-        (110.0, 205.0, 0.0), (150.0, 205.0, 90.0),
+    # The moved parts, all of them, at the measured page pose plus the delta,
+    # as page locks: no rotation (a page lock pins a position, not a pose).
+    assert section["locks"] == [
+        {"partId": "U30", "x": 110.0, "y": 205.0, "scope": "page"},
+        {"partId": "R31", "x": 150.0, "y": 205.0, "scope": "page"},
     ]
+    assert [lock["partId"] for lock in section["locks"]] == ["U30", "R31"]
     assert section["designators"] == ["U30", "R31"]
     assert section["partIds"] == ["part-u30", "part-r31"]
     assert section["pageUuid"] == "page-p5"
-    # Module locks only: the closed key set, and no `scope` key on a lock (a
-    # page lock states scope and may not carry a rotation).
+    # Page locks only: the closed key set, and no rotation on any of them.
     for lock in section["locks"]:
-        assert set(lock) == set(LOCK_KEYS)
-        assert "scope" not in lock
-    assert section["lockScope"] == "module"
+        assert set(lock) == set(PAGE_LOCK_KEYS)
+        assert lock["scope"] == "page"
+        assert "rotation" not in lock
+    assert section["lockScope"] == "page"
     assert "scope=page" in section["lockContract"]
+    assert "rotation" in section["lockContract"]
     # An alternative somebody chooses, never a step that runs itself.
     assert section["automatic"] is False
     assert "refused" in section["appliesOnlyWhen"]
@@ -252,9 +261,10 @@ def test_recompile_locks_use_designators_when_device_part_ids_repeat():
 def test_recompile_strategy_uses_the_declared_v4_pose_plus_delta():
     """The real sidecar now carries the COMPONENT's own x/y: locks use them as-is.
 
-    U1 is declared at (300, -500) in the fixture. The lock is x plus dx and
-    the shared _page_y canvas conversion of that y plus dy — no second flip,
-    no snap, no default, and the rotation stays the instance's own value.
+    U1 is declared at (300, 500) in the fixture. The lock is x plus dx and the
+    shared _page_y canvas conversion of that y plus dy — no second flip, no snap,
+    no default, and no rotation: the pose stays the module drawing's, which is
+    what a page lock means.
     """
     evidence = _evidence()
     u1 = next(
@@ -267,14 +277,53 @@ def test_recompile_strategy_uses_the_declared_v4_pose_plus_delta():
         strategy=STRATEGY_RECOMPILE_WITH_LOCKS,
     )
     section = work["recompileWithLocks"]
-    assert [(lock["x"], lock["y"], lock["rotation"]) for lock in section["locks"]] == [
-        (310.0, 505.0, 0.0),
-    ]
+    assert section["locks"] == [{"partId": "U1", "x": 310.0, "y": 505.0, "scope": "page"}]
     assert section["pageUuid"] == "page-1"
-    assert set(section["locks"][0]) == set(LOCK_KEYS)
-    assert "scope" not in section["locks"][0]
+    assert set(section["locks"][0]) == set(PAGE_LOCK_KEYS)
+    assert "rotation" not in section["locks"][0]
+    assert section["lockScope"] == "page"
     assert work["targetFreeProven"] is False
     assert work["netlistIdentityProven"] is False
+
+
+def test_the_page_view_never_translates_these_locks_a_second_time():
+    """The release blocker: a module lock is pose + delta, and the page view adds
+    its module's offset on top of that — silently, and only on pages whose module
+    is not at the origin. A page lock is already a page coordinate and is passed
+    through as it is, so the segment states each lock at ``scope: page``."""
+    offset = {"mcu-1": (140.0, 200.0)}
+    work = propose_agent_adjusted_move(
+        _posed_evidence(), ["U30", "R31"], 10.0, 5.0, "Free the left lane.",
+        strategy=STRATEGY_RECOMPILE_WITH_LOCKS,
+    )
+    locks = work["recompileWithLocks"]["locks"]
+    presentation = PresentationSpec.from_dict({
+        "modules": [{"id": "mcu-1", "parts": ["U30", "R31"], "role": "mcu"}],
+        # The segment's own locks, read back through the schema: a page lock
+        # states scope and no rotation, so this parse is the shape proof too.
+        "userLocks": [*locks],
+    })
+    view = pagecompiler.page_presentation_view(
+        presentation, presentation.modules, offset,
+    )
+    landed = {lock.part_id: (lock.x, lock.y, lock.scope, lock.rotation)
+              for lock in view.user_locks}
+    assert landed == {
+        "U30": (110.0, 205.0, "page", 0.0),
+        "R31": (150.0, 205.0, "page", 0.0),
+    }, "a page lock is page coordinates: the module's offset is never added to it"
+    # The control, in its own spec: the very same numbers as a *module* lock are
+    # moved by that offset, which is the whole reason the segment may not state
+    # one.
+    control = PresentationSpec.from_dict({
+        "modules": [{"id": "mcu-1", "parts": ["U30", "R31"], "role": "mcu"}],
+        "userLocks": [{"partId": "R31", "x": 150.0, "y": 205.0, "rotation": 90}],
+    })
+    (module_lock,) = pagecompiler.page_presentation_view(
+        control, control.modules, offset,
+    ).user_locks
+    assert (module_lock.x, module_lock.y, module_lock.scope) == (290.0, 405.0, "module")
+    assert module_lock.rotation == 90.0
 
 
 def test_recompile_strategy_refuses_a_part_the_evidence_gives_no_pose():
@@ -361,12 +410,11 @@ def test_move_propose_cli_forwards_an_explicit_recompile_strategy(tmp_path, caps
     assert sorted(work) == sorted([*DEFAULT_KEYS, "recompileWithLocks"])
     section = work["recompileWithLocks"]
     assert section["strategy"] == STRATEGY_RECOMPILE_WITH_LOCKS
-    assert [(lock["x"], lock["y"], lock["rotation"]) for lock in section["locks"]] == [
-        (310.0, 505.0, 0.0),
-    ]
+    assert section["locks"] == [{"partId": "U1", "x": 310.0, "y": 505.0, "scope": "page"}]
     assert section["pageUuid"] == "page-1"
+    assert section["lockScope"] == "page"
     for lock in section["locks"]:
-        assert set(lock) == set(LOCK_KEYS) and "scope" not in lock
+        assert set(lock) == set(PAGE_LOCK_KEYS) and "rotation" not in lock
     assert work["nextCommand"][:4] == ["boardwise", "edit", "plan", "--move"]
     assert work["targetFreeProven"] is False
     assert work["netlistIdentityProven"] is False

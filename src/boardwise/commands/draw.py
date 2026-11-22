@@ -25,7 +25,7 @@ EDIT_DIRECTIONS = ("value", "mpn")
 #: is not imported here; `tests/test_agentadjusted.py` pins the two lists equal
 #: and the default to the engine's `STRATEGY_DIRECT`. `direct-move` is the
 #: existing `edit plan --move` command; `recompile-with-locks` adds the group's
-#: module locks as data for the existing PresentationSpec compiler.
+#: page locks as data for the existing PresentationSpec compiler.
 MOVE_STRATEGIES = ("direct-move", "recompile-with-locks")
 DEFAULT_MOVE_STRATEGY = "direct-move"
 
@@ -807,11 +807,13 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
         help=(
             "The work order's alternative (default: %(default)s). direct-move is "
             "the existing `edit plan --move` command the order names. "
-            "recompile-with-locks adds one segment — the same group's module "
-            "locks for the existing PresentationSpec compiler — for when that "
-            "direct move is refused for a flag/label attachment. It is an "
-            "alternative somebody chooses, never an automatic step, and it "
-            "proves neither live guard."
+            "recompile-with-locks adds one segment — the same group's page "
+            "locks (measured page pose plus delta, no rotation) for the existing "
+            "PresentationSpec compiler — for when that direct move is refused "
+            "for a flag/label attachment. Page locks, not module locks: the page "
+            "translates a module lock by its module's offset and passes a page "
+            "lock through as it is. It is an alternative somebody chooses, never "
+            "an automatic step, and it proves neither live guard."
         ),
     )
     draw_move_propose.add_argument(

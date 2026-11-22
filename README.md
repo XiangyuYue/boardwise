@@ -4,7 +4,7 @@ English | [中文](#中文)
 
 An agent harness for hardware engineers.
 
-Current development version: **0.6.2**. Published packages are in
+Current development version: **0.6.3**. Published packages are in
 [Releases](https://github.com/xianyuyijinban/boardwise/releases).
 
 It lets an AI assistant (Claude Code, DeepSeek, Kimi Code — any of them)
@@ -80,6 +80,21 @@ Newer pieces worth knowing:
   host's persisted classes and net rules; an unreadable class list is `null`, never
   an invented empty list. PCB ARC records are preserved and scoped by net, but arc
   geometry and non-empty net classes are still outside the verified boundary.
+- **Live copper connectivity** — `pcb connection --from REF.PAD --to REF.PAD`
+  proves direct shared copper in the focused PCB. `pcb path` adds an ordered
+  multi-hop Line/Via path with per-hop host evidence and an optional `--json PATH`
+  transport. Arc and direct Pad↔Via contact stay unproven; `NOT_PROVEN` never means
+  open circuit. DSH exposes the direct connection tool, not the multi-hop path.
+- **Part identity and datasheet work** — multi-unit symbols no longer become
+  duplicate physical parts, and sharing a designator across different boards is not
+  an ERROR. `parts hunt --live` and the DSH parts-hunt tool collect candidates by
+  real part identity; mechanical parts, connector pinouts and unresolved identity
+  are separate obligations instead of one generic missing-datasheet bucket.
+- **Guarded drawing recovery** — a saved page candidate can be preflighted with
+  `draw plan --layout` without recompiling. Zero-candidate recovery is explicitly
+  `agent-adjusted`; empty-page reuse, page-deletion confirmation, pin-NC writes and
+  lock-based move proposals keep their identity and readback guards. These are
+  bounded drawing aids, not a promise that any schematic can be drawn automatically.
 - **Geometry and shelf fixes** — round, oval and non-round elliptical pads are no
   longer all measured as bounding rectangles. The checkout's default parts shelf
   resolves independently of the caller's working directory, and a missing shelf is
@@ -95,8 +110,8 @@ Newer pieces worth knowing:
   inside `<new-dir>/checkup`. Exit **0** GREEN / **2** RED / **3** INCOMPLETE or
   unusable input; an `incomplete` checkup never turns GREEN, the out directory must
   not already exist, and there is no `--skip-checkup`, no autofix and no save.
-  Only fake-bridge and offline runs back this so far — the live editor path is not
-  verified yet.
+  Authorized V4 test boards have covered the live RED and INCOMPLETE paths; V3 and
+  a naturally GREEN production board remain outside the verified boundary.
 - **Staged, interruptible review** — after **one** `checkup` the first checkpoint
   (`initial`/`partial`: environment and versions, `report.conclusion`, ERROR / host
   DRC, open items, artifact paths) is delivered **before** any deeper digging; deeper
@@ -248,7 +263,7 @@ MIT
 
 硬件工程师的 Agent Harness。
 
-当前开发版本：**0.6.2**。已发布安装包见
+当前开发版本：**0.6.3**。已发布安装包见
 [Releases](https://github.com/xianyuyijinban/boardwise/releases)。
 
 让 AI 助手（Claude Code、DeepSeek、Kimi Code……哪个都行）真正读懂你的
@@ -304,6 +319,16 @@ boardwise checkup
   `INDETERMINATE` 区分「找到 / 未证明 / 证据不足」，不把网名或读不到当成连通。
   `pcb.net_class.list` 读宿主持久化网络类和网规则；读不到是 `null`，不伪造成空列表。
   PCB ARC 已按网保留，但弧几何和非空网络类仍属未验证边界。
+- **在线铜连通证据**——`pcb connection --from REF.PAD --to REF.PAD` 证明焦点 PCB 上两端
+  直接共享铜；`pcb path` 进一步给出有序多跳 Line/Via 路径、逐跳宿主证据和可选
+  `--json PATH` 传输。Arc 与 Pad↔Via 直接接触仍不当作已证连接，`NOT_PROVEN` 不等于开路。
+  DSH 目前提供 direct connection 工具，不提供多跳 path 工具。
+- **器件身份与手册链**——多单元符号不再被拆成重复物理器件，跨板共用位号不再报 ERROR。
+  `parts hunt --live` 与 DSH 手册工具按真实身份收集候选；机械件、连接器脚位和身份未决
+  分别披露，不再混成一个笼统的「缺手册」桶。
+- **受守卫的绘制恢复**——`draw plan --layout` 可复用保存的页候选而不重新编译；
+  零候选恢复明确标为 `agent-adjusted`。空页复用、删页确认、引脚 NC 写入和关系锁移动
+  提案都保留身份与回读闸。这些是有限绘制辅助，不承诺任意原理图都能自动画好。
 - **几何与货架修复**——圆盘、`OVAL` 和非圆 `ELLIPSE` 焊盘不再统一按外接矩形量间距；
   默认货架不再受启动目录影响，文件缺失也不会被静默说成「真实空架」。
 - **分阶段、可中断的审查**——**一次** `checkup` 之后，先把首轮检查点

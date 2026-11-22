@@ -1,10 +1,10 @@
 # 交接记忆 —— 换 harness / 开新会话先读这份
 
-> **当前路由（2026-11-22 绘制线集成提交完成；下方 556–562 为历史验收记录）**：
-> 主仓 `E:/boardwise`，算法提交 **`319a76e`**；此前 `1344464`、`c6d7b25`、`0d989da`、`0364fbc`、`d665034` 已分别推送 NC 写入、删页/库检索、零候选恢复、关系锁策略和 transport 规范化。本文档及版本提交见后续 `git log`，不沿用旧 beta2 的 HEAD/未提交状态。
-> 本轮算法验收：原失败文件集 **243 passed / 2 skipped**，唯一 `test_193_secrecy_hooks` 的 POSIX `chmod: command not found` 为环境项；修复后全量 **12039 passed / 22 skipped / 2 xfailed**，仅该环境项失败。connector **893 passed**、DSH **218 passed / 1 skipped**，两端 typecheck/build 及 Rust fmt/clippy/test 均 exit 0。没有写成“全仓无红”，也没有用 skip/xfail 掩盖。
-> 核心修复：恢复最近带/成对桶的既有优先序；expanded 只在 `native-attr` 或 legacy 为空时启用；新旗座计划/文字墙只在 `native-attr` 页面生效；声明对保持刚性单位且不再全组否决。534z 的 native 新候选合法，测试改为核实实际 GND 引线不压 H1 文字，而非强钉旧 y 坐标。未改 20 单位重复载体地板、60 单位支路合同或黄金 hash 来掩盖回归。
-> 未纳入运行垃圾：`node_modules/`、pytest 临时目录、根 `tmp*`、lock、`docs/debug.log`、`blocklib/parts.json.tmp` 与探针 JSON 均未提交。无 git restore/checkout、无删除、无新真机写入；下文历史验收记录只作追溯。
+> **当前路由（2026-11-22，0.6.3 发布集成；下方 556–562 为历史验收记录）**：
+> 主仓 `E:/boardwise`。绘制线 `1344464`、`c6d7b25`、`0d989da`、`0364fbc`、`d665034`、`319a76e`、`28b9345` 与审查线 `bd5e8a7` 均已推送。本版三件套统一 **0.6.3**；多跳 DSH 工具仍不注册。
+> 发布挖洞修复两项实锤：`recompile-with-locks` 改用 page locks，避免页面姿态再加模块 offset；`pcb.path_probe` daemon 预算改为 **150 s**，不再先于 Connector 的 120 s 走查挂断。聚焦 **365 passed**，两项主代理独立变异均先红并 cp+SHA 恢复；CLI 官方合同一致。
+> Connector **893 passed**、DSH **218 passed / 1 skipped**、Rust **177 passed / 4 ignored**，typecheck/build/fmt/clippy 均通过。三件套位于 `outputs/releases/0.6.3/`；eext 两条目与 bundle、DSH 包版本、527 个 exe 压缩流和保密扫描已核。隔离 exe 的版本、离线审查、daemon 自起/收回、双端 skill 与打包后 DSH 保存候选调用均通过。
+> 最终全量 Python **12039 passed / 26 skipped / 2 xfailed in 2013.69s，0 failed / 0 errors**；真机只读结果和发布哈希以 `PROGRESS.md` 及 GitHub `v0.6.3` Release 为准。未提交 `node_modules/`、pytest 临时目录、根 `tmp*`、lock、debug 或真实容器；下文历史“未提交/未推送/不发布”只作当时记录，不再作为当前状态。
 > **562A Connector `pcb.path_probe` 工作树完成**：主代理三文件 **52 passed**，Arc/预算两项变异各 1 红后恢复；`getEntireTrack=0`，输出仅图证据，无 verdict/path。
 > **562B Python/CLI 工作树完成**：`core/livepath.py` 双向邻接+BFS，`boardwise pcb path`、protocol、owners=161 与 `--json` 原子写入已接通；十三文件 **376 passed**、Connector **876 passed**。父变异单向 2 红/截断16红、错action16红/写失败1红，均 cp+SHA 恢复并复绿。证据 `evidence/562a/`、`evidence/562b1/`、`evidence/562b2/`。
 > **562D 对抗审查三处小修完成**：两遍扫描消 `Pad` 伪 non-reciprocal、`calls > cap` 才额外判截断、JSON 写入覆盖 `OSError+ValueError`；主代理 **85 passed**，单遍与 `>= cap` 变异先红后恢复。跨层只留 562C 真机探针，没有新增 cross-layer 生产规则。

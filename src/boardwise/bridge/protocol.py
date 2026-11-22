@@ -163,6 +163,20 @@ FAB_TIMEOUT = 240.0
 #: backend — 30 s is the default for *one* read and this is up to nine.
 RECOMMEND_TIMEOUT = 90.0
 
+#: Seconds the daemon waits for a `pcb.path_probe` walk. The walk carries its
+#: **own** budget in the connector (`PATH_TIME_BUDGET_MS = 120000` in
+#: `connector/src/actions.ts`), spent between host reads because a host call is
+#: not cancellable — so its answer legitimately arrives *after* 120 s. The 30 s
+#: default hung up first and the daemon discarded the late frame, which turned
+#: 「the walk ran out of its own budget」 into a daemon-side TIMEOUT for every
+#: board big enough to need the whole walk (0.6.3 release blocker). 150 s is the
+#: connector's deadline plus the default read budget's worth of room for the host
+#: call in flight and the transport back.
+#:
+#: Only this action is widened. `pcb.connection_probe` is a single pair of reads
+#: with no time budget of its own, so the default stays its honest bound.
+PATH_PROBE_TIMEOUT = 150.0
+
 #: Name of the event the daemon sends the instant a socket opens.
 EVENT_BANNER = "banner"
 
@@ -2306,6 +2320,12 @@ def timeout_for(action: str) -> float:
     # Up to nine library searches (3 rungs × 3 pages) behind one action.
     if action == "lib.recommend":
         return RECOMMEND_TIMEOUT
+    # The walk spends its own 120 s budget inside the connector, checked between
+    # host reads so its answer can land after that — the daemon has to outlast
+    # it, or the frame reporting the walk's exhaustion is dropped and the caller
+    # only ever sees a daemon TIMEOUT.
+    if action == "pcb.path_probe":
+        return PATH_PROBE_TIMEOUT
     return ACTION_TIMEOUT
 
 

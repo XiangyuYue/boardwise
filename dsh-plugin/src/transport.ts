@@ -46,7 +46,7 @@ export const TEXT_OUTPUT = {
 
 /**
  * 537D1b2: the output contract of a structured read — a canonical JSON object,
- * rendered as the whole pretty-printed document. `render` never sees a byte
+ * rendered as the whole compact JSON document. `render` never sees a byte
  * cap: the value was parsed from a CLI file, not from stdout.
  */
 export const STRUCTURED_OUTPUT = {

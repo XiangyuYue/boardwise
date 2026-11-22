@@ -11,18 +11,19 @@
 
 ---
 
-## 1. 当前在哪（2026-11-15）
+## 1. 当前在哪（2026-11-22）
 
-- **当前正式版**：`v0.6.1`（2026-11-10 正式发布，`prerelease=false`、latest；tag 与 Release
-  `targetCommitish` 均为 `9ffeb3b2850f8391f75700f1f3f37851a4ee4ac2`
-  <https://github.com/XiangyuYue/boardwise/releases/tag/v0.6.1>）；`v0.6.0` 正式版及原始验收读数仍见
-  `tasks/SCHEDULE.md`，本段不回头改写旧记录。
+- **当前正式版**：`v0.6.3`（2026-11-22 发布，`prerelease=false`、latest；
+  <https://github.com/XiangyuYue/boardwise/releases/tag/v0.6.3>）。本版提供在线 direct 与多跳
+  PCB 铜路径、多单元器件身份、批量手册链、保存候选预检、零候选 `agent-adjusted` 恢复和
+  受守卫的页面/局部调整。发布前挖洞修复了关系锁坐标二次偏移与多跳探针 daemon 提前超时；
+  能力边界和实际验收读数以该版 Release 为准，旧版记录见 `tasks/SCHEDULE.md`。
 - **审查线继续加固**：V4 归档支持多 PCB 逐板与多文件合流守卫；EPRU 记录/tombstone 和
   PAD_NET 按一致性规则判优；非矩形焊盘间距、默认货架缺失披露、mid 去耦分类与跨视图几何
   说明已落地。041 S1/S2 提供显式跨板网络声明；541 R1/R2/R4 提供 opt-in manifest、重算和
   partial 披露闸；541R3/I/R4 已实现检查点、预算、公开接口 tool-gap 与 error-result 记账，
-  隔离真实 DSH 0.2.2-rc.3 已验，桌面 profile 未部署。#87②⑤ 已完成工作树实现与 test V4
-  在线验收，未发布；V3/生产非空板未覆盖，Issue 待提出人复验，不擅自关闭。
+  隔离真实 DSH 0.2.2-rc.3 已验，桌面 profile 未部署。#87②⑤ 已随 0.6.2 发布；
+  V3/生产非空板未覆盖，Issue 待提出人复验，不擅自关闭。
 - **真实 eprj3 多文件正路径已通过（4.1.100）**：3 个 `.epcb2` 与 7 个 `.esch2` 合流，
   三板字段和 60 条 findings 多重集一致；无库副本，三种 guard 的真实负例、真实 NC、缺省
   yAxisDirection 与非空多板仍未覆盖。
@@ -67,6 +68,8 @@
 | **v0.5.18**（内测） | 527 收口批：`IntentSource` 转发 / connector 读回页型守卫 + 信封文档 / 189A2 分类裁定 / `parts classify` + `category_trust` / 189A1·088b 结案 | 三闸：挖洞 + 实测 + 上机 |
 | **v0.6.0**（正式版） | 122 E 阶段 + 高速 A 档 1~3 + 542 绘图人工锚 + 527D2/527D3 + 540 平台准备 + V4 单 PCB 首批 + #89 测量修复 | 全量 **8821 passed / 25 skipped / 0 failed**；真机 doctor 9/9、P4 lint 0/0/0；三件发布件与保密/哈希验收完成 |
 | **v0.6.1**（正式版，2026-11-10 发布，`targetCommitish=9ffeb3b`） | V4 多 PCB 与记录一致性 + 041 跨板声明 + 审查证据/几何/运行时闸 + CH343/CH340 两拓扑绘制 + CH343 关闭重开 | 已正式发布（`prerelease=false`、latest）；发布快照 Python 10628 passed / 39 skipped / 1 xfailed（另有两条已登记 115/116 的 098 基线差异）、Connector 608 passed + typecheck、DSH 137/1 + build、Rust 111/4 ignored；真实样本与未覆盖边界不关闭；CH340 重开验证仍开放 |
+| **v0.6.2**（正式版，2026-11-17 发布） | 离线铜路径、真实网络类、V4/PCB 证据、声明式服务支路与布局修复 | Python 11677 passed / 24 skipped / 2 xfailed；Connector 821；DSH 169/1；Rust 177/4 ignored；ARC 几何、非空网络类和任意自动整页不承诺 |
+| **v0.6.3**（正式版，2026-11-22 发布） | 在线 direct/多跳铜路径、多单元与跨板位号、手册链、保存候选与零候选恢复、页面/局部调整守卫 | 发布前挖洞修复 page lock 二次偏移和 path daemon 超时；Connector/DSH 893/218+1，Rust 177/4 ignored；完整验收与发布件哈希见 Release，未覆盖样本不关闭 |
 | **v0.6.x** | 041 跨板网络（DRAFT → 细化）+ **V4 适配** + **Rust strangler**：新工具/引擎默认 Rust，例外登记；旧工具垂直迁移 | 合同对齐 → Rust 默认 → 临时 Python fallback → 删除旧实现；迁移与算法不同批 |
 | **0.6.0 后（独立方向）** | **AI 电路语义编译层**：网表 → 类型化、类 C 的可读语言；AI 读编译后的电路语义，不再直接读原始网表 | 先调研语义合同与解释器/编译器边界及可验证还原；与 V3/V4 解析适配分批，不阻塞 0.6.0 |
 | **v0.7.0** | Rust 接管全部受支持主流程；connector/DSH 薄适配可留 TS | 验收主流程，不追求逐行翻译全部 Python；无长期双业务实现 |

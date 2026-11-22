@@ -104,7 +104,7 @@ review_read/finalize/doctor 始终可收尾，已派发命令不被取消。541R
   `boardwise_draw_plan` 直接复用保存的页候选，exit 0 / 5有完整JSON才返回，拒绝缺失/坏JSON与其他退出码；
   不再编译，不暴露page/project/instance/apply参数。预检通过不等于已画完、逐脚回读或视觉通过。
   返回的`pageDocument`与`plan.json`同目录；需要当前源码CLI支持`draw plan --layout`，
-  本仓库构建成功不代表已安装到运行中的DSH。原compile/lint接口保留；本地beta包版本为0.6.3-beta.3。
+  本仓库构建成功不代表已安装到运行中的DSH。原compile/lint接口保留；当前发布包版本为0.6.3。
   `draw compile` 有两种负载：单模块 presentation 返回 `candidates` + `failureRounds`，
   页级 presentation（CLI 标 `document: "page"`，即多模块 / 有 `flow` / 模块自带 `grammarRef` /
   page lock）返回 `pages` + `moduleFailureRounds`；两者都带 `failures` / `categories` /
@@ -186,10 +186,10 @@ npm pack                       # 产出 boardwise-dsh-<version>.tgz
 ### 装进 profile
 
 ```sh
-dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.3.tgz
-dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.3.tgz
+dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3.tgz
+dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3.tgz
 # desktop / web / headless 是**不同** profile，各装一次
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3-beta.3.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.3.tgz
 ```
 
 也可以从 GitHub 装（要求仓库根的 shim 已提交，见下节）：

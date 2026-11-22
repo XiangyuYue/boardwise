@@ -4,6 +4,14 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-11-22] 0.6.3 正式发布集成与三闸验收
+
+- 发布基线包含审查线 `bd5e8a7` 与绘制线 `1344464`…`28b9345`。发布前只读挖洞实锤两处阻断：`recompile-with-locks` 将页面坐标误作 module lock，改为既有 page lock，非零模块 offset 不再二次平移；`pcb.path_probe` 的 daemon 预算由 30 s 改为 150 s，避免先于 Connector 的 120 s 走查挂断。聚焦 **365 passed**，两项主代理独立变异均先红并 cp+SHA 恢复，官方 CLI 合同一致。
+- 唯一一轮发布全量：**12039 passed / 26 skipped / 2 xfailed in 2013.69s（0:33:33），0 failed / 0 errors**，命令使用 `-n 4 --dist loadfile`、独立 basetemp、durations 与 JUnit；日志 `evidence/release-063/full-pytest.log`。Connector **893 passed**、DSH **218 passed / 1 skipped**，两端 typecheck/build 通过；Rust fmt/clippy/test 通过，**177 passed / 4 ignored**。
+- 三件套统一 0.6.3，位于 `outputs/releases/0.6.3/`。exe SHA-256 `bd4165ac1814f9234693ad7c9f2fe4e523cd26693c62acdcb5e32d1907e65373`；eext `43b53f43fec91149880e3c78b814ecb48ccc7675df73e7dfb89e464cade301cb`；tgz `fe56f8ad2b8ae7832cd8c097bd403c6bd698092eda7a703324385c4a9738f328`；内嵌 Connector bundle `d07b52feb64c4885d521f0217075f1e1d02849c909b70b2705261ab413c23020`。三件发布物及 527 个 exe 压缩流通过保密扫描。
+- 冻结 exe 的版本、离线审查、隔离 daemon 自起/收回、双端 skill 同步与打包后 DSH 保存候选计划均通过；打包插件注册 14 个工具。真机 test V4 热态在线/离线 **273 条自有 findings 完整多重集一致**，三板身份、铜层、检查集合与 crossView 一致，冷启动差异已由热态复跑澄清；P5 lint 0/0/0 但文本谓词因渲染无文字节点未运行，不称 clean。只读验收后本批 daemon 已停止，未写设计。
+- 版本、README、bridge/review 公开说明、roadmap、SCHEDULE、TASKMAP 与 handoff 已同步。`node_modules/`、根 `tmp*`、lock/debug、探针 JSON 与真实工程容器均未纳入；Release 的 target commit 与服务端附件摘要在发布时复核。
+
 ## [2026-11-22] 绘制线分线提交与算法回归收口
 
 - 按业务边界拆分并推送：`1344464` NC 引脚写入；`c6d7b25` 删页确认闸与库检索默认64；`0d989da` 零候选 recovery 与空页复用；`0364fbc` move-propose 关系锁策略；`d665034` DSH transport 紧凑 JSON/嵌套 `-0` 规范化。共享 transport 与算法未混批。
