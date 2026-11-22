@@ -2156,15 +2156,16 @@ class BridgeDaemon:
         return fields
 
     def _gate_confirmation(self, spec: Action, params: dict[str, Any]) -> dict[str, Any]:
-        """Enforce the creation gate, and consume ``confirm`` either way.
+        """Enforce the document-lifecycle gate, and consume ``confirm`` either way.
 
-        ``create`` actions produce a new document, and xianyuyijinban's hard rule is that
-        creating one must be asked for first — so this is the **single** choke
-        point, on the daemon, rather than a check each caller is trusted to
-        repeat. The connector stays unaware of the concept: the parameter is
-        stripped here so it never appears in a forwarded frame, which also
-        means a connector-side action cannot be talked into creating something
-        the daemon declined.
+        ``create`` actions bring a whole document into the project or take one
+        away, and xianyuyijinban's hard rule is that either must be asked for
+        first — so this is the **single** choke point, on the daemon, rather
+        than a check each caller is trusted to repeat. The connector stays
+        unaware of the concept: the parameter is stripped here so it never
+        appears in a forwarded frame, which also means a connector-side action
+        cannot be talked into creating or deleting something the daemon
+        declined.
 
         The decision is keyed on ``risk``, **not** on whether the entry lists
         ``confirm`` among its params. Keying it on the params list would make
@@ -2183,7 +2184,9 @@ class BridgeDaemon:
         if params.get("confirm") is True:
             return forwarded
         if spec.risk == "create":
-            reason = "creates a new document"
+            reason = {
+                "doc.delete_page": "deletes a schematic page and everything on it",
+            }.get(spec.name, "creates a new document")
         else:
             # Per-action, because the tier's one sentence cannot describe them
             # all: `sys.set_document_source` neither replaces code nor reloads

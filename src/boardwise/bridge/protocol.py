@@ -205,8 +205,12 @@ class Action:
     #:   writes, rename, save), or moves the editor's focus. ``doc.open`` and
     #:   ``doc.focus`` change no byte of the project, but they decide which page
     #:   the placement actions land on, so they are write.
-    #: * ``create`` — produces a **new document**. The daemon refuses these
-    #:   unless ``params.confirm is True`` (``CONFIRMATION_REQUIRED``).
+    #: * ``create`` — brings a **whole document** into the project or takes one
+    #:   away (``sch.doc.new``, ``pcb.doc.new``, and since 2026-11-19
+    #:   ``doc.delete_page``). The daemon refuses these unless
+    #:   ``params.confirm is True`` (``CONFIRMATION_REQUIRED``) — the tier is
+    #:   the document-lifecycle confirmation gate, and a deletion is the half
+    #:   of that lifecycle an agent is most likely to reach for on its own.
     #: * ``dangerous`` — outranks every document write: replaces running code or
     #:   otherwise acts beyond any single document (``sys.self_update`` swaps the
     #:   connector's own bundle and reloads the editor page). Same choke point as
@@ -1093,7 +1097,7 @@ ACTIONS: tuple[Action, ...] = (
         ),
         params=("keyword", "limit"),
         returns="{keyword, returned, shown, items}",
-        params_schema="keyword: search text; limit: max items to dump (default 8)",
+        params_schema="keyword: search text; limit: max items to dump (default 64)",
         risk="read",
     ),
     Action(
@@ -1724,12 +1728,31 @@ ACTIONS: tuple[Action, ...] = (
             "Delete a schematic page by uuid — the cleanup half of the "
             "scratch-page flow. The uuid must be one the project lists "
             "(NOT_FOUND otherwise); the host refuses to delete a schematic's "
-            "last page."
+            "last page. **The default answer is no** (2026-11-19, "
+            "xianyuyijinban's rule): a drawing that came out wrong is cleaned "
+            "up by removing the primitives it put there "
+            "(`sch.delete_primitives` — what `draw discard` does), never by "
+            "removing the page it was drawn on; a spare page is a *reason to "
+            "ask the user*, not permission, so an agent may propose a "
+            "deletion and the human decides. Filed in the `create` tier — the "
+            "document-lifecycle gate — for exactly that reason: without "
+            "`params.confirm is True` the daemon answers "
+            "`CONFIRMATION_REQUIRED` and forwards nothing."
         ),
-        params=("pageUuid",),
+        params=("pageUuid", "confirm"),
         returns="{deleted, pageUuid, name}",
-        params_schema="pageUuid: the page to delete",
-        risk="write",
+        params_schema=(
+            "pageUuid: the page to delete; confirm: must be `true` — the "
+            "daemon refuses without it (CONFIRMATION_REQUIRED) and consumes "
+            "it, so it never reaches the connector and the only party who can "
+            "supply it is the caller that actually asked"
+        ),
+        risk="create",
+        # 2026-11-19: `risk` moved write -> create. The gate keys on `risk`,
+        # not on the params list, so the classification IS the enforcement; a
+        # `write` here meant no confirmation was ever required, and the
+        # "don't delete unasked" promise lived only in the recovery prose.
+        # It stays a design write (537A3) — a deleted page moves project bytes.
     ),
     # --- 012 §六/§七: the fab bundle and part recommendations ----------------
     Action(

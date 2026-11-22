@@ -92,16 +92,16 @@ $CLI --action sch.geometry --params '{"bboxIds":["<id>", …]}' $WIN
 - `Power` 旗：连接点就在原点，字形往上伸（+4.5…+10.5）；
   `Ground` 旗：连接点在原点，三道横杠往下挂（−9.5…−19.5）——**两家反着**。
 
-量完清场（先删件、再删页）：
+量完清场（先删件；这里删除的是操作者明确选择的一次性探针页，所以删页命令显式带 `--yes`）：
 
 ```bash
 $CLI --action sch.delete_primitives --params '{"pageUuid":"<PROBE>","primitiveIds":[…5 个 id…]}' $WIN
 $CLI --action sch.doc.save $WIN
-$CLI --action doc.delete_page --params '{"pageUuid":"<PROBE>"}' $WIN
+$CLI --action doc.delete_page --params '{"pageUuid":"<PROBE>"}' --yes $WIN
 $CLI --action sch.doc.save $WIN
 ```
 
-镜头：临时页上四颗料 + 两个旗标的画面；量完一条删除回空页。说一句「探针件不许留在页上」。
+镜头：临时页上四颗料 + 两个旗标的画面；量完一条删除回空页。说一句「探针件不许留在页上」。普通画错不是删页理由：那种情况只清图元，保留图页。
 
 ## 4. 三份规格文件（这就是「一句话需求」的落地形态）
 

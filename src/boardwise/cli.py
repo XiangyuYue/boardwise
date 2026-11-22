@@ -13730,7 +13730,7 @@ async def _draw_apply_flow(
         ):
             lookup = await call(
                 "lib.device.search",
-                {"keyword": part.lcsc, "limit": 8},
+                {"keyword": part.lcsc, "limit": 64},
                 f"resolve {part.designator}'s LCSC {part.lcsc} through the library search",
             )
             items = (lookup or {}).get("items") if isinstance(lookup, dict) else []
@@ -13775,7 +13775,7 @@ async def _draw_apply_flow(
                 # fuzzy first row.
                 by_mpn = await call(
                     "lib.device.search",
-                    {"keyword": part.mpn, "limit": 8},
+                    {"keyword": part.mpn, "limit": 64},
                     f"resolve {part.designator}'s MPN {part.mpn} through the library search",
                 )
                 items = (by_mpn or {}).get("items") if isinstance(by_mpn, dict) else []

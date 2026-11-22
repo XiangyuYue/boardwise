@@ -424,7 +424,7 @@ def test_every_other_action_is_a_design_write_including_new_ones():
     """A forgotten registration must fail **closed**.
 
     `design_write` defaults to `True`, so this asserts two things at once: the
-    field exists on every entry, and nothing but the pinned four opted out.
+    field exists on every entry, and nothing but the pinned six opted out.
     """
     for action in ACTIONS:
         assert isinstance(action.design_write, bool), action.name

@@ -2135,6 +2135,23 @@ export const schSetComponentAttribute: ActionHandler = async (params, eda) => {
 };
 
 /**
+ * How many of the host's search hits `lib.device.search` shows when the caller
+ * names no `limit`.
+ *
+ * The host answers its whole candidate set (measured: 10 rows for `C1590`) and
+ * the exact hit is not always among the first rows — `C1590` /
+ * `CL10B104KA8NNNC` came back **9th of 10** (test V4 Board2 P5). A default of 8
+ * therefore cut the wanted row off before any caller that omits `limit` could
+ * see it, and the answer looked like a short candidate set rather than a
+ * truncation. 64 is the ceiling the flows that *do* name a limit already ask
+ * for, so the default stops being the tightest of the two. An explicit `limit`
+ * still decides on its own — including `0` and values below 64 — and the
+ * answer reports the host's real candidate count (`returned`) beside the rows
+ * this action actually showed (`shown`).
+ */
+const LIB_SEARCH_DEFAULT_LIMIT = 64;
+
+/**
  * `lib.device.search` — keyword candidates, each dumped (read-only).
  *
  * §G requires R24/R27's replacement to be a *real* 0402 part and U3's to be
@@ -2149,7 +2166,7 @@ export const libDeviceSearch: ActionHandler = async (params, eda) => {
   if (!keyword) {
     throw new ActionError('BAD_REQUEST', 'lib.device.search needs a keyword');
   }
-  const limit = Number.isFinite(Number(params?.limit)) ? Number(params.limit) : 8;
+  const limit = Number.isFinite(Number(params?.limit)) ? Number(params.limit) : LIB_SEARCH_DEFAULT_LIMIT;
   const errors: string[] = [];
   const nsRead = readMember(eda, 'lib_Device');
   const ns = nsRead.value;
@@ -2180,13 +2197,18 @@ export const libDeviceSearch: ActionHandler = async (params, eda) => {
     );
   }
   const list = Array.isArray(found) ? found : [];
+  // `returned` is the host's own candidate count — read before the cut — and
+  // `shown` is how many rows this answer actually carries. Reporting both is
+  // what makes a truncation visible instead of looking like a thin library:
+  // explicit `limit: 8` over 10 hits answers `returned: 10, shown: 8`.
+  const returned = list.length;
   const items: unknown[] = [];
   for (const item of list.slice(0, Math.max(0, limit))) {
     items.push(await deepDump(item, 0, 4, 256, errors));
   }
   return {
     keyword,
-    returned: list.length,
+    returned,
     shown: items.length,
     items,
     ...(errors.length ? { readErrors: errors } : {}),

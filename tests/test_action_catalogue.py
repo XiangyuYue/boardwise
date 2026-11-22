@@ -179,14 +179,20 @@ def test_the_dangerous_tier_is_exactly_the_reviewed_set():
 
 
 def test_only_document_producing_actions_are_create():
-    """`create` means "produces a new document", and the list is short on purpose.
+    """`create` means "a whole document comes or goes", and the list is short.
 
     Placement actions write into an existing page; they do not bring a new
     document into the project, so they are `write`. If this set grows, the
     question to answer is "does this bring a new document into existence?".
+
+    `doc.delete_page` (2026-11-19, xianyuyijinban's rule) is the tier's third
+    member — the other half of the same document lifecycle. It was `write`
+    until then, which meant the "don't delete a page unasked" promise was
+    prose in the recovery text and no gate; the daemon's confirmation gate is
+    keyed on this field, so filing it here is what makes the rule mechanical.
     """
     creators = {action.name for action in ACTIONS if action.risk == "create"}
-    assert creators == {"sch.doc.new", "pcb.doc.new"}, (
+    assert creators == {"sch.doc.new", "pcb.doc.new", "doc.delete_page"}, (
         f"create actions are {sorted(creators)}; a new one needs the gate's "
         "reasoning re-checked, not just a label"
     )
