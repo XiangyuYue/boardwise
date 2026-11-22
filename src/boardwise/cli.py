@@ -11944,6 +11944,109 @@ def _census_is_not_empty(census) -> bool:
     )
 
 
+def _draw_page_rows(listing: dict) -> list[dict]:
+    """The ``type:"page"`` rows of a ``doc.list`` payload, in the host's order.
+
+    `doc.list` lists every document of the focused project, and a page row is the
+    only one that carries ``parentUuid``/``parentName`` — the schematic it belongs
+    to (`connector/src/actions.ts` `docRow`). Reading the rows rather than asking
+    "is anything focused" is what makes the empty-page scan possible at all: the
+    focused page is one row, and the pages beside it are the others of the same
+    schematic.
+    """
+    rows: list[dict] = []
+    for row in listing.get("documents") or []:
+        if isinstance(row, dict) and str(row.get("type") or "") == "page":
+            rows.append(row)
+    return rows
+
+
+def _draw_active_schematic(listing: dict, rows: list[dict]) -> str:
+    """The schematic the active document belongs to, ``""`` when not knowable.
+
+    Two shapes are read: the active document is a **page** (its own ``parentUuid``
+    is the schematic) or it is the **schematic** itself (its pages name it as
+    parent). Anything else — no focus, a PCB, an unknown uuid — is answered with
+    ``""`` rather than a guess.
+    """
+    active = _active_document_uuid(listing)
+    if not active:
+        return ""
+    for row in rows:
+        if str(row.get("uuid") or "") == active:
+            parent = str(row.get("parentUuid") or "")
+            if parent:
+                return parent
+    for row in listing.get("documents") or []:
+        if (
+            isinstance(row, dict)
+            and str(row.get("uuid") or "") == active
+            and str(row.get("type") or "") == "schematic"
+        ):
+            return active
+    return ""
+
+
+def _draw_candidate_pages(listing: dict) -> tuple[str, list[dict]]:
+    """``(schematic uuid, its page rows)`` — the pages the scan may reuse.
+
+    A listing that names exactly one schematic is unambiguous even when the active
+    row carries no ``parentUuid`` (an older connector shape), so that one is used
+    too. Two or more schematics without an active page are left alone: reusing a
+    page from a schematic the editor is not on would be the same guess as landing
+    on "whatever is focused".
+    """
+    rows = _draw_page_rows(listing)
+    if not rows:
+        return "", []
+    schematic = _draw_active_schematic(listing, rows)
+    if not schematic:
+        parents = {
+            str(row.get("parentUuid") or "")
+            for row in rows
+            if str(row.get("parentUuid") or "")
+        }
+        if len(parents) == 1:
+            schematic = next(iter(parents))
+        else:
+            return "", []
+    return schematic, [
+        row for row in rows
+        if str(row.get("parentUuid") or "") == schematic
+    ]
+
+
+def _draw_geometry_readable(geometry) -> bool:
+    """Can this ``sch.geometry`` answer be **judged**? ``empty`` ≠ ``unread``.
+
+    `canvas_census` is deliberately tolerant: a non-dict answers an all-zero
+    census, which is exactly what an empty page looks like. A page is only allowed
+    to count as empty when the dump is the shape the census was built from — both
+    sections it counts are lists, and the connector did not report the component
+    namespace as unavailable (``meta.available.components is False``). A read that
+    failed, or one that answered in another shape, stays unproven.
+    """
+    if not isinstance(geometry, dict):
+        return False
+    if not isinstance(geometry.get("components"), list):
+        return False
+    if not isinstance(geometry.get("wires"), list):
+        return False
+    meta = geometry.get("meta")
+    available = meta.get("available") if isinstance(meta, dict) else None
+    if isinstance(available, dict) and available.get("components") is False:
+        return False
+    return True
+
+
+def _draw_page_label(row: dict) -> str:
+    """A page as ``name (uuid)`` — both halves, because either alone misleads."""
+    return (
+        f"{row.get('name') or '(unnamed)'} "
+        f"({row.get('uuid') or '(no uuid)'})"
+    )
+
+
 def _draw_new_page_conflict(args: argparse.Namespace, bound_page: str) -> str:
     """``''``, or why ``--new-page`` cannot be honoured: a settled page.
 
@@ -12045,6 +12148,58 @@ def _write_draw_previews(args, result, profiles, page_box) -> list[Path]:
     return written
 
 
+#: What an agent must not do when the automatic compile found no candidate (the
+#: zero-candidate guidance of 054): a refusal is a question for the user, not a
+#: licence to retry or to manufacture pages. Shared by both compile paths so the
+#: printed next line and the JSON cannot drift apart.
+_DRAW_RECOVERY_FORBIDDEN = (
+    "blind retry of the same input",
+    "batch-creating pages",
+    "deleting a page without the user's confirmation",
+    "running an unguarded executor",
+)
+
+
+def _draw_zero_candidate_recovery(scope: str) -> dict:
+    """The controlled manual route when a compile produced no candidate at all.
+
+    The compile is offline and sees no page, so ``reuseEmptyPage`` is a policy —
+    look for an existing empty page and reuse it before creating another — never a
+    measurement. ``command`` is an *entry*, with no coordinates and no designators:
+    the user picks the subject once the failures above have been read. The keys are
+    the same in both compile paths, so a caller reading ``recovery`` does not have
+    to branch on the payload shape.
+    """
+    return {
+        "scope": scope,
+        "route": "agent-adjusted",
+        "automaticCandidates": 0,
+        "reason": (
+            f"the automatic {scope} compile produced no legal candidate; check the "
+            "input against the failures above, then ask the user to choose the guarded "
+            "manual adjustment (agent-adjusted) — this is a decision point, not a "
+            "reason to retry or to create pages"
+        ),
+        "reuseEmptyPage": True,
+        "command": "boardwise edit plan --move",
+        "commandNote": (
+            "an entry only: the designators, the delta and the page come from the user "
+            "after the failures are read"
+        ),
+        "forbidden": list(_DRAW_RECOVERY_FORBIDDEN),
+    }
+
+
+def _draw_zero_candidate_next_line(recovery: dict) -> str:
+    """The one human-readable line that says the same thing as ``recovery``."""
+    return (
+        "next: no automatic candidate — check the input against the failures above, "
+        "then let the user choose the guarded manual adjustment (agent-adjusted: "
+        f"{recovery['command']}); reuse an existing empty page; never retry blindly, "
+        "batch-create pages, delete a page unconfirmed or run an unguarded executor"
+    )
+
+
 def _cmd_draw_compile(args: argparse.Namespace) -> int:
     """``draw compile``: the offline half of 054, with pictures.
 
@@ -12095,6 +12250,7 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
     written = _write_draw_previews(args, result, profiles, page_box)
     for path in written:
         print(f"  wrote {path}")
+    recovery = None if result.ok else _draw_zero_candidate_recovery("single-module")
     if args.json_path:
         import json as _json
 
@@ -12130,10 +12286,15 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
             "notes": [*intent_notes, *result.notes],
             "previews": [str(path) for path in written],
         }
+        if recovery is not None:
+            # Only a zero-candidate compile carries it: a successful compile's
+            # payload keeps the exact shape it had.
+            payload["recovery"] = recovery
         Path(args.json_path).write_text(
             _json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
     if not result.ok:
+        print(_draw_zero_candidate_next_line(recovery))
         print(
             "boardwise draw compile: nothing legal came out — the categories above say "
             "why, and 053 §五's refusal cases are refusals on purpose",
@@ -12532,6 +12693,7 @@ def _render_draw_apply(report: dict, args: argparse.Namespace) -> int:
     print(
         f"  page    {page.get('uuid') or '(none)'}"
         + (" [created by this run]" if page.get("created") else "")
+        + (" [reused: the empty page this run found]" if page.get("reused") else "")
         + (f" · {page.get('name')}" if page.get("name") else "")
     )
     identity = report.get("identity") or {}
@@ -13148,7 +13310,10 @@ async def _draw_apply_flow(
             for item in parts
         ],
         "identity": {},
-        "page": {"uuid": "", "created": False, "name": "", "focusedBefore": ""},
+        "page": {
+            "uuid": "", "created": False, "reused": False,
+            "name": "", "focusedBefore": "",
+        },
         "guards": {"checked": {}, "problems": []},
         "idempotence": {},
         "write": {"calls": 0, "placed": [], "connections": []},
@@ -13337,6 +13502,139 @@ async def _draw_apply_flow(
         "consistent": None,
     }
     report["page"]["focusedBefore"] = focused_page
+
+    # ---- 1a. an unbound plan: find the page before creating one -------------
+    # 054 (test V4 Board2): with an empty page already open, the flow went
+    # straight to `sch.doc.new`, and the session answered a failed create by
+    # deleting a page. Creating is the *last* option, not the default: the pages
+    # of the focused schematic are read one by one, and only a page whose
+    # `sch.geometry` proves the census empty may be reused. A page is never
+    # judged empty by its name, and a geometry that did not answer is not
+    # counted at all (「读不到 ≠ 空」).
+    if not page:
+        _schematic, candidates = _draw_candidate_pages(identity_payload)
+        empty_pages: list[dict] = []
+        unreadable: list[dict] = []
+        current_focus = focused_page
+
+        async def focus_for_scan(page_uuid: str) -> bool:
+            """Bring ``page_uuid`` forward, then prove the listing moved with it."""
+            nonlocal current_focus
+            await call(
+                "doc.focus", {"pageUuid": page_uuid},
+                "focus a page of the schematic to read its own census",
+            )
+            refreshed = await call("doc.list", {}, "confirm which page the census reads")
+            if isinstance(refreshed, dict) and _active_document_uuid(refreshed) == page_uuid:
+                current_focus = page_uuid
+                return True
+            return False
+
+        async def restore_focus() -> None:
+            """Put the editor back where the operator left it (refusals only)."""
+            nonlocal current_focus
+            if not focused_page or current_focus == focused_page:
+                return
+            await call(
+                "doc.focus", {"pageUuid": focused_page},
+                "put the editor back on the page it was showing",
+            )
+            refreshed = await call("doc.list", {}, "confirm the focus went back")
+            if (
+                isinstance(refreshed, dict)
+                and _active_document_uuid(refreshed) == focused_page
+            ):
+                current_focus = focused_page
+            else:
+                at = (
+                    _active_document_uuid(refreshed) or "nothing"
+                    if isinstance(refreshed, dict) else "nothing"
+                )
+                notes.append(
+                    "the editor could not be put back on the page it was showing "
+                    f"({focused_page}) after the empty-page scan — it is at {at}; "
+                    "nothing was written"
+                )
+
+        for row in candidates:
+            candidate = str(row.get("uuid") or "")
+            if not candidate:
+                continue
+            if candidate != current_focus and not await focus_for_scan(candidate):
+                unreadable.append(row)
+                continue
+            geometry = await call(
+                "sch.geometry", {},
+                f"prove whether page {candidate} is empty before landing on it",
+            )
+            if not _draw_geometry_readable(geometry):
+                unreadable.append(row)
+                continue
+            if not _census_is_not_empty(drawapply.canvas_census(geometry)):
+                empty_pages.append(row)
+
+        if empty_pages and args.new_page:
+            await restore_focus()
+            notes.append(
+                "--new-page was given, but the focused schematic already holds "
+                f"{len(empty_pages)} provably empty page(s): "
+                + "; ".join(_draw_page_label(row) for row in empty_pages)
+                + ". Creating a page beside an empty one leaves the page this run "
+                "could have used behind, so the flag is refused rather than "
+                "quietly ignored — use --page <uuid> to land on one of them; "
+                "nothing was created and nothing was written"
+            )
+            return done(5, "refused", "empty_page_available")
+        if len(empty_pages) > 1:
+            await restore_focus()
+            notes.append(
+                "this plan is not bound to a page and the focused schematic holds "
+                f"{len(empty_pages)} provably empty pages: "
+                + "; ".join(_draw_page_label(row) for row in empty_pages)
+                + ". Which one the drawing belongs on is the engineer's choice, "
+                "not a guess this run can make — give --page <uuid>; nothing was "
+                "created and nothing was written"
+            )
+            return done(5, "refused", "empty_page_ambiguous")
+        if len(empty_pages) == 1:
+            page = str(empty_pages[0].get("uuid") or "")
+            report["page"]["reused"] = True
+            report["page"]["name"] = str(empty_pages[0].get("name") or "")
+            if current_focus != page and not await focus_for_scan(page):
+                await restore_focus()
+                notes.append(
+                    "the only provably empty page of the focused schematic "
+                    f"({_draw_page_label(empty_pages[0])}) could not be focused, "
+                    "so its identity was not confirmed; nothing was written"
+                )
+                return done(4, "refused", "page_not_focused")
+            focused_page = page
+            notes.append(
+                "this plan is not bound to a page and the focused schematic holds "
+                "exactly one provably empty page: "
+                f"{_draw_page_label(empty_pages[0])} — reusing it; `sch.doc.new` "
+                "was not called (054)"
+            )
+        else:
+            await restore_focus()
+            if unreadable:
+                notes.append(
+                    f"{len(unreadable)} page(s) of the schematic could not be "
+                    "proven empty ("
+                    + "; ".join(_draw_page_label(row) for row in unreadable)
+                    + ") — their geometry did not answer, so none was counted as "
+                    "empty and none is reused"
+                )
+            if not args.new_page:
+                notes.append(
+                    "this plan is not bound to a page and the focused schematic "
+                    "holds no provably empty page — give --page <uuid> to land it "
+                    "on an existing page, or --new-page to create one. Landing it "
+                    "on whatever happens to be focused is exactly what the plan "
+                    "cannot authorise"
+                )
+                return done(5, "refused", "page_required")
+
     if page:
         listed = {
             str(item.get("uuid"))
@@ -13728,6 +14026,12 @@ async def _draw_apply_flow(
             and records[-1].get("code") == "CONNECTOR_ERROR"
             and "matched no library device" in str(records[-1].get("message") or "")
         ):
+            # 549: the host's search answers its whole candidate set, and the
+            # exact hit is not always in the first rows (measured on test V4
+            # Board2 P5: C1590 / CL10B104KA8NNNC came back 9th of 10). Asking
+            # for 8 cut the target off before the exact match below could see
+            # it. 64 is the same generous ceiling the connector already
+            # accepts; the match itself stays exact, never the first row.
             lookup = await call(
                 "lib.device.search",
                 {"keyword": part.lcsc, "limit": 64},
@@ -14690,14 +14994,11 @@ def _cmd_draw_apply(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 5
-    if not (args.page or plan.source.page_uuid or args.new_page):
-        print(
-            "boardwise draw apply: this plan is not bound to a page — give --page <uuid> "
-            "to land it on an existing page, or --new-page to create one. Landing it on "
-            "whatever happens to be focused is exactly what the plan cannot authorise",
-            file=sys.stderr,
-        )
-        return 5
+    # An unbound plan with neither flag is **not** refused here any more (054):
+    # whether a page can be reused is a fact of the live listing (`doc.list` plus
+    # one `sch.geometry` per candidate), so the rule runs in `_draw_apply_flow`
+    # after the bridge opens — before any write. With no empty page there, the
+    # flow refuses with the same `--page`/`--new-page` requirement as before.
     conflict = _draw_new_page_conflict(args, args.page or plan.source.page_uuid)
     if conflict:
         print(f"boardwise draw apply: {conflict}", file=sys.stderr)
@@ -14893,6 +15194,7 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
     written = _write_page_previews(args, result, profiles, page_box)
     for path in written:
         print(f"  wrote {path}")
+    recovery = None if result.ok else _draw_zero_candidate_recovery("page")
     if args.json_path:
         payload = {
             "command": "compile",
@@ -14947,10 +15249,15 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
             "notes": list(result.notes),
             "previews": [str(path) for path in written],
         }
+        if recovery is not None:
+            # Same key, same meaning as the single-module path; a successful page
+            # compile keeps the exact payload it had.
+            payload["recovery"] = recovery
         Path(args.json_path).write_text(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
     if not result.ok:
+        print(_draw_zero_candidate_next_line(recovery))
         print(
             "boardwise draw compile: no legal page came out — the categories above "
             "say why, each naming the module, the lock or the keep-out it is about",
@@ -15453,13 +15760,9 @@ def _cmd_draw_apply_page(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 5
-    if not (args.page or args.new_page):
-        print(
-            "boardwise draw apply: a page document is not bound to a page — give "
-            "--page <uuid> (an existing page) or --new-page",
-            file=sys.stderr,
-        )
-        return 5
+    # Same 054 rule as the module route above: a page document names no landing
+    # page, so "reuse the one empty page" has to be decided against the live
+    # listing inside `_draw_apply_flow` — refusing here would make it unreachable.
     conflict = _draw_new_page_conflict(args, args.page or "")
     if conflict:
         print(f"boardwise draw apply: {conflict}", file=sys.stderr)

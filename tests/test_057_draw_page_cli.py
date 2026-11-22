@@ -441,6 +441,7 @@ def test_a_page_presentation_compiles_to_page_documents_on_the_same_command(tmp_
     assert "page of 2 module(s)" in printed
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["document"] == "page" and payload["pages"]
+    assert "recovery" not in payload, "a successful page compile keeps its payload shape"
     document = PageLayoutPlan.load(out / "cand1.page.json")
     assert [module.id for module in document.modules] == ["pwr", "sense"]
     assert payload["pages"][0]["geometrySha256"] == document.page_geometry_sha256()
@@ -457,6 +458,55 @@ def test_a_page_compile_without_a_sheet_is_refused_by_name(tmp_path, capsys):
     ])
     assert code == 5
     assert "--page-box" in capsys.readouterr().err
+
+
+def test_a_zero_candidate_page_hands_over_the_same_guarded_manual_route(
+    tmp_path, capsys
+):
+    """057 zero-candidate: the page path carries the same `recovery`, key for key.
+
+    A page lock off the page is refused before any module compiles, so no page
+    candidate exists. The JSON and the printed next line must say what the
+    single-module path says — the keys are the single-module contract's, not a
+    second vocabulary invented for pages.
+    """
+    circuit, presentation = write_specs(
+        tmp_path,
+        presentation=page_presentation(
+            userLocks=[{"partId": "U1", "x": 5000, "y": 500, "scope": "page"}]
+        ),
+    )
+    report = tmp_path / "compile.json"
+    code = cli.main([
+        "draw", "compile", "--circuit", str(circuit), "--presentation", str(presentation),
+        "--profiles", str(LIBRARY), "--page-box", PAGE_BOX, "--out", str(tmp_path / "out"),
+        "--json", str(report),
+    ])
+    captured = capsys.readouterr()
+    assert code == 5
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["document"] == "page" and payload["ok"] is False
+    assert payload["pages"] == []
+    recovery = payload["recovery"]
+    assert recovery["route"] == "agent-adjusted"
+    assert recovery["automaticCandidates"] == 0
+    assert recovery["reuseEmptyPage"] is True
+    assert recovery["command"] == "boardwise edit plan --move"
+    assert "no legal candidate" in recovery["reason"]
+    assert "ask the user" in recovery["reason"]
+    assert recovery["forbidden"] == [
+        "blind retry of the same input",
+        "batch-creating pages",
+        "deleting a page without the user's confirmation",
+        "running an unguarded executor",
+    ]
+    next_line = next(
+        line for line in captured.out.splitlines() if line.startswith("next: ")
+    )
+    assert "no automatic candidate" in next_line
+    assert "agent-adjusted" in next_line
+    assert "boardwise edit plan --move" in next_line
+    assert "reuse an existing empty page" in next_line
 
 
 def test_what_makes_a_presentation_a_page():

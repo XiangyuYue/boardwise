@@ -79,6 +79,9 @@ class _FakeEditor:
         focus_refused: bool = False,
         lcsc_index_miss: tuple[str, ...] = (),
         library_search_hits: list[dict] | None = None,
+        library_search_rows: list[dict] | None = None,
+        pages: list[dict] | None = None,
+        page_primitives: dict[str, dict] | None = None,
     ):
         self.page = page
         self.exists = exists
@@ -143,6 +146,64 @@ class _FakeEditor:
         #: draw-apply fallback without pretending the first attempt wrote.
         self.lcsc_index_miss = {item.upper() for item in lcsc_index_miss}
         self.library_search_hits = list(library_search_hits or [])
+        #: 549: the rows the host's search answers **in its own order**, before any
+        #: exact match is applied. A V4 library returns its candidate set for the
+        #: keyword (measured: 10 rows for C1590) and the exact hit need not be in
+        #: the first 8, so the fake must honour the caller's `limit` the way the
+        #: host does — otherwise a flow that asks for 8 can never be caught
+        #: truncating the target away. When set, these rows are answered verbatim
+        #: (still cut to `limit`) instead of the pre-filtered hits list.
+        self.library_search_rows = (
+            None if library_search_rows is None
+            else [dict(row) for row in library_search_rows]
+        )
+        #: Every `lib.device.search` request: keyword, the limit asked for, the
+        #: candidate count the host holds, and how many it actually showed.
+        self.search_requests: list[dict] = []
+        #: 054 empty-page scan: a *whole schematic's* page table (`doc.list`
+        #: documents of `type:"page"`), and the primitives each page starts with.
+        #: ``None`` keeps the older single-document listing every earlier test
+        #: relies on; a test that fills it gets per-page focus, a per-page store
+        #: and a per-page `sch.geometry`, which is what "read the page, not its
+        #: name" needs to be testable offline.
+        self.pages = None if pages is None else [dict(row) for row in pages]
+        self.page_primitives = dict(page_primitives or {})
+        self.page_stores: dict[str, dict] = {}
+        self._activate(str(self.page))
+
+    # ------------------------------------------------- the page-per-page store
+
+    def _store_for(self, page: str) -> dict:
+        """The primitives on ``page`` — created from the seed on first use."""
+        store = self.page_stores.get(page)
+        if store is not None:
+            return store
+        seed = self.page_primitives.get(page) or {}
+        components = {
+            name: {
+                "x": float(item.get("x") or 0.0),
+                "y": float(item.get("y") or 0.0),
+                "rotation": float(item.get("rotation") or 0.0),
+                "mirror": bool(item.get("mirror")),
+                "lcsc": str(item.get("lcsc") or "C25744"),
+            }
+            for name, item in (seed.get("components") or {}).items()
+        }
+        store = {
+            "components": components,
+            "wires": [dict(item) for item in (seed.get("wires") or [])],
+            "flags": [dict(item) for item in (seed.get("flags") or [])],
+        }
+        self.page_stores[page] = store
+        return store
+
+    def _activate(self, page: str) -> None:
+        """Point the fake at ``page``: every later read/write lands on its store."""
+        store = self._store_for(page)
+        self.page = page
+        self.components = store["components"]
+        self.wires = store["wires"]
+        self.flags = store["flags"]
 
     # ---------------------------------------------------------- the page
 
@@ -209,22 +270,43 @@ class _FakeEditor:
             self.timeouts.discard(action)
             raise _BridgeError("TIMEOUT", f"{action} did not answer within 30 s")
         if action == "doc.list":
-            documents = (
-                [{"uuid": self.page, "name": "boardwise draw", "type": "sch"}]
-                if self.exists else []
-            )
+            if self.pages is not None:
+                documents = [
+                    {
+                        "uuid": str(row.get("uuid") or ""),
+                        "name": str(row.get("name") or ""),
+                        "type": "page",
+                        "parentUuid": str(
+                            row.get("parentUuid") or row.get("schematicUuid")
+                            or "schematic-1"
+                        ),
+                        "active": str(row.get("uuid") or "") == self.page,
+                    }
+                    for row in self.pages
+                ]
+            else:
+                documents = (
+                    [{"uuid": self.page, "name": "boardwise draw", "type": "sch"}]
+                    if self.exists else []
+                )
+            listed = {row["uuid"] for row in documents}
             active = (
                 self.active_page if self.active_page is not None else self.page
-            ) if self.exists else None
+            )
+            if active not in listed:
+                active = None
             return {
                 "documents": documents,
                 "projects": [{"projectUuid": "proj-1", "name": "test", "focused": True}],
-                "active": {"uuid": active, "type": "sch"},
+                "active": {
+                    "uuid": active,
+                    "type": "page" if self.pages is not None else "sch",
+                },
                 "count": len(documents),
             }
         if action == "doc.focus":
             if not self.focus_refused:
-                self.page = str(params.get("pageUuid") or self.page)
+                self._activate(str(params.get("pageUuid") or self.page))
                 self.active_page = None
             return {"activated": not self.focus_refused, "tabId": "tab",
                     "documentType": "sch"}
@@ -320,7 +402,7 @@ class _FakeEditor:
             self.writes.append((action, params))
             self.created = True
             self.exists = True
-            self.page = "page-created"
+            self._activate("page-created")
             return {"schematicUuid": "sheet-created", "pageUuid": self.page}
         if action == "sch.place_component":
             device_uuid = str(params.get("deviceUuid") or "")
@@ -392,22 +474,35 @@ class _FakeEditor:
             # rule the flow applies to the answer. 038D2a adds the exact-LCSC
             # fallback rows a V4 library answers when its own index missed.
             keyword = str(params.get("keyword") or "")
-            items = [
-                {"name": name, **dict(device)}
-                for name, device in self.ground_symbols.items() if name == keyword
-            ]
-            wanted = keyword.upper()
-            items.extend(
-                item for item in self.library_search_hits
-                if str(item.get("supplierId") or "").upper() == wanted
-                or str((item.get("otherProperty") or {}).get("Supplier Part") or "").upper()
-                == wanted
-                or str(item.get("manufacturerId") or "").upper() == wanted
-                or str((item.get("otherProperty") or {}).get("Manufacturer Part") or "").upper()
-                == wanted
-                or str(item.get("name") or "").upper() == wanted
-            )
-            return {"keyword": keyword, "returned": len(items), "shown": len(items),
+            if self.library_search_rows is not None:
+                # 549: the host answers its whole candidate set in its own order
+                # (`returned`), and `limit` decides how many of them it shows.
+                items = [dict(row) for row in self.library_search_rows]
+            else:
+                items = [
+                    {"name": name, **dict(device)}
+                    for name, device in self.ground_symbols.items() if name == keyword
+                ]
+                wanted = keyword.upper()
+                items.extend(
+                    item for item in self.library_search_hits
+                    if str(item.get("supplierId") or "").upper() == wanted
+                    or str((item.get("otherProperty") or {}).get("Supplier Part") or "").upper()
+                    == wanted
+                    or str(item.get("manufacturerId") or "").upper() == wanted
+                    or str((item.get("otherProperty") or {}).get("Manufacturer Part") or "").upper()
+                    == wanted
+                    or str(item.get("name") or "").upper() == wanted
+                )
+            held = len(items)
+            limit = int(params.get("limit") or 0)
+            if limit > 0:
+                items = items[:limit]
+            self.search_requests.append({
+                "keyword": keyword, "limit": limit,
+                "returned": held, "shown": len(items),
+            })
+            return {"keyword": keyword, "returned": held, "shown": len(items),
                     "items": items}
         if action == "sch.place_power":
             net = str(params.get("net") or "")
@@ -576,6 +671,7 @@ def test_draw_compile_writes_previews_and_exits_zero(tmp_path, capsys):
     assert "candidate(s)" in printed and "ranked" in printed
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["ok"] and payload["candidates"]
+    assert "recovery" not in payload, "a successful compile keeps its payload shape"
     written = sorted(path.name for path in out.iterdir())
     assert "cand1.svg" in written and "cand1.layout.json" in written
     assert payload["previews"], "the report says where the pictures went"
@@ -596,6 +692,52 @@ def test_draw_compile_refuses_a_circuit_it_cannot_draw(tmp_path, capsys):
     captured = capsys.readouterr()
     assert code == 5
     assert "0 candidate(s)" in captured.out and "failure(s)" in captured.out
+
+
+def test_a_zero_candidate_compile_hands_over_the_guarded_manual_route(
+    tmp_path, capsys
+):
+    """054 zero-candidate: the second answer is a controlled manual route, not a retry.
+
+    The compile is offline and sees no page, so `recovery` states a policy
+    (`reuseEmptyPage` is true because one should be looked for and reused, not
+    because one was measured), and `command` is an entry with no coordinates or
+    designators: the user chooses the subject after reading the failures.
+    """
+    spec = json.loads(CIRCUIT.read_text(encoding="utf-8"))
+    spec["nets"][1]["members"] = ["R1.2", "R2.9"]
+    broken = tmp_path / "broken.circuit.json"
+    broken.write_text(json.dumps(spec), encoding="utf-8")
+    report = tmp_path / "compile.json"
+    code = cli.main([
+        "draw", "compile", "--circuit", str(broken),
+        "--presentation", str(PRESENTATION), "--profiles", str(LIBRARY),
+        "--out", str(tmp_path / "out"), "--json", str(report),
+    ])
+    captured = capsys.readouterr()
+    assert code == 5
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["ok"] is False and payload["candidates"] == []
+    recovery = payload["recovery"]
+    assert recovery["route"] == "agent-adjusted"
+    assert recovery["automaticCandidates"] == 0
+    assert recovery["reuseEmptyPage"] is True
+    assert recovery["command"] == "boardwise edit plan --move"
+    assert "no legal candidate" in recovery["reason"]
+    assert "ask the user" in recovery["reason"]
+    assert recovery["forbidden"] == [
+        "blind retry of the same input",
+        "batch-creating pages",
+        "deleting a page without the user's confirmation",
+        "running an unguarded executor",
+    ]
+    next_line = next(
+        line for line in captured.out.splitlines() if line.startswith("next: ")
+    )
+    assert "no automatic candidate" in next_line
+    assert "agent-adjusted" in next_line
+    assert "boardwise edit plan --move" in next_line
+    assert "reuse an existing empty page" in next_line
 
 
 def test_draw_compile_refuses_an_unreadable_input(tmp_path, capsys):
@@ -1121,11 +1263,161 @@ def test_apply_refuses_a_plan_of_another_kind(tmp_path, capsys):
     assert "draw-module" in capsys.readouterr().err
 
 
-def test_apply_refuses_an_unbound_plan_without_a_page(tmp_path, capsys):
+def test_apply_refuses_an_unbound_plan_without_a_page(monkeypatch, tmp_path, capsys):
+    """054: the requirement survives, but it is now decided on the live listing.
+
+    "Needs --page/--new-page" can only be said after the empty-page scan, because
+    a schematic that holds exactly one empty page is reused without either flag.
+    This project lists no page row at all, so there is nothing to reuse and the
+    old refusal stands — same exit code, same words.
+    """
     plan_path, _plan_ = _plan(tmp_path)
-    code = cli.main(["draw", "apply", str(plan_path)])
-    assert code == 5
-    assert "--page" in capsys.readouterr().err
+    editor = _FakeEditor()
+    _stub_editor(monkeypatch, editor)
+    _stub_export(monkeypatch, components={}, findings=[])
+    report = tmp_path / "apply.json"
+    code = cli.main(["draw", "apply", str(plan_path), "--json", str(report)])
+    printed = capsys.readouterr().out
+    assert code == 5, printed
+    assert "--page" in printed and "--new-page" in printed
+    assert json.loads(report.read_text(encoding="utf-8"))["reason"] == "page_required"
+    assert "sch.doc.new" not in editor.calls
+    assert editor.writes == []
+
+
+# ------------------------- 054: an empty page is found before one is created
+
+
+def _page_row(uuid: str, name: str = "boardwise draw", schematic: str = "sch-1") -> dict:
+    return {"uuid": uuid, "name": name, "schematicUuid": schematic}
+
+
+def _occupied(designator: str = "U9") -> dict:
+    return {"components": {designator: {"x": 500.0, "y": 500.0}}}
+
+
+def test_an_unbound_apply_reuses_the_only_empty_page(monkeypatch, tmp_path, capsys):
+    """054: the empty page is found by reading each page, not by trusting a name."""
+    plan_path, plan = _plan(tmp_path)
+    editor = _FakeEditor(
+        page="page-occupied",
+        # Two pages with the **same** name: only `sch.geometry` can tell them
+        # apart, so a reuse that guessed from `doc.list` alone would land on U9.
+        pages=[
+            _page_row("page-occupied", "boardwise draw"),
+            _page_row("page-empty", "boardwise draw"),
+        ],
+        page_primitives={"page-occupied": _occupied()},
+        netlists=[{"components": {}}, _live_netlist_for(plan)],
+    )
+    _stub_editor(monkeypatch, editor)
+    _stub_export(monkeypatch, components={}, findings=[])
+    report = tmp_path / "apply.json"
+
+    code = cli.main([
+        "draw", "apply", str(plan_path), "--project", "test", "--json", str(report),
+    ])
+    printed = capsys.readouterr().out
+    assert code == 0, printed
+    assert "sch.doc.new" not in editor.calls, (
+        "the empty page was already there — creating another is the failure this "
+        "batch exists for"
+    )
+    assert editor.created is False
+    assert editor.page == "page-empty", (
+        "the drawing landed on the page geometry proved empty, not the occupied one"
+    )
+    assert {part.designator for part in plan.change.draw_parts} <= set(editor.components)
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["page"]["reused"] is True
+    assert payload["page"]["created"] is False
+    assert payload["page"]["uuid"] == "page-empty"
+    assert payload["outcome"] == "applied"
+    assert any("reusing it" in note and "sch.doc.new" in note
+               for note in payload["notes"])
+    assert "sch.place_component" in [action for action, _params in editor.writes]
+    assert {params.get("pageUuid") for action, params in editor.writes
+            if action == "sch.place_component"} == {"page-empty"}
+
+
+def test_two_empty_pages_are_refused_instead_of_guessed(monkeypatch, tmp_path, capsys):
+    """054: more than one empty page belongs to the engineer, not to a guess."""
+    plan_path, _plan_ = _plan(tmp_path)
+    editor = _FakeEditor(
+        page="page-a",
+        pages=[_page_row("page-a"), _page_row("page-b", "boardwise draw 2")],
+    )
+    _stub_editor(monkeypatch, editor)
+    report = tmp_path / "apply.json"
+
+    code = cli.main([
+        "draw", "apply", str(plan_path), "--json", str(report),
+    ])
+    printed = capsys.readouterr().out
+    assert code == 5, printed
+    assert "sch.doc.new" not in editor.calls
+    assert editor.writes == []
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["reason"] == "empty_page_ambiguous"
+    joined = " ".join(payload["notes"])
+    assert "page-a" in joined and "page-b" in joined, (
+        "both candidates are named, so the operator can choose one with --page"
+    )
+    assert editor.page == "page-a", "the refusal put the editor back on page-a"
+
+
+def test_an_explicit_new_page_is_refused_when_an_empty_page_exists(
+    monkeypatch, tmp_path, capsys,
+):
+    """054: `--new-page` beside a proven empty page is refused, never ignored."""
+    plan_path, _plan_ = _plan(tmp_path)
+    editor = _FakeEditor(page="page-a", pages=[_page_row("page-a")])
+    _stub_editor(monkeypatch, editor)
+    report = tmp_path / "apply.json"
+
+    code = cli.main([
+        "draw", "apply", str(plan_path), "--new-page", "--json", str(report),
+    ])
+    printed = capsys.readouterr().out
+    assert code == 5, printed
+    assert "sch.doc.new" not in editor.calls, (
+        "even an explicit --new-page must not create beside an empty page"
+    )
+    assert editor.created is False
+    assert editor.writes == []
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["reason"] == "empty_page_available"
+    assert "page-a" in " ".join(payload["notes"])
+    assert "--page" in " ".join(payload["notes"])
+    assert editor.page == "page-a", "the refusal restored the original focus"
+
+
+def test_an_unbound_apply_still_creates_when_no_page_is_empty(
+    monkeypatch, tmp_path, capsys,
+):
+    """The control: no provably empty page, so --new-page creates as before."""
+    plan_path, plan = _plan(tmp_path)
+    editor = _FakeEditor(
+        page="page-occupied",
+        pages=[_page_row("page-occupied")],
+        page_primitives={"page-occupied": _occupied()},
+        netlists=[{"components": {}}, _live_netlist_for(plan)],
+    )
+    _stub_editor(monkeypatch, editor)
+    _stub_export(monkeypatch, components={}, findings=[])
+    report = tmp_path / "apply.json"
+
+    code = cli.main([
+        "draw", "apply", str(plan_path), "--new-page", "--project", "test",
+        "--json", str(report),
+    ])
+    printed = capsys.readouterr().out
+    assert code == 0, printed
+    assert editor.created is True, "nothing was empty, so the create path must run"
+    assert "sch.doc.new" in [action for action, _params in editor.writes]
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["page"]["created"] is True
+    assert payload["page"]["reused"] is False
 
 
 def test_apply_reports_that_the_state_cannot_be_stated_without_a_daemon(monkeypatch, tmp_path, capsys):
@@ -1747,4 +2039,181 @@ def test_apply_falls_back_to_exact_mpn_search_when_lcsc_and_supplier_part_miss(
     )
     assert "exact MPN search R0402" in printed
     assert {item["designator"] for item in payload["write"]["placed"]} == {"R1", "R2"}
+
+
+def test_the_exact_library_hit_past_the_first_eight_search_rows_is_found(
+    monkeypatch, tmp_path, capsys,
+):
+    """549: the host's search answers 10 rows and the exact hit is the 9th.
+
+    Measured on test V4 Board2 P5: the LCSC index misses C1590, and
+    ``lib.device.search`` answers 10 rows with ``shown=8`` — the exact
+    ``C1590`` / ``CL10B104KA8NNNC`` row is the 9th, so a request for 8 truncates
+    it away and the flow falls into the manual executor. The fallback must ask
+    for the whole candidate set (64) while still accepting only an exact
+    Supplier Part / MPN identity — never a fuzzy first row. With the old
+    ``limit: 8`` this test ends in ``place_unanswered``; with 64 both parts land
+    by uuid and the plan's LCSC is what the read-back and the report carry.
+    """
+    plan_path, plan = _plan(tmp_path)
+    for part in plan.change.draw_parts:
+        part.lcsc = "C1590"
+        part.mpn = "CL10B104KA8NNNC"
+    plan.dump(plan_path)
+
+    def _exact(row: dict, wanted: str) -> bool:
+        """The flow's own exact-identity rule, restated for the fixture."""
+        return (
+            str(row.get("supplierId") or "").strip().upper() == wanted
+            or str((row.get("otherProperty") or {}).get("Supplier Part") or "")
+            .strip().upper() == wanted
+            or str(row.get("manufacturerId") or "").strip().upper() == wanted
+            or str((row.get("otherProperty") or {}).get("Manufacturer Part") or "")
+            .strip().upper() == wanted
+            or str(row.get("name") or "").strip().upper() == wanted
+        )
+
+    decoys = [
+        {
+            "uuid": f"dev-decoy-{index}",
+            "libraryUuid": "lib-decoys",
+            "supplierId": f"C99000{index}",
+            "name": f"DECOY-{index}",
+            "otherProperty": {"Supplier Part": f"C99000{index}"},
+        }
+        for index in range(8)
+    ]
+    target = {
+        "uuid": "dev-c1590",
+        "libraryUuid": "lib-c1590",
+        "supplierId": "C1590",
+        "manufacturerId": "CL10B104KA8NNNC",
+        "name": "CL10B104KA8NNNC",
+        "otherProperty": {
+            "Supplier Part": "C1590", "Manufacturer Part": "CL10B104KA8NNNC",
+        },
+    }
+    rows = decoys + [target, {
+        "uuid": "dev-decoy-9",
+        "libraryUuid": "lib-decoys",
+        "supplierId": "C990009",
+        "name": "DECOY-9",
+        "otherProperty": {"Supplier Part": "C990009"},
+    }]
+    assert len(rows) == 10, "the host's candidate set, as measured"
+    assert rows.index(target) == 8, "the exact hit is the 9th row, not the first"
+    assert not any(
+        _exact(row, "C1590") or _exact(row, "CL10B104KA8NNNC")
+        for row in rows[:8]
+    ), "none of the first 8 rows is the exact identity, so a limit of 8 must miss"
+
+    editor = _FakeEditor(
+        exists=False,
+        netlists=[{"components": {}}, _live_netlist_for(plan)],
+        pin_offsets={"C1590": {"1": (0.0, 50.0), "2": (0.0, -50.0)}},
+        lcsc_index_miss=("C1590",),
+        library_search_rows=rows,
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+
+    assert code == 0, printed
+    assert editor.calls.count("sch.place_component") == 4, (
+        "two definite LCSC-index misses, then two uuid placements"
+    )
+    placed = [
+        params for action, params in editor.writes
+        if action == "sch.place_component"
+    ]
+    assert len(placed) == 2
+    assert all(item.get("deviceUuid") == "dev-c1590" for item in placed), (
+        "the 9th row is the exact hit; the first row is a decoy"
+    )
+    assert all(item.get("lcsc") == "C1590" for item in placed), (
+        "the retry carries the plan's Supplier Part for the read-back and report"
+    )
+    assert [item["lcsc"] for item in payload["write"]["placed"]] == ["C1590", "C1590"]
+    assert {item["designator"] for item in payload["write"]["placed"]} == {"R1", "R2"}
+    assert "LCSC index missed" in printed
+    assert "exact library-search hit" in printed, (
+        "the placement came from the exact Supplier Part search, not the MPN "
+        "fallback — this run pins the first of the two limits"
+    )
+
+    # 549: the request must carry the whole candidate set (64), and the answer
+    # must really have been cut to it — the fake now honours `limit`, so these
+    # numbers are the truncation the old code performed, not a fixture guess.
+    searches = [
+        request for request in editor.search_requests
+        if request["keyword"] == "C1590"
+    ]
+    assert len(searches) == 2, editor.search_requests
+    for request in searches:
+        assert request["returned"] == 10, request
+        assert request["limit"] <= 64, request
+        assert request["shown"] == min(request["returned"], request["limit"]), request
+        assert request["shown"] >= 9, (
+            "a request whose limit cut the 9th row away could not have found it: "
+            f"{request}"
+        )
+
+    # 549: the sibling exact-MPN call (534A) carries the same limit. A second
+    # apply, where only the MPN is the exact identity on the 9th row and the
+    # Supplier Part search therefore finds nothing, pins that call too: at the
+    # old ``limit: 8`` it would end in ``place_unanswered`` exactly the same way.
+    mpn_target = {
+        "uuid": "dev-c1590-mpn",
+        "libraryUuid": "lib-c1590-mpn",
+        "supplierId": "C990010",
+        "manufacturerId": "CL10B104KA8NNNC",
+        "name": "CAP-0402",
+        "otherProperty": {
+            "Supplier Part": "C990010", "Manufacturer Part": "CL10B104KA8NNNC",
+        },
+    }
+    mpn_rows = decoys + [mpn_target, {
+        "uuid": "dev-decoy-10",
+        "libraryUuid": "lib-decoys",
+        "supplierId": "C990011",
+        "name": "DECOY-10",
+        "otherProperty": {"Supplier Part": "C990011"},
+    }]
+    assert mpn_rows.index(mpn_target) == 8, "the exact MPN is the 9th row too"
+    assert not any(_exact(row, "C1590") for row in mpn_rows), (
+        "nothing matches the Supplier Part, so the flow must take the MPN branch"
+    )
+    mpn_editor = _FakeEditor(
+        exists=False,
+        netlists=[{"components": {}}, _live_netlist_for(plan)],
+        pin_offsets={"C1590": {"1": (0.0, 50.0), "2": (0.0, -50.0)}},
+        lcsc_index_miss=("C1590",),
+        library_search_rows=mpn_rows,
+    )
+    mpn_code, mpn_payload, mpn_printed = _apply(
+        monkeypatch, tmp_path, plan_path, mpn_editor, capsys,
+    )
+
+    assert mpn_code == 0, mpn_printed
+    assert "exact MPN search CL10B104KA8NNNC" in mpn_printed
+    mpn_placed = [
+        params for action, params in mpn_editor.writes
+        if action == "sch.place_component"
+    ]
+    assert len(mpn_placed) == 2
+    assert all(item.get("deviceUuid") == "dev-c1590-mpn" for item in mpn_placed)
+    assert all(item.get("lcsc") == "C1590" for item in mpn_placed), (
+        "the MPN retry also carries the plan's Supplier Part unchanged"
+    )
+    mpn_searches = [
+        request for request in mpn_editor.search_requests
+        if request["keyword"] == "CL10B104KA8NNNC"
+    ]
+    assert len(mpn_searches) == 2, mpn_editor.search_requests
+    for request in mpn_searches:
+        assert request["returned"] == 10, request
+        assert request["limit"] <= 64, request
+        assert request["shown"] == min(request["returned"], request["limit"]), request
+        assert request["shown"] >= 9, request
+    assert {item["designator"] for item in mpn_payload["write"]["placed"]} == {
+        "R1", "R2",
+    }
 

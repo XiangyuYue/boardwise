@@ -39,7 +39,12 @@ export function registerDrawTools(ctx: Context): void {
       'presentation answers `candidates` + `failureRounds`, while a page presentation (the CLI marks it ' +
       '`document: "page"`) answers `pages` + `moduleFailureRounds`; both carry `failures`, `categories`, ' +
       '`rejected`, `notes` and the `previews` artifact paths. `ok` and every verdict are Python\'s, never ' +
-      'recomputed in TypeScript. Exit 0 (at least one candidate) and exit 5 (a documented compiler refusal) are ' +
+      'recomputed in TypeScript. When `ok` is false the payload also carries `recovery`, with the same keys on ' +
+      'both shapes: route `agent-adjusted`, `reuseEmptyPage: true`, the `boardwise edit plan --move` entry (no ' +
+      'coordinates, no designators) and the four forbidden shortcuts. Read that field from the JSON — do not ' +
+      'rebuild it here — and hand the zero-candidate case to the user as a guarded manual adjustment: check the ' +
+      'input first, never retry blindly, batch-create pages, delete a page unconfirmed or run an unguarded ' +
+      'executor. Exit 0 (at least one candidate) and exit 5 (a documented compiler refusal) are ' +
       'both transported **when the CLI wrote the JSON file**; a run whose input could not be read exits 5 without ' +
       'writing one, and that is an error — as is an unreadable transport or an unexpected exit. A partial or ' +
       'stdout-derived answer is never returned.',
