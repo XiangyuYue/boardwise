@@ -137,6 +137,33 @@ def _make_project(root: Path) -> Path:
     return root
 
 
+def _make_unposed_project(root: Path) -> Path:
+    """One page with a COMPONENT that declares rotation but no x/y."""
+    (root / "sch" / "Schematic1").mkdir(parents=True)
+    page = [
+        _record(
+            "DOCHEAD",
+            {"docType": "SCH_PAGE", "uuid": "page-u", "editVersion": "2.3.0"},
+        ),
+        _record("COMPONENT", {"partId": "part-u1", "rotation": 90}, "c-u1"),
+        _attr("part-u1", "Designator", "U1", "d-u1"),
+    ]
+    (root / "sch" / "Schematic1" / "P1.esch2").write_text(
+        "\n".join(page), encoding="utf-8"
+    )
+    index = {
+        "name": root.name,
+        "owner_uuid": "0" * 32,
+        "profile": {
+            "schematics": {"sch-1": {"uuid": "sch-1", "name": "Schematic1"}},
+            "sheets": {},
+            "pcbs": {},
+        },
+    }
+    (root / f"{root.name}.eprj3").write_text(json.dumps(index), encoding="utf-8")
+    return root
+
+
 def test_fixture_flag_is_project_scope_and_flag_evidence() -> None:
     facts = read_v4_facts(FIXTURE)
 
@@ -314,7 +341,7 @@ def test_circuit_enrichment_does_not_add_facts_missing_from_the_circuit() -> Non
     assert report["unmatchedFacts"] == ["SIG_A"]
 
 
-def test_instances_keep_page_identity_without_turning_pose_into_layout() -> None:
+def test_instances_keep_page_identity_and_convert_declared_y_to_canvas() -> None:
     facts = read_v4_facts(FIXTURE)
     by_id = {item["partId"]: item for item in facts["instances"]}
     assert by_id["inst-u1"]["designator"] == "U1"
@@ -322,7 +349,28 @@ def test_instances_keep_page_identity_without_turning_pose_into_layout() -> None
     assert by_id["inst-u1"]["pageUuid"] == "page-1"
     assert by_id["inst-u1"]["page"] == "P1"
     assert by_id["flag-gnd"]["symbolTitle"] == "Ground-GND"
-    assert all("x" not in item and "y" not in item for item in facts["instances"])
+    # The COMPONENT record declares x/y; x is copied verbatim, y is converted
+    # once by shared _page_y into canvas coordinates, never flipped twice.
+    assert (by_id["inst-u1"]["x"], by_id["inst-u1"]["y"]) == (300.0, 500.0)
+    assert (by_id["inst-u1"]["rotation"], by_id["inst-u1"]["isMirror"]) == (0, False)
+    assert (by_id["flag-gnd"]["x"], by_id["flag-gnd"]["y"]) == (420.0, 500.0)
+
+
+def test_a_component_that_declares_no_pose_keeps_x_and_y_absent(
+    tmp_path: Path,
+) -> None:
+    """No declared coordinate is a missing fact, never a fabricated 0."""
+    from boardwise.engines.v4facts import presentation_evidence
+
+    facts = read_v4_facts(_make_unposed_project(tmp_path / "unposed"))
+    instance = facts["instances"][0]
+    assert instance["designator"] == "U1"
+    assert instance["rotation"] == 90
+    assert "x" not in instance and "y" not in instance
+    evidence = presentation_evidence(facts)
+    copied = evidence["pageGroups"][0]["instances"][0]
+    assert "x" not in copied and "y" not in copied
+    assert any("not inferred" in note for note in evidence["notes"])
 
 
 def test_presentation_evidence_groups_page_facts_without_claiming_modules() -> None:
@@ -334,6 +382,10 @@ def test_presentation_evidence_groups_page_facts_without_claiming_modules() -> N
     group = evidence["pageGroups"][0]
     assert (group["pageUuid"], group["page"]) == ("page-1", "P1")
     assert {item["designator"] for item in group["instances"]} >= {"U1", "U2"}
+    posed = {item["designator"]: item for item in group["instances"]}
+    assert (posed["U1"]["x"], posed["U1"]["y"]) == (300.0, 500.0)
+    assert any("x is copied verbatim and y uses the shared _page_y canvas conversion" in note
+               for note in evidence["notes"])
     nets = {item["name"]: item for item in group["nets"]}
     assert nets["GND"]["scope"] == "project"
     assert nets["SIG_A"]["scope"] == "page"

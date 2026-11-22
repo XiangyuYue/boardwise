@@ -36,7 +36,7 @@ from ..core.presentationspec import PresentationModule, PresentationSpec
 from ..core.symbolprofile import SymbolPose
 from ..parsers.eprj3 import load_eprj3_text
 from ..parsers.epru_stream import iter_epru_records
-from ..parsers.schematic import build_project_model
+from ..parsers.schematic import build_project_model, page_y
 
 #: Schema id of the fact document this module returns.
 SCHEMA = "boardwise.v4-facts/1"
@@ -196,7 +196,7 @@ def read_v4_facts(path: str | Path, board: str = "") -> dict[str, Any]:
         if record.type == "COMPONENT":
             part_id = _text(body.get("partId"))
             if part_id and current_page_uuid:
-                instance_rows.append({
+                instance = {
                     "partId": part_id,
                     "instanceId": _text(record.id),
                     "designator": "",
@@ -206,7 +206,16 @@ def read_v4_facts(path: str | Path, board: str = "") -> dict[str, Any]:
                     "page": current_page_name,
                     "rotation": body.get("rotation", 0),
                     "isMirror": bool(body.get("isMirror", False)),
-                })
+                }
+                # The record's own page pose, copied only when the COMPONENT
+                # declares it: x stays as stated, while y goes through the shared
+                # schematic._page_y canvas conversion exactly once. An axis the
+                # record does not state stays absent so a consumer can refuse
+                # instead of reading a fabricated 0 as a measured pose.
+                for axis in ("x", "y"):
+                    if axis in body:
+                        instance[axis] = body[axis] if axis == "x" else page_y(body[axis])
+                instance_rows.append(instance)
             continue
 
         if record.type == "BUS":
@@ -589,8 +598,10 @@ def presentation_evidence(facts: dict[str, Any]) -> dict[str, Any]:
         "notes": [
             "A page group is an attribution boundary, not a functional island "
             "or a module declaration. AI/engineer judgement is still required.",
-            "Instances keep identity and pose only; no x/y coordinates are copied "
-            "into this planning sidecar.",
+            "Instances keep identity and pose: x/y are not inferred — x is copied "
+            "verbatim and y uses the shared _page_y canvas conversion exactly once; an undeclared "
+            "coordinate stays absent rather than becoming 0, and rotation/mirror "
+            "are copied verbatim.",
             "Same-named evidence on multiple pages does not prove cross-page "
             "connectivity; every page group's flag is explicitly unproven.",
         ],

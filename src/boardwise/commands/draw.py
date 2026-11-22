@@ -19,6 +19,15 @@ from ..engines.generate import DEFAULT_NAMING_STRATEGY, NAMING_STRATEGIES
 #: drawing, and the two must not be mistaken for each other in a directory listing.
 DEFAULT_ISLANDS_OUT = "outputs/530e_islands"
 EDIT_DIRECTIONS = ("value", "mpn")
+#: `draw move-propose --strategy` vocabulary, in the engine's own spelling and
+#: order (:data:`boardwise.engines.agentadjusted.STRATEGIES`). This module's
+#: import whitelist is `engines/generate.py` + `core/portmeta.py`, so the engine
+#: is not imported here; `tests/test_agentadjusted.py` pins the two lists equal
+#: and the default to the engine's `STRATEGY_DIRECT`. `direct-move` is the
+#: existing `edit plan --move` command; `recompile-with-locks` adds the group's
+#: module locks as data for the existing PresentationSpec compiler.
+MOVE_STRATEGIES = ("direct-move", "recompile-with-locks")
+DEFAULT_MOVE_STRATEGY = "direct-move"
 
 
 def register_draw_parser(sub: Any, *, force_help: str) -> None:
@@ -793,6 +802,18 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
     draw_move_propose.add_argument("--dx", required=True, metavar="UNITS")
     draw_move_propose.add_argument("--dy", required=True, metavar="UNITS")
     draw_move_propose.add_argument("--reason", required=True, metavar="TEXT")
+    draw_move_propose.add_argument(
+        "--strategy", choices=MOVE_STRATEGIES, default=DEFAULT_MOVE_STRATEGY,
+        help=(
+            "The work order's alternative (default: %(default)s). direct-move is "
+            "the existing `edit plan --move` command the order names. "
+            "recompile-with-locks adds one segment — the same group's module "
+            "locks for the existing PresentationSpec compiler — for when that "
+            "direct move is refused for a flag/label attachment. It is an "
+            "alternative somebody chooses, never an automatic step, and it "
+            "proves neither live guard."
+        ),
+    )
     draw_move_propose.add_argument(
         "-o", "--out", dest="out_path", default=None, metavar="PATH",
         help="Write the work order here (default: print it to stdout).",

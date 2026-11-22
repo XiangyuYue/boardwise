@@ -17016,6 +17016,7 @@ def _cmd_draw_move_propose(args: argparse.Namespace) -> int:
             evidence,
             [item.strip() for item in args.designators.split(",") if item.strip()],
             float(args.dx), float(args.dy), args.reason,
+            strategy=getattr(args, "strategy", agentadjusted.STRATEGY_DIRECT),
         )
     except json.JSONDecodeError as exc:
         print(f"draw move-propose: invalid evidence JSON: {exc}", file=sys.stderr)
