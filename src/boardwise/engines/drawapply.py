@@ -1124,6 +1124,59 @@ def validate_layout_partition(
         raise DrawPlanError("archipelago plan partition: " + str(exc)) from exc
 
 
+def _spec_device_identity(spec_part: Any, part_id: str) -> tuple[str, str]:
+    """The library device pair a CircuitSpec part carries in its own ``params``.
+
+    Not a new top-level field on `SpecPart`: a real V4 CircuitSpec states the
+    verified pair the connector's `sch.place_component` accepts
+    (``deviceUuid``+``libraryUuid``) beside the other device facts it already
+    keeps in ``params``, and that is where this reads it.
+
+    Four answers, and none of them guessed:
+
+    * neither key present — ``("", "")``, the old spec, and the LCSC ladder below
+      is used exactly as before;
+    * both present and non-blank (after stripping) — the pair;
+    * one present (or one blank) — refused by name: a device uuid belongs to
+      exactly one library and the connector never guesses the second half;
+    * a value that is not a string — refused: an identity the page's own
+      `Component.uuid`/`libraryUuid` cannot be compared with is an identity
+      nobody can check after placement.
+    """
+    params = getattr(spec_part, "params", None)
+    if params is None:
+        return "", ""
+    if not isinstance(params, Mapping):
+        raise DrawPlanError(
+            f"{part_id}.params must be a mapping of device parameters, got "
+            f"{type(params).__name__}"
+        )
+    pair: list[str] = []
+    for field in ("deviceUuid", "libraryUuid"):
+        raw = params.get(field)
+        if raw is None:
+            pair.append("")
+            continue
+        if not isinstance(raw, str):
+            raise DrawPlanError(
+                f"{part_id}.params.{field} must be a string (the library uuid "
+                f"`sch.place_component` takes), got {raw!r}"
+            )
+        pair.append(raw.strip())
+    device_uuid, library_uuid = pair
+    if bool(device_uuid) != bool(library_uuid):
+        half = "deviceUuid without libraryUuid" if device_uuid else (
+            "libraryUuid without deviceUuid"
+        )
+        raise DrawPlanError(
+            f"{part_id}.params states "
+            + half
+            + " — the pair is one identity (`sch.place_component` needs both: a device "
+            "uuid belongs to exactly one library)"
+        )
+    return device_uuid, library_uuid
+
+
 def module_plan(
     layout: LayoutPlan,
     circuit: CircuitSpec,
@@ -1269,11 +1322,14 @@ def module_plan(
                 "declare — the two documents disagree"
             )
         number = lcsc.get(part_id) or spec_part.lcsc
-        if not number:
+        device_uuid, library_uuid = _spec_device_identity(spec_part, part_id)
+        if not number and not (device_uuid and library_uuid):
             raise DrawPlanError(
                 f"{part_id} has no LCSC number: the circuit spec states none and no "
                 f"`--lcsc {part_id}=Cxxxxx` was given. A compiled drawing places library "
-                "devices, and an unverified part is never placed silently (029 §二.2)"
+                "devices, and an unverified part is never placed silently (029 §二.2). "
+                "A part with no Supplier Part must carry its verified "
+                "`deviceUuid`+`libraryUuid` pair in `params`"
             )
         value = values.get(part_id) or spec_part.value
         if not value:
@@ -1287,6 +1343,8 @@ def module_plan(
             designator=designator,
             prefix=prefix,
             lcsc=number,
+            device_uuid=device_uuid,
+            library_uuid=library_uuid,
             mpn=spec_part.mpn,
             value=value,
             # 055 G2: the design value is what lands in the editor's own `Value`
@@ -4858,6 +4916,392 @@ def value_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     return problems
 
 
+@dataclass(frozen=True)
+class PageDeviceRecord:
+    """What a ``sch.geometry`` dump says one placed part *is*, read tolerantly.
+
+    Deliberately **not** ``state.Component.uuid``: a live V4 run measured that
+    this field is the document's own device-record id (device
+    ``b948db94476e4027ac8953235755ec96`` requested, ``state.Component.uuid``
+    ``6fe130e2666a04e2`` on the page, and ``lib.device.get(6fe130…)`` answers
+    ``found:false``), so comparing it with the library uuid refuses every
+    legitimate placement. What identifies the device on the page is the
+    **library symbol** it was drawn with plus the sub-part name and the
+    properties the host copied from the library:
+
+    * ``symbol_name`` — ``state.Symbol.name``, the library symbol's **name**;
+      ``state.Symbol.uuid`` is deliberately **not** compared with anything: a live
+      V4 page answered a document symbol-record id there (0/47 of the P1 page's
+      symbol uuids matched the library's own ``association.symbolUuid``), so it is
+      a document id, not a library id;
+    * ``symbol_library_uuid`` — ``state.Symbol.libraryUuid``, or the same library
+      as reported by the component record when the dump carries no Symbol;
+    * ``sub_part_name`` — ``state.SubPartName`` (``state.SubPart`` is the one
+      equivalent spelling the host has also answered);
+    * ``manufacturer_id`` / ``supplier_id`` — ``state.ManufacturerId`` /
+      ``state.SupplierId``.
+
+    Every field is what the page says, never what the plan wants: the comparison
+    lives in :func:`identity_problems`. A missing symbol name / library uuid /
+    sub-part is a refusal there; an empty copied property (``ManufacturerId`` /
+    ``SupplierId``) is *unavailable copied evidence* and is listed as such, never
+    silently passed off as agreement.
+    """
+
+    designator: str = ""
+    symbol_name: str = ""
+    symbol_library_uuid: str = ""
+    sub_part_name: str = ""
+    manufacturer_id: str = ""
+    supplier_id: str = ""
+
+
+def page_device_record(geometry: Any, designator: str) -> PageDeviceRecord | None:
+    """One placed part's page-side identity record, or ``None`` when not there."""
+    wanted = designator.strip().upper()
+    if not wanted or not isinstance(geometry, dict):
+        return None
+    for entry in geometry.get("components") or []:
+        state = _state(entry)
+        name = _text(state.get("Designator")) or _text(
+            (state.get("OtherProperty") or {}).get("Designator")
+            if isinstance(state.get("OtherProperty"), dict)
+            else ""
+        )
+        if name.upper() != wanted:
+            continue
+        symbol = state.get("Symbol") if isinstance(state.get("Symbol"), dict) else {}
+        component = state.get("Component") if isinstance(state.get("Component"), dict) else {}
+        return PageDeviceRecord(
+            designator=name,
+            symbol_name=_text(symbol.get("name")) or _text(state.get("SymbolName")),
+            symbol_library_uuid=(
+                _text(symbol.get("libraryUuid")) or _text(component.get("libraryUuid"))
+            ),
+            sub_part_name=_text(state.get("SubPartName")) or _text(state.get("SubPart")),
+            manufacturer_id=_text(state.get("ManufacturerId")),
+            supplier_id=_text(state.get("SupplierId")),
+        )
+    return None
+
+
+@dataclass(frozen=True)
+class LibraryDeviceEvidence:
+    """What ``lib.device.get`` says about the device a plan asked for.
+
+    The evidence chain a page-side record is compared against, read from the
+    host's own answer without inventing anything:
+
+    * ``found`` — the library answers this uuid at all;
+    * ``library_uuid`` — the library the device belongs to;
+    * ``symbol_uuid`` — ``association.symbolUuid`` (or
+      ``association.symbol.uuid`` when the host nests it). It is the **key**
+      ``lib.symbol.get`` is asked about, never something compared with the page;
+    * ``symbol_name`` — the name ``lib.symbol.get(symbol_uuid)`` answers, which is
+      what the page's ``state.Symbol.name`` is compared with;
+    * ``sub_part_names`` — ``subPartNames``;
+    * ``manufacturer_id`` / ``supplier_id`` — ``item.property.manufacturerId`` /
+      ``item.property.supplierId`` (the item's own top-level keys are accepted
+      when the host puts them there instead).
+    """
+
+    found: bool = False
+    library_uuid: str = ""
+    symbol_uuid: str = ""
+    symbol_name: str = ""
+    sub_part_names: tuple[str, ...] = ()
+    manufacturer_id: str = ""
+    supplier_id: str = ""
+
+    @property
+    def sub_part_evidence(self) -> str:
+        """``"available"`` / ``"unavailable"`` — what the library states.
+
+        Measured on the live library (22/22 devices found): some devices answer
+        ``subPartNames: ['']`` — the field exists but states nothing. That is not
+        "the sub-part matches"; it is *no sub-part evidence*, and the identity
+        then rests on the symbol, any copied properties the host actually
+        returned, and the fresh geometry (all reported as such). A library that
+        states neither sub-parts nor properties nor a symbol proves nothing and
+        is refused.
+        """
+        return "available" if self.sub_part_names else "unavailable"
+
+
+def library_symbol_name(answer: Any) -> str:
+    """The library symbol's own name from one ``lib.symbol.get`` answer.
+
+    Empty means the answer carries no name — an unresolvable symbol, never a
+    reason to compare a document id instead.
+    """
+    if not isinstance(answer, dict):
+        return ""
+    item = answer.get("item") if isinstance(answer.get("item"), dict) else {}
+    return _text(item.get("name")) or _text(item.get("title"))
+
+
+def library_device_evidence(
+    answer: Any, symbol_answer: Any = None
+) -> LibraryDeviceEvidence:
+    """Normalise one ``lib.device.get`` answer (the bridge's envelope).
+
+    ``symbol_answer`` is the ``lib.symbol.get(association.symbolUuid)`` answer the
+    caller made next; its own name is the only symbol fact the page is compared
+    with (the page's ``Symbol.uuid`` is a document id — 0/47 matched live).
+    """
+    if not isinstance(answer, dict):
+        return LibraryDeviceEvidence()
+    item = answer.get("item") if isinstance(answer.get("item"), dict) else {}
+    association = item.get("association") if isinstance(item.get("association"), dict) else {}
+    property_map = item.get("property") if isinstance(item.get("property"), dict) else {}
+    symbol = association.get("symbol") if isinstance(association.get("symbol"), dict) else {}
+    raw_names = item.get("subPartNames")
+    names = tuple(
+        _text(name) for name in (raw_names if isinstance(raw_names, (list, tuple)) else [])
+        if _text(name)
+    )
+    return LibraryDeviceEvidence(
+        found=bool(answer.get("found", bool(item))),
+        library_uuid=_text(answer.get("libraryUuid")) or _text(item.get("libraryUuid")),
+        symbol_uuid=_text(association.get("symbolUuid")) or _text(symbol.get("uuid")),
+        symbol_name=library_symbol_name(symbol_answer),
+        sub_part_names=names,
+        manufacturer_id=(
+            _text(property_map.get("manufacturerId")) or _text(item.get("manufacturerId"))
+        ),
+        supplier_id=_text(property_map.get("supplierId")) or _text(item.get("supplierId")),
+    )
+
+
+def copied_property_evidence(
+    part: PlanDrawPart,
+    page: PageDeviceRecord | None,
+    library: LibraryDeviceEvidence | None,
+) -> tuple[list[str], list[str]]:
+    """The copied-property leg, as ``(problems, unavailable)``.
+
+    ``problems`` are disagreements: the library states a value and the page states
+    a **different non-empty** value. ``unavailable`` lists the fields
+    (``"<designator>.<label>"``) where the library states a value and the page
+    states **nothing** — the host copied no property at all.
+
+    The two are deliberately not the same claim. A live V4 measurement of the P1
+    page found ``state.ManufacturerId`` / ``state.SupplierId`` left empty on 40 of
+    47 placed parts (the other 7 carried copied properties), while
+    ``state.Symbol.name`` and ``state.Symbol.libraryUuid`` matched the library
+    exactly: for those 40, the host's ``sch.place_component`` copied neither
+    property. Treating the empty field as a conflict refused a correct placement
+    after 47 parts were already on the page; the evidence is simply *unavailable*,
+    and the report says so. A
+    non-empty value that differs is still a different device and still refused —
+    this leg is not relaxed.
+    """
+    spot = part.designator or part.spec_id
+    problems: list[str] = []
+    unavailable: list[str] = []
+    if library is None or not library.found or page is None:
+        return problems, unavailable
+    for label, library_value, page_value in (
+        ("ManufacturerId", library.manufacturer_id, page.manufacturer_id),
+        ("SupplierId", library.supplier_id, page.supplier_id),
+    ):
+        if not library_value:
+            continue
+        if not page_value:
+            unavailable.append(f"{spot}.{label}")
+            continue
+        if page_value != library_value:
+            problems.append(
+                f"{spot}.{label} reads {page_value!r} on the page, and library device "
+                f"{part.device_uuid} states {library_value!r} — a copied property that "
+                "disagrees with the library is not the same device"
+            )
+    return problems, unavailable
+
+
+def identity_problems(
+    part: PlanDrawPart,
+    page: PageDeviceRecord | None,
+    library: LibraryDeviceEvidence | None,
+    *,
+    evidence_error: str = "",
+) -> list[str]:
+    """Is the part the page placed the device the library says the plan asked for?
+
+    The identity is **evidence-based**, because the two documents name the same
+    device by different ids: the plan names a library ``deviceUuid``, the page
+    carries a ``Symbol`` uuid, a sub-part name and the properties the host copied
+    from the library. The chain:
+
+    1. the requested uuid must exist in the library (``found``), and that entry
+       must belong to the library the plan states;
+    2. the library's ``association.symbolUuid`` must resolve through
+       ``lib.symbol.get`` to a **name**, and that name must be the page's
+       ``state.Symbol.name``. No document id is compared with any library id:
+       measured live, both ``state.Component.uuid`` and ``state.Symbol.uuid`` are
+       the document's own record ids (0/47 of the P1 page's symbol uuids matched
+       the library's ``association.symbolUuid``);
+    3. the page's ``state.SubPartName`` must be one of the library's
+       ``subPartNames``;
+    4. when the library states a manufacturer id / Supplier Part, the page's own
+       ``state.ManufacturerId`` / ``state.SupplierId`` must equal it **whenever the
+       page states one at all** (a non-empty library fact is a fact to check, never
+       one to skip). A page field the host left empty is *unavailable copied
+       evidence* — measured live on V4, the host places by ``deviceUuid`` and
+       leaves both fields blank while the symbol name / library uuid agree — and is
+       reported as ``copiedPropertyEvidenceUnavailable`` instead of refused; a
+       non-empty page value that differs is still a different device;
+    5. the page's symbol must belong to the plan's library too.
+
+    An unavailable evidence answer (``library is None``, ``found`` false, or a
+    symbol uuid ``lib.symbol.get`` cannot name) is a refusal and **not** a
+    fallback: both page ids are document records (``state.Component.uuid`` is not
+    the library device uuid — ``lib.device.get`` does not resolve it — and
+    ``state.Symbol.uuid`` is not ``association.symbolUuid``), so comparing either
+    rejects a correct placement. Same coordinates and same pins are not the same
+    claim either; the fresh pin/body read-back stays the geometry gate.
+    """
+    spot = part.designator or part.spec_id
+    problems: list[str] = []
+    if library is None or not library.found:
+        why = evidence_error or "the library answered no such device"
+        problems.append(
+            f"{spot} is planned from library device {part.device_uuid}/"
+            f"{part.library_uuid}, and `lib.device.get` cannot resolve it ({why}) — a "
+            "device uuid nothing in the library resolves is not evidence that "
+            "anything was placed, and the page's own Component.uuid is the document's "
+            "device-record id, not the library id, so it is never used as a fallback"
+        )
+        return problems
+    if library.library_uuid and library.library_uuid != part.library_uuid:
+        problems.append(
+            f"{spot}: the library answers device {part.device_uuid} in library "
+            f"{library.library_uuid}, and the plan names library {part.library_uuid} — "
+            "a device uuid belongs to exactly one library"
+        )
+    if page is None:
+        problems.append(
+            f"{spot} is not on the page: `sch.geometry` reports no component with that "
+            f"designator, so the identity of a library device "
+            f"{part.device_uuid}/{part.library_uuid} cannot be confirmed"
+        )
+        return problems
+    if not library.symbol_uuid:
+        problems.append(
+            f"{spot}: the library entry for device {part.device_uuid} states no "
+            "association.symbolUuid, so there is no library symbol to name the page's "
+            "symbol with"
+        )
+    elif not library.symbol_name:
+        problems.append(
+            f"{spot}: `lib.symbol.get({library.symbol_uuid})` answers no name, so the "
+            "page's Symbol.name cannot be judged — a document Symbol.uuid is not a "
+            "library id and is never compared instead"
+        )
+    elif not page.symbol_name:
+        problems.append(
+            f"{spot} is on the page but its state.Symbol.name is empty — the symbol "
+            f"library device {part.device_uuid} is drawn with cannot be read back"
+        )
+    elif page.symbol_name != library.symbol_name:
+        problems.append(
+            f"{spot} is drawn with symbol {page.symbol_name!r} on the page, and library "
+            f"device {part.device_uuid} names its symbol {library.symbol_name!r} — a "
+            "different library symbol is a different device, whatever the coordinates "
+            "and pins say"
+        )
+    if not library.sub_part_names:
+        # Measured live: `subPartNames: ['']` is a real answer (22/22 devices found,
+        # one of them a C22P chip). An empty list is no sub-part evidence, not a
+        # mismatch — the identity may rest on the symbol plus the copied
+        # properties, and only if *those* are also absent is there nothing to
+        # judge (the symbol problem above already covers a missing symbol).
+        if not (
+            library.symbol_name
+            and (library.manufacturer_id or library.supplier_id)
+        ):
+            problems.append(
+                f"{spot}: the library entry for device {part.device_uuid} states no "
+                "subPartNames and no manufacturer/supplier property, so the page's "
+                "identity has no evidence left to be judged against"
+            )
+    elif page.sub_part_name not in library.sub_part_names:
+        problems.append(
+            f"{spot} reads SubPartName {page.sub_part_name!r} on the page, and library "
+            f"device {part.device_uuid} states "
+            f"{', '.join(library.sub_part_names)} — a sub-part the device does not "
+            "carry is a different device"
+        )
+    property_problems, _unavailable = copied_property_evidence(part, page, library)
+    problems.extend(property_problems)
+    if not page.symbol_library_uuid:
+        problems.append(
+            f"{spot}: the page states no library for its Symbol, so the library the "
+            "device was placed from cannot be compared"
+        )
+    elif page.symbol_library_uuid != part.library_uuid:
+        problems.append(
+            f"{spot}'s symbol belongs to library {page.symbol_library_uuid} on the "
+            f"page, and the plan names library {part.library_uuid}"
+        )
+    return problems
+
+
+def device_identity_problems(
+    plan: ChangePlan,
+    pages: Mapping[str, PageDeviceRecord | None],
+    library: Mapping[tuple[str, str], LibraryDeviceEvidence],
+    errors: Mapping[tuple[str, str], str] | None = None,
+) -> list[str]:
+    """The identity leg over every part whose plan states the pair.
+
+    A plan that names LCSC numbers only keeps exactly the checks it had: there is
+    no pair to verify, and inventing one from the page would compare the page with
+    itself.
+    """
+    problems: list[str] = []
+    for part in plan.change.draw_parts:
+        if not (part.device_uuid and part.library_uuid):
+            continue
+        key = (part.device_uuid, part.library_uuid)
+        problems.extend(
+            identity_problems(
+                part,
+                pages.get(part.designator),
+                library.get(key),
+                evidence_error=str((errors or {}).get(key) or ""),
+            )
+        )
+    return problems
+
+
+def unavailable_copied_properties(
+    plan: ChangePlan,
+    pages: Mapping[str, PageDeviceRecord | None],
+    library: Mapping[tuple[str, str], LibraryDeviceEvidence],
+) -> list[str]:
+    """``["R1.ManufacturerId", ...]`` — library-stated properties the page left empty.
+
+    The structured half of :func:`copied_property_evidence`, over the same parts
+    :func:`device_identity_problems` judges. Reported in
+    ``write.deviceIdentity.copiedPropertyEvidenceUnavailable`` so an apply that
+    passes on the symbol / sub-part / geometry evidence still states which copied
+    properties it could not read back, rather than claiming a comparison it never
+    made.
+    """
+    unavailable: list[str] = []
+    for part in plan.change.draw_parts:
+        if not (part.device_uuid and part.library_uuid):
+            continue
+        _problems, fields = copied_property_evidence(
+            part,
+            pages.get(part.designator),
+            library.get((part.device_uuid, part.library_uuid)),
+        )
+        unavailable.extend(fields)
+    return unavailable
+
+
 def postcondition_problems(
     plan: ChangePlan,
     *,
@@ -4895,6 +5339,9 @@ def postcondition_problems(
         state["canvas"].extend(_part_problems(plan, geometry, pins or {}))
         state["canvas"].extend(_wire_problems(plan, geometry))
         state["canvas"].extend(value_problems(plan, geometry))
+        # The identity leg is NOT here: it needs the library's own evidence
+        # (`lib.device.get`) beside the page dump, and this function only has the
+        # canvas. `draw apply` runs it as its own leg instead.
         state["canvas"].extend(_flag_problems(plan, geometry))
         if flags_before is not None:
             expected = len(plan.change.draw_flags)
@@ -5376,6 +5823,93 @@ def ground_family_observations(
     return notes
 
 
+#: The precision the page reports coordinates at. Measured on the P1 landing
+#: (`.tmp_lock_p1/p1-final-geometry.json`): every one of its 576 wire coordinates
+#: and all 100 component origins (47 parts, 52 flags, 1 sheet) is a multiple of
+#: 0.01, while the
+#: plan's own points carry full precision — `1031.6957661431065` comes back as
+#: `1031.7`. Comparing the two for exact equality therefore calls a landing that
+#: *did* land a miss (14 of them on that page), so "the same point" has to be
+#: judged within the page's own rounding step. Half of it is the most that step
+#: can move a coordinate; it is far below the drawing lattice, so it cannot turn
+#: an off-path segment into an on-path one.
+PAGE_POINT_PRECISION = 0.01
+
+
+def _near_polyline(
+    point: tuple[float, float],
+    points: Sequence[tuple[float, float]],
+    tolerance: float = PAGE_POINT_PRECISION / 2.0,
+) -> bool:
+    """`:func:`_on_polyline`` asked within `tolerance`, by real distance.
+
+    The same question — is `point` a vertex of the polyline or on one of its
+    segments — but the page's coordinates are rounded readings (measured, see
+    :data:`PAGE_POINT_PRECISION`), so a planned point and the page's reading of it
+    are never exactly equal. Distance to the nearest point of each segment rather
+    than an axis box plus a cross product, so a segment at an angle is judged by
+    how far the point really is from it.
+    """
+    if not points:
+        return False
+    segments = list(zip(points, points[1:])) if len(points) > 1 else [(points[0], points[0])]
+    for start, end in segments:
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        if dx == 0.0 and dy == 0.0:
+            if _near(point, start, tolerance):
+                return True
+            continue
+        t = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / (dx * dx + dy * dy)
+        t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+        if (
+            (point[0] - (start[0] + t * dx)) ** 2
+            + (point[1] - (start[1] + t * dy)) ** 2
+            <= tolerance * tolerance
+        ):
+            return True
+    return False
+
+
+def _page_segment_holds_end(
+    net: str,
+    named: bool,
+    line: Sequence[tuple[float, float]],
+    spot: tuple[float, float],
+    page_segments: Sequence[tuple[str, tuple[float, float], tuple[float, float], float]],
+) -> bool:
+    """Is `spot` interior to a real page segment that lies on *this* wire's line?
+
+    The strict form of "the end landed": one page segment, of non-zero length,
+    whose **both** ends lie on the polyline the plan drew for this wire and which
+    passes through `spot`. A segment reaching outside that polyline is another
+    wire's copper (or an unplanned extension) and does not answer for this end; a
+    page vertex somewhere else does not either. A named wire additionally requires
+    the segment to carry its net — the condition the named branch has always had.
+    """
+    for seg_net, start, stop, length in page_segments:
+        if length <= 0.0:
+            continue
+        if not _near_polyline(spot, (start, stop)):
+            continue
+        if named and seg_net != net:
+            continue
+        if _near_polyline(start, line) and _near_polyline(stop, line):
+            return True
+    return False
+
+
+def _page_flag_lands(
+    net: str,
+    spot: tuple[float, float],
+    page_flags: Sequence[tuple[str, float, float]],
+) -> bool:
+    """Does the page hold a flag of `net` at its own reading of `spot`?"""
+    for flag_net, x, y in page_flags:
+        if flag_net == net and _near(spot, (x, y), PAGE_POINT_PRECISION / 2.0):
+            return True
+    return False
+
+
 def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     """Each planned wire's own endpoints, under the net it belongs to.
 
@@ -5426,6 +5960,21 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
             total += length
             page_segments.append((net, pairs[index - 1], pairs[index], length))
         lengths[net] = lengths.get(net, 0.0) + total
+    # A planned end that is a flag's anchor has a second witness the page can be
+    # asked for: the flag itself, under its own net (:func:`census_items`, 163b).
+    # Read once here — a flag that is missing, renamed or moved is exactly what
+    # the anchor condition below is for, and it must not be able to pass on the
+    # wire's geometry alone.
+    plan_flag_anchors: dict[tuple[float, float], str] = {}
+    for flag in getattr(plan.change, "draw_flags", ()) or ():
+        plan_flag_anchors[(round(float(flag.x), 6), round(float(flag.y), 6))] = flag.net
+    page_flags: list[tuple[str, float, float]] = [
+        (str(row.get("net") or ""), float(row["x"]), float(row["y"]))
+        for row in census_items(geometry)
+        if row.get("kind") == "netflag"
+        and row.get("x") is not None
+        and row.get("y") is not None
+    ]
     problems: list[str] = []
     all_vertices = {spot for spots in vertices.values() for spot in spots}
     # 069 sec.9, tightened by 163b and made per-wire by 530D: an unnamed wire is
@@ -5464,6 +6013,7 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
         if not named and wire.net:
             have = unnamed_vertices.get(wire.net) or set()
             attributed = bool(have)
+        line = [(float(point[0]), float(point[1])) for point in wire.points]
         for end in (wire.points[0], wire.points[-1]):
             spot = (round(end[0], 6), round(end[1], 6))
             if spot in have:
@@ -5479,6 +6029,23 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
                 for seg_net, start, stop, _length in page_segments
             ):
                 continue
+            # The same shape, read at the page's own precision (530D/P1, and the
+            # 14 points a correct landing was refused on): the page reports its
+            # coordinates rounded (PAGE_POINT_PRECISION), so an end that *is* the
+            # page's point is neither an exact vertex nor exactly on a segment —
+            # 1031.695766 came back as 1031.7. Accept it only on the page's own
+            # evidence: a real, non-zero segment that lies wholly on the polyline
+            # this wire drew and passes through the end. A segment reaching
+            # outside that polyline, a vertex somewhere else, or the same net name
+            # alone is not this wire's landing and stays reported below.
+            if _page_segment_holds_end(wire.net, named, line, spot, page_segments):
+                # A flag's anchor end additionally needs the flag itself on the
+                # page, of the same net, at that point: the anchor point existing
+                # as copper says the wire reached it, not that the flag landed.
+                if plan_flag_anchors.get(spot) is None or _page_flag_lands(
+                    wire.net, spot, page_flags
+                ):
+                    continue
             if attributed:
                 problems.append(
                     f"net {wire.net}: no wire vertex at ({end[0]:g}, {end[1]:g}) on the "

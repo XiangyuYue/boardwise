@@ -21,7 +21,9 @@ from boardwise.engines import svgpreview
 
 SVG = "http://www.w3.org/2000/svg"
 PAGE = (10.0, 20.0, 110.0, 120.0)
-DEFAULT_SHA256 = "5922b03e26f297dcd8962d10f75a21259e65d35bd0f99466fc8cb234e686b404"
+# Includes the measured 7.006px native-text attribute on LayoutText; the rest of
+# the default diagnostic output is unchanged (see test_svgpreview_native_text.py).
+DEFAULT_SHA256 = "d66a1b4859e7beceaaf12ade8007c243e0fe053c430319628699f6f2ba7a3253"
 SOURCE = "548P44 handwritten captured-pose test art; not a live calibration"
 ART = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="-15 -10 30 20">
 <style>*{stroke-linejoin:round}.pin-bar{stroke:#880000}</style>

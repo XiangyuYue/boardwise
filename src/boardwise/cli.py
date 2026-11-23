@@ -13984,6 +13984,89 @@ async def _draw_apply_flow(
             )
             return done(4, "refused", "attribute_api_missing")
 
+    # ---- 4c. the library's own identity evidence (read-only, before a write) ----
+    #
+    # Only plans that name a library device pair pay for this, and they pay before
+    # the first part is placed: `lib.device.get(deviceUuid, libraryUuid)` is the
+    # host's own statement of which symbol and which sub-part that device is, and
+    # it is the evidence the page's identity is judged against after placement.
+    # A pair nothing in the library resolves refuses here, before anything lands —
+    # a uuid that does not resolve is not evidence, and `state.Component.uuid` is
+    # NOT its fallback (it is the document's device-record id).
+    identity_evidence: dict[tuple[str, str], drawapply.LibraryDeviceEvidence] = {}
+    identity_evidence_errors: dict[tuple[str, str], str] = {}
+    pair_parts = [
+        part for part in parts if part.device_uuid and part.library_uuid
+    ]
+    if pair_parts:
+        for part in pair_parts:
+            key = (part.device_uuid, part.library_uuid)
+            if key in identity_evidence or key in identity_evidence_errors:
+                continue
+            answer = await call(
+                "lib.device.get",
+                {"uuid": part.device_uuid, "libraryUuid": part.library_uuid},
+                f"resolve {part.designator}'s library device "
+                f"{part.device_uuid}/{part.library_uuid} (identity evidence)",
+            )
+            if not isinstance(answer, dict):
+                identity_evidence_errors[key] = (
+                    "`lib.device.get` answered nothing readable"
+                )
+                continue
+            evidence = drawapply.library_device_evidence(answer)
+            # The *name* of the library symbol is the only symbol fact the page is
+            # compared with: both page ids (`Component.uuid`, `Symbol.uuid`) are
+            # document record ids (0/47 of the P1 page's symbol uuids matched the
+            # library's `association.symbolUuid`), so a symbol uuid this call cannot
+            # name is a refusal — never a reason to compare ids instead.
+            symbol_answer = None
+            if evidence.found and evidence.symbol_uuid:
+                symbol_answer = await call(
+                    "lib.symbol.get",
+                    {"uuid": evidence.symbol_uuid,
+                     "libraryUuid": part.library_uuid},
+                    f"resolve {part.designator}'s library symbol "
+                    f"{evidence.symbol_uuid} (identity evidence)",
+                )
+            evidence = drawapply.library_device_evidence(answer, symbol_answer)
+            identity_evidence[key] = evidence
+            if evidence.found and not evidence.symbol_name:
+                identity_evidence_errors[key] = (
+                    "`lib.symbol.get(" + (evidence.symbol_uuid or "?") + ")` answers "
+                    "no symbol name (or the library states no association.symbolUuid), "
+                    "so the page's Symbol.name has nothing to be compared with"
+                )
+        if identity_evidence_errors:
+            notes.append(
+                "库证据不可读，器件写入之前停下："
+                + "；".join(
+                    f"{uuid}/{library_uuid}: {message}"
+                    for (uuid, library_uuid), message in sorted(
+                        identity_evidence_errors.items()
+                    )
+                )
+                + " —— 没有写任何东西（不借用文档内 Component.uuid 冒充库 ID）"
+            )
+            return done(2, "failed", "device_identity_evidence_unavailable")
+        unresolved = [
+            evidence for evidence in identity_evidence.values() if not evidence.found
+        ]
+        if unresolved:
+            notes.append(
+                "库不认识 plan 请求的器件 UUID，器件写入之前停下："
+                + "；".join(
+                    f"{uuid}/{library_uuid}"
+                    for (uuid, library_uuid), evidence in sorted(
+                        identity_evidence.items()
+                    )
+                    if not evidence.found
+                )
+                + " —— 没有写任何东西（`lib.device.get found=false` 不是证据，"
+                "文档内 Component.uuid 也不是库 ID）"
+            )
+            return done(2, "failed", "device_identity_unresolved")
+
     # ---- 5. the writes: the parts -----------------------------------------
     # The pose the editor takes is the *negation* of the layout's angle — one
     # place in the repo owns that conversion and the measurement behind it
@@ -13996,18 +14079,35 @@ async def _draw_apply_flow(
     primitive_ids: dict[str, str] = {}
     for part in parts:
         pose_rotation, pose_mirror = editor_pose(part.rotation, bool(part.mirror))
-        place_params: dict = {
-            "lcsc": part.lcsc,
+        # Identity first (device-identity batch): a plan that states the verified
+        # library pair is placed **by that pair**, and its LCSC number is not sent
+        # at all — the connector tests `deviceUuid` before `lcsc`
+        # (`actions.ts`), so sending both would only restate which one wins, and a
+        # verified device with no orderable number has no `lcsc` to send. A plan
+        # with no pair emits exactly the call it always did, key for key.
+        by_uuid = bool(part.device_uuid and part.library_uuid)
+        place_params: dict = (
+            {"deviceUuid": part.device_uuid, "libraryUuid": part.library_uuid}
+            if by_uuid
+            else {"lcsc": part.lcsc}
+        )
+        place_params.update({
             "x": part.x,
             "y": part.y,
             "rotation": int(pose_rotation),
             "mirror": pose_mirror,
             "designator": part.designator,
             "pageUuid": page,
-        }
+        })
         placed = await call(
             "sch.place_component", place_params,
-            f"place {part.designator} ({part.value}, {part.lcsc}) at "
+            f"place {part.designator} ({part.value}, "
+            + (
+                f"device {part.device_uuid}/{part.library_uuid}"
+                if by_uuid
+                else part.lcsc
+            )
+            + f") at "
             f"({part.x:g}, {part.y:g}) rot {part.rotation:g}",
             writes=True,
         )
@@ -14133,6 +14233,11 @@ async def _draw_apply_flow(
             "designator": part.designator, "value": part.value, "lcsc": part.lcsc,
             "x": part.x, "y": part.y, "rotation": part.rotation,
             "mirror": part.mirror, "answered": isinstance(placed, dict),
+            **(
+                {"deviceUuid": part.device_uuid, "libraryUuid": part.library_uuid}
+                if by_uuid
+                else {}
+            ),
         }
         report["write"]["placed"].append(entry)
         primitive = str((placed or {}).get("uuid") or "") if isinstance(placed, dict) else ""
@@ -14475,6 +14580,97 @@ async def _draw_apply_flow(
     placed_geometry = await call(
         "sch.geometry", {}, "read the page again to find the placed parts and their pins"
     )
+    # Identity leg (device-identity batch): a part the plan named by its library
+    # pair is judged against **library evidence plus the page's own symbol /
+    # sub-part / properties** — never against `state.Component.uuid`, which a live
+    # V4 run measured to be the document's device-record id (device
+    # b948db94476e4027ac8953235755ec96 requested, Component.uuid 6fe130e2666a04e2 on
+    # the page, and `lib.device.get(6fe130…)` answers found:false). The library
+    # evidence was fetched before the first write; here the page is compared with
+    # it. Empty for a plan that names LCSC numbers only.
+    pages = {
+        part.designator: drawapply.page_device_record(placed_geometry or {}, part.designator)
+        for part in plan.change.draw_parts
+        if part.device_uuid and part.library_uuid
+    }
+    identities = drawapply.device_identity_problems(
+        plan, pages, identity_evidence, identity_evidence_errors
+    )
+    # Empty copied properties are unavailable evidence, not disagreement: the live
+    # V4 host left state.ManufacturerId/SupplierId blank on 40 of the 47 P1 parts
+    # (the other 7 carried copied properties), while the symbol name and library
+    # uuid agreed. The report lists what could not be read back.
+    unavailable_copied = drawapply.unavailable_copied_properties(
+        plan, pages, identity_evidence
+    )
+    if any(part.device_uuid for part in plan.change.draw_parts):
+        report["write"]["deviceIdentity"] = {
+            "problems": identities,
+            "copiedPropertyEvidenceUnavailable": unavailable_copied,
+            "identityBasis": (
+                "document record ids do NOT take part (neither state.Component.uuid "
+                "nor state.Symbol.uuid is a library id: measured live, 0/47 symbol "
+                "uuids matched the library's association.symbolUuid). Identity is "
+                "proven by the library symbol **name** (`lib.device.get`'s "
+                "association.symbolUuid resolved through `lib.symbol.get`, compared "
+                "with the page's state.Symbol.name), the library (`state.Symbol."
+                "libraryUuid`), the sub-part / copied-property evidence (a page "
+                "property the host left empty is reported as "
+                "copiedPropertyEvidenceUnavailable, never refused; a non-empty value "
+                "that differs is a refusal) and — from the "
+                "fresh pin/body read-back — the geometry. "
+                + (
+                    "subPartEvidence=unavailable for "
+                    + ", ".join(
+                        f"{uuid}/{library_uuid}"
+                        for (uuid, library_uuid), evidence in sorted(
+                            identity_evidence.items()
+                        )
+                        if evidence.sub_part_evidence == "unavailable"
+                    )
+                    + " (the library states no subPartNames, so identity rests on the "
+                    "symbol name/library and any available copied properties); "
+                    if any(
+                        evidence.sub_part_evidence == "unavailable"
+                        for evidence in identity_evidence.values()
+                    )
+                    else "subPartEvidence=available; "
+                )
+                + "the document/library association ids can change between runs, so the "
+                "fresh apply's own pin-geometry read-back remains the geometry gate — "
+                "this leg is the device-identity gate, not a substitute for it"
+            ),
+            "libraryEvidence": {
+                f"{uuid}/{library_uuid}": {
+                    "found": evidence.found,
+                    "libraryUuid": evidence.library_uuid,
+                    "symbolUuid": evidence.symbol_uuid,
+                    "symbolName": evidence.symbol_name,
+                    "subPartNames": list(evidence.sub_part_names),
+                    "subPartEvidence": evidence.sub_part_evidence,
+                    "manufacturerId": evidence.manufacturer_id,
+                    "supplierId": evidence.supplier_id,
+                }
+                for (uuid, library_uuid), evidence in sorted(identity_evidence.items())
+            },
+            **(
+                {"evidenceErrors": {
+                    f"{uuid}/{library_uuid}": message
+                    for (uuid, library_uuid), message in sorted(
+                        identity_evidence_errors.items()
+                    )
+                }}
+                if identity_evidence_errors
+                else {}
+            ),
+        }
+    if identities:
+        notes.append(
+            "放下的器件身份与 plan 不符（deviceUuid/libraryUuid 逐件回读），在拉线之前停下："
+            + "；".join(identities)
+            + " —— 器件已放、线没有画；现场见报告（不清理、不重试、不保存）"
+        )
+        return done(2, "failed", "device_identity_disagrees")
     values = drawapply.value_problems(plan, placed_geometry or {})
     for entry in value_entries:
         looked_up = resolve_on_page(placed_geometry or {}, entry["designator"])
@@ -15419,8 +15615,9 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
     """
     import asyncio
 
+    from .core import pageframe
     from .core.pagelayoutplan import PageLayoutPlan, PageLayoutPlanError
-    from .engines import drawapply, pagecompiler, readability
+    from .engines import drawapply, islandlayout, pagecompiler, readability
 
     layout_path = getattr(args, "layout", None)
     saved_page = None
@@ -15503,6 +15700,25 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
             {"box": list(box), "from": label}
             for box, label in zip(keep_boxes, keep_labels)
         ]
+        # 057 saved pages: a page is a sheet, and a sheet's title block is a
+        # keep-out (S-01).  A saved page was packed by an earlier run (or tuned
+        # by hand), so the block is derived here from the page's own ``page_box``
+        # with the same `core.pageframe` derivation the compile stage uses, and
+        # it is handed to **both** current checks together with the census.  Left
+        # out, a page whose modules/figure sit inside the table passes both and
+        # becomes an applicable plan (the P1 replay: J10/J11/J12 and their wires
+        # inside the title block).  The census is never dropped; a title block
+        # the census already states is not added twice.  Nothing here re-packs,
+        # scales or repairs the saved page: a conflict is a refusal.
+        title_keepouts: tuple = ()
+        if saved_page is not None:
+            title_keepouts = pageframe.title_block_keepouts(saved_page.page_box)
+        preflight_boxes = list(keep_boxes)
+        preflight_labels = list(keep_labels)
+        for box in title_keepouts:
+            if not any(_draw_same_box(box, seen) for seen in preflight_boxes):
+                preflight_boxes.append(tuple(float(value) for value in box))
+                preflight_labels.append("the sheet's title block (S-01)")
         result = None
         if saved_page is None:
             result = pagecompiler.compile_page(
@@ -15528,6 +15744,17 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
         else:
             page = saved_page
         try:
+            # 533/S-01: a saved page is a page, so the plan that lands it must say
+            # so — `draw apply` reads the island marker and the sheet reservation
+            # off the plan's own notes, and a saved-page plan that carried neither
+            # silently skipped the title-block guard (`_draw_plan_is_island_page`
+            # was False).  The marker and the note use the one spelling the
+            # landing stage already reads; no second marker is invented.
+            saved_page_notes: list[str] = []
+            if saved_page is not None:
+                saved_page_notes.append(islandlayout.ISLAND_PAGE_KIND)
+                if title_keepouts:
+                    saved_page_notes.append(pageframe.keep_out_note(page_box, title_keepouts))
             plan = _draw_plan_from_page(
                 page, circuit, presentation, profiles,
                 candidate=args.candidate, lcsc=lcsc, values=values,
@@ -15541,6 +15768,7 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
                     + f"({page.page_geometry_sha256()[:12]}…)",
                     f"the designator pool is {report['poolSource'] or 'empty (offline)'}",
                     *_draw_page_notes(page, [] if saved_page is not None else keep_labels, keep_notes),
+                    *saved_page_notes,
                 ],
                 keep_names=bool(getattr(args, "keep_names", False)),
             )
@@ -15549,7 +15777,7 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
         if saved_page is not None:
             try:
                 page_check = readability.check_page(
-                    page, circuit, presentation, profiles, keepouts=keep_boxes,
+                    page, circuit, presentation, profiles, keepouts=preflight_boxes,
                 )
                 view = pagecompiler.page_presentation_view(
                     presentation, page.modules,
@@ -15557,7 +15785,7 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
                 )
                 drawing_check = readability.check(
                     page.plan, circuit, view, profiles,
-                    page_box=page_box, keepouts=keep_boxes,
+                    page_box=page_box, keepouts=preflight_boxes,
                 )
             except readability.ReadabilityError as exc:
                 return refuse("readability_refused", str(exc))
@@ -15569,7 +15797,7 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
             if problems:
                 return refuse(
                     "readability_refused", "saved page failed current readability checks; no recompile",
-                    [_draw_keepout_names(item.render(), keep_labels) for item in problems],
+                    [_draw_keepout_names(item.render(), preflight_labels) for item in problems],
                 )
         if args.out_path:
             plan.dump(args.out_path)
@@ -16415,6 +16643,38 @@ def _print_proposal(proposal: object, out_path: str | None) -> None:
         print("  draft:")
 
 
+def _draw_lint_body_boxes(raw: Any) -> dict[str, tuple[float, float, float, float]]:
+    """primitiveId → measured page body box, from either captured form.
+
+    `--bodies` has always documented the ``[minX, minY, maxX, maxY]`` list
+    shape (a dict handed to ``tuple()`` silently became four *key names*, which
+    is why a captured ``bboxes`` probe never reached L3/L4). Both shapes are
+    read here: the list, and the ``{"minX": …, "minY": …, "maxX": …, "maxY": …}``
+    object the `sch.geometry --params {"bboxIds": …}` probe actually prints.
+    """
+    out: dict[str, tuple[float, float, float, float]] = {}
+    for key, value in (raw or {}).items() if isinstance(raw, dict) else ():
+        box: tuple[float, float, float, float] | None = None
+        if isinstance(value, (list, tuple)) and len(value) == 4:
+            try:
+                box = tuple(float(v) for v in value)  # type: ignore[assignment]
+            except (TypeError, ValueError):
+                box = None
+        elif isinstance(value, dict):
+            try:
+                box = (
+                    float(value["minX"]),
+                    float(value["minY"]),
+                    float(value["maxX"]),
+                    float(value["maxY"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                box = None
+        if box is not None:
+            out[str(key)] = box
+    return out
+
+
 def _cmd_draw_lint(args: argparse.Namespace) -> int:
     """`draw lint --page P1` (task 111): eleven read-only geometric predicates.
 
@@ -16471,11 +16731,7 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
         if args.bodies:
             try:
                 raw = json.loads(Path(args.bodies).read_text(encoding="utf-8"))
-                bodies = {
-                    key: tuple(value)
-                    for key, value in (raw or {}).items()
-                    if isinstance(value, (list, tuple)) and len(value) == 4
-                }
+                bodies = _draw_lint_body_boxes(raw)
             except (OSError, ValueError) as exc:
                 print(f"boardwise draw lint: {args.bodies}: {exc}", file=sys.stderr)
                 return 2
@@ -16630,6 +16886,56 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
             return 3
         page_label = args.page or "the focused page"
 
+    # 549x: the netlist is a gate, not a decoration. It is read on **both**
+    # paths (a captured `sch.netlist` answer is the same file whether the page
+    # came from the daemon or from `--snapshot`), an unreadable one is exit 2,
+    # and a run without one says in its notes that the electrical predicates
+    # never ran — an empty L12 family must never read as "checked".
+    netlist = None
+    netlist_stats: dict = {
+        "provided": False,
+        "path": None,
+        "components": 0,
+        "pins": 0,
+        "nets": 0,
+    }
+    netlist_path = getattr(args, "netlist", None)
+    if netlist_path:
+        try:
+            raw_netlist = json.loads(Path(netlist_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"boardwise draw lint: {netlist_path}: {exc}", file=sys.stderr)
+            return 2
+        try:
+            netlist = drawlint.read_netlist_document(raw_netlist)
+        except ValueError as exc:
+            print(
+                f"boardwise draw lint: {netlist_path}: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+        netlist_stats.update(
+            {
+                "provided": True,
+                "path": str(netlist_path),
+                "components": len(netlist.parts),
+                "pins": netlist.pin_count(),
+                "nets": len(netlist.pin_nets()),
+            }
+        )
+        notes.append(
+            f"netlist {Path(netlist_path).name}: {len(netlist.parts)} components / "
+            f"{netlist.pin_count()} pins / {len(netlist.pin_nets())} nets — the "
+            "netlist predicates (L12) ran against it"
+        )
+    else:
+        notes.append(
+            "no --netlist: the netlist semantic checks (L12-two-pin-same-net, "
+            "L12-ground-supply-pin-short, L12-ground-flag-absent-from-netlist) did "
+            "NOT run — this page is judged on geometry and flags alone, and an "
+            "empty L12 family is not a pass"
+        )
+
     text_readable = True
     if render_svg is None:
         # Both paths above already said why (no `--render` sidecar, or the
@@ -16649,10 +16955,17 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
             "called clean"
         )
 
-    findings = drawlint.run_lint(snapshot, render_svg)
+    findings = drawlint.run_lint(
+        snapshot, render_svg, bodies=bodies or None, netlist=netlist
+    )
     counts = {"ERROR": 0, "WARN": 0, "INFO": 0}
+    by_predicate: dict[str, int] = {}
     for finding in findings:
         counts[finding.severity] += 1
+        by_predicate[finding.predicate] = by_predicate.get(finding.predicate, 0) + 1
+    netlist_stats["predicates"] = {
+        name: by_predicate.get(name, 0) for name in drawlint.NETLIST_PREDICATES
+    }
 
     print(f"boardwise draw lint: {page_label} — {counts['ERROR']} error / "
           f"{counts['WARN']} warn / {counts['INFO']} info")
@@ -16666,6 +16979,8 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
             "source": "replay" if args.snapshot else "live",
             "findings": [finding.as_dict() for finding in findings],
             "counts": counts,
+            "predicates": by_predicate,
+            "netlist": netlist_stats,
             "exitCode": 1 if counts["ERROR"] else 0,
             "textReadable": text_readable,
             "notes": notes,

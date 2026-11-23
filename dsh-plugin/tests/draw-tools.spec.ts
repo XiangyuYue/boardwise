@@ -278,6 +278,7 @@ describe('boardwise_draw_lint: offline replay only', () => {
     const snapshot = fixture('snapshot.json')
     const render = fixture('render.svg', '<svg/>\n')
     const bodies = fixture('bodies.json')
+    const netlist = fixture('netlist.json')
     const payload = lintPayload(1)
     let jsonPath = ''
     const mock = installSpawn((child, _command, args) => {
@@ -287,13 +288,13 @@ describe('boardwise_draw_lint: offline replay only', () => {
       child.finish(1)
     })
 
-    const value = await callObject('boardwise_draw_lint', { snapshot, render, bodies })
+    const value = await callObject('boardwise_draw_lint', { snapshot, render, bodies, netlist })
 
     expect(value).toEqual(payload)
     const argv = spawnedCommand(mock)
     expect(argv.slice(1)).toEqual([
       'draw', 'lint', '--snapshot', snapshot, '--render', render,
-      '--bodies', bodies, '--json', jsonPath,
+      '--bodies', bodies, '--netlist', netlist, '--json', jsonPath,
     ])
     for (const liveFlag of ['--page', '--project', '--instance', '--port']) {
       expect(argv).not.toContain(liveFlag)

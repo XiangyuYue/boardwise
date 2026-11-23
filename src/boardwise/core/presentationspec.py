@@ -195,7 +195,7 @@ PRESENTATION_SPEC_VERSION = 1
 #: saying the grammar is not known.
 GRAMMARS: tuple[str, ...] = (
     "voltage-divider", "rc-lowpass", "ldo", "power-entry", "ic-periphery",
-    "flyback",
+    "flyback", "mixed-island",
 )
 
 #: How a net may be expressed locally (052 sec.5: a key local topology is drawn
@@ -320,7 +320,7 @@ _TOP_KEYS = (
 )
 _MODULE_KEYS = (
     "id", "parts", "role", "grammarRef", "presentation", "branchOrder", "core",
-    "attach",
+    "freeParts", "attach",
 )
 #: The sides a module may be attached to its host on (053c), and the two nested
 #: defaults. `bottom` is the decoupling row's side — a block of capacitors under
@@ -435,6 +435,17 @@ class PresentationModule:
     key this build does not read would be an intent nobody honours, and a document
     that states nothing serialises exactly as it did before the field existed —
     same bytes, same digest, same plan.
+
+    ``free_parts`` is the group's own statement that some of its two-terminal
+    branches belong to this island but bind **no** core role: they are not the
+    core's `bridge`, not a `shunt`, not a `stray`, and no `near`/`adjacent`
+    constraint is derived from a role they do not have. It is an engineer's
+    declaration, not a deletion: the parts stay in `parts` (and therefore in the
+    circuit and on the page), the page compiler still places and connects them,
+    and only `mixed-island` reads the key. The default is empty and the key is
+    written only when stated, for the same reason every optional field here is:
+    a document that declares no free part keeps its bytes, its digest and every
+    plan compiled from it.
     """
 
     id: str
@@ -444,6 +455,7 @@ class PresentationModule:
     side_preferences: dict[str, str] = field(default_factory=dict)
     branch_order: list[str] = field(default_factory=list)
     core: str = ""
+    free_parts: list[str] = field(default_factory=list)
     attach: "ModuleAttach | None" = None
 
 
@@ -1446,6 +1458,10 @@ def _module_json(module: PresentationModule) -> dict[str, Any]:
         out["branchOrder"] = list(module.branch_order)
     if module.core:
         out["core"] = module.core
+    # 548L: written only when stated, so a document that declares no free part
+    # keeps its bytes, digest and every plan compiled from it.
+    if module.free_parts:
+        out["freeParts"] = list(module.free_parts)
     if module.attach is not None:
         out["attach"] = _attach_json(module.attach)
     return out
@@ -1544,6 +1560,9 @@ def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
             side_preferences=_module_presentation(body.get("presentation"), spot),
             branch_order=_module_branch_order(body.get("branchOrder"), spot, parts),
             core=_module_core(body.get("core"), f"{spot}.core"),
+            free_parts=_module_free_parts(
+                body.get("freeParts"), f"{spot}.freeParts", parts
+            ),
             attach=_module_attach(body.get("attach"), spot, module_id),
         ))
     _check_attachments(out)
@@ -1676,6 +1695,43 @@ def _module_branch_order(
                 f"({', '.join(parts)}) — the order is stated over this group's "
                 "own parts, and a designator outside it is a statement about "
                 "another group's drawing"
+            )
+    return designators
+
+
+def _module_free_parts(
+    value: Any, where: str, parts: Sequence[str]
+) -> list[str]:
+    """A module's declared free parts, checked against its own ``parts`` (548L).
+
+    ``freeParts`` is the engineer's statement that some of **this group's**
+    two-terminal branches belong to the island but bind no core role. Two facts
+    are decidable from the document alone and are refused here rather than left
+    to the grammar: a part the module's own ``parts`` does not list (a free part
+    of somebody else's group is a statement about another drawing) and the same
+    part named twice ("one part is declared once"). Whether a named part is
+    really two-terminal is a property of the circuit, so that half belongs to
+    the grammar and is refused there as `circuit-invalid` (never silently
+    ignored). An empty list is the default and is not serialised.
+    """
+    designators = _text_list(value, f"{where}")
+    if not designators:
+        return []
+    seen: set[str] = set()
+    for index, designator in enumerate(designators):
+        spot = f"{where}[{index}]"
+        if designator in seen:
+            raise PresentationSpecError(
+                f"{spot} is {designator!r}, already named — one part is declared "
+                "free once, and a repeat says two different things about it"
+            )
+        seen.add(designator)
+        if designator not in parts:
+            raise PresentationSpecError(
+                f"{spot} is {designator!r}, which this module's parts does not "
+                f"list ({', '.join(parts)}) — freeParts is stated over this "
+                "module's own parts, and a designator outside it is a statement "
+                "about another module's branches"
             )
     return designators
 

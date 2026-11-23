@@ -77,7 +77,9 @@ def test_owner_manifest_covers_review_commands():
     # beta 2 adds agentadjusted (draw), v4facts (draw), v4circuitspec (shared).
     # 559 adds `core/connection.py` (shared) and `pcb_connection.py` (assembly) — 159.
     # 562 adds `core/livepath.py` (shared) and `pcb_path.py` (assembly) — 161.
-    assert len(data["modules"]) == 161
+    # 563A/B add `core/netlist.py` and `core/circuitsemantics.py` (shared), and
+    # the smart-lock batch adds `engines/grammar/mixed_island.py` (draw) — 164.
+    assert len(data["modules"]) == 164
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

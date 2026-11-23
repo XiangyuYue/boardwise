@@ -475,10 +475,10 @@ def test_the_grammar_uses_only_the_existing_obligation_vocabulary():
         assert item.nets and item.reason.strip()
 
 
-def test_the_five_existing_grammars_are_untouched():
+def test_the_existing_grammars_keep_their_positions_and_the_mixed_one_is_last():
     assert tuple(GRAMMARS) == (
         "voltage-divider", "rc-lowpass", "ldo", "power-entry", "ic-periphery",
-        "flyback",
+        "flyback", "mixed-island",
     )
     for name in ("voltage-divider", "rc-lowpass", "ldo", "power-entry",
                  "ic-periphery"):

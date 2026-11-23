@@ -71,6 +71,11 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from ..core import textmetrics
+# 563A: the netlist reader is shared (`core.netlist`) rather than owned here —
+# `core.candidate` parsed the same host document a second time. The names stay
+# imported so every existing `drawlint.NetlistPin` / `read_netlist_document`
+# caller reads the same objects, and L12's fields are unchanged.
+from ..core.netlist import Netlist, NetlistPart, NetlistPin, read_netlist_document
 
 
 #: The paint colours the editor's render uses for canvas text, measured on
@@ -399,8 +404,45 @@ class Sheet:
     predicate can answer "unreadable" instead of inventing geometry.
     """
 
-    def __init__(self, snapshot: dict, render_svg: str | None = None) -> None:
+    def __init__(
+        self,
+        snapshot: dict,
+        render_svg: str | None = None,
+        *,
+        bodies: dict[str, Sequence[float]] | None = None,
+    ) -> None:
         self.snapshot = snapshot
+        #: primitiveId → the **page-coordinate** body box the run measured for
+        #: that part (`sch.geometry --params {"bboxIds": [...]}`, the only
+        #: measured body read this host gives). Kept beside the parts instead of
+        #: in ``Part.local_body`` on purpose: ``local_body`` feeds
+        #: :meth:`Part.page_body` through the part's own pose, while these boxes
+        #: were measured *after* the pose was applied. A run that measured
+        #: nothing leaves the dict empty, so every body predicate answers
+        #: "unreadable" rather than guessing a size.
+        #:
+        #: Two sources, one table: the snapshot's own ``bboxes`` member (a
+        #: capture that probed the part boxes already carries them — the P1
+        #: delivery evidence `geometry-bboxes.json` is exactly that) and the
+        #: explicit ``bodies`` mapping (``--bodies``), which wins when both
+        #: name one primitive.
+        measured: dict[str, Any] = {}
+        for key, box in (snapshot.get("bboxes") or {}).items():
+            if isinstance(box, dict):
+                try:
+                    measured[str(key)] = (
+                        box["minX"], box["minY"], box["maxX"], box["maxY"],
+                    )
+                except KeyError:
+                    continue
+            elif isinstance(box, (list, tuple)) and len(box) == 4:
+                measured[str(key)] = box
+        measured.update({str(key): box for key, box in (bodies or {}).items()})
+        self.bodies: dict[str, tuple[float, float, float, float]] = {}
+        for key, box in measured.items():
+            values = tuple(_num(v) for v in box)
+            if len(values) == 4 and all(v is not None for v in values):
+                self.bodies[str(key)] = values  # type: ignore[assignment]
         components = snapshot.get("components") or []
         self.parts: list[Part] = []
         self.flags: list[Flag] = []
@@ -457,6 +499,20 @@ class Sheet:
             for p in self.parts
             if p.page_body() is not None
         ]
+
+    def measured_bodies(
+        self,
+    ) -> list[tuple[str, str, tuple[float, float, float, float]]]:
+        """The (designator, primitive, measured page box) of every part the run
+        actually measured. ``self.parts`` already excludes the sheet frame and
+        every net flag (``Sheet.__init__`` splits the components by type), so a
+        flag glyph can never be "a body" here."""
+        out: list[tuple[str, str, tuple[float, float, float, float]]] = []
+        for part in self.parts:
+            box = self.bodies.get(part.primitive)
+            if box:
+                out.append((part.designator or part.primitive, part.primitive, box))
+        return out
 
 
 @dataclass
@@ -1566,6 +1622,317 @@ def check_wire_multiname(sheet: Sheet) -> list[LintFinding]:
     return out
 
 
+#: L5/L11 — the supply half of the rail vocabulary: ``layout._net_kind``'s
+#: supply branch (``+\d+V`` / ``VCC`` / ``VDD`` / ``VBAT`` / ``VPP``) **plus**
+#: the ``+NVn`` spelling boards actually print (``+3V3``, ``+5V0``) and
+#: **minus** its bare ``V\d+`` branch. That branch is a router convenience
+#: (``V3`` is a legal *net label* on the accepted page P24) and reading it as a
+#: rail here would report P24's one ``V3`` wire as a flagless supply — the
+#: zero-false-positive rule outranks the extra recall. Ground is never
+#: re-spelled here: ``core.model.is_ground_net`` stays the one place a name is
+#: called ground.
+_RAIL_SUPPLY_RE = re.compile(
+    r"^(?:\+\d+(?:\.\d+)?V\d*|V(?:CC|DD|BAT|PP)\d*)$", re.IGNORECASE
+)
+
+#: L12 — the pin-name families the netlist gate reads. A ground pin is a GND
+#: word anywhere it starts a name (``GND``, ``GNDA``, ``AGND``, ``PGND``,
+#: ``SGND``) or a ``VSS`` word (``VSS``, ``VSSA``, ``VSS_1``); a positive
+#: supply pin is a ``VDD``/``VCC``/``VBAT`` word. Deliberately **not** the
+#: generic ``VIN``/``5V`` shapes: a part whose return is a negative rail is a
+#: legal design, and the gate's point is two pins of *one* device on *one*
+#: net, never "this name looks like a rail".
+_GROUND_PIN_RE = re.compile(r"^(?:(?:A|P|S|D|E)?GND\w*|VSS\w*)$", re.IGNORECASE)
+_SUPPLY_PIN_RE = re.compile(r"^(?:VDD\w*|VCC\w*|VBAT\w*|V\+)$", re.IGNORECASE)
+
+
+def _rail_kind(net: str) -> str:
+    """``"Ground"`` / ``"Power"`` for a rail name, ``""`` for a signal name.
+
+    The vocabulary is the repo's, not a second one: ground defers to
+    :func:`boardwise.core.model.is_ground_net`, supply is
+    :data:`_RAIL_SUPPLY_RE` (``layout._net_kind``'s supply branch, documented
+    there and narrowed here — see the constant).
+    """
+    name = (net or "").strip()
+    if not name:
+        return ""
+    from ..core.model import is_ground_net
+
+    if is_ground_net(name):
+        return "Ground"
+    if _RAIL_SUPPLY_RE.match(name):
+        return "Power"
+    return ""
+
+
+def _is_flag_own_name(sheet: Sheet, box: TextBox) -> bool:
+    """The box is some flag's own name glyph (``L5_FLAG_OWN_NAME_GAP``).
+
+    A flag's name rides its own glyph (pit 43: it hangs 10..19 units out), so
+    the box can touch a conductor that merely runs beside the flag — measured
+    on the accepted page P22: its ``GND`` flag at (80,745) prints its name at
+    x 95..111, and the ``3V3`` wire's stub ends at (115,755). Reading that name
+    as a name *on the 3V3 wire* would invent a ground label the page never
+    drew; L5-rail-name-conflict therefore only counts names that are not a
+    flag's own statement.
+    """
+    for flag in sheet.flags:
+        if (
+            math.hypot(box.anchor[0] - flag.x, box.anchor[1] - flag.y)
+            <= L5_FLAG_OWN_NAME_GAP
+        ):
+            return True
+    return False
+
+
+def check_wire_rail_conflict(sheet: Sheet) -> list[LintFinding]:
+    """L5-rail-name-conflict (ERROR): one conductor stating **different** names,
+    at least one of them a rail.
+
+    The pre-fix P1 shape: wire ``b0d9b57a`` (parent net ``GND``) backs a ``GND``
+    label and a ``+5V`` label, so the conductor silently joins ground to a
+    supply — a netlist fact the host's own DRC could only say as
+    「导线有多个网络名」, and a page fact no reader can resolve.
+
+    This is **not** L5b's case and does not replace it: L5b counts repeat
+    annotations of *one* name (the named-stub technique) and keeps its WARN
+    calibration; this predicate reads the names themselves and fires only when
+    a conductor carries two of them. A one-name carrier — the legal shape — can
+    never reach it, and two different *signal* names stay L5b/L5's business
+    rather than being invented into a rail error here.
+    """
+    out: list[LintFinding] = []
+    annotations = [
+        b
+        for b in sheet.texts
+        if b.kind == "annotation" and not _is_flag_own_name(sheet, b)
+    ]
+    carriers: dict[str, list[TextBox]] = {}
+    for box in annotations:
+        for primitive in _label_carriers(box, sheet):
+            carriers.setdefault(primitive, []).append(box)
+    for primitive, boxes in carriers.items():
+        names: list[str] = []
+        for box in boxes:
+            text = box.text.strip()
+            if text and text not in names:
+                names.append(text)
+        if len(names) < 2:
+            continue
+        rails = [(name, _rail_kind(name)) for name in names]
+        rail_names = [name for name, kind in rails if kind]
+        if not rail_names:
+            continue
+        wire_net = next((w.net for w in sheet.wires if w.primitive == primitive), "")
+        stated = ", ".join(
+            f"{name} ({kind.lower()})" for name, kind in rails if kind
+        )
+        first = boxes[0]
+        out.append(
+            LintFinding(
+                "L5-wire-rail-conflict",
+                "ERROR",
+                f"wire {primitive[:8]} (parent net {wire_net or 'unnamed'}) "
+                f"carries {len(names)} different names on one conductor "
+                f"({', '.join(names)}): {stated} — one conductor cannot state "
+                "two nets, and a rail name among them shorts ground/supply to "
+                "whatever the other name says",
+                x=(first.box[0] + first.box[2]) / 2,
+                y=(first.box[1] + first.box[3]) / 2,
+                objects=(primitive, *names),
+                estimate=True,
+            )
+        )
+    return out
+
+
+def check_part_overlap(sheet: Sheet) -> list[LintFinding]:
+    """L11-part-overlap (ERROR): two parts' measured bodies share area.
+
+    P1 pre-fix drew U1/Q1 on top of each other (11×21 units) and U1/R4
+    (21×9): the page still "linted" because every earlier body predicate reads
+    a body against *text* or *wires*, never two bodies against each other, and
+    because the measured boxes only reach the predicates when a run feeds them.
+
+    Only a **positive-area** intersection reports — two symbols that share an
+    edge (``w == 0`` or ``h == 0``) touch, they do not stack. Parts the run did
+    not measure contribute nothing (``--bodies`` absent = "unreadable", the
+    same degradation L3/L4 already state).
+    """
+    out: list[LintFinding] = []
+    bodies = sheet.measured_bodies()
+    for index, (name_a, prim_a, box_a) in enumerate(bodies):
+        for name_b, prim_b, box_b in bodies[index + 1 :]:
+            width = min(box_a[2], box_b[2]) - max(box_a[0], box_b[0])
+            height = min(box_a[3], box_b[3]) - max(box_a[1], box_b[1])
+            if width <= 0 or height <= 0:
+                continue
+            out.append(
+                LintFinding(
+                    "L11-part-overlap",
+                    "ERROR",
+                    f"{name_a} ({prim_a}) and {name_b} ({prim_b}) body boxes "
+                    f"overlap {width:.1f}×{height:.1f} units — two symbols "
+                    "stacked on one canvas; the reader cannot tell which body a "
+                    "wire or a name belongs to",
+                    x=(max(box_a[0], box_b[0]) + min(box_a[2], box_b[2])) / 2,
+                    y=(max(box_a[1], box_b[1]) + min(box_a[3], box_b[3])) / 2,
+                    objects=(name_a, name_b, prim_a, prim_b),
+                )
+            )
+    return out
+
+
+def check_rail_without_flag(sheet: Sheet) -> list[LintFinding]:
+    """L11-rail-without-flag (ERROR): a conductor names a rail the page has no
+    flag for.
+
+    岳's rule (069 §7, 2026-10-20): a ground/supply net is a **flag**, never a
+    net label. A page whose wire says ``GND`` and whose flag list is empty (the
+    P1 pre-fix page carries no ``netflag`` component at all) is stating a rail
+    with nothing that can reach it: the name is a comment, and the netlist is
+    free to call that copper something else — which is exactly what P1's
+    netlist did (no GND net anywhere while the labels said GND).
+
+    One row per (rail net, wires) rather than one per wire: a page that named
+    GND on twelve conductors has one defect. Signal names never reach this
+    predicate (:func:`_rail_kind`), and a rail with a flag — the legal MCU
+    minimal system — is silent.
+    """
+    flag_nets = {(f.net or "").strip().upper() for f in sheet.flags if (f.net or "").strip()}
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    for wire in sheet.wires:
+        kind = _rail_kind(wire.net)
+        if not kind:
+            continue
+        if (wire.net or "").strip().upper() in flag_nets:
+            continue
+        grouped.setdefault(wire.net.strip(), []).append((wire.primitive, kind))
+    out: list[LintFinding] = []
+    for net, members in sorted(grouped.items()):
+        kind = members[0][1]
+        primitive, _ = members[0]
+        wire = next((w for w in sheet.wires if w.primitive == primitive), None)
+        point = wire.points[0] if wire and wire.points else (0.0, 0.0)
+        out.append(
+            LintFinding(
+                "L11-rail-without-flag",
+                "ERROR",
+                f"net {net} is a {kind.lower()} name stated by "
+                f"{len(members)} wire(s) "
+                f"({', '.join(p[:8] for p, _ in members[:3])}"
+                f"{'…' if len(members) > 3 else ''}) but the page carries no "
+                f"{net} flag — a rail on a conductor with no flag is a name, not "
+                "a connection; ground/supply must be a flag, not a label",
+                x=point[0],
+                y=point[1],
+                objects=(net, len(members)),
+            )
+        )
+    return out
+
+
+# ------------------------------------------------------- netlist semantics
+
+# 563A: `NetlistPin` / `NetlistPart` / `Netlist` and `read_netlist_document`
+# moved to `core.netlist` (one reader for the draw chain and the candidate
+# projection); they are imported above and stay callable by these names.
+
+
+def _numeric_pin_name(pin: NetlistPin) -> bool:
+    """``1``/``2``-class pin naming — the two-terminal passives' own shape.
+
+    A transistor says ``B``/``E``/``C`` and an MCU says ``VDD_1``, so a
+    two-terminal reading keyed on *numeric names* excludes them without any
+    designator-prefix table (this gate must not be a hidden ``C`` whitelist).
+    """
+    name = (pin.name or "").strip()
+    if name.isdigit():
+        return True
+    return not name and (pin.number or "").strip().isdigit()
+
+
+def check_netlist_electrical(sheet: Sheet, netlist: Netlist) -> list[LintFinding]:
+    """L12 — the three electrical questions only a netlist can answer.
+
+    * ``L12-two-pin-same-net``: a two-terminal passive whose two pins land on
+      one non-empty net is shorted to itself (P1's C3/C4, both pins on +3V3).
+      The shape is read from the part's **pin naming**, not its designator: two
+      pins, both numeric. A one-pin part, a sheet and a net flag have no such
+      pair by construction.
+    * ``L12-ground-supply-pin-short``: one device's ground-family pin and its
+      positive-supply pin on the *same* non-empty net (P1's U1: VSSA/VSS_1..3
+      and VDD/VDDA all on +3V3). A negative-rail design puts VSS on a
+      different net and stays silent — the gate never fires on a name alone.
+    * ``L12-ground-flag-absent-from-netlist``: the page states a ground net
+      with a Ground flag, and the netlist has no pin on a net of that name
+      (P1: the labels said GND; the netlist had no GND). Two artifacts that
+      disagree about the return path are exactly what a page-level review
+      must not wave through.
+    """
+    out: list[LintFinding] = []
+    for part in netlist.parts:
+        pins = part.pins
+        if len(pins) == 2 and all(_numeric_pin_name(pin) for pin in pins):
+            nets = {pin.net for pin in pins}
+            if len(nets) == 1 and "" not in nets:
+                net = next(iter(nets))
+                out.append(
+                    LintFinding(
+                        "L12-two-pin-same-net",
+                        "ERROR",
+                        f"netlist: {part.designator}'s two pins "
+                        f"({pins[0].number}, {pins[1].number}) both land on net "
+                        f"{net} — a two-terminal part with both ends on one net "
+                        "is shorted to itself",
+                        objects=(part.designator, net),
+                    )
+                )
+        by_net: dict[str, list[NetlistPin]] = {}
+        for pin in pins:
+            if pin.net:
+                by_net.setdefault(pin.net, []).append(pin)
+        for net, group in by_net.items():
+            if len(group) < 2:
+                continue
+            grounds = [p for p in group if _GROUND_PIN_RE.match(p.name or "")]
+            supplies = [p for p in group if _SUPPLY_PIN_RE.match(p.name or "")]
+            if not grounds or not supplies:
+                continue
+            ground, supply = grounds[0], supplies[0]
+            out.append(
+                LintFinding(
+                    "L12-ground-supply-pin-short",
+                    "ERROR",
+                    f"netlist: {part.designator} puts its ground pin "
+                    f"{ground.name} ({ground.number}) and its supply pin "
+                    f"{supply.name} ({supply.number}) on the same net {net} — "
+                    "地/电源在器件内部短接，这一页的任何供电声明都不能成立",
+                    objects=(part.designator, net),
+                )
+            )
+    netlist_nets = netlist.pin_nets()
+    for net in sorted({(f.net or "").strip() for f in sheet.flags if (f.net or "").strip()}):
+        if _rail_kind(net) != "Ground":
+            continue
+        if net in netlist_nets:
+            continue
+        out.append(
+            LintFinding(
+                "L12-ground-flag-absent-from-netlist",
+                "ERROR",
+                f"the page's Ground flag states net {net}, but the netlist has "
+                f"no net named {net} (its {len(netlist_nets)} nets: "
+                f"{', '.join(sorted(netlist_nets)[:6])}"
+                f"{'…' if len(netlist_nets) > 6 else ''}) — the page and the "
+                "netlist disagree about the return path",
+                objects=(net,),
+            )
+        )
+    return out
+
+
 def check_out_of_bounds(sheet: Sheet) -> list[LintFinding]:
     """L10 (ERROR, 111a §规则一): element geometry beyond the sheet frame.
 
@@ -1915,11 +2282,26 @@ PREDICATES: tuple[tuple[str, str], ...] = (
     ("L4-wire-through-part", "ERROR"),
     ("L5-duplicate-annotation", "ERROR"),
     ("L5-wire-multiname", "WARN"),
+    ("L5-wire-rail-conflict", "ERROR"),
     ("L6-wire-crossing", "INFO/WARN"),
     ("L7-label-wire-clearance", "WARN"),
     ("L8-flag-orientation", "ERROR/INFO"),
     ("L9-board-fill", "INFO"),
     ("L10-out-of-bounds", "ERROR"),
+    ("L11-part-overlap", "ERROR"),
+    ("L11-rail-without-flag", "ERROR"),
+    ("L12-two-pin-same-net", "ERROR"),
+    ("L12-ground-supply-pin-short", "ERROR"),
+    ("L12-ground-flag-absent-from-netlist", "ERROR"),
+)
+
+#: The predicates that only run when a netlist was handed to the run. A caller
+#: that did not pass one must say so (the CLI's notes do); an empty list from
+#: this family is *not* evidence that the board is electrically consistent.
+NETLIST_PREDICATES: tuple[str, ...] = (
+    "L12-two-pin-same-net",
+    "L12-ground-supply-pin-short",
+    "L12-ground-flag-absent-from-netlist",
 )
 
 
@@ -1928,9 +2310,19 @@ def run_lint(
     render_svg: str | None = None,
     *,
     pin_positions: dict[str, dict[str, tuple[float, float]]] | None = None,
+    bodies: dict[str, Sequence[float]] | None = None,
+    netlist: "Netlist | dict | None" = None,
 ) -> list[LintFinding]:
-    """All eleven predicates over one normalised page, in the table's order."""
-    sheet = Sheet(snapshot, render_svg=render_svg)
+    """Every predicate over one normalised page, in the table's order.
+
+    ``bodies`` is the measured per-part page box (primitiveId → box); without
+    it L11-part-overlap answers "unreadable" and says nothing. ``netlist`` is
+    the captured ``sch.netlist`` answer (or an already-parsed
+    :class:`Netlist`); without it the L12 family does not run at all — the
+    caller's notes are what tell a reader that, and no finding is invented to
+    stand in for the check.
+    """
+    sheet = Sheet(snapshot, render_svg=render_svg, bodies=bodies)
     findings: list[LintFinding] = []
     findings.extend(check_text_on_wire(sheet))
     findings.extend(check_text_on_text(sheet))
@@ -1938,6 +2330,7 @@ def run_lint(
     findings.extend(check_wire_through_part(sheet, pin_positions))
     findings.extend(check_duplicate_annotation(sheet))
     findings.extend(check_wire_multiname(sheet))
+    findings.extend(check_wire_rail_conflict(sheet))
     findings.extend(check_crossings(sheet))
     findings.extend(check_label_wire_clearance(sheet, pin_positions))
     findings.extend(check_flag_orientation(sheet))
@@ -1945,6 +2338,11 @@ def run_lint(
     if fill:
         findings.append(fill)
     findings.extend(check_out_of_bounds(sheet))
+    findings.extend(check_part_overlap(sheet))
+    findings.extend(check_rail_without_flag(sheet))
+    if netlist is not None:
+        parsed = netlist if isinstance(netlist, Netlist) else read_netlist_document(netlist)
+        findings.extend(check_netlist_electrical(sheet, parsed))
     return findings
 
 

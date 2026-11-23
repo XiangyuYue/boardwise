@@ -620,6 +620,20 @@ def compile_page(
                 gnd_cluster_radius=presentation_spec.gnd_cluster_radius,
             ),
         )
+    # 548M: `railClustering.radius` is the same statement for the power/gnd
+    # rails, and it travels the same way. The single-module entry already fills
+    # it in from the document (`drawcompiler.compile`), but a module's budget is
+    # rebuilt field by field here and in `_module_budget_for`; leaving the rail
+    # out of both made the page path draw per-pin flags while a standalone
+    # compile of the same document clustered — one document, two drawings.
+    if presentation_spec.rail_cluster_radius:
+        budget = replace(
+            budget,
+            module_budget=replace(
+                budget.module_budget,
+                rail_cluster_radius=presentation_spec.rail_cluster_radius,
+            ),
+        )
     book = drawcompiler.profile_book(profiles)
 
     result = PageCompileResult()
@@ -1188,6 +1202,11 @@ def _module_view(
             # `facts-missing` about a fact the document states.
             branch_order=list(module.branch_order),
             core=module.core,
+            # 548L: the engineer's free-part declaration is the group's own
+            # statement about its own branches (like `branchOrder` and `core`),
+            # so a slice that dropped it would draw the page with the strict
+            # reading while the standalone module used the declared one.
+            free_parts=list(module.free_parts),
         )],
         main_paths=_module_paths(presentation_spec.main_paths, part_ids, net_ids),
         feedback_paths=_module_paths(
@@ -1236,6 +1255,13 @@ def _module_view(
         # 053S: the page switch is a property of the page's landing, not of a
         # module's circuit, so it travels to every module's sub-spec unchanged.
         text_placement=presentation_spec.text_placement,
+        # 548M: the cluster radii are page-level construction statements, like
+        # `textPlacement` — a slice that dropped them handed the module compiler
+        # 0/0 while the page stated 120, so the page drew per-pin flags and a
+        # standalone compile of the same document drew one flag per cluster.
+        # They travel unchanged, and 0.0 (no declaration) stays 0.0.
+        rail_cluster_radius=presentation_spec.rail_cluster_radius,
+        gnd_cluster_radius=presentation_spec.gnd_cluster_radius,
         # 543B: the service interval is a page-level construction statement, like
         # `textPlacement`. A slice that dropped it would draw the page's shunt at
         # the old ladder distance while a standalone compile used the stated
@@ -1447,6 +1473,10 @@ def _module_budget_for(
         # a page that states it must not lose it when a module's budget is
         # rebuilt field by field.
         gnd_cluster_radius=module_budget.gnd_cluster_radius,
+        # 548M: the rail radius is the same kind of switch and is rebuilt by the
+        # same field-by-field loop — leaving it out of this builder put the
+        # declared 120 back to 0 one frame before the module compile.
+        rail_cluster_radius=module_budget.rail_cluster_radius,
     )
 
 

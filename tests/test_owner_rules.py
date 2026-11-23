@@ -192,6 +192,13 @@ def _package_edges() -> set[tuple[str, str]]:
 
 
 def test_the_scan_sees_the_package():
+    # 164 since 563B added `core/circuitsemantics.py` (shared: the versioned
+    # `boardwise.circuitSemantics/1` projection compiled from a `NetlistView`,
+    # with its structural re-verification and its C-like rendering).
+    # 163 since 563A added `core/netlist.py` (shared: the EasyEDA netlist
+    # reader moved out of `engines/drawlint.py` so the draw chain and the
+    # candidate projection read one copy).
+    # 162 since the smart-lock batch added `engines/grammar/mixed_island.py`.
     # 161 since 562 added `core/livepath.py` (shared, the pure path projection)
     # and `pcb_path.py` (assembly, the online `pcb path` CLI adapter).
     # 159 since 559 added `core/connection.py` (shared, the verdict projection)
@@ -204,8 +211,8 @@ def test_the_scan_sees_the_package():
     # ``assembly`` owner line; 151 was 038Y4's count (``rules/pcb/silkbody.py``),
     # 150 was 038Y3B's (``rules/pcb/silkpad.py``), 149 was 038Y2's
     # (``rules/pcb/overlap.py``), 148 was 540B6's.
-    assert len(PATHS) == 161, (
-        f"found {len(PATHS)} modules, expected the 161 this batch owns — "
+    assert len(PATHS) == 164, (
+        f"found {len(PATHS)} modules, expected the 164 this batch owns — "
         "a new module needs an owner line in contracts/module-owners.json"
     )
     assert {"core", "parsers", "rules", "engines", "bridge"} <= {

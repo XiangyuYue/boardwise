@@ -108,7 +108,9 @@ def test_owner_manifest_covers_the_final_command_modules():
     #: (assembly adapter) — 159 rows.
     #: 562 adds `core/livepath.py` (shared judgement) and `pcb_path.py`
     #: (assembly adapter) — 161 rows.
-    assert len(data["modules"]) == 161
+    #: 563A/B add `core/netlist.py` and `core/circuitsemantics.py` (shared), and
+    #: the smart-lock batch adds `engines/grammar/mixed_island.py` (draw) — 164 rows.
+    assert len(data["modules"]) == 164
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

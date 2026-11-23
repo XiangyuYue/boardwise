@@ -463,6 +463,18 @@ class PlanDrawPart:
     designator: str = ""
     prefix: str = ""
     lcsc: str = ""
+    #: The library device **pair** `sch.place_component` also accepts
+    #: (``deviceUuid`` + ``libraryUuid``), for a part whose identity is already
+    #: verified in the library and which has no Supplier Part to be found by.
+    #: Both empty is the old document: a plan written before this field existed
+    #: carries neither key, and the serializer still omits both when they are
+    #: empty, so an old plan's bytes do not change. A plan may state the pair
+    #: *instead of* ``lcsc`` (that is the ladder this field exists for), and when
+    #: it states both, the pair wins at apply — which is the connector's own
+    #: order (`actions.ts` tests ``deviceUuid`` before ``lcsc``). Never one of
+    #: the two on its own: a device uuid without its library names nothing.
+    device_uuid: str = ""
+    library_uuid: str = ""
     #: The manufacturer part number, when the CircuitSpec states one.  It is
     #: carried into the plan because a host library's LCSC index can miss a
     #: device its own search still finds by MPN (measured 2026-11-01 on V4
@@ -956,6 +968,16 @@ class ChangePlan:
                         "designator": item.designator,
                         "prefix": item.prefix,
                         "lcsc": item.lcsc,
+                        # Written only when the plan carries the pair, so a plan
+                        # that has none keeps the exact document it had.
+                        **(
+                            {
+                                "deviceUuid": item.device_uuid,
+                                "libraryUuid": item.library_uuid,
+                            }
+                            if item.device_uuid and item.library_uuid
+                            else {}
+                        ),
                         **({"mpn": item.mpn} if item.mpn else {}),
                         "value": item.value,
                         "footprint": item.footprint,
@@ -2211,11 +2233,25 @@ def _draw_parts_from(value: Any, profile_hashes: list[tuple[str, str]]) -> list[
             )
         designators.add(designator)
         lcsc = str(item.get("lcsc") or "").strip()
-        if not lcsc:
+        device_uuid = _draw_identity(item.get("deviceUuid"), spot, "deviceUuid")
+        library_uuid = _draw_identity(item.get("libraryUuid"), spot, "libraryUuid")
+        if bool(device_uuid) != bool(library_uuid):
+            half = "deviceUuid without libraryUuid" if device_uuid else (
+                "libraryUuid without deviceUuid"
+            )
+            raise ChangePlanError(
+                f"{spot} states "
+                + half
+                + " — the pair is one identity (`sch.place_component` needs both: a "
+                "device uuid belongs to exactly one library, and the connector never "
+                "guesses the second half)"
+            )
+        if not lcsc and not (device_uuid and library_uuid):
             raise ChangePlanError(
                 f"{spot}.lcsc is empty — a compiled drawing places library devices, and "
                 "`sch.place_component` needs the orderable number (029 §二.2; an "
-                "unverified part is never placed silently)"
+                "unverified part is never placed silently). A part with no Supplier "
+                "Part must state its verified `deviceUuid`+`libraryUuid` pair instead"
             )
         value = str(item.get("value") or "").strip()
         if not value:
@@ -2268,6 +2304,8 @@ def _draw_parts_from(value: Any, profile_hashes: list[tuple[str, str]]) -> list[
             designator=designator,
             prefix=str(item.get("prefix") or "").strip(),
             lcsc=lcsc,
+            device_uuid=device_uuid,
+            library_uuid=library_uuid,
             mpn=str(item.get("mpn") or "").strip(),
             value=value,
             value_key=_draw_value_key(item.get("valueKey"), spot),
@@ -2282,6 +2320,26 @@ def _draw_parts_from(value: Any, profile_hashes: list[tuple[str, str]]) -> list[
             pins=pins,
         ))
     return out
+
+
+def _draw_identity(value: Any, spot: str, field: str) -> str:
+    """One half of a part's library device identity (``deviceUuid``/``libraryUuid``).
+
+    Absent (``None``) or an empty string means the plan states no half — the old
+    document's shape, and the serializer will omit both keys again. Anything else
+    must be a non-empty string: a number, a list or a dict in that slot is a
+    document whose identity cannot be compared with the page's own
+    ``Component.uuid``/``libraryUuid``, and skipping it silently would place a
+    part nobody can check.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ChangePlanError(
+            f"{spot}.{field} must be a string (the library uuid "
+            f"`sch.place_component` takes), got {value!r}"
+        )
+    return value.strip()
 
 
 def _draw_value_key(value: Any, spot: str) -> str:

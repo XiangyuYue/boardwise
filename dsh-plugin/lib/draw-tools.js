@@ -108,7 +108,7 @@ export function registerDrawTools(ctx) {
     ctx.tools.register(defineTool({
         name: 'boardwise_draw_lint',
         description: 'Replay one captured schematic page offline through `boardwise draw lint --snapshot ... --render ...`. ' +
-            'Both inputs are required; bodies= optionally supplies measured part boxes. There is deliberately no page=, ' +
+            'Both inputs are required; bodies= optionally supplies measured part boxes and netlist= a captured sch.netlist answer for the electrical predicates. There is deliberately no page=, ' +
             'project=, instance= or apply parameter, so this tool cannot focus or modify a live design. Python writes ' +
             'the complete findings/counts/thresholds/notes object to a private JSON file and this tool returns it whole. ' +
             'Exit 0 (no ERROR) and exit 1 (ERROR findings) are both lint results and return that JSON; exit 2 is an ' +
@@ -128,6 +128,10 @@ export function registerDrawTools(ctx) {
                 type: 'string',
                 description: 'Optional measured body boxes JSON passed to --bodies (read-only).',
             },
+            netlist: {
+                type: 'string',
+                description: 'Optional captured sch.netlist JSON passed to --netlist; without it the electrical predicates are explicitly not run (read-only).',
+            },
         },
         output: STRUCTURED_OUTPUT,
         execute: async (args, exec) => {
@@ -137,10 +141,15 @@ export function registerDrawTools(ctx) {
             const bodies = text(args.bodies);
             if (bodies !== '')
                 requireExistingInput(tool, 'bodies', bodies, 'the measured body-box JSON');
+            const netlist = text(args.netlist);
+            if (netlist !== '')
+                requireExistingInput(tool, 'netlist', netlist, 'the captured netlist JSON');
             const target = join(await transportDir(tool), 'draw-lint.json');
             const argv = ['draw', 'lint', '--snapshot', snapshot, '--render', render];
             if (bodies !== '')
                 argv.push('--bodies', bodies);
+            if (netlist !== '')
+                argv.push('--netlist', netlist);
             argv.push('--json', target);
             const result = await runStructuredCli(tool, argv, DRAW_LINT_TIMEOUT_MS, exec, target, [0, 1]);
             requireField(tool, result, 'source', 'replay');

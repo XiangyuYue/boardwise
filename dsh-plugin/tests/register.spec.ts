@@ -249,7 +249,7 @@ describe('boardwise-dsh: plugin registration contract', () => {
     expect(compile.description).toMatch(/offline/)
 
     const lint = tools.get('boardwise_draw_lint') as CapturedTool
-    expect(Object.keys(lint.parameters)).toEqual(['snapshot', 'render', 'bodies'])
+    expect(Object.keys(lint.parameters)).toEqual(['snapshot', 'render', 'bodies', 'netlist'])
     expect(lint.parameters['snapshot']?.required).toBe(true)
     expect(lint.parameters['render']?.required).toBe(true)
     expect(lint.parameters['page']).toBeUndefined()

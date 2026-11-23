@@ -15,7 +15,10 @@ What the picture shows, and why each element is there:
   because a reviewer who sees only glyphs cannot tell whether a text was measured
   or estimated;
 * every **wire**, **junction**, **label** and **flag**, with a label's anchor dot
-  separate from its text (they are different facts in `LayoutPlan`). A flag's box
+  separate from its text (they are different facts in `LayoutPlan`). A label's
+  text is drawn in the row its carrier's longest run prints it in
+  (`_label_carrier_row`), and in its static box only when no row exists — which
+  is a diagnostic, not a claim that a name is printed there. A flag's box
   is the one `drawcompiler` reserves — the glyph hanging away from the pin
   (`core.symbolprofile.flag_glyph_box`, 060) — so the two cannot disagree about
   which side of the anchor the flag occupies, which is how 054-059's upside-down
@@ -39,15 +42,17 @@ import re
 from typing import Mapping, Sequence
 from xml.etree import ElementTree as ET
 
-from boardwise.core.layoutplan import LayoutPlan
+from boardwise.core.layoutplan import TEXT_MODE_NATIVE, LayoutLabel, LayoutPlan
 from boardwise.core.symbolprofile import (
     Box,
     SymbolPose,
     SymbolProfile,
     flag_glyph_box,
 )
+from boardwise.core.textmetrics import WireNameRow, wire_name_row
 
 __all__ = [
+    "NATIVE_TEXT_FONT_SIZE",
     "PREVIEW_FONT_SIZE",
     "PREVIEW_KIND",
     "PREVIEW_MARGIN",
@@ -64,6 +69,17 @@ PREVIEW_MARGIN = 40.0
 
 #: The caption's font size in SVG units (the drawing itself is 1:1).
 PREVIEW_FONT_SIZE = 11.0
+
+#: The host font size of a placed text, a net label and a power symbol's net
+#: name. It is the size a real V4 native SVG uses: in the y173 export
+#: ``KEY_C1``, ``RFID_MISO``, ``HALL_LOCK``, ``+3V3``, ``GND`` and
+#: ``STM32F103C8T6`` all carry ``font-size:7.006200555911909px`` (the label box
+#: height the host claims for them is 9). Those three text kinds used to inherit
+#: the 11-unit diagnostic default, which made them look larger — and therefore
+#: more overlapping — than the native drawing they stand in for. The 11 stays the
+#: canvas default for caption and other diagnostic text; a pin number stays 9
+#: and a frame name 12, each stated where it is drawn.
+NATIVE_TEXT_FONT_SIZE = 7.006
 
 #: The caption strip's own metrics, in canvas units: the first line's baseline
 #: below the drawing, the line pitch, and the room a line needs under its own
@@ -114,6 +130,90 @@ class NativeSymbolArt:
     mirror: bool
     svg: str
     source: str
+
+
+#: The tolerance :func:`boardwise.core.layoutplan.label_wire_indices` uses to say
+#: "this label's anchor lies on this run". The preview reads that fact the same
+#: way, so the wire it prints a name on is the wire the readability gate measures.
+_CARRIER_TOL = 1e-6
+
+
+def _anchor_on_run(
+    start: tuple[float, float],
+    stop: tuple[float, float],
+    point: tuple[float, float],
+) -> bool:
+    """Is ``point`` on the orthogonal run ``start``-``stop`` (ends included)?
+
+    ``label_wire_indices``' own test, in behaviour: a carrier is a horizontal or a
+    vertical wire and the anchor lies on the closed span. A diagonal run carries no
+    name on this host and is not a carrier here either.
+    """
+    if abs(start[0] - stop[0]) < 1e-9:  # vertical
+        return abs(point[0] - start[0]) < _CARRIER_TOL and (
+            min(start[1], stop[1]) - _CARRIER_TOL
+            <= point[1]
+            <= max(start[1], stop[1]) + _CARRIER_TOL
+        )
+    if abs(start[1] - stop[1]) < 1e-9:  # horizontal
+        return abs(point[1] - start[1]) < _CARRIER_TOL and (
+            min(start[0], stop[0]) - _CARRIER_TOL
+            <= point[0]
+            <= max(start[0], stop[0]) + _CARRIER_TOL
+        )
+    return False
+
+
+def _label_carrier_row(layout_plan: LayoutPlan, label: LayoutLabel) -> WireNameRow | None:
+    """The row the host prints this label's **name** in, or ``None``.
+
+    A label on this host has no primitive of its own (029): the net's name is
+    printed by a *wire*, at the midpoint of that wire's longest straight run and
+    **start-anchored** from there (:func:`boardwise.core.textmetrics.wire_name_row`,
+    measured on the 145e/147 renders). The carrier is the wire whose same-net
+    orthogonal run the label's own anchor lies on — the one statement
+    ``core.layoutplan.label_wire_indices`` makes for the landing, the readability
+    gate and the connectivity re-verification, so the preview must not invent a
+    second reading.
+
+    Nowhere does the name sit at the label's static ``bbox`` centre: on the y173
+    page the four J7 RFID labels all anchor at ``x=827.75`` while their static boxes
+    reach ``x=780``/``x=782.5``, and the native drawing prints ``RFID_MOSI``,
+    ``RFID_SCK`` and ``RFID_NSS`` at ``x=822.75`` — the midpoint of each 10-unit
+    name stub ``827.75 -> 817.75`` — and ``RFID_MISO`` at ``x=752.75``, the midpoint
+    of *its* long detour run (``832.75 -> 672.75``). Centring every label in its
+    static box is what made an independent visual review reject the preview as
+    "the RFID names hang off their stubs".
+
+    ``None`` means **no row may be drawn**, and the caller keeps the old
+    ``bbox``-centred text as a diagnostic:
+
+    * ``text_mode="native"`` (:data:`TEXT_MODE_NATIVE`): the host prints the name
+      with its attribute API at the label's own box, so the box *is* the row;
+    * a label with no carrier on its net: nothing prints a name there, and no row
+      is invented;
+    * a carrier whose longest run is **vertical**. Only the horizontal row is this
+      preview's contract (the measured rule above); a vertical row is a real host
+      case (534 r18, the CH343 sheet) the preview does not model yet, so it is
+      disclosed by falling back to the diagnostic box rather than guessed.
+    """
+    if not label.net or getattr(label, "text_mode", "") == TEXT_MODE_NATIVE:
+        return None
+    anchor = (float(label.x), float(label.y))
+    for segment in layout_plan.segments:
+        points = [(float(point[0]), float(point[1])) for point in segment.points]
+        if segment.net != label.net or len(points) < 2:
+            continue
+        if not any(
+            _anchor_on_run(start, stop, anchor)
+            for start, stop in zip(points, points[1:])
+        ):
+            continue
+        row = wire_name_row(points, label.text)
+        # The first carrier in plan order is the one the landing named; a
+        # vertical row is unmodelled, not silently replaced by a second carrier.
+        return row if row is not None and row.horizontal else None
+    return None
 
 
 def render_svg(
@@ -217,7 +317,8 @@ def render_svg(
         )
         parts.append(
             f'<text x="{x(symbol.x) + 6:.3f}" y="{y(symbol.y) - 4:.3f}" '
-            f'fill="{_COLOURS["flag"]}">{escape(symbol.net)}</text>'
+            f'fill="{_COLOURS["flag"]}" font-size="{NATIVE_TEXT_FONT_SIZE:g}">'
+            f"{escape(symbol.net)}</text>"
         )
 
     for segment in layout_plan.segments:
@@ -279,19 +380,37 @@ def render_svg(
         centre_y = (text.bbox[1] + text.bbox[3]) / 2.0
         parts.append(
             f'<text x="{x(centre_x):.3f}" y="{y(centre_y) + 3:.3f}" '
-            f'fill="{_COLOURS["text"]}" text-anchor="middle">'
+            f'fill="{_COLOURS["text"]}" text-anchor="middle" '
+            f'font-size="{NATIVE_TEXT_FONT_SIZE:g}">'
             f"{escape(text.text)}</text>"
         )
     for label in layout_plan.labels:
-        parts.append(rect(label.bbox, fill="none", stroke=_COLOURS["label"],
-                          **{"stroke-dasharray": "2 2", "stroke-width": "0.8"}))
-        centre_x = (label.bbox[0] + label.bbox[2]) / 2.0
-        centre_y = (label.bbox[1] + label.bbox[3]) / 2.0
-        parts.append(
-            f'<text x="{x(centre_x):.3f}" y="{y(centre_y) + 3:.3f}" '
-            f'fill="{_COLOURS["label"]}" text-anchor="middle">'
-            f"{escape(label.text)}</text>"
-        )
+        row = _label_carrier_row(layout_plan, label)
+        if row is None:
+            # No row the host prints (native label, no carrier, unmodelled
+            # vertical run): the static box stays as the diagnostic it always was.
+            parts.append(rect(label.bbox, fill="none", stroke=_COLOURS["label"],
+                              **{"stroke-dasharray": "2 2", "stroke-width": "0.8"}))
+            centre_x = (label.bbox[0] + label.bbox[2]) / 2.0
+            centre_y = (label.bbox[1] + label.bbox[3]) / 2.0
+            parts.append(
+                f'<text x="{x(centre_x):.3f}" y="{y(centre_y) + 3:.3f}" '
+                f'fill="{_COLOURS["label"]}" text-anchor="middle" '
+                f'font-size="{NATIVE_TEXT_FONT_SIZE:g}">'
+                f"{escape(label.text)}</text>"
+            )
+        else:
+            # The name is printed on its carrier's longest run: the dashed box is
+            # that measured row, the glyphs start at the run's midpoint.
+            parts.append(rect(row.box, fill="none", stroke=_COLOURS["label"],
+                              **{"stroke-dasharray": "2 2", "stroke-width": "0.8"}))
+            parts.append(
+                f'<text x="{x(row.box[0]):.3f}" y="{y(row.box[1]) - 3:.3f}" '
+                f'fill="{_COLOURS["label"]}" text-anchor="start" '
+                f'font-size="{NATIVE_TEXT_FONT_SIZE:g}">'
+                f"{escape(label.text)}</text>"
+            )
+        # The anchor is the label's own fact and does not move with its name's row.
         parts.append(
             f'<circle cx="{x(label.x):.3f}" cy="{y(label.y):.3f}" r="2.0" '
             f'fill="{_COLOURS["label"]}"/>'

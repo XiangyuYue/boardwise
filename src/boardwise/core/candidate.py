@@ -26,6 +26,7 @@ from typing import Any
 # 006c): core may not import parsers, and this module needs the transform.
 from boardwise.core.geometry import transform_point as _transform_point
 from boardwise.core.model import Component, DesignModel, Net, Pin
+from boardwise.core.netlist import read_netlist_document
 
 
 class NetlistFormatError(Exception):
@@ -128,20 +129,28 @@ def candidate_from_netlist(text: str, netlist_type: str = "EasyEDA") -> DesignMo
     except json.JSONDecodeError as exc:
         raise NetlistFormatError(f"netlist JSON is malformed: {exc}") from exc
 
-    components_raw = doc.get("components")
+    components_raw = doc.get("components") if isinstance(doc, dict) else None
     if not isinstance(components_raw, dict) or not components_raw:
         raise NetlistFormatError("netlist JSON has no components section")
+    try:
+        netlist = read_netlist_document(doc)
+    except ValueError as exc:
+        # 563A: one reader for the host document — the shape refusals, the pin
+        # decoding and the designator discovery are `core.netlist`'s, and this
+        # function only projects them onto the normalized model.
+        raise NetlistFormatError(f"netlist JSON is not readable: {exc}") from exc
 
     model = DesignModel()
-    for entry in components_raw.values():
-        if not isinstance(entry, dict):
-            continue
-        props = entry.get("props") or {}
-        designator = str(props.get("Designator") or "").strip()
+    for part in netlist.parts:
+        designator = str(part.designator or "").strip()
         if not designator or designator.endswith("?"):
             continue
+        props = part.props
         component = Component(
-            uid=str(entry.get("Unique ID") or props.get("Unique ID") or ""),
+            # The entry-level ``Unique ID`` wins over the property one, exactly
+            # as this projection has always read it; the reader hands both over
+            # separately so the property mapping is never the whole entry.
+            uid=str(part.entry_uid or props.get("Unique ID") or ""),
             designator=designator,
             value=str(props.get("Value") or "").strip(),
             # Semantic footprint first (what the golden side reports after the
@@ -173,15 +182,19 @@ def candidate_from_netlist(text: str, netlist_type: str = "EasyEDA") -> DesignMo
         # nothing is added to ``unproven_nets`` and no pin list is dropped.
         if designator in model.components and designator not in model.duplicate_designators:
             model.duplicate_designators.append(designator)
-        for number, pin in sorted(
-            (entry.get("pinInfoMap") or {}).items(), key=lambda kv: len(kv[0]),
-        ):
+        # Pin order is the historical one: by the length of the host's own
+        # `pinInfoMap` key (1, 2, …, 10, …), read off the shared pin's `key`.
+        for pin in sorted(part.pins, key=lambda item: len(item.key)):
+            number = pin.key or pin.number
             # An empty net string is the editor's "unconnected" (including
             # schematic NO_CONNECT marks): model it as ``None`` exactly like
             # the golden-side parser does, or every NC pin reads as a diff.
-            net = str(pin.get("net") or "").strip() or None
+            net = pin.net or None
+            # A pin the document leaves unnamed stays unnamed here — the
+            # reader's `name` carries the pin-number fallback L12 gates on,
+            # and borrowing it would turn "no name" into "named 10" (537d).
             component.pins.append(
-                Pin(number=number, name=str(pin.get("name") or ""), net=net)
+                Pin(number=number, name=pin.raw_name, net=net)
             )
             if net:
                 net_obj = model.nets.setdefault(net, Net(name=net))

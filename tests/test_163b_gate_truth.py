@@ -521,6 +521,110 @@ def test_a_page_vertex_touching_the_plan_end_still_counts():
     assert drawapply.postcondition_problems(plan, geometry=geometry)["canvas"] == []
 
 
+# ---------------------------------------------------------------------------
+# P1 landing: the page reports coordinates rounded, so a landed end is interior
+# ---------------------------------------------------------------------------
+#
+# Measured on `.tmp_lock_p1/p1-final-geometry.json`: every one of its 576 wire
+# coordinates (and all 52 flag origins) is a multiple of 0.01, while the plan's
+# points carry full precision — `1031.695766…` comes back as `1031.7`, 0.004234
+# away. A correct landing therefore reads as "no vertex here": the 14 canvas
+# points that refused to save a page whose escalated netlist leg was clean. The
+# three tests below pin the rule that accepts those ends **only** on the page's
+# own evidence, and pin its two refusals.
+
+def _wire_lines(state: dict) -> list[str]:
+    """The wire leg's own sentences — a flag leg has its own tolerance."""
+    return [
+        line for line in state["canvas"]
+        if "no wire vertex" in line or "lies on the wiring the plan drew" in line
+    ]
+
+
+def test_an_unnamed_end_interior_to_a_real_segment_of_its_own_wiring_lands():
+    """The measured shape: the end is the page's point, one rounding step away.
+
+    `SENSOR`'s run ends at (1031.7, 1010.5) and turns at (1031.7, 1030.5). The
+    page reports both as its own vertices of one primitive at 0.1 precision, so
+    the plan's `1031.695766` is *inside* the page segment (1031.7,1030.5)→
+    (1031.7,1010.5) rather than on it. One non-zero segment whose both ends lie
+    on this wire's own planned polyline and which passes through the end is the
+    page saying the wire landed; nothing else is allowed to answer for it.
+    """
+    plan = ChangePlan(
+        source=PlanSource(input_sha256="d" * 64, page_uuid="page-1"),
+        change=PlanChange(draw_wires=[PlanDrawWire(net="SENSOR", points=[
+            (1031.695766, 1010.5), (1031.695766, 1030.5), (1186.695766, 1030.5),
+        ])]),
+    )
+    geometry = _page(wires=[("w", "", [
+        (1186.7, 1030.5), (1031.7, 1030.5), (1031.7, 1010.5),
+    ])])
+    state = drawapply.postcondition_problems(plan, geometry=geometry)
+    assert _wire_lines(state) == [], state["canvas"]
+
+
+def test_an_end_on_a_segment_that_leaves_the_planned_wiring_is_still_reported():
+    """The refusal that makes the rule load-bearing: same point, other copper.
+
+    The end (1031.7, 1010.5) sits on the page's segment, but that segment runs on
+    to (1031.7, 930.5) — 80 units past the planned polyline. Accepting it would
+    let any wire that happens to pass through the point answer for this one. The
+    second page moves the whole segment one unit sideways: near, and still not
+    this wire's landing.
+    """
+    plan = ChangePlan(
+        source=PlanSource(input_sha256="e" * 64, page_uuid="page-1"),
+        change=PlanChange(draw_wires=[PlanDrawWire(net="SENSOR", points=[
+            (1031.695766, 1010.5), (1031.695766, 1030.5),
+        ])]),
+    )
+    past_the_end = _page(wires=[("w", "", [(1031.7, 1010.5), (1031.7, 930.5)])])
+    canvas = _wire_lines(drawapply.postcondition_problems(plan, geometry=past_the_end))
+    assert len(canvas) == 2, canvas
+
+    sideways = _page(wires=[("w", "", [(1031.7, 1011.5), (1031.7, 1029.5)])])
+    canvas = _wire_lines(drawapply.postcondition_problems(plan, geometry=sideways))
+    assert len(canvas) == 2, canvas
+
+
+def test_a_flag_anchor_end_needs_the_flag_of_its_net_on_the_page():
+    """The anchor's second witness: the wire reaching the point is not the flag.
+
+    `+3V3`'s stub ends on its flag (`plan.change.draw_flags`). The page's segment
+    passes through that end, so the wire leg would read the stub as landed — but a
+    missing flag, or one of another net, is exactly what the anchor condition is
+    for (`_flag_problems` judges the flag leg; this one must not wave the wire
+    through on the flag's behalf). Same net, same point: landed.
+    """
+    plan = ChangePlan(
+        source=PlanSource(input_sha256="f" * 64, page_uuid="page-1"),
+        change=PlanChange(
+            draw_wires=[PlanDrawWire(net="+3V3", points=[
+                (1031.695766, 1010.5), (1031.695766, 1035.5),
+            ])],
+            draw_flags=[PlanDrawFlag(
+                net="+3V3", kind="Power", symbol_ref="PWR-3V3",
+                x=1031.695766, y=1035.5,
+            )],
+        ),
+    )
+    wires = [("w", "", [(1031.7, 1010.5), (1031.7, 1035.5)])]
+    landed = _page(wires=wires, netflags=[("+3V3", 1031.7, 1035.5)])
+    state = drawapply.postcondition_problems(plan, geometry=landed)
+    assert _wire_lines(state) == [], state["canvas"]
+
+    for page in (
+        _page(wires=wires),
+        _page(wires=wires, netflags=[("VCC", 1031.7, 1035.5)]),
+    ):
+        # The wire leg must still refuse the anchor end; the flag leg's own
+        # sentence would be there either way, so it cannot stand in for this.
+        canvas = _wire_lines(drawapply.postcondition_problems(plan, geometry=page))
+        assert canvas, page
+        assert "no wire vertex at" in canvas[0] or "lies on the wiring" in canvas[0], canvas
+
+
 # ===========================================================================
 # D3 — two boards with the same title are two boards, not one
 # ===========================================================================

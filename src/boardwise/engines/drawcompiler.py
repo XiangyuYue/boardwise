@@ -22044,6 +22044,43 @@ def _net_order(ctx: _Context, expressions: Mapping[str, _Expression]) -> list[st
     return promised + rest
 
 
+def _flag_first_order(
+    expressions: Mapping[str, _Expression], order: Sequence[str],
+    presentation: PresentationSpec | None = None,
+) -> list[str]:
+    """`order` with every flag-style net first; every other net keeps its place.
+
+    Only `mixed-island` opts into this order. Every older grammar returns the
+    caller's original sequence unchanged, so the compatibility fix cannot move
+    a golden page's wires or labels.
+
+    A flag's ink is its glyph **and the name row the host prints beside it**
+    (:func:`_flag_ink_rows`, one ruler with :func:`_flag_box`), and that ink can
+    only be avoided by a label that is placed *after* it. `order` is built from
+    promises and net size alone (:func:`_net_order`), so it is free to put a
+    single-pin label net ahead of the flag net next to it: the label then chose
+    its box with ``avoid=[]`` and `_place_flag` put the flag on exactly that box
+    (measured on the mixed-island lock page — `probe-label-flag-order.log`:
+    `OLED_SDA` at ``(70, -80)`` with an empty avoid list, `+3V3`'s box computed
+    afterwards, readability refusing `text-overlap`).
+
+    The fix is this order and nothing else: the same per-net loop, the same
+    `_label_for` ladder, the same `_service_label_avoid`/`_flag_ink_rows`
+    ruler. A **stable** partition is what keeps the change honest — a flag moved
+    forward can no longer be followed by a net that used to precede it, but the
+    non-flag nets keep their relative order, so wire/label choices between them
+    are untouched. A net whose flag expression will be downgraded inside the
+    loop (a flag the library does not carry, 143 F1) is still ordered here by
+    the style the page was planned with; its own iteration then decides, exactly
+    as before.
+    """
+    if presentation is not None and presentation.grammar_ref != "mixed-island":
+        return list(order)
+    flags = [net for net in order if expressions[net].style == "flag"]
+    others = [net for net in order if expressions[net].style != "flag"]
+    return flags + others
+
+
 def _blocked_points(
     ctx: _Context,
     placed: _Placement,
@@ -23725,7 +23762,17 @@ def _build_one_variant(
         return None, local_label_reservation_failure, []
     router.boxes = [*solids, *router.flag_walls]
     channels = _series_channels(ctx, placed)
-    for net_id in order:
+    # lock-p1-flags-first: the per-net loop walks the flag expressions first, so a
+    # label's `_label_for(..., _service_label_avoid(...))` already sees the flag
+    # glyph/name rows beside it instead of colliding with a box that is computed
+    # one iteration later. The partition itself is `_flag_first_order`; the
+    # passes above (grouping, lane reservations, panel channels) keep reading
+    # `order`, and no other expression moves relative to its neighbours.
+    net_order = (
+        _flag_first_order(expressions, order, ctx.presentation)
+        if ctx.presentation.grammar_ref == "mixed-island" else list(order)
+    )
+    for net_id in net_order:
         expression = expressions[net_id]
         if (
             expression.style == "flag"
@@ -27378,6 +27425,22 @@ def _service_label_avoid(
 ) -> list[Box]:
     """The boxes a label must not print on: flag glyphs/names + promised seats."""
     rows = list(_flag_ink_rows(ctx, symbols))
+    # lock-p1-flags-first: a **wire-style** rail's flag is not placed in the net
+    # loop at all. `_seat_wire_flags` has already decided and reserved its whole
+    # box (glyph + the host's name row, `_flag_box`) before the first wire, and
+    # `_rail_flag` only draws it after every net — so `_flag_ink_rows`, which
+    # reads `symbols`, is empty for that flag exactly while the label beside it
+    # chooses its box. Measured on the mixed-island HMI module: `+3V3` and `GND`
+    # are `style == "wire"` with two pads each, `_place_flag` runs from
+    # `_rail_flag` after the loop, and `OLED_SDA` was placed with `avoid=[]`
+    # straight onto the reserved seat (`text-overlap`).
+    #
+    # The reservation **is** that flag's own box, on the same ruler, so the one
+    # list a label already avoids is where it belongs — no second collision
+    # model, no re-ordering of the seat pass, and a page with no wire-style flag
+    # reserved adds nothing (the same drawing byte for byte).
+    if ctx.presentation.grammar_ref == "mixed-island":
+        rows.extend(box for box in getattr(router, "flag_walls", ()) if box not in rows)
     if _service_channels(ctx):
         rows.extend(getattr(router, "service_flag_boxes", ()))
     return rows
@@ -30978,6 +31041,15 @@ def _with_service_groups(
     hosts = _service_group_hosts(circuit_spec, presentation_spec)
     if not hosts:
         return binding
+    #: Every branch whose host the circuit resolved is *seated*: the record
+    #: states the host foot the branch serves, which is a stronger relation than
+    #: the automatic near heuristic whatever the host's own feet look like.
+    #: `kinds` is a narrower map — it holds only the branches whose foot profile
+    #: names one side, and only those may rewrite a lateral constraint.
+    seated: dict[str, str] = (
+        {branch: host for branch, (host, _kind, _side_net) in hosts.items()}
+        if presentation_spec.grammar_ref == "mixed-island" else {}
+    )
     kinds: dict[str, str] = {}
     reasons: dict[str, str] = {}
     for group in (getattr(presentation_spec, "service_groups", ()) or ()):
@@ -31000,24 +31072,31 @@ def _with_service_groups(
                 f"548J: {branch.part} serves {host}.{side_net} and the host foot "
                 f"faces {side}, so the branch is read {side} of its host "
                 f"(the declared group {group.id!r})")
-    if not kinds:
+    if not kinds and not seated:
         return binding
+    owners = seated or kinds
     constraints: list[RelativeConstraint] = []
     for item in binding.constraints:
         pair = {item.subject, item.object}
-        cell = next((name for name in pair if name in kinds), None)
+        cell = next((name for name in pair if name in owners), None)
         if cell is None or len(pair) != 2:
             constraints.append(item)
             continue
         host = next(name for name in pair if name != cell)
-        if hosts[cell][0] != host:
+        if owners[cell] != host:
             constraints.append(item)
             continue
         if item.kind in _PANEL_SIDE_KINDS:
-            constraints.append(RelativeConstraint(
-                kind=kinds[cell], subject=cell, object=host,
-                reason=reasons[cell],
-            ))
+            # A side is only rewritten where the host profile names one; an
+            # undetermined side leaves the document's own lateral relation as
+            # it stands rather than inventing a direction.
+            if cell in kinds:
+                constraints.append(RelativeConstraint(
+                    kind=kinds[cell], subject=cell, object=host,
+                    reason=reasons[cell],
+                ))
+            else:
+                constraints.append(item)
             continue
         if item.kind == NEAR:
             continue

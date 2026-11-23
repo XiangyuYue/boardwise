@@ -214,6 +214,19 @@ class IcPeripheryGrammar:
 
     name = NAME
 
+    #: Whether the core must sit on both a stated power and a stated ground net.
+    #: This is 098's reading and the default: a core with no supply has no rail
+    #: to reference and no return to read, so the drawing is refused rather than
+    #: drawn as if the fact were absent. `mixed-island` turns it off.
+    require_core_supply: bool = True
+
+    #: Whether a two-terminal part that touches no core pin net is refused.
+    #: This is 098 sec.三 and the default: such a part is not this core's
+    #: periphery. `mixed-island` turns it off and leaves the branch unbound —
+    #: the compiler's free shelf is the honest place for a branch this grammar
+    #: has no role for; it is never given an invented role.
+    allow_unowned_branches: bool = False
+
     def __init__(self, profiles: Mapping[str, SymbolProfile] | None = None) -> None:
         # The profiles are read for one thing: the **drawing's orientation** — the
         # side a hanging part reads on is the side its core's own pin leaves in
@@ -222,6 +235,19 @@ class IcPeripheryGrammar:
         # come from the partition and the documents. Taken as a construction input
         # for the same reason every grammar takes it (053 sec.3).
         self.profiles: dict[str, SymbolProfile] = dict(profiles or {})
+
+    def free_parts(
+        self, presentation: PresentationSpec, scope_id: str
+    ) -> tuple[str, ...]:
+        """Parts the scope module declares free (``modules[].freeParts``).
+
+        The default is **none**: `ic-periphery` has no free branches, and a
+        document that declares the key is read exactly as it was before the key
+        existed. `mixed-island` overrides this to read the current scope
+        module's declaration — the parts themselves are still in `parts`, still
+        in the circuit and still drawn; they simply earn no role here.
+        """
+        return ()
 
     # -------------------------------------------------------------- binding
 
@@ -239,6 +265,17 @@ class IcPeripheryGrammar:
         core then comes from the declaration or from the partition.
         """
         scope_id, scope_parts = _scope(presentation)
+        free_parts = self.free_parts(presentation, scope_id)
+        if free_parts:
+            # 548L: a declared free part is *this module's own two-terminal
+            # branch*, excused from a core role. A declaration naming a part of
+            # another module, or a part that is not a two-terminal branch, is a
+            # statement the grammar cannot honour — refused, never ignored.
+            problems = _free_parts_problem(
+                circuit, free_parts, scope_id, scope_parts
+            )
+            if problems:
+                return refused_result(list(problems))
         claims, conflict = _core_claims(
             circuit, presentation, intent, scope_id, scope_parts
         )
@@ -253,7 +290,15 @@ class IcPeripheryGrammar:
             # falls through to the refusal this grammar has always given, or —
             # when the shape is close but wrong (a short, two grounds, no ground
             # end) — to the one that names what is wrong with it.
-            coreless, problem = _coreless_bank(circuit, scope_id, scope_parts)
+            coreless, problem = _coreless_bank(
+                circuit, scope_id,
+                # 548L: the bank reading is "the group's parts are all the
+                # drawing's parts, every one a branch". A declared free part is
+                # deliberately not a branch of that bank, so the filtered tuple
+                # fails the completeness check and the honest no-core refusal
+                # stands — a free part is never re-bound as a shunt here.
+                tuple(part for part in scope_parts if part not in free_parts),
+            )
             if coreless is not None:
                 return coreless
             if problem is not None:
@@ -277,14 +322,23 @@ class IcPeripheryGrammar:
         core_nets = {net for net in pins_of_part(circuit, core).values()}
         power = nets_of_class(circuit, "power")
         ground = nets_of_class(circuit, "gnd")
-        rail, gnd, supply_failures = _supply(circuit, core, core_nets, power, ground)
-        if supply_failures:
-            return refused_result(supply_failures)
+        if self.require_core_supply:
+            rail, gnd, supply_failures = _supply(
+                circuit, core, core_nets, power, ground
+            )
+            if supply_failures:
+                return refused_result(supply_failures)
+        else:
+            # Mixed island: each reference is read on its own and a class this
+            # core is not on is simply not bound. The classes are still the
+            # stated ones (`_net_on_core`); nothing is invented to fill a gap.
+            rail = _net_on_core(circuit, core, core_nets, power, "power") or ""
+            gnd = _net_on_core(circuit, core, core_nets, ground, "gnd") or ""
 
         bridges, shunts, strays = _periphery(
-            circuit, core, core_nets, rail, gnd, scope_parts
+            circuit, core, core_nets, rail, gnd, scope_parts, free_parts
         )
-        if strays:
+        if strays and not self.allow_unowned_branches:
             return refused_result([
                 _stray_failure(circuit, core, part_id) for part_id in strays[:1]
             ])
@@ -317,12 +371,15 @@ class IcPeripheryGrammar:
         orientation = _orientation_reading(
             self.profiles, circuit, core, presentation, signals
         )
-        prov = weakest_provenance(
-            part_provenance(circuit.part(core)),
-            net_provenance(circuit, rail),
-            net_provenance(circuit, gnd),
-            *(part_provenance(circuit.part(part_id)) for part_id in periphery),
+        supplied = [part_provenance(circuit.part(core))]
+        if rail:
+            supplied.append(net_provenance(circuit, rail))
+        if gnd:
+            supplied.append(net_provenance(circuit, gnd))
+        supplied.extend(
+            part_provenance(circuit.part(part_id)) for part_id in periphery
         )
+        prov = weakest_provenance(*supplied)
         shape = _describe(rail, core, gnd, bridges, shunts)
 
         bindings: list[RoleBinding] = [
@@ -336,9 +393,7 @@ class IcPeripheryGrammar:
                     "says which of them the others hang off",
                     claim.clause(),
                     part_clause(circuit, core),
-                    f"pins on this module's two supplies: "
-                    f"{_pin_on(circuit, core, rail) or '?'}→{rail}, "
-                    f"{_pin_on(circuit, core, gnd) or '?'}→{gnd}",
+                    _supply_note(circuit, core, rail, gnd),
                     f"the group this bind read: {shape}",
                     _scope_note(scope_id, scope_parts),
                     _partition_note(circuit, core),
@@ -347,30 +402,40 @@ class IcPeripheryGrammar:
                     f"provenance={_core_provenance(prov, claim)}",
                 ),
             ),
-            RoleBinding(
-                role="rail",
-                part_id=rail,
-                evidence=evidence(
-                    "role=rail: the net of class 'power' this core's own pins sit "
-                    "on — the supply this drawing references, drawn as a flag or "
-                    "a label (069's rule) and not as a conductor here",
-                    _spec_net_clause(circuit, rail),
-                    f"members: {', '.join(_members(circuit, rail))}",
-                    f"provenance={net_provenance(circuit, rail)}",
-                ),
-            ),
-            RoleBinding(
-                role="gnd",
-                part_id=gnd,
-                evidence=evidence(
-                    "role=gnd: the net of class 'gnd' this core's own pins sit on "
-                    "— every hanging part of this module returns to it",
-                    _spec_net_clause(circuit, gnd),
-                    f"members: {', '.join(_members(circuit, gnd))}",
-                    f"provenance={net_provenance(circuit, gnd)}",
-                ),
-            ),
         ]
+        # A reference this core does not sit on is not bound: a net role names a
+        # net, and there is no net here to name. `mixed-island` therefore states
+        # no rail/gnd role instead of inventing one (the same absence the two
+        # obligations below follow).
+        if rail:
+            bindings.append(
+                RoleBinding(
+                    role="rail",
+                    part_id=rail,
+                    evidence=evidence(
+                        "role=rail: the net of class 'power' this core's own pins "
+                        "sit on — the supply this drawing references, drawn as a "
+                        "flag or a label (069's rule) and not as a conductor here",
+                        _spec_net_clause(circuit, rail),
+                        f"members: {', '.join(_members(circuit, rail))}",
+                        f"provenance={net_provenance(circuit, rail)}",
+                    ),
+                )
+            )
+        if gnd:
+            bindings.append(
+                RoleBinding(
+                    role="gnd",
+                    part_id=gnd,
+                    evidence=evidence(
+                        "role=gnd: the net of class 'gnd' this core's own pins sit "
+                        "on — every hanging part of this module returns to it",
+                        _spec_net_clause(circuit, gnd),
+                        f"members: {', '.join(_members(circuit, gnd))}",
+                        f"provenance={net_provenance(circuit, gnd)}",
+                    ),
+                )
+            )
         for part_id in periphery:
             role = "bridge" if part_id in bridges else "shunt"
             bindings.append(
@@ -484,26 +549,35 @@ class IcPeripheryGrammar:
                     )
                 )
 
-        obligations: list[GrammarObligation] = [
-            GrammarObligation(
-                kind=OWNED_BRANCH,
-                nets=(rail,),
-                reason=(
-                    "098 sec.2: "
-                    + (", ".join(periphery) if periphery else "no hanging part")
-                    + f" read as parts owned by the core {core} — each attached to "
-                    "the pin it belongs to, not crossing into another module"
-                ),
-            ),
-            GrammarObligation(
-                kind=UNIFORM_GND,
-                nets=(gnd,),
-                reason=(
-                    "098 sec.2: this module's ground is expressed one way "
-                    "throughout — one symbol style or one label, never mixed"
-                ),
-            ),
-        ]
+        obligations: list[GrammarObligation] = []
+        # An obligation is about a named net; a reference this core does not sit
+        # on has no net to name, so the obligation is not stated rather than
+        # stated over an empty name (GrammarObligation refuses an empty net, and
+        # `mixed-island` must not invent a rail or a return for the island).
+        if rail:
+            obligations.append(
+                GrammarObligation(
+                    kind=OWNED_BRANCH,
+                    nets=(rail,),
+                    reason=(
+                        "098 sec.2: "
+                        + (", ".join(periphery) if periphery else "no hanging part")
+                        + f" read as parts owned by the core {core} — each attached "
+                        "to the pin it belongs to, not crossing into another module"
+                    ),
+                )
+            )
+        if gnd:
+            obligations.append(
+                GrammarObligation(
+                    kind=UNIFORM_GND,
+                    nets=(gnd,),
+                    reason=(
+                        "098 sec.2: this module's ground is expressed one way "
+                        "throughout — one symbol style or one label, never mixed"
+                    ),
+                )
+            )
         return bound_result(bindings, constraints, obligations)
 
 
@@ -680,6 +754,63 @@ def _in_scope(part_id: str, scope_parts: tuple[str, ...]) -> bool:
 def _pin_count(circuit: CircuitSpec, part_id: str) -> int:
     """How many pins the spec states for this part (never a symbol's pin count)."""
     return len(pins_of_part(circuit, part_id))
+
+
+def _free_parts_problem(
+    circuit: CircuitSpec,
+    free_parts: tuple[str, ...],
+    scope_id: str,
+    scope_parts: tuple[str, ...],
+) -> tuple[GrammarFailure, ...]:
+    """One refusal per declared free part this grammar cannot honour (548L).
+
+    The declaration says "these two-terminal branches belong to this island but
+    bind no core role". Two facts make it impossible to honour: the part is not
+    one of **this** module's parts (the declaration would be about another
+    drawing), or the part is not a two-terminal branch (a free part with no
+    branch shape is not a branch this reading can excuse). Both are
+    `circuit-invalid`, and neither is silently dropped — a silently ignored
+    declaration would draw the part as something the engineer never said.
+    """
+    where = f"modules[{scope_id}].freeParts"
+    failures: list[GrammarFailure] = []
+    for part_id in free_parts:
+        if scope_parts and part_id not in scope_parts:
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=part_id,
+                detail=(
+                    f"{where} names {part_id}, which is not a part of the module "
+                    f"this bind draws (modules[{scope_id}].parts = "
+                    f"{', '.join(scope_parts)}) — a free part is one of this "
+                    "group's own branches, not another module's"
+                ),
+                action=(
+                    f"remove {part_id} from {where}, or state the branch on the "
+                    "module that really holds it"
+                ),
+            ))
+            continue
+        pins = pins_of_part(circuit, part_id)
+        if len(pins) == 2:
+            continue
+        where_pins = ", ".join(f"{pin}→{net}" for pin, net in sorted(pins.items()))
+        failures.append(GrammarFailure(
+            category=FAILURE_CIRCUIT_INVALID,
+            subject=part_id,
+            detail=(
+                f"{where} names {part_id}, but the spec gives it {len(pins)} "
+                f"stated pin(s) ({where_pins or 'none'}) — a free part is a "
+                "two-terminal branch of this island that is excused from a core "
+                "role, and a part with another pin count is not a branch this "
+                "declaration can excuse"
+            ),
+            action=(
+                f"remove {part_id} from {where}, or name a two-terminal part of "
+                "this module instead"
+            ),
+        ))
+    return tuple(failures)
 
 
 def _conflict_failure(
@@ -930,6 +1061,7 @@ def _periphery(
     rail: str,
     gnd: str,
     scope_parts: tuple[str, ...],
+    free_parts: tuple[str, ...] = (),
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """``(bridges, shunts, strays)`` — every two-terminal part of this drawing.
 
@@ -946,6 +1078,11 @@ def _periphery(
     signal path — is **left unbound**: this grammar's role table has no name for
     a signal path, and inventing one would be inventing a promise 053 sec.3 never
     made.
+
+    ``free_parts`` are the module's own declared free branches (548L): they are
+    skipped **before** any shape is read, so they get no role at all and no
+    constraint is derived from one. They are still in the circuit and still
+    drawn; only this grammar's role table declines to name them.
     """
     signals = core_nets - {rail, gnd}
     edges = two_terminal_parts(circuit)
@@ -953,7 +1090,9 @@ def _periphery(
     shunts: list[str] = []
     strays: list[str] = []
     for part_id in sorted(edges):
-        if part_id == core or not _in_scope(part_id, scope_parts):
+        if part_id == core or part_id in free_parts:
+            continue
+        if not _in_scope(part_id, scope_parts):
             continue
         here = set(edges[part_id])
         if here and here <= signals:
@@ -1282,8 +1421,8 @@ def _role_sentence(
         )
     return (
         f"role=shunt: a two-terminal part from one pin net of the core {core} to "
-        f"the rail {rail} or the ground {gnd}, read from the nets and not from a "
-        "designator prefix, a value or a package name"
+        f"{_supply_text(rail, gnd)}, read from the nets and not from a designator "
+        "prefix, a value or a package name"
     )
 
 
@@ -1433,6 +1572,52 @@ def _spec_net_clause(circuit: CircuitSpec, net_id: str) -> str:
     return net_clause(net) if net else f"net {net_id}: not declared in nets[]"
 
 
+def _supply_text(rail: str, gnd: str) -> str:
+    """The supply references as a noun phrase, naming only the ones that exist."""
+    if rail and gnd:
+        return f"the rail {rail} or the ground {gnd}"
+    if rail:
+        return f"the rail {rail}"
+    if gnd:
+        return f"the ground {gnd}"
+    return "a supply reference this core states none of"
+
+
+def _supply_note(
+    circuit: CircuitSpec, core: str, rail: str, gnd: str
+) -> str:
+    """The core's supply clause, worded only over the references it really has.
+
+    098's sample has both, and the evidence says "two supplies" — but the mixed
+    island is the case where that sentence would be a claim about a net nobody
+    stated. Each missing half is named as missing (and as the reason its role is
+    not bound), never filled with a placeholder.
+    """
+    if rail and gnd:
+        return (
+            f"pins on this module's two supplies: "
+            f"{_pin_on(circuit, core, rail) or '?'}→{rail}, "
+            f"{_pin_on(circuit, core, gnd) or '?'}→{gnd}"
+        )
+    if rail:
+        return (
+            f"pin on this module's power net: "
+            f"{_pin_on(circuit, core, rail) or '?'}→{rail}; the core states no "
+            "ground net, so no gnd role is bound"
+        )
+    if gnd:
+        return (
+            f"pin on this module's ground net: "
+            f"{_pin_on(circuit, core, gnd) or '?'}→{gnd}; the core states no "
+            "power net, so no rail role is bound"
+        )
+    return (
+        "no supply or ground net of this core is stated: the core is bound on "
+        "its own pins, and no rail/gnd role or obligation is stated — a net "
+        "nobody stated is not invented"
+    )
+
+
 def _describe(
     rail: str,
     core: str,
@@ -1440,12 +1625,18 @@ def _describe(
     bridges: tuple[str, ...],
     shunts: tuple[str, ...],
 ) -> str:
-    """``VCC→U1‖X1‖C1,C2,C3→GND`` — the spelling a report prints."""
+    """``VCC→U1‖X1‖C1,C2,C3→GND`` — the spelling a report prints.
+
+    The two ends are printed only when the reference exists, so a mixed island
+    reads ``U1⟷X1`` rather than carrying an arrow to a net nobody stated.
+    """
     parts = [
         *[f"⟷{part_id}" for part_id in bridges],
         *[f"‖{part_id}" for part_id in shunts],
     ]
-    return f"{rail}→{core}" + "".join(parts) + f"→{gnd}"
+    left = f"{rail}→" if rail else ""
+    right = f"→{gnd}" if gnd else ""
+    return f"{left}{core}" + "".join(parts) + right
 
 
 # ------------------------------- 534: the coreless parallel-branch group

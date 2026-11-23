@@ -1,6 +1,6 @@
 """The drawing grammars of 053 stage B (053 sec.3, 052 sec.5).
 
-Six grammars, one per idiom the drawing compiler is about, each a `bind` over
+Seven grammars, one per idiom the drawing compiler is about, each a `bind` over
 the two specs of stage A:
 
     voltage-divider   两电阻竖排同轴，抽头可见
@@ -20,6 +20,10 @@ the two specs of stage A:
                       （Np 在母线与开关节点间、Ns 在整流二极管与副边地间、Naux 另一对）。
                       与 power-entry / ic-periphery **组合**使用，引用其角色证据、
                       不复制其逻辑
+    mixed-island      ic-periphery 的通用岛入口（策略子类，不复制布局）：核心可以
+                      没有已声明的 power/gnd（连接器、按键、蜂鸣核心），不 touch
+                      核心的两端支路保持 unbound 落在编译器自由架，不发明角色；
+                      核心真在的 rail/gnd 仍按同一 `_net_on_core` 绑定
 
 Two things this package is not. It does not compute coordinates — the compiler
 does, and `RelativeConstraint` has no place to put one (053 sec.4). And it does
@@ -50,6 +54,7 @@ from . import (
     flyback,
     ic_periphery,
     ldo,
+    mixed_island,
     power_entry,
     rc_lowpass,
     voltage_divider,
@@ -96,7 +101,7 @@ from .base import (
 #: name are the same string, so a lookup cannot half-match.
 NAMES: tuple[str, ...] = (
     voltage_divider.NAME, rc_lowpass.NAME, ldo.NAME, power_entry.NAME,
-    ic_periphery.NAME, flyback.NAME,
+    ic_periphery.NAME, flyback.NAME, mixed_island.NAME,
 )
 
 _CLASSES: dict[str, type] = {
@@ -106,6 +111,7 @@ _CLASSES: dict[str, type] = {
     power_entry.NAME: power_entry.PowerEntryGrammar,
     ic_periphery.NAME: ic_periphery.IcPeripheryGrammar,
     flyback.NAME: flyback.FlybackGrammar,
+    mixed_island.NAME: mixed_island.MixedIslandGrammar,
 }
 
 #: Every role any grammar may bind, per grammar, table roles first and this
@@ -117,6 +123,7 @@ ROLES_BY_GRAMMAR: dict[str, tuple[str, ...]] = {
     power_entry.NAME: power_entry.ROLES,
     ic_periphery.NAME: ic_periphery.ROLES,
     flyback.NAME: flyback.ROLES,
+    mixed_island.NAME: mixed_island.ROLES,
 }
 
 __all__ = [
@@ -127,6 +134,7 @@ __all__ = [
     "grammar_for",
     "ic_periphery",
     "ldo",
+    "mixed_island",
     "power_entry",
     "rc_lowpass",
     "voltage_divider",

@@ -519,6 +519,18 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
         ),
     )
     draw_lint.add_argument(
+        "--netlist", default=None, metavar="PATH",
+        help=(
+            "A captured `sch.netlist` answer (JSON: {\"type\": \"EasyEDA\", "
+            "\"text\": \"<netlist JSON>\"}, or the EasyEDA netlist itself) used "
+            "by the electrical predicates: a two-terminal part whose pins share "
+            "one net, one device's ground and supply pins sharing one net, and "
+            "a Ground flag whose net is absent from the netlist. Works on both "
+            "replay and live paths. Without it those predicates do not run and "
+            "the report says so; an unreadable netlist is exit 2, never a skip."
+        ),
+    )
+    draw_lint.add_argument(
         "--json", dest="json_path", metavar="PATH",
         help="Write the machine-readable findings report here.",
     )

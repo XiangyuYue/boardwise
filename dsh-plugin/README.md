@@ -58,7 +58,7 @@ review_read/finalize/doctor 始终可收尾，已派发命令不被取消。541R
 | `boardwise_parts_hunt` | `parts hunt --file F \| --live [--project P \| --instance I] --out D [--from-report R] [--offline] [--limit N] [--cache C \| --no-cache] [--shelf S] [--apply A] [--apply-facts F]` | `file`/`project`/`instance` 三选一，`out` 必填；`answers`/`claims` 数组写插件自己的 transport 临时文件 | 1 800 000 |
 | `boardwise_pcb_connection` | `pcb connection --from REF.PAD --to REF.PAD [--project P] [--instance I] [--port N]` | `from`/`to` 必填；无 file/board/live/json，焦点 PCB 即板身份，不切文档 | 120 000 |
 | `boardwise_draw_compile` | `draw compile --circuit C --presentation P --profiles S --out D --json J` | 三个输入必填，`pageBox`/`intent`/`out` 可选；整份 JSON 返回：单模块 `candidates`，页级 `pages`（见下） | 600 000 |
-| `boardwise_draw_lint` | `draw lint --snapshot S --render R [--bodies B] --json J` | `snapshot`/`render` 必填，仅离线回放；完整 JSON 返回 | 120 000 |
+| `boardwise_draw_lint` | `draw lint --snapshot S --render R [--bodies B] [--netlist N] --json J` | `snapshot`/`render` 必填，`netlist` 可选；未给时电气谓词明确未运行；仅离线回放，完整 JSON 返回 | 120 000 |
 | `boardwise_draw_plan` | `draw plan --layout L --circuit C --presentation P --profiles S --out D/plan.json --json J` | 四个现有文件必填，仅离线预检保存的PageLayoutPlan；`out`目录可选，默认独立持久临时目录；完整CLI JSON返回 | 120 000 |
 
 统一约定：

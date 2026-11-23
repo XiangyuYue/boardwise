@@ -32,9 +32,10 @@ from pathlib import Path
 import pytest
 
 from boardwise import cli
+from boardwise.core import pageframe
 from boardwise.core.changeplan import DRAW_MODULE_KIND, ChangePlan
 from boardwise.core.pagelayoutplan import PageLayoutPlan
-from boardwise.engines import drawapply, pagecompiler
+from boardwise.engines import drawapply, pagecompiler, readability
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "drawapply"
 LIBRARY = FIXTURES / "library.json"
@@ -423,6 +424,62 @@ def _apply(editor, plan_path, circuit, presentation, tmp_path, *extra):
     return code, json.loads(report.read_text(encoding="utf-8"))
 
 
+# ------------------------------------------------------------ the saved page
+
+
+def _move_saved_page(page: PageLayoutPlan, dy: float) -> None:
+    """Move a saved page (drawing, frames, ports) as one rigid body.
+
+    This is the hand-tuned page a saved ``--layout`` stands for: an earlier run's
+    document, moved as a whole, with no recompile and no scaling.  Only ``dy`` is
+    needed here because the sheet's title block sits in the bottom-right corner
+    and the compiled page's second module already shares its x range.
+    """
+    for part in page.plan.parts:
+        part.y += dy
+    for segment in page.plan.segments:
+        segment.points = [(x, y + dy) for x, y in segment.points]
+    for junction in page.plan.junctions:
+        junction.y += dy
+    for label in page.plan.labels:
+        label.y += dy
+        label.bbox = (label.bbox[0], label.bbox[1] + dy,
+                      label.bbox[2], label.bbox[3] + dy)
+    for symbol in page.plan.power_symbols:
+        symbol.y += dy
+    for text in page.plan.texts:
+        if text.y is not None:
+            text.y += dy
+        text.bbox = (text.bbox[0], text.bbox[1] + dy, text.bbox[2], text.bbox[3] + dy)
+    for module in page.modules:
+        module.origin = (module.origin[0], module.origin[1] + dy)
+        module.frame = (module.frame[0], module.frame[1] + dy,
+                        module.frame[2], module.frame[3] + dy)
+        for port in module.ports:
+            port.y += dy
+
+
+def _saved_page(tmp_path: Path, *, dy: float = 0.0, name: str = "saved.page.json") -> Path:
+    """A real saved page: `draw compile`'s first candidate, optionally moved."""
+    circuit, presentation = write_specs(tmp_path)
+    out = tmp_path / "compiled"
+    code = cli.main([
+        "draw", "compile", "--circuit", str(circuit), "--presentation", str(presentation),
+        "--profiles", str(LIBRARY), "--page-box", PAGE_BOX, "--out", str(out),
+    ])
+    assert code == 0, "the page this test starts from did not compile"
+    page = PageLayoutPlan.load(sorted(out.glob("cand*.page.json"))[0])
+    if dy:
+        _move_saved_page(page, dy)
+    path = tmp_path / name
+    page.dump(path)
+    return path
+
+
+def _report(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 # -------------------------------------------------------------- draw compile
 
 
@@ -549,6 +606,154 @@ def test_an_offline_page_plan_is_a_draw_module_plan_of_the_pages_drawing(tmp_pat
     assert sorted(part.designator for part in plan.change.draw_parts) == [
         "C1", "C2", "R1", "R2", "U1"
     ]
+
+
+def test_a_saved_page_inside_the_title_block_is_refused_by_name(tmp_path, capsys):
+    """The P1 replay: a saved page whose module frame shares the sheet's table.
+
+    The preflight used to check the census only, so this exact page passed both
+    checks and became an applicable plan — J10/J11/J12 and their wires inside the
+    title block.  Derived from the saved page's own ``page_box`` (S-01), the block
+    is a keep-out and the page is refused by name; nothing is re-packed, scaled or
+    repaired, and no product plan is written.
+    """
+    circuit, presentation = write_specs(tmp_path)
+    saved = _saved_page(tmp_path, dy=-300.0, name="overlap.page.json")
+    out = tmp_path / "overlap-plan.json"
+    report_path = tmp_path / "overlap-report.json"
+    code = cli.main(_plan_args(
+        circuit, presentation, "--layout", str(saved),
+        "--out", str(out), "--json", str(report_path),
+    ))
+    captured = capsys.readouterr()
+    report = _report(report_path)
+    title = pageframe.title_block_keepouts((0.0, 0.0, 1169.0, 826.0))[0]
+    page = PageLayoutPlan.load(saved)
+    overlapping = [
+        module.id for module in page.modules
+        if min(module.frame[2], title[2]) - max(module.frame[0], title[0]) > 0
+        and min(module.frame[3], title[3]) - max(module.frame[1], title[1]) > 0
+    ]
+    assert overlapping, "the fixture must really sit in the title block"
+    assert code == 5, captured.out
+    assert report["reason"] == "readability_refused"
+    assert report["outcome"] == "refused"
+    assert report["checks"]["page"]["ok"] is False
+    assert report["plan"] is None
+    assert not out.exists(), "a conflicted saved page must not produce an applicable plan"
+    assert not (tmp_path / "overlap-plan.page.json").exists(), (
+        "no page document is written for a page that is refused"
+    )
+    assert "[459, 10, 1159, 190]" in captured.err, captured.err
+    assert "title block (S-01)" in captured.err, captured.err
+    assert "page-keepout-conflict" in captured.err, captured.err
+    assert f"module '{overlapping[0]}'" in captured.err, captured.err
+    assert "no recompile" in captured.err, captured.err
+
+
+def test_a_legal_saved_page_is_marked_and_carries_the_exact_title_keepout(
+    monkeypatch, tmp_path, capsys
+):
+    """A saved page that clears the table plans, and says so in the two spellings
+    `draw apply` already reads — the island marker and the sheet reservation.
+
+    The checks are handed the census **and** the derived block (the census is not
+    dropped, and the block is not added twice), which is what makes the refusal in
+    the test above about the saved page rather than about the preflight list.
+    """
+    editor = _PageEditor()
+    editor.add_part("R9", 60, 60, lcsc="C25744", value="1k")
+    editor.add_wire("", [(250, 60), (320, 60)])
+    editor.add_flag("GND", 250, 120)
+    circuit, presentation = write_specs(tmp_path)
+    saved = _saved_page(tmp_path)
+    captured: list[tuple[str, list[tuple[float, ...]]]] = []
+    real_page_check = readability.check_page
+    real_drawing_check = readability.check
+
+    def _spy(name, real):
+        def called(*args, **kwargs):
+            captured.append((
+                name,
+                [tuple(float(value) for value in box) for box in kwargs.get("keepouts") or ()],
+            ))
+            return real(*args, **kwargs)
+        return called
+
+    monkeypatch.setattr(readability, "check_page", _spy("page", real_page_check))
+    monkeypatch.setattr(readability, "check", _spy("drawing", real_drawing_check))
+    _stub_editor(monkeypatch, editor)
+    _stub_export(monkeypatch)
+    out = tmp_path / "legal-plan.json"
+    report_path = tmp_path / "legal-report.json"
+    code = cli.main(_plan_args(
+        circuit, presentation, "--layout", str(saved), "--page", editor.page,
+        "--out", str(out), "--json", str(report_path),
+    ))
+    assert code == 0, capsys.readouterr().out
+    report = _report(report_path)
+    census = [tuple(row["box"]) for row in report["keepouts"]]
+    assert len(census) == 3, "a part, a wire and a flag: the census is not dropped"
+    title = tuple(float(value) for value in
+                  pageframe.title_block_keepouts((0.0, 0.0, 1169.0, 826.0))[0])
+    assert tuple(title) not in census
+    assert [name for name, _boxes in captured] == ["page", "drawing"]
+    for name, boxes in captured:
+        assert boxes == census + [title], name
+        assert len(set(boxes)) == len(boxes), "the title block is not added twice"
+    plan = ChangePlan.load(out)
+    assert cli._draw_plan_is_island_page(plan), "without the marker the S-01 guard is skipped"
+    assert pageframe.page_keep_out_from_notes(plan.change.draw_notes) == (
+        (0.0, 0.0, 1169.0, 826.0), title,
+    )
+
+
+def test_a_legal_saved_page_plan_enters_the_s01_guard(monkeypatch, tmp_path, capsys):
+    """The marker and the reservation put a saved-page plan through S-01 itself.
+
+    Landing on a sheet the reservation was not made for is refused before the
+    first write (`landing_sheet_mismatch`).  Before the fix the plan carried no
+    marker, `_draw_plan_is_island_page` was False, and this leg never ran.
+    """
+    from test_533_island_guard import LIVE_SHEET, _source
+
+    class _SheetEditor(_PageEditor):
+        async def call(self, action, params=None, **_route):
+            if action == "sys.get_document_source":
+                self.calls.append(action)
+                return {"data": _source(LIVE_SHEET, attached=True)}
+            return await super().call(action, params, **_route)
+
+    editor = _SheetEditor()
+    _stub_editor(monkeypatch, editor)
+    _stub_export(monkeypatch)
+    circuit, presentation = write_specs(tmp_path)
+    saved = _saved_page(tmp_path)
+    plan_path = tmp_path / "plan.json"
+    plan_report = tmp_path / "plan-report.json"
+    code = cli.main(_plan_args(
+        circuit, presentation, "--layout", str(saved), "--page", editor.page,
+        "--out", str(plan_path), "--json", str(plan_report),
+    ))
+    assert code == 0, capsys.readouterr().out
+    plan = ChangePlan.load(plan_path)
+    assert cli._draw_plan_is_island_page(plan)
+
+    apply_report = tmp_path / "saved-apply.json"
+    code = cli.main([
+        "draw", "apply", str(plan_path), "--page", editor.page, "--instance", "inst-1",
+        "--circuit", str(circuit), "--presentation", str(presentation),
+        "--profiles", str(LIBRARY), "--json", str(apply_report),
+    ])
+    printed = capsys.readouterr().out
+    payload = _report(apply_report)
+    assert code == 5, printed
+    assert payload["reason"] == "landing_sheet_mismatch"
+    assert payload["write"]["calls"] == 0
+    assert editor.writes == [], "the refusal happens before the first write"
+    assert payload["titleBlock"]["planRecordedPageBox"] == [0.0, 0.0, 1169.0, 826.0]
+    assert payload["titleBlock"]["livePageBox"] == [0.0, 0.0, 1170.0, 825.0]
+    assert "sys.get_document_source" in editor.calls
 
 
 def test_a_page_label_no_wire_reaches_becomes_a_named_stub(tmp_path, capsys):
