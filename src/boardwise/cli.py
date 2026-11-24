@@ -11645,6 +11645,13 @@ class _DrawInputError(Exception):
     """The command's inputs cannot be read. Exit 5, with the message printed."""
 
 
+#: The largest page this command accepts on either side, in canvas units
+#: (100000 units is 1000 inches — far past any sheet, and the point past which
+#: the compile's work on a page grows without returning: 569G-04 measured
+#: `1e9`/`inf` pages never finishing). A page is a *sheet*, not a search space.
+_DRAW_PAGE_BOX_MAX_SIDE = 100000.0
+
+
 def _draw_page_box(text: str | None) -> tuple[float, float, float, float] | None:
     """``--page-box x0,y0,x1,y1`` -> the Box the compiler anchors the drawing in.
 
@@ -11652,7 +11659,16 @@ def _draw_page_box(text: str | None) -> tuple[float, float, float, float] | None
     with a page the compiler anchors the drawing at the page's own top-left
     (`drawcompiler._anchor_to_page`), so a landing spot is a spot on that sheet
     rather than a number relative to nothing.
+
+    Every coordinate must be finite and no side may exceed
+    :data:`_DRAW_PAGE_BOX_MAX_SIDE`: a NaN page slips through both the ordering
+    and the size check (`0 >= nan` and `nan - 0 < 100` are both false) and used
+    to be compiled into candidates whose SVG said ``width="nan"``, and a page
+    with no size bound used to run the compiler for tens of seconds without
+    returning (569G-03/04).
     """
+    from math import isfinite
+
     if not text:
         return None
     parts = [item.strip() for item in str(text).split(",")]
@@ -11667,6 +11683,11 @@ def _draw_page_box(text: str | None) -> tuple[float, float, float, float] | None
         raise _DrawInputError(
             f"--page-box is four numbers, got {text!r} ({exc})"
         ) from exc
+    if not all(isfinite(value) for value in values):
+        raise _DrawInputError(
+            f"--page-box {text!r} is not a page: all four coordinates must be finite "
+            "(a NaN or infinite sheet has no size to lay a drawing out on)"
+        )
     if values[0] >= values[2] or values[1] >= values[3]:
         raise _DrawInputError(
             f"--page-box {text!r} is not a box: x0 < x1 and y0 < y1 are required "
@@ -11676,6 +11697,16 @@ def _draw_page_box(text: str | None) -> tuple[float, float, float, float] | None
         raise _DrawInputError(
             f"--page-box {text!r} is {values[2] - values[0]:g}x{values[3] - values[1]:g} "
             "canvas units — too small to be a page (100 units is 1 inch)"
+        )
+    if (
+        values[2] - values[0] > _DRAW_PAGE_BOX_MAX_SIDE
+        or values[3] - values[1] > _DRAW_PAGE_BOX_MAX_SIDE
+    ):
+        raise _DrawInputError(
+            f"--page-box {text!r} is {values[2] - values[0]:.12g}x{values[3] - values[1]:.12g} "
+            f"canvas units — larger than the {_DRAW_PAGE_BOX_MAX_SIDE:g} units per side "
+            "a page may have; the cap keeps the compile's work on a sheet bounded "
+            "(an unbounded page does not finish)"
         )
     return (values[0], values[1], values[2], values[3])
 
@@ -11836,19 +11867,94 @@ def _draw_inputs(args: argparse.Namespace):
     from .core.presentationspec import PresentationSpec, PresentationSpecError
     from .engines import drawapply
 
+    # 569-G-01: a decode failure is a `ValueError`, not an `OSError`, so the
+    # three readers below used to let `UnicodeDecodeError` escape this function
+    # and turn `draw compile --circuit <non-UTF-8>` into a bare traceback.  The
+    # three shapes are named the way `ChangePlan.load` names its own (569-E-03),
+    # rather than forwarding the codec's sentence as if it were ours.
     try:
         circuit = CircuitSpec.load(args.circuit)
+    except UnicodeDecodeError as exc:
+        raise _DrawInputError(f"--circuit {args.circuit}: is not UTF-8 ({exc})") from exc
     except (CircuitSpecError, OSError) as exc:
         raise _DrawInputError(f"--circuit {args.circuit}: {exc}") from exc
     try:
         presentation = PresentationSpec.load(args.presentation)
+    except UnicodeDecodeError as exc:
+        raise _DrawInputError(
+            f"--presentation {args.presentation}: is not UTF-8 ({exc})"
+        ) from exc
     except (PresentationSpecError, OSError) as exc:
         raise _DrawInputError(f"--presentation {args.presentation}: {exc}") from exc
     try:
         profiles = drawapply.load_library(args.profiles)
+    except UnicodeDecodeError as exc:
+        raise _DrawInputError(f"--profiles {args.profiles}: is not UTF-8 ({exc})") from exc
     except (drawapply.DrawPlanError, OSError) as exc:
         raise _DrawInputError(f"--profiles {args.profiles}: {exc}") from exc
     return circuit, presentation, profiles
+
+
+def _draw_output_check(command: str, flag: str, raw: str, *, directory: bool) -> Path:
+    """Refuse an output target this run cannot write, **before** anything is written.
+
+    ``directory=True`` is `draw compile --out`: the candidates are written inside
+    it and the preview writer creates it, so a path that does not exist yet is
+    legal.  ``False`` is a single-document target (`draw plan --out`, every
+    `--json`): the parent has to be a directory that already exists, because
+    this CLI does not invent output directories — a typo would otherwise become
+    a directory nobody asked for, and a missing one is refused by name instead.
+
+    569-G-02/05/06: both questions are asked here, ahead of the compile (or the
+    plan), so a refused target cannot leave candidates behind — the measured
+    failure was `FileExistsError`/`FileNotFoundError` arriving *after* the SVGs
+    and page documents had landed.  The two `--out` meanings are stated in the
+    refusal itself: a caller moving between the sibling commands reads which one
+    takes a directory and which one takes a file.
+    """
+    target = Path(raw)
+    if directory:
+        if target.exists() and not target.is_dir():
+            raise _DrawInputError(
+                f"{flag} {target}: exists and is a file — {command}'s {flag} names an "
+                "output directory (the candidates are written inside it), while "
+                "`draw plan --out` names a file; give a directory path, or remove the "
+                "file"
+            )
+        ancestor = target
+        while not ancestor.exists() and ancestor != ancestor.parent:
+            ancestor = ancestor.parent
+        if not ancestor.is_dir():
+            raise _DrawInputError(
+                f"{flag} {target}: cannot be created — {ancestor} is a file, not a "
+                "directory"
+            )
+        return target
+    if target.exists() and target.is_dir():
+        raise _DrawInputError(
+            f"{flag} {target}: is a directory — {command}'s {flag} names a single "
+            "output file, while `draw compile --out` names a directory; give a file "
+            "path"
+        )
+    parent = target.parent
+    if not parent.exists():
+        raise _DrawInputError(
+            f"{flag} {target}: its directory {parent} does not exist — {command} does "
+            "not create output directories; give a path in a directory that exists"
+        )
+    if not parent.is_dir():
+        raise _DrawInputError(
+            f"{flag} {target}: cannot be written — {parent} is a file, not a directory"
+        )
+    return target
+
+
+def _draw_output_checks(args: argparse.Namespace, command: str, *, plan: bool) -> None:
+    """The output flags `command` will use, each asked before the run starts."""
+    if args.out_path:
+        _draw_output_check(command, "--out", args.out_path, directory=not plan)
+    if args.json_path:
+        _draw_output_check(command, "--json", args.json_path, directory=False)
 
 
 def _draw_compile(args: argparse.Namespace, *, page_box, notes: list[str]):
@@ -11930,18 +12036,22 @@ def _warn_page_intent(args: argparse.Namespace, command: str) -> None:
     )
 
 
-def _census_is_not_empty(census) -> bool:
-    """Does the page hold any primitive at all — every counter, never three of them.
+def _census_is_not_empty(census, geometry=None) -> bool:
+    """Does the page hold any primitive at all — electrical *and* drawing ones.
 
     143d: this test read parts, wires and flags, so a "just created" page that
     already held a net label or an un-numbered part passed for empty and the run
-    landed the drawing on top of it. The counters are the census's own fields, so
-    the day the census grows one this test cannot be the reader that forgot it.
+    landed the drawing on top of it. 566-A-2: the census itself speaks for the
+    electrical primitives only, so a page holding just a text or a frame line was
+    still read as empty — ``geometry`` (the same ``sch.geometry`` dump the census
+    was taken from) carries the six drawing sections into the answer, and both the
+    empty-page scan and the pre-write guard pass it. The one-argument form answers
+    the electrical half only and exists for direct census assertions (143d); the
+    empty-page proof never uses it.
     """
-    return bool(
-        census.components or census.wire_count or census.netflag_count
-        or census.netlabel_count or census.unnumbered_count or census.pin_count
-    )
+    from .engines import drawapply
+
+    return drawapply.page_is_not_empty(census, geometry)
 
 
 def _draw_page_rows(listing: dict) -> list[dict]:
@@ -12021,21 +12131,33 @@ def _draw_geometry_readable(geometry) -> bool:
 
     `canvas_census` is deliberately tolerant: a non-dict answers an all-zero
     census, which is exactly what an empty page looks like. A page is only allowed
-    to count as empty when the dump is the shape the census was built from — both
-    sections it counts are lists, and the connector did not report the component
-    namespace as unavailable (``meta.available.components is False``). A read that
-    failed, or one that answered in another shape, stays unproven.
+    to count as empty when the dump is the shape the census and the drawing
+    sections were built from — every section is a list, and the connector says it
+    read that namespace (``meta.available.<section> is True``). 566-A-1: the gate
+    used to refuse only ``available.components is False``, so a page whose
+    ``wires``/``pins``/``netlabels`` read broke (an empty list, not a failed read
+    the census could see) was proven empty and reused — 11 writes on a page with a
+    wire. 566-A-2 added the six drawing sections to the same requirement, because
+    a dump that does not carry them cannot prove *nothing* is on the page either.
+
+    An older connector that omits a section or an availability flag therefore
+    fails closed: the run loses the ability to **prove** a page empty (and reuse
+    it), while an explicit ``--page`` still reads normally — this gate is only the
+    empty-page scan's admission test.
     """
     if not isinstance(geometry, dict):
         return False
-    if not isinstance(geometry.get("components"), list):
-        return False
-    if not isinstance(geometry.get("wires"), list):
-        return False
+    from .engines import drawapply
+
     meta = geometry.get("meta")
     available = meta.get("available") if isinstance(meta, dict) else None
-    if isinstance(available, dict) and available.get("components") is False:
+    if not isinstance(available, dict):
         return False
+    for key in (*drawapply.GEOMETRY_SECTIONS, *drawapply.DRAWING_SECTIONS):
+        if not isinstance(geometry.get(key), list):
+            return False
+        if available.get(key) is not True:
+            return False
     return True
 
 
@@ -12084,7 +12206,7 @@ def _draw_is_page(args: argparse.Namespace) -> bool:
 
     try:
         presentation = PresentationSpec.load(args.presentation)
-    except (PresentationSpecError, OSError):
+    except (PresentationSpecError, OSError, UnicodeDecodeError):
         return False
     return pagecompiler.wants_page(presentation)
 
@@ -12200,6 +12322,303 @@ def _draw_zero_candidate_next_line(recovery: dict) -> str:
     )
 
 
+#: What the seal a successful compile attaches is worth, stated in the payload
+#: itself. The seal catches "geometry moved, provenance did not" — it is a public
+#: checksum, so it is neither a signature nor proof of who made the document.
+_DRAW_PROVENANCE_ATTESTATION = "self-consistency-only"
+
+_DRAW_PROVENANCE_BOUNDARY = (
+    "the provenanceSha256 values are self-consistency seals over (route, geometry "
+    "digest): they detect a document whose geometry was edited without re-sealing "
+    "it. They are not signatures and do not prove authorship, and the compile "
+    "verdict is not a visual or delivery acceptance"
+)
+
+
+def _draw_automatic_provenance(scope: str, seal_domain: str, seals: list[dict]) -> dict:
+    """``route`` / ``mode`` / ``provenance`` for a compile that produced candidates.
+
+    hole568 D-3 measured the gap: a successful compile's payload carried no route
+    at all, so "this drawing is the compiler's own" was expressible only by the
+    *absence* of the failure route, while ``route: agent-adjusted`` existed as a
+    constant on the zero-candidate path. The successful half now says what it is,
+    and says what its seal is worth (:data:`_DRAW_PROVENANCE_ATTESTATION`) so no
+    reader can mistake a checksum for a signed authorship claim (590).
+    """
+    from .core.layoutplan import ROUTE_AUTOMATIC
+
+    return {
+        "route": ROUTE_AUTOMATIC,
+        "mode": ROUTE_AUTOMATIC,
+        "provenance": {
+            "mode": ROUTE_AUTOMATIC,
+            "attestation": _DRAW_PROVENANCE_ATTESTATION,
+            "scope": scope,
+            "sealDomain": seal_domain,
+            "seals": seals,
+            "boundary": _DRAW_PROVENANCE_BOUNDARY,
+        },
+    }
+
+
+#: The four P44 readings every drawing delivery must state, in order. A delivery
+#: that cannot name all four is unverified by construction (hole568 D-6).
+_DRAW_P44_ITEMS = ("P1", "P2", "P3", "P4")
+
+#: What a delivery's ``ok: false`` means, stated with every delivery. The
+#: compile's own ``ok`` is a legality statement about the candidates; this one is
+#: about acceptance, and only a person who read the render can move it.
+_DRAW_DELIVERY_BOUNDARY = (
+    "compile ok says legal candidates were produced, not that the drawing was "
+    "accepted; the P44 readings below are diagnostics and the render still has to "
+    "be read by a person"
+)
+
+
+def _draw_p44_flags_by_net(plan) -> dict[str, int]:
+    """How many flags the plan places on each net — a count, never a cluster."""
+    counts: dict[str, int] = {}
+    for symbol in plan.power_symbols:
+        counts[symbol.net] = counts.get(symbol.net, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _draw_p44_p1(plan) -> dict:
+    """P1 — functional host-pin groups: semantic, so it stays unverified.
+
+    Which pin is a host and which branch belongs to it is a property of the
+    presentation's functional groups; a body-origin → host-pin distance or a part
+    count cannot establish that a pull-up follows the actual pin side. So this
+    block lists what the plan contains and says what that cannot prove.
+    """
+    return {
+        "status": "unverified",
+        "reason": (
+            "host-pin groups are read from the presentation's functional branches and "
+            "from the render; a body-origin → host-pin distance is a diagnostic, not a "
+            "membership proof"
+        ),
+        "counts": {
+            "parts": len(plan.parts),
+            "segments": len(plan.segments),
+            "labels": len(plan.labels),
+            "powerSymbols": len(plan.power_symbols),
+            "flagsByNet": _draw_p44_flags_by_net(plan),
+        },
+        "countsProveNothing": (
+            "the counts say what the plan contains; they do not say that a pull-up sits "
+            "beside its own host pin or that the decoupling pair is one group"
+        ),
+    }
+
+
+def _draw_p44_p2(plan) -> dict:
+    """P2 — local flags follow the functional groups. Counts, never a proof.
+
+    Whether the right pins share a flag cluster, whether the left boot pull-up is
+    independent and whether the host GND is local are read from the connected
+    clusters and their member pins on the render; a count cannot stand in for that.
+    """
+    labelled: dict[str, list[str]] = {}
+    for label in plan.labels:
+        if label.part_id:
+            labelled.setdefault(label.net, []).append(label.part_id)
+    return {
+        "status": "unverified",
+        "reason": (
+            "flag clusters are read as connected groups of member pins on the render, "
+            "with no full-page bus; the plan's counts say nothing about co-membership"
+        ),
+        "counts": {
+            "flagsByNet": _draw_p44_flags_by_net(plan),
+            "labelledPartsByNet": {
+                net: sorted(parts) for net, parts in sorted(labelled.items())
+            },
+        },
+        "countsProveNothing": (
+            "a flag count cannot prove that the right pins share a cluster, and one "
+            "page-wide bus would not show up as a count at all"
+        ),
+    }
+
+
+def _draw_p44_p3(plan) -> dict:
+    """P3 — every actual segment's path against its direct Manhattan distance.
+
+    ``path`` is the sum of the sub-edges' Manhattan lengths, ``direct`` is the
+    Manhattan distance between the segment's two endpoints, and ``excess`` is
+    ``path - direct``. These are diagnostics: a detour around an obstacle is
+    necessary, so excess alone neither rejects a drawing nor passes one — the
+    host-body and foreign-net crossings are read on the render.
+    """
+    from .engines.layout import polyline_length
+
+    rows: list[dict] = []
+    by_net: dict[str, dict] = {}
+    worst: dict | None = None
+    for index, segment in enumerate(plan.segments):
+        points = [(float(x), float(y)) for x, y in segment.points]
+        path = round(polyline_length([points]), 6)
+        if len(points) >= 2:
+            direct = round(
+                abs(points[-1][0] - points[0][0]) + abs(points[-1][1] - points[0][1]), 6
+            )
+        else:
+            direct = 0.0
+        excess = round(path - direct, 6)
+        rows.append(
+            {
+                "index": index,
+                "net": segment.net,
+                "points": len(points),
+                "path": path,
+                "direct": direct,
+                "excess": excess,
+            }
+        )
+        aggregate = by_net.setdefault(
+            segment.net, {"segments": 0, "path": 0.0, "direct": 0.0, "excess": 0.0}
+        )
+        aggregate["segments"] += 1
+        aggregate["path"] = round(aggregate["path"] + path, 6)
+        aggregate["direct"] = round(aggregate["direct"] + direct, 6)
+        aggregate["excess"] = round(aggregate["excess"] + excess, 6)
+        if worst is None or excess > worst["excess"]:
+            worst = {"net": segment.net, "index": index, "excess": excess}
+    return {
+        "status": "unverified",
+        "reason": (
+            "a detour can be the only legal way around an obstacle, so excess is a "
+            "diagnostic and neither a rejection nor an acceptance; crossings and "
+            "hidden connection destinations are read on the render"
+        ),
+        "segments": rows,
+        "byNet": dict(sorted(by_net.items())),
+        "maxExcess": worst,
+    }
+
+
+def _draw_p44_p4(plan) -> dict:
+    """P4 — the part origins' two-dimensional span, diagnostic only.
+
+    ``[maxX - minX, maxY - minY]`` over ``plan.parts``' origins, ``[0, 0]`` for a
+    plan with no parts. Same-group orientation, terminal rows and reading order
+    are read on the render; P44's 265 × 25 is that page's measurement and a
+    threshold for no other page.
+    """
+    if plan.parts:
+        xs = [float(part.x) for part in plan.parts]
+        ys = [float(part.y) for part in plan.parts]
+        span = [round(max(xs) - min(xs), 6), round(max(ys) - min(ys), 6)]
+    else:
+        span = [0.0, 0.0]
+    return {
+        "status": "unverified",
+        "reason": (
+            "subgroup relationships and alignment are read on the render; the origin "
+            "span is a diagnostic and establishes no readability"
+        ),
+        "span": span,
+        "parts": len(plan.parts),
+    }
+
+
+def _draw_delivery(plan, *, scope: str, index: int = 0) -> dict:
+    """The delivery object a compile's success path states (592, hole568 D-6).
+
+    The compile's ``ok`` keeps its meaning — a legal candidate came out. This
+    object answers a different question: has the drawing been *accepted*? Until a
+    person has read the render and the P44 relationships the answer is
+    ``ok: false, status: "unverified"``, and every P44 item says what it could not
+    establish. ``route`` is the plan's own route (590), so the compiler's drawing
+    stays distinguishable from a replay or a hand adjustment.
+    """
+    p44 = {
+        "P1": _draw_p44_p1(plan),
+        "P2": _draw_p44_p2(plan),
+        "P3": _draw_p44_p3(plan),
+        "P4": _draw_p44_p4(plan),
+    }
+    return {
+        "ok": False,
+        "status": "unverified",
+        "route": plan.route,
+        "visualReview": "required",
+        "scope": scope,
+        "candidate": index,
+        "p44": p44,
+        "missing": [item for item in _DRAW_P44_ITEMS if item not in p44],
+        "boundary": _DRAW_DELIVERY_BOUNDARY,
+    }
+
+
+def _draw_p44_flag_text(counts: dict[str, int]) -> str:
+    """``VCC=2, GND=1`` — the flag counts as one readable clause."""
+    return ", ".join(f"{net}={count}" for net, count in counts.items()) or "none"
+
+
+def _draw_p44_line(item: str, block: dict) -> str:
+    """One console line for one P44 reading, from the delivery's own numbers."""
+    if item == "P1":
+        counts = block["counts"]
+        return (
+            f"  P44-P1 unverified: host-pin groups — {counts['parts']} part(s), "
+            f"{counts['segments']} segment(s), flags "
+            f"{_draw_p44_flag_text(counts['flagsByNet'])}; counts cannot prove a "
+            "functional group"
+        )
+    if item == "P2":
+        counts = block["counts"]
+        return (
+            f"  P44-P2 unverified: flag clusters — flags "
+            f"{_draw_p44_flag_text(counts['flagsByNet'])}, "
+            f"{len(counts['labelledPartsByNet'])} labelled net(s); counts cannot "
+            "prove co-membership"
+        )
+    if item == "P3":
+        rows = block["segments"]
+        worst = block["maxExcess"]
+        excess_text = "no segment" if worst is None else (
+            f"{worst['excess']:g} ({worst['net']} segment {worst['index']})"
+        )
+        return (
+            f"  P44-P3 unverified: {len(rows)} segment(s), path "
+            f"{sum(row['path'] for row in rows):g}, direct "
+            f"{sum(row['direct'] for row in rows):g}, max excess {excess_text}; "
+            "a necessary detour is not a gratuitous one"
+        )
+    return (
+        f"  P44-P4 unverified: origin span "
+        f"[{block['span'][0]:g}, {block['span'][1]:g}] over {block['parts']} part(s); "
+        "diagnostic, not a threshold"
+    )
+
+
+def _draw_delivery_lines(delivery: dict) -> list[str]:
+    """The console block: ``delivery: UNVERIFIED`` plus ``P44-P1`` … ``P44-P4``.
+
+    A reading that is absent is printed as absent rather than dropped, so the
+    four lines are always stated and "one of the four is missing" can never read
+    as a complete checklist (hole568 D-6).
+    """
+    p44 = delivery["p44"]
+    lines = [
+        f"  delivery: UNVERIFIED — route {delivery['route']}, visual review "
+        f"{delivery['visualReview']} ({delivery['scope']} candidate "
+        f"{delivery['candidate']}; compile ok is not an acceptance)",
+    ]
+    for item in _DRAW_P44_ITEMS:
+        block = p44.get(item)
+        if block is None:
+            lines.append(
+                f"  P44-{item} missing: no reading is stated — the delivery stays "
+                "unverified and omission cannot complete it"
+            )
+        else:
+            lines.append(_draw_p44_line(item, block))
+    return lines
+
+
 def _cmd_draw_compile(args: argparse.Namespace) -> int:
     """``draw compile``: the offline half of 054, with pictures.
 
@@ -12217,6 +12636,14 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
     path does not read the contract yet (095 A4 landed on the single-module
     compiler); ``--intent`` given there says so instead of being ignored.
     """
+    try:
+        # 569-G-02/05: both output flags are asked before either path runs, so a
+        # target this run cannot write is refused by name instead of crashing
+        # after the candidates (or the report) had already landed.
+        _draw_output_checks(args, "draw compile", plan=False)
+    except _DrawInputError as exc:
+        print(f"boardwise draw compile: {exc}", file=sys.stderr)
+        return 5
     if _draw_is_page(args):
         _warn_page_intent(args, "draw compile")
         return _cmd_draw_compile_page(args)
@@ -12247,6 +12674,14 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
         print(line)
     for note in result.notes:
         print(f"  note: {note}")
+    delivery = None
+    if result.ok and result.ranked:
+        # 592: the best-ranked candidate is the one a delivery would use, so its
+        # P44 readings are the ones the console states and the JSON carries.
+        delivery = _draw_delivery(result.ranked[0].plan, scope="single-module")
+    if delivery is not None:
+        for line in _draw_delivery_lines(delivery):
+            print(line)
     written = _write_draw_previews(args, result, profiles, page_box)
     for path in written:
         print(f"  wrote {path}")
@@ -12269,6 +12704,8 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
                     "key": item.describe_key(),
                     "metrics": dict(item.metrics),
                     "geometrySha256": item.plan.geometry_sha256(),
+                    # 590: the seal of exactly the picture this candidate states.
+                    "provenanceSha256": item.plan.provenance_sha256(),
                     "verdict": item.plan.evidence.verdict,
                 }
                 for index, item in enumerate(result.ranked)
@@ -12288,8 +12725,24 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
         }
         if recovery is not None:
             # Only a zero-candidate compile carries it: a successful compile's
-            # payload keeps the exact shape it had.
+            # payload keeps the exact shape it had, plus the route it now states
+            # (590) — a failure is a manual route, never an automatic drawing.
             payload["recovery"] = recovery
+        else:
+            from .core.layoutplan import PROVENANCE_DOMAIN
+
+            payload.update(_draw_automatic_provenance(
+                "single-module",
+                PROVENANCE_DOMAIN,
+                [
+                    {"index": index,
+                     "provenanceSha256": item.plan.provenance_sha256()}
+                    for index, item in enumerate(result.ranked)
+                ],
+            ))
+            # 592: additively only — the candidate, its metrics and its seals keep
+            # their exact shape; ``ok`` above stays the compile's own answer.
+            payload["delivery"] = delivery
         Path(args.json_path).write_text(
             _json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -12479,6 +12932,14 @@ def _cmd_draw_plan(args: argparse.Namespace) -> int:
     """
     import asyncio
 
+    try:
+        # 569-G-05/06: `--out` is a file here (the plan) and a directory on
+        # `draw compile`; both flags are asked before the compile, so a refused
+        # target writes neither the plan nor its page document.
+        _draw_output_checks(args, "draw plan", plan=True)
+    except _DrawInputError as exc:
+        print(f"boardwise draw plan: {exc}", file=sys.stderr)
+        return 5
     if getattr(args, "layout", None) or _draw_is_page(args):
         _warn_page_intent(args, "draw plan")
         return _cmd_draw_plan_page(args)
@@ -13570,7 +14031,7 @@ async def _draw_apply_flow(
             if not _draw_geometry_readable(geometry):
                 unreadable.append(row)
                 continue
-            if not _census_is_not_empty(drawapply.canvas_census(geometry)):
+            if not _census_is_not_empty(drawapply.canvas_census(geometry), geometry):
                 empty_pages.append(row)
 
         if empty_pages and args.new_page:
@@ -13789,6 +14250,7 @@ async def _draw_apply_flow(
         return done(3 if last["unknown"] else 4, "unknown" if last["unknown"] else "refused",
                     "guard_unreadable")
     census_before = drawapply.canvas_census(geometry) if isinstance(geometry, dict) else None
+    drawing_counts = drawapply.drawing_section_counts(geometry)
     if census_before is not None:
         report["page"]["censusBefore"] = {
             "components": census_before.components,
@@ -13797,15 +14259,31 @@ async def _draw_apply_flow(
             "netlabelCount": census_before.netlabel_count,
             "unnumberedCount": census_before.unnumbered_count,
             "pinCount": census_before.pin_count,
+            # 566-A-2: the drawing primitives are content too, and a census that
+            # printed six zeroes beside "page_not_empty" would be the reader told
+            # the guard looked at less than it did.
+            "textCount": drawing_counts["texts"],
+            "busCount": drawing_counts["buses"],
+            "circleCount": drawing_counts["circles"],
+            "rectangleCount": drawing_counts["rectangles"],
+            "arcCount": drawing_counts["arcs"],
+            "polygonCount": drawing_counts["polygons"],
             "digest": census_before.digest,
         }
-    if report["page"]["created"]:
-        if census_before is not None and _census_is_not_empty(census_before):
+    if report["page"]["created"] or report["page"]["reused"]:
+        # 566-A-3: the scan's own read is not the only proof that matters — a page
+        # proven empty there can have gained a primitive by the time the guards run
+        # (the editor's canvas, a hand, another window), and the reuse branch used
+        # to leave `created` False, so this guard never ran for it. Both legs ask
+        # the same whole-page judgement (electrical counters *and* the six drawing
+        # sections), so "provably empty" and "still empty" cannot disagree.
+        if census_before is not None and _census_is_not_empty(census_before, geometry):
+            ran = "created" if report["page"]["created"] else "is reusing"
             notes.append(
-                "the page this run just created is not empty "
-                f"({drawapply.census_phrase(census_before)}) — a page a drawing is "
-                "landed on has to be one the plan described, and this one was not; "
-                "nothing was written"
+                f"the page this run {ran} is not empty "
+                f"({drawapply.page_phrase(census_before, geometry)}) — a page a "
+                "drawing is landed on has to be one the plan described, and this "
+                "one was not; nothing was written"
             )
             return done(4, "refused", "page_not_empty")
     elif plan.change.draw_baseline.digest or args.expect_census:
@@ -15023,7 +15501,17 @@ async def _draw_apply_flow(
         # point list. The counts above cannot see a moved part or a wire the host
         # merged with one of ours (pit 32), and "既有图元零改动" is the claim.
         items_before = drawapply.census_items(geometry)
-        changed = drawapply.census_changes(items_before, drawapply.census_items(verify))
+        items_after = drawapply.census_items(verify)
+        # 573 (567-E-2): the host merges a planned wire into existing copper of
+        # the same net when the two touch and are collinear (pit 32), which makes
+        # the existing primitive's point list longer. That is not "somebody
+        # edited an existing primitive" — but it is only exempted when
+        # `host_merges` can prove it item by item, and it is reported below.
+        host_merges = drawapply.host_merges(plan, items_before, items_after)
+        changed = drawapply.census_changes(
+            items_before, items_after,
+            ignore_ids=[row["id"] for row in host_merges],
+        )
         diff["outOfScope"] = {
             "items": len(items_before),
             "changed": changed,
@@ -15033,6 +15521,18 @@ async def _draw_apply_flow(
                 "writes — drawapply.census_changes"
             ),
         }
+        if host_merges:
+            diff["outOfScope"]["hostMerges"] = host_merges
+            notes.append(
+                "宿主把我方计划线并入落图前已在页上的同网共线铜皮（pit 32），"
+                "该既有图元因此不再逐点不变 —— 这是合法合并，逐项披露："
+                + "；".join(
+                    f"{row['id']}（{row['net']}，{row['before']} → {row['after']}）"
+                    for row in host_merges
+                )
+                + "。判据：同网、合并后共线、原线完整包含、且确有计划线并入并延伸"
+                "（drawapply.host_merges）"
+            )
         if changed:
             notes.append(
                 "范围外图元被改动（落图前已在页上的图元逐项对比）："
@@ -15346,6 +15846,7 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
     page, 5 when the page compiler refused or an input cannot be read — the same
     two answers the single-module path gives.
     """
+    from .core import pageframe
     from .engines import pagecompiler
 
     try:
@@ -15363,8 +15864,16 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 5
+    # S-01: a page has a sheet, and a sheet's title block is a keep-out. Derived
+    # here from the stated page box with the same `core.pageframe` call the island
+    # path and the landing stage use, then handed to the one keep-out entrance the
+    # page compiler has (``PageCompileBudget.keepouts``) with the rigid-body move
+    # on — otherwise an ``ok=True`` page packs the bottom row into the table
+    # (H-567F-1: 5 and 16 drawn boxes inside it at 1170x600).
+    title_keepouts = pageframe.title_block_keepouts(page_box)
     result = pagecompiler.compile_page(
-        circuit, presentation, profiles, _draw_page_budget(page_box)
+        circuit, presentation, profiles,
+        _draw_page_budget(page_box, title_keepouts, relocate=bool(title_keepouts)),
     )
     print(
         f"boardwise draw compile: page of {len(presentation.modules)} module(s) — "
@@ -15387,7 +15896,15 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
         )
     for note in result.notes:
         print(f"  note: {note}")
-    written = _write_page_previews(args, result, profiles, page_box)
+    delivery = None
+    if result.ok and result.ranked:
+        # 592: the page's merged plan is what a delivery would apply, so the same
+        # four readings the single-module path states are stated for it.
+        delivery = _draw_delivery(result.ranked[0].page.plan, scope="page")
+    if delivery is not None:
+        for line in _draw_delivery_lines(delivery):
+            print(line)
+    written = _write_page_previews(args, result, profiles, page_box, title_keepouts)
     for path in written:
         print(f"  wrote {path}")
     recovery = None if result.ok else _draw_zero_candidate_recovery("page")
@@ -15403,6 +15920,10 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
                     "metrics": dict(item.metrics),
                     "geometrySha256": item.page.page_geometry_sha256(),
                     "planGeometrySha256": item.page.plan.geometry_sha256(),
+                    # 590: the page's own seal — a module frame moved after the
+                    # compile would leave this stale even though the merged plan's
+                    # digest stood still.
+                    "provenanceSha256": item.page.page_provenance_sha256(),
                     "verdict": item.page.verdict,
                     "modules": [
                         {
@@ -15447,8 +15968,23 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
         }
         if recovery is not None:
             # Same key, same meaning as the single-module path; a successful page
-            # compile keeps the exact payload it had.
+            # compile keeps the exact payload it had, plus the route it states (590).
             payload["recovery"] = recovery
+        else:
+            from .core.pagelayoutplan import PAGE_PROVENANCE_DOMAIN
+
+            payload.update(_draw_automatic_provenance(
+                "page",
+                PAGE_PROVENANCE_DOMAIN,
+                [
+                    {"index": index,
+                     "provenanceSha256": item.page.page_provenance_sha256()}
+                    for index, item in enumerate(result.ranked[: len(result.pages)])
+                ],
+            ))
+            # 592: the page payload gains the same delivery object, same meaning;
+            # the per-page fields above and ``ok`` are untouched.
+            payload["delivery"] = delivery
         Path(args.json_path).write_text(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -15710,9 +16246,13 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
         # inside the title block).  The census is never dropped; a title block
         # the census already states is not added twice.  Nothing here re-packs,
         # scales or repairs the saved page: a conflict is a refusal.
-        title_keepouts: tuple = ()
-        if saved_page is not None:
-            title_keepouts = pageframe.title_block_keepouts(saved_page.page_box)
+        #
+        # 569: the same derivation is a page's, not a saved page's — a fresh page
+        # compile has a sheet too, and the reservation is what `draw apply` reads
+        # back off the plan.  So it is derived for both routes here, added to the
+        # census keep-outs the compiler is handed (never in place of them), and
+        # recorded in the plan's notes by both routes below.
+        title_keepouts: tuple = pageframe.title_block_keepouts(page_box)
         preflight_boxes = list(keep_boxes)
         preflight_labels = list(keep_labels)
         for box in title_keepouts:
@@ -15723,14 +16263,16 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
         if saved_page is None:
             result = pagecompiler.compile_page(
                 circuit, presentation, profiles,
-                _draw_page_budget(page_box, keep_boxes, relocate=bool(keep_boxes)),
+                _draw_page_budget(
+                    page_box, preflight_boxes, relocate=bool(preflight_boxes),
+                ),
             )
             if not result.ok:
                 return refuse(
                     "compile_refused",
                     "the page compiler refused this page; nothing to plan",
                     [
-                        _draw_keepout_names(line, keep_labels)
+                        _draw_keepout_names(line, preflight_labels)
                         for line in result.render_failures().splitlines()
                     ],
                 )
@@ -15750,11 +16292,15 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
             # silently skipped the title-block guard (`_draw_plan_is_island_page`
             # was False).  The marker and the note use the one spelling the
             # landing stage already reads; no second marker is invented.
-            saved_page_notes: list[str] = []
-            if saved_page is not None:
-                saved_page_notes.append(islandlayout.ISLAND_PAGE_KIND)
-                if title_keepouts:
-                    saved_page_notes.append(pageframe.keep_out_note(page_box, title_keepouts))
+            #
+            # 569: the same two lines belong to a **fresh** page plan.  The marker
+            # was written only for `--layout` pages, so a plan compiled from the
+            # presentation directly reached `draw apply` unmarked and the S-01 leg
+            # was skipped whole (565-S3-1).  Both routes are page plans; both say
+            # so, and both carry the sheet they were packed for.
+            page_notes: list[str] = [islandlayout.ISLAND_PAGE_KIND]
+            if title_keepouts:
+                page_notes.append(pageframe.keep_out_note(page_box, title_keepouts))
             plan = _draw_plan_from_page(
                 page, circuit, presentation, profiles,
                 candidate=args.candidate, lcsc=lcsc, values=values,
@@ -15768,7 +16314,7 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
                     + f"({page.page_geometry_sha256()[:12]}…)",
                     f"the designator pool is {report['poolSource'] or 'empty (offline)'}",
                     *_draw_page_notes(page, [] if saved_page is not None else keep_labels, keep_notes),
-                    *saved_page_notes,
+                    *page_notes,
                 ],
                 keep_names=bool(getattr(args, "keep_names", False)),
             )
@@ -16643,6 +17189,103 @@ def _print_proposal(proposal: object, out_path: str | None) -> None:
         print("  draft:")
 
 
+def _draw_lint_snapshot_problem(snapshot: Any) -> str | None:
+    """Why a replayed ``sch.geometry`` dump cannot be judged; ``None`` if it can.
+
+    569G-07: the replay path used to take "the file parsed" for "there is a page
+    here". ``{}``, ``{"primitives": "notalist"}``, string coordinates and NaN
+    coordinates all printed ``0 error / 0 warn / 0 info`` and exited 0 — a clean
+    bill for a page nothing inspected. The shape is checked here, once, before
+    any predicate runs: a dump that is not an object, whose primitive containers
+    are not lists, whose entries/states are not objects, or whose coordinates
+    are not finite numbers is exit 2 with a named reason. It must also hold at
+    least one thing to inspect (a component, a wire point or a sheet frame) —
+    an empty model is not a page. Optional sections an older capture never
+    wrote (``bboxes``, ``meta``, ``pins``, ``netlabels``) stay optional.
+    """
+    import math
+
+    if not isinstance(snapshot, dict):
+        return (
+            "the snapshot's root is not a JSON object (a `sch.geometry` dump is "
+            "an object with components/wires)"
+        )
+    for key in ("components", "wires", "pins", "netlabels"):
+        value = snapshot.get(key)
+        if value is not None and not isinstance(value, list):
+            return f"{key} is not a list (got {type(value).__name__})"
+    for key in ("bboxes", "meta"):
+        value = snapshot.get(key)
+        if value is not None and not isinstance(value, dict):
+            return f"{key} is not an object (got {type(value).__name__})"
+
+    def finite(value: Any) -> bool:
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+        )
+
+    geometry = False
+    for key in ("components", "wires"):
+        for index, entry in enumerate(snapshot.get(key) or []):
+            if not isinstance(entry, dict):
+                return f"{key}[{index}] is not an object"
+            state = entry.get("state")
+            if state is not None and not isinstance(state, dict):
+                return f"{key}[{index}].state is not an object"
+            state = state or {}
+            if key == "components":
+                geometry = True
+                for field in ("X", "Y", "Rotation"):
+                    if field in state and not finite(state[field]):
+                        return (
+                            f"components[{index}] {field}={state[field]!r} is not a "
+                            "finite number"
+                        )
+            else:
+                line = state.get("Line")
+                if line is None:
+                    continue
+                if not isinstance(line, list):
+                    return f"wires[{index}].state.Line is not a list"
+                for point in line:
+                    if not finite(point):
+                        return (
+                            f"wires[{index}].state.Line holds {point!r}, which is "
+                            "not a finite number"
+                        )
+                if len(line) >= 2:
+                    geometry = True
+    for key in ("pins", "netlabels"):
+        for index, entry in enumerate(snapshot.get(key) or []):
+            if not isinstance(entry, dict):
+                return f"{key}[{index}] is not an object"
+    for name, box in (snapshot.get("bboxes") or {}).items():
+        if isinstance(box, dict):
+            for field in ("minX", "minY", "maxX", "maxY"):
+                if not finite(box.get(field)):
+                    return (
+                        f"bboxes[{name!r}] {field}={box.get(field)!r} is not a "
+                        "finite number"
+                    )
+        elif isinstance(box, (list, tuple)) and len(box) == 4:
+            if not all(finite(value) for value in box):
+                return f"bboxes[{name!r}] holds a coordinate that is not a finite number"
+        else:
+            return (
+                f"bboxes[{name!r}] is not a box (expected a 4-number list or a "
+                "{minX,minY,maxX,maxY} object)"
+            )
+        geometry = True
+    if not geometry:
+        return (
+            "the snapshot has no geometry to inspect: no component, no wire point "
+            "and no sheet frame — an empty model is not a page"
+        )
+    return None
+
+
 def _draw_lint_body_boxes(raw: Any) -> dict[str, tuple[float, float, float, float]]:
     """primitiveId → measured page body box, from either captured form.
 
@@ -16651,32 +17294,83 @@ def _draw_lint_body_boxes(raw: Any) -> dict[str, tuple[float, float, float, floa
     is why a captured ``bboxes`` probe never reached L3/L4). Both shapes are
     read here: the list, and the ``{"minX": …, "minY": …, "maxX": …, "maxY": …}``
     object the `sch.geometry --params {"bboxIds": …}` probe actually prints.
+
+    565-S6-H3: the probe's answer is the **wrapped** ``{"bboxes": {…}, "meta":
+    …}`` document, and the file used to be read as one flat mapping — so the
+    single key ``bboxes`` had no box and the whole file became 0 boxes with no
+    note (136 ERROR / exit 1 turned into 0 ERROR / exit 0 on the same page).
+    The wrapper is unwrapped here. Every box that cannot be read is refused **by
+    name** (non-object, len ≠ 4, missing key, non-number/bool, NaN/Inf, inverted
+    corner) instead of being silently dropped: "nothing measured" must never
+    read as "nothing overlaps". ``Sheet`` keeps its own tolerant reader for
+    snapshot-shaped data; this is the CLI's gate for an explicit ``--bodies``.
     """
+    import math
+
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "bodies must be a JSON object (primitiveId → box, or "
+            '{"bboxes": {primitiveId: box}})'
+        )
+    table = raw
+    if "bboxes" in raw:
+        table = raw["bboxes"]
+        if not isinstance(table, dict):
+            raise ValueError("bboxes is not an object of primitiveId → box")
+
+    def number(primitive: str, field: str, value: Any) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"{primitive!r}: {field}={value!r} is not a number"
+            )
+        out = float(value)
+        if not math.isfinite(out):
+            raise ValueError(f"{primitive!r}: {field}={value!r} is not finite")
+        return out
+
     out: dict[str, tuple[float, float, float, float]] = {}
-    for key, value in (raw or {}).items() if isinstance(raw, dict) else ():
-        box: tuple[float, float, float, float] | None = None
-        if isinstance(value, (list, tuple)) and len(value) == 4:
-            try:
-                box = tuple(float(v) for v in value)  # type: ignore[assignment]
-            except (TypeError, ValueError):
-                box = None
-        elif isinstance(value, dict):
-            try:
-                box = (
-                    float(value["minX"]),
-                    float(value["minY"]),
-                    float(value["maxX"]),
-                    float(value["maxY"]),
+    for key, value in table.items():
+        primitive = str(key)
+        if isinstance(value, dict):
+            missing = [
+                field for field in ("minX", "minY", "maxX", "maxY")
+                if field not in value
+            ]
+            if missing:
+                raise ValueError(
+                    f"{primitive!r}: box is missing {', '.join(missing)}"
                 )
-            except (KeyError, TypeError, ValueError):
-                box = None
-        if box is not None:
-            out[str(key)] = box
+            box = tuple(
+                number(primitive, field, value[field])
+                for field in ("minX", "minY", "maxX", "maxY")
+            )
+        elif isinstance(value, (list, tuple)):
+            if len(value) != 4:
+                raise ValueError(
+                    f"{primitive!r}: box has {len(value)} value(s), expected 4 "
+                    "([minX, minY, maxX, maxY])"
+                )
+            box = tuple(
+                number(primitive, f"[{index}]", value[index])
+                for index in range(4)
+            )
+        else:
+            raise ValueError(
+                f"{primitive!r}: box is a {type(value).__name__}, expected a "
+                "4-number list or a {minX,minY,maxX,maxY} object"
+            )
+        if box[2] < box[0] or box[3] < box[1]:
+            raise ValueError(
+                f"{primitive!r}: box is inverted ({box[0]}, {box[1]}, "
+                f"{box[2]}, {box[3]}) — min ≤ max is required on both axes"
+            )
+        out[primitive] = box  # type: ignore[assignment]
     return out
 
 
 def _cmd_draw_lint(args: argparse.Namespace) -> int:
-    """`draw lint --page P1` (task 111): eleven read-only geometric predicates.
+    """`draw lint --page P1` (task 111): 19 read-only readability predicates
+    (16 geometric + 3 that run only when a netlist is handed to the run).
 
     Two data paths: live (doc.open to focus the page, then one `sch.geometry`
     and one `export.render format=svg` — reads only, and the render is a
@@ -16702,6 +17396,7 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
     snapshot: dict | None = None
     render_svg: str | None = None
     bodies: dict[str, tuple] = {}
+    bodies_provided = False
     notes: list[str] = []
 
     if args.snapshot:
@@ -16716,6 +17411,14 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
             snapshot = json.loads(Path(args.snapshot).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             print(f"boardwise draw lint: {args.snapshot}: {exc}", file=sys.stderr)
+            return 2
+        # 569G-07: "parsed" is not "a page". A dump whose root/containers/entries
+        # are the wrong shape, whose coordinates are strings/NaN/Inf, or that
+        # carries nothing to inspect is exit 2 with the reason — never the
+        # `0 error / 0 warn / 0 info` clean report a `{}` used to earn.
+        problem = _draw_lint_snapshot_problem(snapshot)
+        if problem is not None:
+            print(f"boardwise draw lint: {args.snapshot}: {problem}", file=sys.stderr)
             return 2
         if args.render:
             try:
@@ -16735,6 +17438,7 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
             except (OSError, ValueError) as exc:
                 print(f"boardwise draw lint: {args.bodies}: {exc}", file=sys.stderr)
                 return 2
+            bodies_provided = True
         page_label = args.snapshot
     else:
         BridgeClient, BridgeError, port, token = _open_cli(args)
@@ -16955,6 +17659,37 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
             "called clean"
         )
 
+    # 565-S2-H1/H7, completed by 593: name the predicates this run could not run
+    # over the whole page. A family that never ran (no netlist) or ran over only
+    # part of the page (bodies measured fewer parts than the page holds) is not
+    # a pass — the sentence and the JSON both say so instead of 「reads clean」.
+    skipped: list[str] = []
+    if netlist is None:
+        skipped.extend(drawlint.NETLIST_PREDICATES)
+    coverage = drawlint.Sheet(snapshot, bodies=bodies or None)
+    measured_parts = len(coverage.measured_bodies())
+    total_parts = len(coverage.parts)
+    bodies_stats = {
+        "provided": bodies_provided,
+        "count": len(bodies),
+        "measured": measured_parts,
+        "parts": total_parts,
+    }
+    if total_parts >= 2 and measured_parts < total_parts:
+        skipped.append("L11-part-overlap")
+        if measured_parts == 0:
+            notes.append(
+                f"no measured body boxes covered this page's {total_parts} part(s) "
+                f"(measured 0 of {total_parts}) — L11-part-overlap did NOT run, so "
+                "an empty overlap family is not a pass"
+            )
+        else:
+            notes.append(
+                f"measured body boxes cover {measured_parts} of {total_parts} "
+                "part(s) — L11-part-overlap only checked the measured ones, so the "
+                "unmeasured parts were not checked for overlap"
+            )
+
     findings = drawlint.run_lint(
         snapshot, render_svg, bodies=bodies or None, netlist=netlist
     )
@@ -16971,7 +17706,11 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
           f"{counts['WARN']} warn / {counts['INFO']} info")
     for note in notes:
         print(f"  note: {note}")
-    print(drawlint.render_report(findings, text_readable=text_readable))
+    print(
+        drawlint.render_report(
+            findings, text_readable=text_readable, skipped=skipped
+        )
+    )
 
     if args.json_path:
         payload = {
@@ -16981,6 +17720,8 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
             "counts": counts,
             "predicates": by_predicate,
             "netlist": netlist_stats,
+            "skipped": skipped,
+            "bodies": bodies_stats,
             "exitCode": 1 if counts["ERROR"] else 0,
             "textReadable": text_readable,
             "notes": notes,
@@ -17321,17 +18062,38 @@ def _cmd_draw_v4_facts(args: argparse.Namespace) -> int:
 
 def _cmd_draw_move_propose(args: argparse.Namespace) -> int:
     """`draw move-propose`: semantic input -> an agent-adjusted work order."""
+    from .core.presentationspec import PresentationSpec
     from .engines import agentadjusted
 
     try:
         evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
         if not isinstance(evidence, dict):
             raise ValueError("the evidence document must be a JSON object")
+        presentation = None
+        presentation_path = getattr(args, "presentation", "") or ""
+        if presentation_path:
+            try:
+                presentation_text = Path(presentation_path).read_text(encoding="utf-8")
+            except OSError as exc:
+                print(
+                    f"draw move-propose: cannot read the presentation: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
+            try:
+                presentation = PresentationSpec.from_dict(json.loads(presentation_text))
+            except json.JSONDecodeError as exc:
+                print(
+                    f"draw move-propose: invalid presentation JSON: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
         work = agentadjusted.propose_agent_adjusted_move(
             evidence,
             [item.strip() for item in args.designators.split(",") if item.strip()],
             float(args.dx), float(args.dy), args.reason,
             strategy=getattr(args, "strategy", agentadjusted.STRATEGY_DIRECT),
+            presentation=presentation,
         )
     except json.JSONDecodeError as exc:
         print(f"draw move-propose: invalid evidence JSON: {exc}", file=sys.stderr)
@@ -17342,6 +18104,12 @@ def _cmd_draw_move_propose(args: argparse.Namespace) -> int:
     except (AttributeError, TypeError, ValueError) as exc:
         print(f"draw move-propose: {exc}", file=sys.stderr)
         return 5
+    if args.out_path:
+        # 591: when the order was saved, the command it names can be run as it
+        # stands — so `edit plan --move` can check it against the very file the
+        # caller holds. An order printed to stdout has no file to point at, and
+        # the engine's default command keeps exactly the argv it always had.
+        work["nextCommand"].extend(["--work-order", str(args.out_path)])
     payload = json.dumps(work, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.out_path:
         Path(args.out_path).write_text(payload, encoding="utf-8")
@@ -25087,7 +25855,8 @@ def _cmd_edit_plan(args: argparse.Namespace) -> int:
       the live export (the baseline findings), because "insert an RC here" without
       looking at the board is the same guess.
 
-    Exit codes: 0 plan built; 2 the snapshot cannot be read; 5 the plan cannot
+    Exit codes: 0 plan built; 2 the snapshot cannot be read, or no way in was
+    named at all (no ``--file`` / ``--report`` / ``--insert`` / ``--move``); 5 the plan cannot
     be built from what was asked — an unknown rule id, a rule this build cannot
     repair, no violation for that designator, an ambiguous designator, no
     verified recipe, an exhausted landing ladder, a net with no connection
@@ -25114,6 +25883,17 @@ def _cmd_edit_plan(args: argparse.Namespace) -> int:
         return 5
     if getattr(args, "move", False):
         return _cmd_edit_plan_move(args)
+    if str(getattr(args, "work_order", "") or "").strip():
+        # `--work-order` is the move path's input (591): the other ways in build
+        # their plan from a finding or a template and would silently ignore it
+        # (`--pin`'s rule, 035 四轮).
+        print(
+            "boardwise edit plan: --work-order names the agent-adjusted order a "
+            "`--move` plan is built from — the --file / --report / --insert paths "
+            "build their plan from a finding or a template, so pass --move to use it",
+            file=sys.stderr,
+        )
+        return 5
     if getattr(args, "insert", None):
         return _cmd_edit_plan_insert(args)
     if getattr(args, "report", None):
@@ -25136,6 +25916,24 @@ def _cmd_edit_plan(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 5
+    if not (
+        getattr(args, "move", False)
+        or getattr(args, "insert", None)
+        or getattr(args, "report", None)
+        or getattr(args, "file", None)
+    ):
+        # Every flag is optional at the parser, so the bare command used to fall
+        # into the value path and die in ``Path(None)`` — a TypeError traceback
+        # under a contract that only declares 0/2/3/4/5 (568-B-01). "Nothing to
+        # plan from" is a usage refusal, and it comes after the per-flag guards
+        # above so their codes stay what they were.
+        print(
+            "boardwise edit plan: nothing to plan from — pass --file (re-run a rule "
+            "over a snapshot), --report (repair a checkup finding), --insert "
+            "(a template) or --move (a block delta)",
+            file=sys.stderr,
+        )
+        return 2
     return _cmd_edit_plan_value(args)
 
 
@@ -25609,6 +26407,116 @@ def _grade_new_findings(
     return verdict["blocking"]
 
 
+def _move_work_order(path: str, names: list[str], dx: float, dy: float) -> dict[str, Any]:
+    """Read the agent-adjusted work order a move plan is built from (591).
+
+    The order is the document `draw move-propose` writes; `--move` still takes
+    the group and the delta from the caller, so this is a **declaration check**,
+    not a second way to say what to do: the order must say the same group (same
+    uppercase rule, item by item) and the same delta the command does, or one of
+    the two is about a change nobody asked for.
+
+    Everything is judged here, before a bridge is opened, so a bad order costs a
+    refused exit rather than a live read. `mode`/`status` are read as the
+    proposal's own words: `status=proposed` is the only status this contract
+    writes, and neither field makes the move true — the live move-block guards
+    remain the only judge.
+    """
+    from .engines import agentadjusted
+
+    source = Path(path)
+    try:
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"--work-order {path} is not UTF-8 ({exc})") from exc
+    except OSError as exc:
+        raise ValueError(f"--work-order {path} cannot be read ({exc})") from exc
+    try:
+        work = json.loads(text)
+    except ValueError as exc:
+        raise ValueError(f"--work-order {path} is not JSON ({exc})") from exc
+    if not isinstance(work, dict):
+        raise ValueError(
+            f"--work-order {path} is a JSON {type(work).__name__}, not an object — "
+            "a work order is the document `draw move-propose` writes"
+        )
+    schema = work.get("schema")
+    if schema != agentadjusted.SCHEMA:
+        raise ValueError(
+            f"--work-order {path}: schema is {schema!r}; expected "
+            f"{agentadjusted.SCHEMA!r} (the document `draw move-propose` writes)"
+        )
+    mode = work.get("mode")
+    if mode != "agent-adjusted":
+        raise ValueError(
+            f"--work-order {path}: mode is {mode!r}; expected 'agent-adjusted' — "
+            "only an agent-adjusted proposal names a move this plan may follow"
+        )
+    status = work.get("status")
+    if status != "proposed":
+        raise ValueError(
+            f"--work-order {path}: status is {status!r}; expected 'proposed' — "
+            "a proposal is the only status a work order carries, and a live "
+            "plan has not been judged by the move-block guards yet"
+        )
+    declared = work.get("designators")
+    if not isinstance(declared, list):
+        raise ValueError(
+            f"--work-order {path}: designators must be a list of designators, "
+            f"got {declared!r}"
+        )
+    ordered = [str(item).strip().upper() for item in declared if str(item).strip()]
+    if ordered != names:
+        raise ValueError(
+            f"--work-order {path} names {', '.join(ordered) or '(no part)'}; the "
+            f"command names {', '.join(names)} — the order and the command must be "
+            "the same group, or one of them is about a move nobody asked for"
+        )
+    delta = work.get("delta")
+    if not isinstance(delta, dict):
+        raise ValueError(
+            f"--work-order {path}: delta must be an object with dx and dy, "
+            f"got {delta!r}"
+        )
+    numbers: dict[str, float] = {}
+    for key in ("dx", "dy"):
+        value = delta.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"--work-order {path}: delta.{key} must be a number in canvas "
+                f"units, got {value!r}"
+            )
+        numbers[key] = float(value)
+    if numbers["dx"] != dx or numbers["dy"] != dy:
+        raise ValueError(
+            f"--work-order {path} asks for delta ({numbers['dx']:g}, {numbers['dy']:g}); "
+            f"the command asks for ({dx:g}, {dy:g}) — the two disagree about how far"
+        )
+    if "recompileWithLocks" in work:
+        # hole568 D-4's last unread field: the order's *alternative* route says
+        # `automatic: False` in as many words, because a page-lock recompile is an
+        # alternative somebody chooses, never an automatic step. A plan consumed
+        # as agent-adjusted must not carry a segment that calls itself automatic.
+        section = work["recompileWithLocks"]
+        if not isinstance(section, dict):
+            raise ValueError(
+                f"--work-order {path}: recompileWithLocks is a JSON "
+                f"{type(section).__name__}, not an object — that segment is the "
+                "order's alternative route and must say, in its own `automatic` "
+                "field, that it is not one"
+            )
+        automatic = section.get("automatic")
+        if automatic is not False:
+            raise ValueError(
+                f"--work-order {path}: recompileWithLocks.automatic is "
+                f"{automatic!r}; expected the explicit false — a page-lock "
+                "recompile is an alternative somebody chooses, never an automatic "
+                "step, so an order that calls it automatic (or does not say) "
+                "cannot be consumed as an agent-adjusted proposal"
+            )
+    return work
+
+
 def _cmd_edit_plan_move(args: argparse.Namespace) -> int:
     """``edit plan --move``: a group of parts and a delta -> a ChangePlan (037).
 
@@ -25663,6 +26571,16 @@ def _cmd_edit_plan_move(args: argparse.Namespace) -> int:
             f"the delta ({dx:g}, {dy:g}) is not a multiple of the {moveblock.GRID:g}-unit "
             "grid — 网格歪了线就再也接不上（037 §一）；改成 5 的整数倍再来"
         )
+    # 591: the order is read and judged before any bridge call — a bad order must
+    # cost a refusal, not a live read (and it is a declaration check: the group
+    # and the delta still come from the command line).
+    work_order_path = str(getattr(args, "work_order", "") or "").strip()
+    if work_order_path:
+        try:
+            _move_work_order(work_order_path, names, dx, dy)
+        except ValueError as exc:
+            return fail(str(exc))
+    route = "agent-adjusted" if work_order_path else ""
 
     BridgeClient, BridgeError, port, token = _open_cli(args)
     notes: list[str] = []
@@ -25792,6 +26710,7 @@ def _cmd_edit_plan_move(args: argparse.Namespace) -> int:
                     notes,
                 ),
             ),
+            route=route,
         )
 
         print(
@@ -25817,6 +26736,11 @@ def _cmd_edit_plan_move(args: argparse.Namespace) -> int:
             f"against)  pageUuid {page or '(none)'}"
         )
         print(f"baseline: {len(plan.change.baseline_findings)} finding(s) — apply refuses to save if the set grows")
+        if route:
+            print(
+                f"route: {route} (work order {work_order_path}) — a proposal's own "
+                "label, not a quality proof: the live guards above are the judge"
+            )
         for note in notes:
             print(f"note: {note}")
         if args.out_path:
@@ -25831,6 +26755,13 @@ def _cmd_edit_plan_move(args: argparse.Namespace) -> int:
                         "command": "plan",
                         "ok": True,
                         "kind": MOVE_BLOCK_KIND,
+                        # 591: only when the plan was built from a work order, so
+                        # the old payload keeps the exact keys it had.
+                        **(
+                            {"route": route, "workOrder": work_order_path}
+                            if route
+                            else {}
+                        ),
                         "designators": names,
                         "delta": {"dx": dx, "dy": dy},
                         "moves": [

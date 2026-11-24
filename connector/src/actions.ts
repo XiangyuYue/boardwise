@@ -5159,10 +5159,19 @@ async function geometryOf(eda: Eda, namespace: string) {
 /**
  * `sch.geometry` — full geometry of the open schematic page.
  *
- * Components, wires, pins and net labels are dumped raw, plus the **measured**
- * bounding boxes of the sheet primitives (`getPrimitivesBBox` — the only way
- * to learn where the drawing frame actually is: the sheet's `getState_*`
- * fields carry an anchor, not an extent, so `Width`/`Height` would otherwise
+ * Components, wires, pins and net labels are the **electrical** dump; the
+ * **drawing** primitives (text, bus, circle, rectangle, arc, polygon) are dumped
+ * beside them, because the draw flow's empty-page proof may only call a page
+ * "provably empty" when *every* namespace answered — a hand-written note or a
+ * frame line is content too (566-A-2). The six drawing namespaces are the ones
+ * the host really exposes; there is no `sch_PrimitiveLine`, and none is invented
+ * here. A namespace whose read fails is reported `available: false` with its
+ * reason — it is never filled in as an empty list the caller cannot tell from a
+ * real reading.
+ *
+ * Also dumped are the **measured** bounding boxes of the sheet primitives
+ * (`getPrimitivesBBox` — the only way to learn where the drawing frame actually
+ * is: the sheet's `getState_*` fields carry an anchor, not an extent, so `Width`/`Height` would otherwise
  * have to be trusted from the file). Callers may pass `bboxIds` to measure
  * more primitives, one `getPrimitivesBBox` call each — the API returns a
  * single union box for a list, so a per-id answer costs a call per id.
@@ -5177,6 +5186,15 @@ export const schGeometry: ActionHandler = async (params, eda) => {
   const wires = await geometryOf(eda, 'sch_PrimitiveWire');
   const pins = await geometryOf(eda, 'sch_PrimitivePin');
   const netlabels = await geometryOf(eda, 'sch_PrimitiveNetLabel');
+  // 566-A-2: the drawing primitives, in the key order the Python side names
+  // (`drawapply.DRAWING_SECTIONS`). Each is a real host namespace; a failed read
+  // is `available: false` with its reason, never a silent empty list.
+  const texts = await geometryOf(eda, 'sch_PrimitiveText');
+  const buses = await geometryOf(eda, 'sch_PrimitiveBus');
+  const circles = await geometryOf(eda, 'sch_PrimitiveCircle');
+  const rectangles = await geometryOf(eda, 'sch_PrimitiveRectangle');
+  const arcs = await geometryOf(eda, 'sch_PrimitiveArc');
+  const polygons = await geometryOf(eda, 'sch_PrimitivePolygon');
 
   const sheetIds: string[] = [];
   for (const item of components.items as Array<Record<string, unknown>>) {
@@ -5216,6 +5234,8 @@ export const schGeometry: ActionHandler = async (params, eda) => {
   for (const [label, part] of [
     ['components', components], ['wires', wires],
     ['pins', pins], ['netlabels', netlabels],
+    ['texts', texts], ['buses', buses], ['circles', circles],
+    ['rectangles', rectangles], ['arcs', arcs], ['polygons', polygons],
   ] as const) {
     if ((part as { reason?: string }).reason) {
       reasons[label] = (part as { reason?: string }).reason as string;
@@ -5227,6 +5247,12 @@ export const schGeometry: ActionHandler = async (params, eda) => {
     wires: wires.items,
     pins: pins.items,
     netlabels: netlabels.items,
+    texts: texts.items,
+    buses: buses.items,
+    circles: circles.items,
+    rectangles: rectangles.items,
+    arcs: arcs.items,
+    polygons: polygons.items,
     bboxes,
     meta: {
       available: {
@@ -5234,6 +5260,12 @@ export const schGeometry: ActionHandler = async (params, eda) => {
         wires: wires.available,
         pins: pins.available,
         netlabels: netlabels.available,
+        texts: texts.available,
+        buses: buses.available,
+        circles: circles.available,
+        rectangles: rectangles.available,
+        arcs: arcs.available,
+        polygons: polygons.available,
         bboxes: bboxAvailable,
       },
       sheets: sheetIds,
@@ -8822,6 +8854,51 @@ export const schModifyPrimitive = makeModifyPrimitive('sch.modify_primitive', tr
 export const pcbModifyPrimitive = makeModifyPrimitive('pcb.modify_primitive', false);
 
 /**
+ * The project's page table, read strictly enough to be *evidence*.
+ *
+ * `readDocItems` folds both "the enumeration threw" and "it answered something
+ * that is not a list" into `[]`, which is right for a listing and wrong for a
+ * read-back: `[]` after a delete would read as "every page is gone", so a host
+ * that answered nothing would be confirmed as having deleted everything. Here
+ * a failure is `error` and an empty **project** is a list of length zero — the
+ * same distinction `doc.rename` draws with `problems`, made explicit because
+ * the delete's success shape is a set comparison.
+ */
+async function readPageTable(
+  eda: Eda,
+): Promise<{ pages: Array<Record<string, unknown>>; error: string | null }> {
+  let value: unknown;
+  try {
+    value = await settle(requireFn(eda, 'dmt_Schematic.getAllSchematicPagesInfo')());
+  } catch (error) {
+    return {
+      pages: [],
+      error: `getAllSchematicPagesInfo() threw: ${String((error as Error)?.message ?? error)}`,
+    };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      pages: [],
+      error: `getAllSchematicPagesInfo() returned ${describeHostAnswer(value)}, not a list`,
+    };
+  }
+  const pages: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const uuid = plainGet(item, 'uuid');
+    if (typeof uuid !== 'string' || !uuid) {
+      return { pages: [], error: 'a page row in the listing carries no uuid' };
+    }
+    if (seen.has(uuid)) {
+      return { pages: [], error: `the listing names page ${uuid} more than once` };
+    }
+    seen.add(uuid);
+    pages.push({ uuid, name: plainGet(item, 'name') });
+  }
+  return { pages, error: null };
+}
+
+/**
  * `doc.delete_page` — remove a schematic page by uuid (012 S4).
  *
  * The cleanup half of the scratch-page flow: `sch.doc.new` creates one, work
@@ -8829,33 +8906,106 @@ export const pcbModifyPrimitive = makeModifyPrimitive('pcb.modify_primitive', fa
  * uuid must be one the project actually lists — an unknown uuid is NOT_FOUND,
  * never a silent no-op — and the host's own `deleteSchematicPage` decides the
  * rest (it refuses the last page of a schematic, measured behaviour).
+ *
+ * `deleteSchematicPage() === true` is a **claim**, not the answer (566-D-3):
+ * a host that answers `true` and deletes nothing, or deletes a different page,
+ * would otherwise be reported as a successful deletion of the page asked for.
+ * So the deletion is read back from the editor's own table, and success means
+ * the table now holds exactly what it held before, minus the one page — which
+ * names "nothing happened" and "something extra happened" as different
+ * failures instead of hiding both behind one boolean. An unreadable or
+ * malformed read-back is a failure too: unconfirmed is not confirmed.
  */
 export const docDeletePage: ActionHandler = async (params, eda) => {
   const uuid = typeof params.pageUuid === 'string' ? params.pageUuid.trim() : '';
   if (!uuid) {
     throw new ActionError('BAD_REQUEST', 'doc.delete_page needs params.pageUuid');
   }
-  const pages = await readDocItems(eda, 'dmt_Schematic.getAllSchematicPagesInfo', []);
-  const page = pages.find((item) => plainGet(item, 'uuid') === uuid);
+  const before = await readPageTable(eda);
+  if (before.error) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `doc.delete_page: the project's page table could not be read (${before.error}), `
+        + `so ${uuid} cannot be identified and nothing was deleted`,
+      { pageUuid: uuid, confirmed: false, readBack: null, readBackError: before.error },
+    );
+  }
+  const page = before.pages.find((item) => item.uuid === uuid);
   if (!page) {
     throw new ActionError(
       'NOT_FOUND',
       `doc.delete_page: ${uuid} is not a page of the current project`,
-      { pageUuid: uuid, knownPages: pages.map((item) => plainGet(item, 'uuid')) },
+      { pageUuid: uuid, knownPages: before.pages.map((item) => item.uuid) },
     );
   }
-  const name = plainGet(page, 'name');
-  const deleted = await settle(
+  const name = typeof page.name === 'string' ? page.name : '';
+  const answer = await settle(
     requireFn(eda, 'dmt_Schematic.deleteSchematicPage')(uuid),
   );
-  if (deleted !== true) {
+  const after = await readPageTable(eda);
+
+  const remaining = after.pages.map((item) => item.uuid);
+  const expected = before.pages.map((item) => item.uuid).filter((known) => known !== uuid);
+  const targetPresent = remaining.includes(uuid);
+  const missing = expected.filter((known) => !remaining.includes(known));
+  const unexpected = remaining.filter((known) => !expected.includes(known));
+  const confirmed = !after.error && !targetPresent && !missing.length && !unexpected.length;
+  const evidence = {
+    pageUuid: uuid,
+    name,
+    call: 'dmt_Schematic.deleteSchematicPage',
+    hostAnswer: describeHostAnswer(answer),
+    confirmed,
+    targetPresent,
+    missing,
+    unexpected,
+    readBack: after.error ? null : { pagePresent: targetPresent, remaining },
+    ...(after.error ? { readBackError: after.error } : {}),
+  };
+
+  if (confirmed) {
+    return {
+      deleted: true,
+      pageUuid: uuid,
+      name,
+      confirmed: true,
+      readBack: { pagePresent: false, remaining },
+    };
+  }
+
+  if (answer !== true) {
     throw new ActionError(
       'CONNECTOR_ERROR',
-      `the editor refused to delete page ${name ?? uuid}`,
-      { pageUuid: uuid },
+      `the editor refused to delete page ${name || uuid}`,
+      evidence,
     );
   }
-  return { deleted: true, pageUuid: uuid, name: typeof name === 'string' ? name : '' };
+  if (after.error) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `deleteSchematicPage(${uuid}) answered true, and the project's page table could not be `
+        + `read back (${after.error}), so the deletion cannot be confirmed`,
+      evidence,
+    );
+  }
+  if (targetPresent) {
+    const also = missing.length
+      ? `, and the table also lost ${JSON.stringify(missing)}`
+      : '';
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `deleteSchematicPage(${uuid}) answered true but page ${name || uuid} is still in the `
+        + `project's page table — the page that was asked for is still there${also}`,
+      evidence,
+    );
+  }
+  throw new ActionError(
+    'CONNECTOR_ERROR',
+    `deleteSchematicPage(${uuid}) answered true, but the page table is not the one before the `
+      + `call minus that page: missing ${JSON.stringify(missing)}, `
+      + `unexpected ${JSON.stringify(unexpected)}`,
+    evidence,
+  );
 };
 
 // --------------------------------------------------------------------------

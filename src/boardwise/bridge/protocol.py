@@ -1353,12 +1353,15 @@ ACTIONS: tuple[Action, ...] = (
         name="sch.geometry",
         summary=(
             "Full geometry of the open schematic page (wires with polylines, "
-            "pins, net labels, components) — the readback fallback when the "
-            "netlist export is unusable."
+            "pins, net labels, components, and the drawing primitives: text, "
+            "bus, circle, rectangle, arc, polygon) — the readback fallback when "
+            "the netlist export is unusable."
         ),
         params=("bboxIds",),
         returns=(
             "{components: [...], wires: [...], pins: [...], netlabels: [...], "
+            "texts: [...], buses: [...], circles: [...], rectangles: [...], "
+            "arcs: [...], polygons: [...], "
             "bboxes: {primitiveId: {minX,minY,maxX,maxY}}, meta: {...}}"
         ),
         params_schema="bboxIds: optional array of primitive ids to measure as well",
@@ -1751,10 +1754,17 @@ ACTIONS: tuple[Action, ...] = (
             "deletion and the human decides. Filed in the `create` tier — the "
             "document-lifecycle gate — for exactly that reason: without "
             "`params.confirm is True` the daemon answers "
-            "`CONFIRMATION_REQUIRED` and forwards nothing."
+            "`CONFIRMATION_REQUIRED` and forwards nothing. **The host's "
+            "`true` is not the answer** (566-D-3): the page table is read "
+            "before and after the call, and `confirmed: true` means the table "
+            "is exactly what it was minus that one page, with "
+            "`readBack: {pagePresent: false, remaining}` as the evidence. An "
+            "answer of `true` that deleted nothing, deleted a different page, "
+            "or came with an unreadable table is a CONNECTOR_ERROR carrying "
+            "`confirmed: false` and the difference."
         ),
         params=("pageUuid", "confirm"),
-        returns="{deleted, pageUuid, name}",
+        returns="{deleted, pageUuid, name, confirmed, readBack: {pagePresent, remaining}}",
         params_schema=(
             "pageUuid: the page to delete; confirm: must be `true` — the "
             "daemon refuses without it (CONFIRMATION_REQUIRED) and consumes "

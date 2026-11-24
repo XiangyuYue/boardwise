@@ -25,10 +25,12 @@ Nothing here touches the network or the editor: this is the offline half, and
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -1770,6 +1772,20 @@ def library_to_json(library: PartLibrary) -> dict[str, Any]:
 #: exact shape ``tests/test_039_parts_toolchain.py`` exercises. The digest costs
 #: 114 µs against the 2491 µs parse it avoids (22x), and has no stale window at
 #: all — "compute once more rather than answer wrong".
+#:
+#: **The memo's value is never handed out** (588 / 569-F-5). Until then it was,
+#: and ``load_parts → .parts.append → save_parts`` therefore edited the memo
+#: itself: a failed save (a read-only shelf on Windows is a real state) left the
+#: next read answering with an entry the file never had — disk=1, memory=2.
+#: Now the memo holds the parsed library and :func:`load_parts` answers with
+#: :func:`_isolated_copy` of it, so a writer's edit cannot reach the cache no
+#: matter which writer it is. The isolation is a copy, not a re-parse: the parse
+#: count (perf-02A's contract, see ``tests/test_perf02a_memoization.py``) is
+#: unchanged at one per digest. Measured on the bundled 109 entries
+#: (``evidence/588/perf_cost.json``): the copy is 0.34 ms, a memo hit 0.59 ms
+#: end to end (digest 0.11 ms + copy), against the 2.00 ms parse it avoids —
+#: still a 3.4x win per read, and a read no longer hands out anything a writer
+#: can edit.
 _PARTS_MEMO: dict[tuple[str, str], PartLibrary] = {}
 
 #: How many shelves the memo keeps. The suite writes a temp shelf per test, so
@@ -1778,17 +1794,54 @@ _PARTS_MEMO: dict[tuple[str, str], PartLibrary] = {}
 PARTS_MEMO_LIMIT = 256
 
 
+def _isolated_entry(part: PartEntry) -> PartEntry:
+    """A copy of a memoised entry a caller may edit without reaching the memo."""
+    clone = copy.copy(part)
+    clone.params = dict(part.params)
+    clone.notes = list(part.notes)
+    # Optional nested records, absent on most entries — ``deepcopy(None)`` is
+    # ``None``, so the entries written before those fields existed stay cheap.
+    clone.category_provenance = copy.deepcopy(part.category_provenance)
+    clone.facts = copy.deepcopy(part.facts)
+    clone.candidate_facts = copy.deepcopy(part.candidate_facts)
+    clone.provenance = copy.copy(part.provenance)
+    clone.provenance.designators = list(part.provenance.designators)
+    return clone
+
+
+def _isolated_copy(library: PartLibrary) -> PartLibrary:
+    """The memo's value as a caller's own object — see :func:`load_parts`.
+
+    Container-level, not ``copy.deepcopy``: the hand-written clone of the 109
+    bundled entries costs 0.34 ms against ``deepcopy``'s 1.36 ms and the 2.05 ms
+    parse it exists to avoid, and ``copy.copy`` keeps ``__post_init__`` (which
+    moves facts behind the candidate gate) from running a second time.
+    ``tests/test_588_parts_cache.py`` walks every mutable field of
+    :class:`PartEntry`, so a future container field is caught there rather than
+    silently shared.
+    """
+    return PartLibrary(
+        parts=[_isolated_entry(part) for part in library.parts],
+        kind=library.kind,
+        version=library.version,
+        sources=list(library.sources),
+        notes=list(library.notes),
+        origins=dict(library.origins),
+    )
+
+
 def load_parts(path: str | Path) -> PartLibrary:
     """Read a part library. A missing file is an empty shelf, not an error.
 
     **Memoised per process** (perf-02A C1) on ``(path, sha256 of the file's
     bytes)`` — the key and why it is a digest rather than a stat are in
-    :data:`_PARTS_MEMO`. The object handed back is therefore **shared**, and
-    the shelf is read-only by convention: the one writer in the code base
-    (``boardwise parts add`` / ``parts select``) appends to the library it then
-    ``save_parts``, and that write changes the very bytes the next key is
-    computed from — so the next ``load_parts`` re-reads the file instead of
-    handing the half-edited object back.
+    :data:`_PARTS_MEMO`. The memo holds the parsed library; the object handed
+    back is **this caller's copy** of it (:func:`_isolated_copy`), so the one
+    writer in the code base (``boardwise parts add`` / ``parts select``) can
+    append to what it was given without the failed-save pollution of 588 /
+    569-F-5. A successful write changes the very bytes the next key is computed
+    from, so the next ``load_parts`` re-reads the file rather than answering
+    from the old digest.
     """
     file = Path(path)
     if not file.is_file():
@@ -1800,7 +1853,7 @@ def load_parts(path: str | Path) -> PartLibrary:
     key = (os.path.normcase(os.path.abspath(file)), hashlib.sha256(raw).hexdigest())
     memoised = _PARTS_MEMO.get(key)
     if memoised is not None:
-        return memoised
+        return _isolated_copy(memoised)
     try:
         document = json.loads(raw.decode("utf-8"))
     except ValueError as exc:
@@ -1813,17 +1866,58 @@ def load_parts(path: str | Path) -> PartLibrary:
         # every library it has ever read.
         _PARTS_MEMO.pop(next(iter(_PARTS_MEMO)))
     _PARTS_MEMO[key] = library
-    return library
+    return _isolated_copy(library)
 
 
 def save_parts(library: PartLibrary, path: str | Path) -> Path:
-    """Write a library as JSON."""
+    """Write a library as JSON — **atomically**, through a sibling temporary.
+
+    The convention the rest of the repository uses for a file a reader may hold
+    (``core/config.py``, ``core/runmanifest.py``, ``core/changeplan.py``): build
+    the document in a uniquely-named ``.<name>.<random>.tmp`` beside the target,
+    then :func:`os.replace` it into place. An interrupted or refused write —
+    a read-only shelf, a full volume, a replace that cannot land — leaves the
+    **previous file exactly as it was**, takes its temporary with it, and raises
+    :class:`PartError` naming the path (the error type every caller of this
+    module already handles).
+
+    The bytes are the ones the previous implementation produced: ``indent=2``,
+    ``ensure_ascii=False``, a trailing newline, and the platform's newline
+    translation (the text-mode temporary keeps CRLF on Windows, which is what
+    the shipped ``blocklib/parts.json`` carries). 588 / 569-F-5 changed *when*
+    the file changes, not what it contains.
+    """
     file = Path(path)
-    file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_text(
-        json.dumps(library_to_json(library), indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        file.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise PartError(f"{file}: cannot create {file.parent}: {exc}") from exc
+    blob = json.dumps(library_to_json(library), indent=2, ensure_ascii=False) + "\n"
+    temporary: str | None = None
+    try:
+        handle = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(file.parent),
+            prefix=f".{file.name}.",
+            suffix=".tmp",
+            delete=False,
+        )
+        temporary = handle.name
+        with handle:
+            handle.write(blob)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, file)
+        temporary = None
+    except OSError as exc:
+        raise PartError(f"{file}: cannot write: {exc}") from exc
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
     return file
 
 

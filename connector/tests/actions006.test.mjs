@@ -101,6 +101,16 @@ function edaHost(stored = {}) {
 
     sch_PrimitivePin: { getAll: async () => [] },
     sch_PrimitiveNetLabel: { getAll: async () => [] },
+    // 570: the drawing primitives are real host namespaces — there is no
+    // `sch_PrimitiveLine`, so none is invented. `sch.geometry` carries them
+    // beside the electrical four: a page is only provably empty when every
+    // namespace answered (566-A-2).
+    sch_PrimitiveText: { getAll: async () => [] },
+    sch_PrimitiveBus: { getAll: async () => [] },
+    sch_PrimitiveCircle: { getAll: async () => [] },
+    sch_PrimitiveRectangle: { getAll: async () => [] },
+    sch_PrimitiveArc: { getAll: async () => [] },
+    sch_PrimitivePolygon: { getAll: async () => [] },
 
     sch_PrimitiveWire: {
       getAll: async () => [],
@@ -362,4 +372,82 @@ test('sch.geometry dumps every namespace with uuids preserved', async (t) => {
   );
   assert.equal(frame.data.meta.available.wires, true);
   assert.equal(frame.data.meta.available.pins, true);
+});
+
+const DRAWING_KEYS = ['texts', 'buses', 'circles', 'rectangles', 'arcs', 'polygons'];
+
+test('sch.geometry carries the six drawing namespaces, additively', async (t) => {
+  // 566-A-2: `sch.geometry` dumped four namespaces, so a page whose only content
+  // was a text or a frame line read as an empty page and was reused. The six
+  // drawing namespaces are dumped beside the electrical four, each with its own
+  // availability; a failed read is named, never filled in as an empty list.
+  const host = edaHost();
+  host.sch_PrimitiveText = {
+    getAll: async () => [primitive('text-1', {
+      getState_Text: () => 'REV A',
+      getState_X: () => 10,
+      getState_Y: () => 20,
+    })],
+  };
+  host.sch_PrimitiveRectangle = {
+    getAll: async () => [primitive('rect-1', { getState_X: () => 0 })],
+  };
+  host.sch_PrimitiveArc = {
+    getAll: async () => { throw new Error('the read broke'); },
+  };
+  withEda(t, host);
+  await connector.activate();
+  await call(host, 'sch.place_wire', { points: [[0, 0], [10, 0]] });
+
+  const frame = await call(host, 'sch.geometry', {});
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  for (const key of DRAWING_KEYS) {
+    assert.ok(Array.isArray(frame.data[key]), `${key} must be an array`);
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(frame.data.meta.available, key),
+      `${key} must report whether it was read: ${JSON.stringify(frame.data.meta)}`,
+    );
+  }
+  assert.equal(frame.data.meta.available.texts, true);
+  assert.equal(frame.data.texts.length, 1);
+  assert.equal(frame.data.texts[0].primitiveId, 'text-1');
+  assert.equal(frame.data.texts[0].state.Text, 'REV A');
+  assert.equal(frame.data.meta.available.rectangles, true);
+  assert.equal(frame.data.rectangles[0].primitiveId, 'rect-1');
+  // One namespace failing costs that namespace only.
+  assert.equal(frame.data.meta.available.arcs, false);
+  assert.deepEqual(frame.data.arcs, []);
+  assert.match(frame.data.meta.reasons.arcs, /the read broke/);
+  assert.equal(frame.data.meta.available.buses, true);
+
+  // The electrical four and the measured-sheet half are unchanged.
+  assert.equal(frame.data.meta.available.components, true);
+  assert.equal(frame.data.meta.available.wires, true);
+  assert.equal(frame.data.meta.available.pins, true);
+  assert.equal(frame.data.meta.available.netlabels, true);
+  assert.ok(Array.isArray(frame.data.wires));
+  assert.deepEqual(frame.data.meta.sheets, []);
+  assert.deepEqual(frame.data.bboxes, {});
+});
+
+test('sch.geometry reports absent drawing namespaces as unavailable', async (t) => {
+  // An older editor without these namespaces must read as "not read", never as
+  // "nothing there": the Python empty-page proof fails closed on exactly that
+  // distinction (`_draw_geometry_readable`).
+  const host = edaHost();
+  for (const key of ['Text', 'Bus', 'Circle', 'Rectangle', 'Arc', 'Polygon']) {
+    delete host[`sch_Primitive${key}`];
+  }
+  withEda(t, host);
+  await connector.activate();
+
+  const frame = await call(host, 'sch.geometry', {});
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  for (const key of DRAWING_KEYS) {
+    assert.equal(frame.data.meta.available[key], false, key);
+    assert.deepEqual(frame.data[key], [], key);
+    assert.ok(frame.data.meta.reasons?.[key], `${key} must name why it is unread`);
+  }
+  assert.equal(frame.data.meta.available.components, true);
+  assert.equal(frame.data.meta.available.netlabels, true);
 });

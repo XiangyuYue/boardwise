@@ -26692,8 +26692,9 @@ def _flag_alternates(
     ``lead[:2]`` equals a legacy candidate's and whose hang is the opposite,
     de-duplicated. No new length, direction or location family enters, and the
     legacy order is unchanged, so every page that never needed the extra rung
-    draws exactly its old bytes. The loop is still the ladder's own finite
-    rung space (64-rung cap).
+    draws exactly its old bytes. The expanded pass is asked on ``native-attr``
+    pages only; every other page returns the legacy list as it stands. The loop
+    is still the ladder's own finite rung space (64-rung cap).
     """
     family = flag_glyph_kind(profile)
 
@@ -26724,10 +26725,11 @@ def _flag_alternates(
         return out
 
     old = walk(True)
-    if ctx.presentation.text_placement != "native-attr" and old:
-        # Legacy pages keep their exact candidate set and ranking. The expanded
-        # opposite-hang pass is native-attr or an empty-legacy rescue, never a
-        # default reorder of an already working ladder.
+    if ctx.presentation.text_placement != "native-attr":
+        # Legacy pages keep their exact candidate set and ranking: the expanded
+        # opposite-hang pass exists for native-attr pages only. It is not a
+        # rescue for an empty ladder either — both passes ask the same first
+        # question, so an empty legacy walk is an empty expanded walk.
         return old
     out = list(old)
     seen = {(item[0], tuple(item[1]), item[2]) for item in out}

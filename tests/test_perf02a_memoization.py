@@ -96,16 +96,23 @@ def parse_counter(monkeypatch):
     return calls
 
 
-def test_a_shelf_is_parsed_once_and_every_reader_gets_the_same_object(
+def test_a_shelf_is_parsed_once_and_every_reader_gets_its_own_copy(
     tmp_path, parse_counter
 ):
-    """The whole point: 296-312 reads inside one ``run_pcb_review`` = one parse."""
+    """The whole point: 296-312 reads inside one ``run_pcb_review`` = one parse.
+
+    588 / 569-F-5: the readers get **equal** libraries, not the one memoised
+    object — a shared object let a writer's ``append`` before a *failed* save
+    pollute every later read in the process. The parse count, which is what
+    this memo exists for, is unchanged.
+    """
     shelf = _shelf(tmp_path / "shelf.json", "ic.one")
     first = load_parts(shelf)
     second = load_parts(shelf)
     third = load_parts(str(shelf))  # same file, spelled differently
     assert parse_counter["n"] == 1
-    assert first is second is third
+    assert first is not second and second is not third
+    assert first == second == third
     assert [p.key for p in first.parts] == ["ic.one"]
 
 

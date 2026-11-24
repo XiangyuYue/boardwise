@@ -1187,7 +1187,14 @@ def check_box(value: Any, where: str, error: type[ValueError] = SymbolProfileErr
 
     ``error`` is the caller's exception: each module raises its own type, and a
     refusal has to arrive as the error the caller's callers catch.
+
+    Coordinates must be finite. NaN used to pass both tests here for the same
+    reason it passed `cli._draw_page_box`: ``nan < x`` is false. There is no
+    page-size cap: this validator also measures text boxes and keep-outs, which
+    are not sheets (the page cap belongs to the page's own entry point).
     """
+    from math import isfinite
+
     if value is None:
         return None
     if (
@@ -1200,6 +1207,11 @@ def check_box(value: Any, where: str, error: type[ValueError] = SymbolProfileErr
             f"{where} must be [minX, minY, maxX, maxY] in canvas units, got {value!r}"
         )
     box = (float(value[0]), float(value[1]), float(value[2]), float(value[3]))
+    if not all(isfinite(item) for item in box):
+        raise error(
+            f"{where} is {value!r} — every coordinate must be finite: a NaN or "
+            "infinite box has no extent, so nothing can be measured against it"
+        )
     if box[2] < box[0] or box[3] < box[1]:
         raise error(
             f"{where} is {value!r} — maxX/maxY are below minX/minY, which is not a box"

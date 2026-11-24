@@ -121,6 +121,7 @@
     "engines/subcircuit.py": "draw",
     "engines/svgpreview.py": "draw",
     "engines/validate_spec.py": "draw",
+    "home.py": "shared",
     "parsers/__init__.py": "shared",
     "parsers/board_source.py": "shared",
     "parsers/enet.py": "shared",

@@ -577,6 +577,41 @@ actual path or grouping evidence. None replaces reading the render; numerical
 agreement alone is not a visual pass. A rejected candidate remains rejected
 until its functional and visual defects are resolved.
 
+#### Delivery status: a compile's `ok` is not an acceptance (592, hole568 D-6)
+
+A successful `draw compile` states two different facts and never merges them.
+The payload's `ok` and the exit code keep their meaning: legal candidates were
+produced. The `delivery` object answers the other question — was the drawing
+*accepted* — and until a person has read the render it is
+`ok: false, status: "unverified", visualReview: "required"`, with `route` taken
+from the plan itself (590), so the compiler's drawing stays distinguishable from
+a replay or a hand adjustment. No code path may flip that status to a pass; a
+pass needs a human reference, and none exists for a fresh candidate.
+
+`delivery.p44` carries the four checks of the table above, each with its own
+`status: "unverified"`, and `delivery.missing` lists none of them:
+
+- **P1** lists the plan's part/segment/label/flag counts together with
+  `countsProveNothing`: a distance does not make a branch a host's branch, and a
+  part count does not make a decoupling pair one group.
+- **P2** lists flags per net and the parts a label names on each net, and says a
+  count cannot prove that the right pins share a cluster.
+- **P3** recomputes, per segment, `path` (the sum of the sub-edges' Manhattan
+  lengths), `direct` (the Manhattan distance between the two endpoints) and
+  `excess = path - direct`, plus a per-net aggregate and the largest excess. A
+  detour around an obstacle is necessary, so excess is a diagnostic: it neither
+  rejects a drawing nor passes one.
+- **P4** states the part origins' two-dimensional span
+  `[maxX - minX, maxY - minY]` (`[0, 0]` for a plan with no parts). P44's
+  265 × 25 is that page's measurement and a threshold for no other page.
+
+The console prints `delivery: UNVERIFIED` and `P44-P1` … `P44-P4`, one line
+each, for the best-ranked candidate; the page path prints the same five lines for
+the page's merged plan and carries the same object in its JSON. A zero-candidate
+compile gains no `delivery` — it keeps its `recovery` and exit 5, because there
+is no drawing to deliver. `tests/test_592_delivery_p44.py` recomputes P3 and P4
+from the written plan independently and pins the printed lines against the JSON.
+
 ## Persistence: the facts about a write (M0-P0d, extended 2026-09-18)
 
 "The write API said ok", "the editor's page is right" and "the file kept it" are
@@ -684,10 +719,36 @@ R5 c-17"). After the landing, **every primitive that was on the page before is
 compared field by field** (designator, value, LCSC, net, origin, pose; a wire's
 point list; a label's net, text and pose) — one changed item is exit 2 and no save
 (`range.outOfScope`). This applies to every `draw apply`, single module or page.
-The C5 digest behind all of this counts every section a `sch.geometry` dump is
-contracted to carry (`components`/`wires`/`pins`/`netlabels`) plus the parts the
-designator set deliberately drops (`R5?`): a kind the census does not count is a
-change no guard can see.
+**One exemption, disclosed**: the host merges a wire this run lands into copper
+that was already on the page when the two touch and are collinear (pit 32), so the
+existing primitive comes back longer under the same id. That is not an edit
+somebody made, but it is exempted only when `drawapply.host_merges` can prove it
+item by item — the net name is the same before and after and is one the plan
+draws, the merged point list is **one straight line**, the existing wire is
+completely contained in it, and a planned wire of that net lies on it, touches the
+existing wire and reaches beyond it; nothing the plan did not draw may be part of
+the merged primitive. Every such id is printed in `range.outOfScope.hostMerges`
+with its before/after points and the criterion. A foreign net, a primitive whose
+net name changed, a re-routed (elbow) merge, an existing wire no longer contained,
+or an extension no planned wire asked for remain one changed item = exit 2, no
+save. The landing's own canvas leg reads the same merge (a joint that stopped
+being a vertex is still the wire reaching its point), but only for a page segment
+that carries the wire's own net **and** lies along the wire's own line.
+The C5 digest behind all of this covers **every primitive the page holds**, one
+row each: the four electrical sections (`components`/`wires`/`pins`/`netlabels` —
+a part's designator, value, LCSC and pose, a flag's net and pose, a wire's net and
+point list, a label's net, text and pose) and the six drawing sections
+(`texts`/`buses`/`circles`/`rectangles`/`arcs`/`polygons`). The sheet is the page,
+not a primitive on it, and is left out; the measured `bboxes` are a reading of the
+page rather than content and are left out too. Rows are ordered by section and
+primitive id and hashed with sorted keys, so re-reading the same page hashes the
+same. A digest written by the **counts-only** algorithm that preceded this
+coverage (574 / 567-E-1: it could not see a part moved, a wire re-routed, a flag
+moved or a value changed) is recognised and **refused** with its own reason —
+regenerate the plan, or take a fresh `--expect-census` — and never accepted as
+"the page did not change". The empty-page proof separately requires all six
+drawing sections to be readable and checks their counts before reusing a page, so
+a note or graphic is not mistaken for a blank page.
 
 **Page locks**: a `userLocks[]` entry with `"scope": "page"` (x, y only — the pose
 is the module's) pins the part to that page point in every candidate: the
@@ -695,6 +756,22 @@ module's origin is `P − L(generation)`. A lock point off the page, two locks i
 one module that disagree, a locked frame off the page / on a keep-out / on
 another locked frame are `presentation-poor` naming the lock(s). A module lock
 and a page lock may sit on the same part.
+
+**Recompile with locks** (`draw move-propose --strategy recompile-with-locks`):
+the segment a work order adds when the direct move is refused for an attachment.
+It states page locks only, and two consequences of that are enforced before a
+lock is written. (1) Because the origin is derived from the lock point, a lock
+moves the part's **whole module**, so the group must name every member of every
+module it touches: the page's `PresentationSpec` is required (`--presentation`)
+as the member proof, a part no module claims is refused, and a subset is refused
+naming the companions it would drag along. Modules the group does not name are
+still re-packed by the page packer, which the order says in
+`presentationSpecReview` — review the whole recompiled plan, not only the named
+parts. (2) A page lock pins a position and never a pose, so a measured rotation
+that is not a multiple of 360, a mirror, or no finite rotation is refused
+(use the direct move, which moves the part as it stands) instead of silently
+landing the part in the module drawing's pose. The direct-move work order is
+unchanged: it consults no spec, and its bytes are the same with or without one.
 
 **Shared nets (G4)**: a net that spans modules is named at each end (label or
 flag); this host cannot place a net label, so a label whose point no planned wire
@@ -1322,6 +1399,75 @@ source is AGPL-3.0 and the current Konnect-EDA internals are not public; no sour
 is vendored into this MIT repository. The research boundaries, pilot contract and
 subagent batches are in `tasks/547_smart_medicine_box.md` §547G.
 
+### Route and provenance seal (590)
+
+A `LayoutPlan` and a `PageLayoutPlan` now state **how they were made**, and an
+`automatic` one carries a seal over that route and its own geometry digest.
+
+- `route` is a closed three-value vocabulary: `automatic` (the compiler's own
+  candidate), `reference-replay` (a drawing reproduced from a reference page) and
+  `agent-adjusted` (a plan the agent edited by hand after a proposal). Any other
+  value — a misspelling, `Automatic`, a number, null — is refused by name.
+- A plan built in process is `automatic` by default, and its document states
+  `provenanceSha256 = sha256("boardwise.layout-plan-provenance/1" + route +
+  geometrySha256())`. The page has its own domain
+  (`boardwise.page-layout-plan-provenance/1`) over its page geometry digest, so
+  moving a module frame is sealed too, not only the merged drawing.
+- A document written **before** this contract has no route and no seal. It reads
+  as `reference-replay` — silence is not a compilation — and is written back with
+  no new keys, so `load` → `dump` is byte for byte the old file. The real 054
+  candidates are the regression.
+- `draw compile`'s success JSON states `route: "automatic"`, `mode: "automatic"`
+  and a `provenance` object (`mode`, `attestation: "self-consistency-only"`,
+  `scope`, `sealDomain`, one seal per candidate, and the boundary sentence); each
+  candidate/page entry carries its own `provenanceSha256`. A zero-candidate
+  compile still carries only `recovery.route: "agent-adjusted"`: a failure is a
+  manual route, never an automatic drawing.
+
+**What the seal is and is not.** It detects *staleness*: a document whose
+geometry was edited while its provenance stayed put is refused, which is exactly
+hole568 D-1's re-sealed plan (edit a coordinate, recompute `geometrySha256`, load
+as the compiler's own). The seal is a promise about the geometry the document
+carries, so it is compared **whenever it is stated** — deleting the derived
+`geometrySha256` (an optional display of that number) does not skip the check
+(590B); a genuine automatic document that leaves the digest out still loads. It is
+**not** a signature and **not** proof of authorship:
+the algorithm is public and anyone willing to recompute every value can re-seal a
+document. The seal also does not enter the geometry digest, so no plan this
+repository has recorded moves its `geometrySha256` because of it, and `ok` in a
+compile still means only "a legal candidate came out" — not visual or delivery
+acceptance.
+
+### The work order becomes a ChangePlan input (591)
+
+hole568 D-4 measured that an agent-adjusted work order's `mode`/`status` had no
+consumer: `nextCommand` was an argv line and `edit plan --move` never read the
+file, so those fields could be changed to anything with no downstream reaction.
+This is the one closed link, and nothing else consumes the order:
+
+- `draw move-propose -o work.json` appends `--work-order work.json` to the
+  order's own `nextCommand`, so the command it prints runs as it stands. An order
+  printed to stdout names no file, and the engine's default document is the one
+  570/571 froze, field for field.
+- `edit plan --move --work-order work.json` reads the order **before the bridge is
+  opened** and refuses by name (exit 5, no traceback, no editor read) when the
+  file is missing or not UTF-8/JSON, is not the
+  `boardwise.agent-adjusted-move/1` schema, does not say `mode: agent-adjusted`
+  and `status: proposed`, or names a different group (same uppercase rule, item
+  by item) or delta than `--designators`/`--dx`/`--dy`. The order is a
+  *declaration check*: the group and the delta still come from the command line.
+- A plan built from one states `route: "agent-adjusted"` at the top level of the
+  ChangePlan, and `--json` adds `route` and `workOrder` beside the plan. A
+  `ChangePlan` without one writes no `route` key at all — every document from
+  before this field, and every plan whose producer states no route, keeps its
+  exact bytes and round-trips byte for byte. When stated, the value must be one
+  of 590's three (`automatic` / `reference-replay` / `agent-adjusted`); anything
+  else is refused by name.
+- **`route` is where the proposal came from, not that the move is right.** It
+  does not skip the live guards (target free, wire redraw, netlist identity) and
+  is not a quality proof: `mode` is a label on a proposal whose guards carry the
+  judgement.
+
 ### 548C3 / 548C4 public contracts on compiled pages (2026-11-08)
 
 Two behaviours are public contracts now, not incidental fixes. Both are offline: neither was
@@ -1448,9 +1594,48 @@ boardwise draw apply   plan.json --project test \
     --render render.png --json apply.json                     # 真机：守卫 → 落图 → 回读 → 保存 → 出图
 ```
 
-同族另外两条，别漏：**`boardwise draw lint --page …` 是落图之后的机器闸**（只读：九条几何
-谓词——压线/重叠/出界/同名导线段等，111 起；真机快照或 `--snapshot` 捕获件都吃。
-P1 的 48E/20W/21I 验收基线就是它量的——**画完一页先过它再交付**。
+同族另外两条，别漏：**`boardwise draw lint --page …` 是落图之后的机器闸**（只读，111 起；
+真机快照或 `--snapshot` 捕获件都吃。P1 的 48E/20W/21I 验收基线就是它量的——**画完一页
+先过它再交付**）。谓词以 `engines/drawlint.py` 的 `PREDICATES` 为机器源，这里逐项列全
+（568A-H3：本节曾写「九条几何谓词」，568-A 实测当时已在跑 17 条——本批再加 2 条 = 19 条；
+`L11-part-overlap`、`L11-rail-without-flag`、`L5-wire-rail-conflict` 与 L12 三项当时连
+模块自己的表都没列）：
+
+几何闸（16 条）：`L1-text-on-wire`、`L2-text-on-text`、`L3-text-on-part`、
+`L4-wire-through-part`、`L5-duplicate-annotation`、`L5-wire-multiname`、
+`L5-wire-rail-conflict`、`L6-wire-crossing`、`L7-label-wire-clearance`、
+`L8-flag-orientation`、`L9-board-fill`、`L10-out-of-bounds`、`L11-part-overlap`、
+`L11-rail-without-flag`、`L13-non-orthogonal`、`L13-crossing-budget`；
+仅网表闸（3 条，只有把 `sch.netlist` 交给这一轮才跑——没给时它们的沉默不算电学一致）：
+`L12-two-pin-same-net`、`L12-ground-supply-pin-short`、`L12-ground-flag-absent-from-netlist`。
+
+**replay 形状、skipped 与 bodies 口径（593 / W-L）**：`draw lint --snapshot` 的输入必须是
+`sch.geometry` 形状的 JSON——根是对象，`components`/`wires`/`pins`/`netlabels` 是列表
+（旧捕获可缺省），`bboxes`/`meta` 是对象，图元 entry/state 是对象，坐标（含 wire `Line`
+与 bboxes 四角）是有限数，且至少有一个可检图元（sheet 框也算）；否则 exit 2 具名拒绝，
+不再对 `{}` 或坏坐标打 `0 error / 0 warn / 0 info`。`--bodies` 同时接受
+`{"bboxes": {id: box}}`（`sch.geometry --params {"bboxIds": …}` 的原样答案）与裸映射；
+box 为四元组或 `{minX,minY,maxX,maxY}`，长度不是 4、缺键、非数/bool、NaN/Inf、倒盒一律
+具名 `ValueError` → exit 2，绝不静默丢成 0 盒。没给 `--netlist` 时 L12 三项、测量盒未覆盖
+全部 part 时 `L11-part-overlap` 记入 skipped：stdout 不再称 clean（有 findings 时也附
+「未跑项/未完整检查」），`--json` 增 `skipped`（谓词名）与
+`bodies{provided,count,measured,parts}`；材料齐全的合法 clean 页文案与退出码不变。
+**S-08/S-11 的两条硬闸（589 / W-Q）**：`L13-non-orthogonal` 逐子边判斜线——判定单位是
+`Wire.segments`（实际画出的子边，与渲染的 `<polyline>` 同读法），任一子边 x、y 同时变化即
+ERROR，finding 点名 wire、子边两端坐标与 S-08；水平、垂直、零长段不报，折线只报斜的那一段。
+`L13-crossing-budget` 给 S-11 的 2% 补上分母——distinct crossing site（同一 unordered pair
+在 `L6_CLUSTER_GAP` 内合并，与 L6 同一把尺）除以本轮实际参与检查的导线段数；
+**页级 ERROR 的条件是 `cluster_count > max(3, 0.02 × 段数)`，即同时严格超过 3 处和 2%**
+（589B：`max(L6_PAGE_WARN, 0.02 × segments)`），message 同时给出 sites、segments、2% 的
+计算值、实际采用的阈值（下限还是比例赢）与实测比例。2% 在大页上照常收口（例：21 site /
+1000 段 = 2.10% > 20 处额度 ⇒ ERROR），小页退到 3 处的绝对下限（3 site / 102 段 = 2.94%
+不报、4 site / 102 段 = 3.92% 报）。旧的 `L6-wire-crossing` >3 site 页级 WARN 与逐簇
+WARN/INFO 原样保留，两者是独立 finding，不许用新 ERROR 顶掉旧 WARN。
+**这个下限是通用规则，不是 P24 特例**：验收页 P24 实测 2 site / 27 段 = 7.41%，按纯 2%
+会被判废（证据 `evidence/589/P24_s11_conflict.txt`），它只是"需要下限"的证据；P24 不特判，
+同一页到 4 处仍报。阈值常量（`S11_CROSSING_BUDGET` = 0.02）未改。
+（上面 P1 的 48E/20W/21I 是 111 时的读数；589 加了 S-08/S-11 两条硬闸后，同一份 P1
+快照的 ERROR 计数会增加，旧读数只作历史对照。）
 **168 的严重度口径**：人手页/既有页只观察提醒——L8 横放旗标（90/270）报 INFO，
 不进退出码（`FLAG_VERTICAL_ROTATIONS` 仍是 {0,180}，横放仍要报；非直角斜置如 45°
 仍是 ERROR）；生成器产出的页不受影响，它的旗标朝向闸在 `draw apply` 的⑮核对，
@@ -1639,6 +1824,11 @@ exit 4 零写入（C5）；库几何不符 → exit 4 零写入（C6，写前那
   keepout 规则（压到既有图元 → exit 4 零写入）；要"页面任何变动都拒"用 `draw plan --page` 产的 plan
   （census 摘要精确）或 `--expect-census`。**所有落图**新增范围外逐项对比：落图前已在页上的每个图元
   （位号/值/LCSC/网/坐标/姿态/线点；网标另比 网名/文字/坐标/角度）必须原样，改了一件 → exit 2 不保存（`range.outOfScope`）。
+  **唯一豁免且逐项披露**：宿主把我方计划线并入落图前已在页上、与之相接且共线的同网铜皮（坑 32）时，该既有图元
+  会以更长线点、同一 id 回来——这不是有人改图，但只有 `drawapply.host_merges` 能逐项证明时才豁免（前后网名一致
+  且是计划画的网、合并后所有点共线、原线被完整包含、确有一条计划线落在其上并与原线相接且超出原线、合并后的
+  图元不得含计划没画的铜），并把这些 id 连同前后线点与判据写进 `range.outOfScope.hostMerges`。异网、网名变了、
+  折线改道、原线不再被完整包含、无计划线延伸——一律仍是"范围外图元被改动" → exit 2 不保存。
   报告 `verification.nets` 逐网列出编辑器网表回读名，跨模块网标 `crossModule`、`oneNet`（G4）。
   findings 按身份分级拦（`rule|severity|位号|脚|命名网` 的**第二段**就是严重度）：ERROR 必拦、
   WARN 需 `--force`、INFO 只报告（#55 裁决 B）；仍不按计数。

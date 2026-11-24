@@ -42,6 +42,7 @@ from boardwise.core.islands import (
     LayoutIsland,
     cross_island_nets,
 )
+from boardwise.core.layoutplan import ROUTE_AUTOMATIC
 from boardwise.core.presentationspec import PresentationSpec, PresentationSpecError
 
 from gate_skip import skip_if_the_147_gate_refused
@@ -53,6 +54,37 @@ SPECS = ROOT / "blocklib" / "specs"
 def _json_sha(payload: object) -> str:
     text = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+#: 590 adds exactly these two keys on top of the pre-change document. A third
+#: moving key would mean the pin below is being asked to absorb something else.
+_ROUTE_KEYS = ("route", "provenanceSha256")
+
+
+def _pre_590_projection(plan) -> dict:
+    """The document a pre-590 build wrote: the pinned shas were measured on it.
+
+    The pin is not replaced and the keys are not deleted to make it pass: the
+    projection must still reproduce the old sha byte for byte, and the caller
+    asserts below that the two new keys are present and correct.
+    """
+    body = plan.to_jsonable()
+    projection = {key: value for key, value in body.items() if key not in _ROUTE_KEYS}
+    assert set(body) - set(projection) == set(_ROUTE_KEYS), (
+        "590 must add exactly `route` and `provenanceSha256`; any other key is a "
+        "changed field hiding behind the new ones"
+    )
+    return projection
+
+
+def _assert_automatic_route(plan) -> None:
+    """The compiled plan is an automatic drawing, sealed by its own geometry."""
+    body = plan.to_jsonable()
+    assert plan.route == ROUTE_AUTOMATIC and plan.route_declared is True
+    assert body["route"] == ROUTE_AUTOMATIC
+    assert body["provenanceSha256"] == plan.provenance_sha256(), (
+        "the seal is this plan's route + geometry digest, not a transplanted value"
+    )
 
 
 #: 改动**之前**（520j 的代码未落）由 `evidence/520j/probes/probe_baseline.py`
@@ -337,6 +369,11 @@ def test_the_two_shipping_specs_hash_and_compile_to_what_they_did_before_520j():
     （`evidence/520j/probe_baseline.before.txt`）。plan json 里也带着
     `source.presentationSha256`，所以它证明的不只是几何没动，而是这份 spec 的
     摘要也没动——本批加的是键，凡不写这个键的 spec 一律原样。
+
+    590 之后整份文档多了 `route` / `provenanceSha256` 两个键（都不在
+    `geometry_json` 里）：旧 json 摘要因此对着**去掉这两个键的投影**比较，
+    投影逐字节等于旧文档才通过；两个新键本身在紧接的 `_assert_automatic_route`
+    里另行钉住——删字段装兼容不会让这条用例变绿。
     """
     import boardwise.engines.drawcompiler as dc
     from boardwise.engines.drawapply import load_library
@@ -357,5 +394,9 @@ def test_the_two_shipping_specs_hash_and_compile_to_what_they_did_before_520j():
         assert result.ok and result.candidates, result.render_failures()
         plan = result.candidates[0]
         assert plan.geometry_sha256() == _BEFORE_520J[plan_sha_key], stem
-        assert _json_sha(plan.to_jsonable()) == _BEFORE_520J[json_sha_key], stem
+        # 590 split: the pinned json sha is the *pre-590* document, so it is
+        # compared against the projection with the two route keys taken off;
+        # the keys themselves are asserted present and correct right after.
+        assert _json_sha(_pre_590_projection(plan)) == _BEFORE_520J[json_sha_key], stem
+        _assert_automatic_route(plan)
         assert plan.source.presentation_sha256 == _BEFORE_520J[f"{stem}.presentation"]

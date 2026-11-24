@@ -1,8 +1,10 @@
 """Task 111: `draw lint` — the readability checker as a machine gate.
 
-Nine geometric predicates over one page's read-only snapshot. Each predicate
-maps to a defect class 110's re-review caught by eye (the task book's
-predicate table), and each test below says which.
+19 readability predicates over one page's read-only snapshot: 16 geometric and
+3 that run only when a netlist is handed to the run (their silence without one
+is not an electrical pass). Each predicate maps to a defect class 110's
+re-review caught by eye (the task book's predicate table), and each test below
+says which.
 
 The calibration discipline is the point of the whole batch: **zero false
 positives on the accepted pages outrank recall** (岳 will be flooded by a

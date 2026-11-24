@@ -21,6 +21,11 @@ What is pinned here, each against a real mechanism rather than a constant:
 4. ``draw discard`` — the "the drawing came out wrong, keep the page" path — never
    reaches ``doc.delete_page`` and never creates a page: it deletes the primitives
    the plan drew, and leaves everything else exactly as it was.
+
+566-D-3 adds one more thing to pin: the connector now reads the page table before and
+after the deletion, so the success shape carries ``confirmed`` and ``readBack`` — a host
+that answers ``true`` without deleting (or deleting another page) is a ``CONNECTOR_ERROR``
+with ``confirmed: false``, not a success. The socket case below asserts the whole shape.
 """
 
 from __future__ import annotations
@@ -118,8 +123,11 @@ def test_a_refused_page_delete_forwards_nothing_and_a_confirmed_one_forwards_onl
             connector_ws, _ = await tb._hello(port, "connector", token=TOKEN)
             fake = tb.FakeConnector(
                 connector_ws,
-                responses={"doc.delete_page": {"deleted": True, "pageUuid": PAGE,
-                                               "name": "P1"}},
+                responses={"doc.delete_page": {
+                    "deleted": True, "pageUuid": PAGE, "name": "P1",
+                    "confirmed": True,
+                    "readBack": {"pagePresent": False, "remaining": []},
+                }},
             )
             import asyncio
 
@@ -148,7 +156,16 @@ def test_a_refused_page_delete_forwards_nothing_and_a_confirmed_one_forwards_onl
             )
             reply2 = await tb._recv_frame(cli_ws)
             assert reply2["ok"] is True
-            assert reply2["data"] == {"deleted": True, "pageUuid": PAGE, "name": "P1"}
+            # The whole success shape, exactly: 566-D-3 added the read-back, and
+            # a comparison that stopped at the first three keys would let the
+            # contract drift while this test still read green.
+            assert reply2["data"] == {
+                "deleted": True,
+                "pageUuid": PAGE,
+                "name": "P1",
+                "confirmed": True,
+                "readBack": {"pagePresent": False, "remaining": []},
+            }
             assert len(fake.received) == 1
             forwarded = fake.received[0]
             assert forwarded["action"] == "doc.delete_page"
@@ -189,7 +206,9 @@ class _RecordingClient:
                 f"{action} deletes a page; re-send with confirm: true",
                 {"action": action, "risk": "create", "confirm": params.get("confirm")},
             )
-        return {"deleted": True, "pageUuid": PAGE, "name": "P1"}
+        return {"deleted": True, "pageUuid": PAGE, "name": "P1",
+                "confirmed": True,
+                "readBack": {"pagePresent": False, "remaining": []}}
 
     async def close(self):
         return None
@@ -289,6 +308,29 @@ def test_the_entry_is_filed_in_the_gated_tier_and_says_what_to_do_instead():
     assert "sch.delete_primitives" in spec.summary, (
         "the entry must point at the primitive cleanup, or a caller reading it "
         "has no way to know the page is meant to survive"
+    )
+
+
+def test_the_catalogue_declares_the_read_back_the_handler_performs():
+    """566-D-3: `deleted: true` alone is the host's claim.
+
+    The success shape carries what was actually read back — the target gone
+    from the editor's own page table and the remaining pages — so a caller can
+    tell a deletion from an answer that only says one happened. A catalogue
+    without those keys would describe the pre-566-D-3 answer.
+    """
+    spec = action_spec("doc.delete_page")
+    assert "confirmed" in spec.returns, (
+        f"returns {spec.returns!r} does not carry confirmed"
+    )
+    assert "readBack" in spec.returns, (
+        f"returns {spec.returns!r} does not carry readBack"
+    )
+    assert "pagePresent" in spec.returns and "remaining" in spec.returns, (
+        "the read-back must say which page was looked for and what is left"
+    )
+    assert "page table" in spec.summary, (
+        "the summary must say the answer is the page table's, not the host's `true`"
     )
 
 

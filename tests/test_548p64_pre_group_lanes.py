@@ -11,6 +11,7 @@ import json
 import pytest
 
 from boardwise.core.circuitspec import CircuitSpec
+from boardwise.core.layoutplan import ROUTE_AUTOMATIC
 from boardwise.core.presentationspec import PresentationSpec
 from boardwise.core.symbolprofile import SymbolProfile
 from boardwise.engines import drawcompiler as dc
@@ -118,6 +119,26 @@ def test_initial_grouping_sees_the_same_singleton_lanes_the_seat_pass_consumes(m
 # pins. The clearance repair changes only those paths/junctions; parts, flags,
 # labels and texts are identical (`.tmp_548p117/p64-diff.log`). Pin the exact
 # legal geometry rather than preserving that near-short appearance.
+#
+# 599 / 590: the pinned sha is the *pre-590* document. A compiled plan now also
+# states `route` and `provenanceSha256` (neither is part of `geometry_json`), so
+# the pin is compared against the projection with those two keys taken off; the
+# keys themselves are asserted present and correct. Deleting them would fail the
+# second half, and a third moving key fails the projection.
+_ROUTE_KEYS = ("route", "provenanceSha256")
+
+
+def _pre_590_sha(built) -> str:
+    body = built.plan.to_jsonable()
+    projection = {key: value for key, value in body.items() if key not in _ROUTE_KEYS}
+    assert set(body) - set(projection) == set(_ROUTE_KEYS), (
+        "590 must add exactly `route` and `provenanceSha256`; any other key is a "
+        "changed field hiding behind the new ones"
+    )
+    payload = json.dumps(projection, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
 @pytest.mark.parametrize("name,expected", [
     ("no_group", "3804adcec8ee430170423ecc8e8b1dbde5e4428f1bc5f8af4ed108276dc40764"),
     ("no_stubs", "88d0fc98bb39e55355b4e7dff8c532c6fdd71414e48368af3e7729f6ab8c71e7"),
@@ -146,5 +167,9 @@ def test_unstated_path_has_the_expected_complete_success_json(monkeypatch, name,
     monkeypatch.setattr(dc, "_reserve_label_stubs", reserve)
     built, failure, _notes = dc._build_candidate(ctx, dc._variants(ctx)[0])
     assert built is not None, failure
-    payload = json.dumps(built.plan.to_jsonable(), sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(payload).hexdigest() == expected
+    assert _pre_590_sha(built) == expected
+    body = built.plan.to_jsonable()
+    assert body["route"] == ROUTE_AUTOMATIC and built.plan.route_declared is True
+    assert body["provenanceSha256"] == built.plan.provenance_sha256(), (
+        "the seal is this plan's own route + geometry digest"
+    )

@@ -1415,6 +1415,76 @@ def test_the_draw_baseline_uses_p44_functional_relationships():
     assert "均只作诊断，不设成新阈值" in line
 
 
+# ============================ 589：lint 谓词清单与机器源/规格一致（2026-11-24）
+
+
+def test_the_draw_lint_predicate_lists_match_the_machine_table():
+    """护 `docs/draw.md` 落图 SOP 的谓词清单与 S-08/S-11 的机器闸措辞（568A-H3）。
+
+    失效时的样子：文档又写成「九条几何谓词」（代码跑到 17 条时它就是这么写的），或
+    加了新谓词只改代码不改文档——工程师按清单评估「这页过了哪些闸」，漏掉的正是真在
+    跑的那几条（L11×2 / L12×3 / L5-wire-rail-conflict）。钉子读
+    `PREDICATES` / `NETLIST_PREDICATES`（机器源），不读二手转述；规格侧钉 S-08/S-11
+    对应的两个谓词 id 仍在、且级别是 ERROR（文档把「判废」写成「提醒」即红）。
+    """
+    from boardwise.engines import drawlint
+
+    draw = (REPO / "docs" / "draw.md").read_text(encoding="utf-8")
+    assert "几何闸（" in draw and "仅网表闸（" in draw, (
+        "docs/draw.md 落图 SOP 段缺了「几何闸（…）/ 仅网表闸（…）」两行清单")
+    geometry_start = draw.index("几何闸（")
+    netlist_start = draw.index("仅网表闸（", geometry_start)
+    netlist_end = draw.index("\n\n", netlist_start)
+    pattern = re.compile(r"`(L\d+[a-z]?-[a-z-]+)`")
+    geometry = set(pattern.findall(draw[geometry_start:netlist_start]))
+    netlist = set(pattern.findall(draw[netlist_start:netlist_end]))
+    live = {predicate for predicate, _ in drawlint.PREDICATES}
+    assert geometry | netlist == live, (
+        "docs/draw.md 的谓词清单与 PREDICATES 不一致: "
+        f"文档多 {sorted((geometry | netlist) - live)}，"
+        f"代码多 {sorted(live - (geometry | netlist))}"
+    )
+    assert netlist == set(drawlint.NETLIST_PREDICATES)
+    assert geometry.isdisjoint(netlist)
+
+    spec = (REPO / "docs" / "schematic-style-spec.md").read_text(encoding="utf-8")
+    levels = dict(drawlint.PREDICATES)
+    for predicate in ("L13-non-orthogonal", "L13-crossing-budget"):
+        assert predicate in spec, (
+            f"规格没写 {predicate}——S-08/S-11 又退回成只有人眼能看的规格")
+        assert levels[predicate] == "ERROR", (
+            f"{predicate} 不再是 ERROR——「判废」被悄悄改成了「提醒」")
+
+
+def test_the_crossing_budget_floor_is_documented_as_a_general_rule():
+    """护 589B 的 S-11 口径（岳 2026-11-24 裁定）：页级 ERROR 要**同时**严格超过 3 处
+    与 2%，即 `max(L6_PAGE_WARN, 0.02 × 段数)`；下限是通用规则，不是 P24 白名单。
+
+    失效时的样子：文档又退回「2% 没有绝对下限/待裁」的旧冲突描述（下一任照着改回纯 2%，
+    P24 与所有小页再被判废），或悄悄写成 `>=`/`or`；或为了 P24 给它开一条特判——那违反
+    通用闸原则。钉子读代码常量（`S11_CROSSING_BUDGET` 仍是 0.02、`L6_PAGE_WARN` 仍是 3）
+    与两份文档的口径句，不读二手转述。
+    """
+    from boardwise.engines import drawlint
+
+    assert drawlint.S11_CROSSING_BUDGET == 0.02, (
+        "2% 常量被改动了——下限收口不该动比例本身")
+    assert drawlint.L6_PAGE_WARN == 3, (
+        "L6 页级 3 site 阈值被改动了——下限就是它，改了等于换规则")
+
+    draw = (REPO / "docs" / "draw.md").read_text(encoding="utf-8")
+    spec = (REPO / "docs" / "schematic-style-spec.md").read_text(encoding="utf-8")
+    for name, text in (("docs/draw.md", draw), ("docs/schematic-style-spec.md", spec)):
+        assert "同时严格超过 3 处和 2%" in text, (
+            f"{name} 丢了下限口径（同时严格超过 3 处和 2%）")
+        assert "P24" in text and "evidence/589/P24_s11_conflict.txt" in text, (
+            f"{name} 丢了 P24 的实测证据指针")
+        assert "2% 没有绝对下限" not in text, (
+            f"{name} 还在写「2% 没有绝对下限/待裁」的过时冲突描述")
+    assert "待岳裁定" not in spec.split("S-08 / S-11 的机器闸", 1)[1].split(
+        "## 四、", 1)[0], "规格的 S-08/S-11 小节还写着「待岳裁定」——规则已经落地"
+
+
 @pytest.mark.parametrize("property_,old_rule", [
     ("P1", "a pull-up / decoupling body sits 30–65 units from its own host pin"),
     ("P4", "the island is two-dimensional; origin y-span must be at least 60"),

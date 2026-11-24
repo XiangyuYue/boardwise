@@ -125,6 +125,7 @@ import websockets
 from websockets.asyncio.server import ServerConnection, serve
 
 from .. import __version__ as BOARDWISE_VERSION
+from ..home import BoardwiseHomeError, boardwise_home as _shared_home
 from .protocol import (
     HELLO_TIMEOUT,
     PROTOCOL_VERSION,
@@ -149,6 +150,7 @@ __all__ = [
     "DEFAULT_HOST",
     "DEFAULT_PORT",
     "BOARDWISE_HOME",
+    "boardwise_home",
     "AUDIT_PAIRING",
     "AUDIT_REVOKE",
     "AUDIT_REPAIRING",
@@ -281,11 +283,42 @@ WINDOW_KEY_SEPARATOR = "~"
 #: is that a version question is answerable afterwards.
 UNKNOWN_CONNECTOR_VERSION = "(version unknown)"
 
-#: Home for token, audit log and future state. Overridable so tests never
-#: touch the real one.
-BOARDWISE_HOME = Path(
-    os.environ.get("BOARDWISE_HOME", Path.home() / ".boardwise")
-)
+#: Home for token, audit log and future state, resolved **on every read**.
+#:
+#: 569-F-3: this used to be a module constant captured at import, while
+#: ``core.config`` / ``resources`` read ``BOARDWISE_HOME`` on every call. One
+#: process, two homes: settings under the new directory and the token, audit
+#: log and daemon logs under the old one, with nothing saying so. The value now
+#: comes from :func:`boardwise.home.boardwise_home` — the same reader the
+#: settings file uses, at the package root since 598 so the bridge need not
+#: import ``core`` — so every consumer agrees and a spelling that cannot mean
+#: one thing (relative, trailing dot or space) is refused once, by name, in one
+#: place. The name below survives for callers outside this tree; see
+#: ``__getattr__``.
+def boardwise_home() -> Path:
+    """This call's boardwise home: ``BOARDWISE_HOME`` or ``~/.boardwise``."""
+    return _shared_home()
+
+
+def __getattr__(name: str) -> Any:
+    """``BOARDWISE_HOME`` stays importable, but is resolved when read.
+
+    The spelling ``from boardwise.bridge.daemon import BOARDWISE_HOME`` exists
+    in the field (the manual, and the 569-F-3 repro), so removing the name would
+    be a silent import error for them. A module-level constant would instead
+    hand them the import-time home — precisely the bug this batch fixes. The PEP
+    562 hook gives them a value that is right at the moment it is read; nothing
+    in this module reads the name itself, so a shadowing assignment (a test
+    pinning it with ``monkeypatch``) affects no production path.
+    """
+    if name == "BOARDWISE_HOME":
+        return boardwise_home()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """Keep ``BOARDWISE_HOME`` visible to ``dir()`` despite the dynamic lookup."""
+    return sorted(set(globals()) | {"BOARDWISE_HOME"})
 
 #: A screenshot is megabytes of base64; the 1 MiB default would reject it.
 MAX_FRAME_BYTES = 32 * 1024 * 1024
@@ -299,7 +332,7 @@ AUDIT_FILE_TEMPLATE = "{date}.jsonl"
 
 
 def token_path(home: Path | None = None) -> Path:
-    return (home or BOARDWISE_HOME) / "token"
+    return (home or boardwise_home()) / "token"
 
 
 def connector_token_path(home: Path | None = None) -> Path:
@@ -309,11 +342,11 @@ def connector_token_path(home: Path | None = None) -> Path:
     change, weaken or leak the CLI's credential, and so that ``revoke`` has
     something precise to delete. The CLI flow is untouched by design.
     """
-    return (home or BOARDWISE_HOME) / "connector-token"
+    return (home or boardwise_home()) / "connector-token"
 
 
 def audit_dir(home: Path | None = None) -> Path:
-    return (home or BOARDWISE_HOME) / "audit"
+    return (home or boardwise_home()) / "audit"
 
 
 def resolve_port() -> int:
@@ -612,6 +645,12 @@ def append_audit(home: Path | None, **fields: Any) -> None:
     A module-level function rather than a daemon method so that the CLI can
     record events that happen *without* a daemon — ``bridge revoke`` is the
     case that matters: it has to work precisely when nothing is listening.
+
+    ``BoardwiseHomeError`` is caught beside ``OSError`` because 587 made the home
+    a call-time resolution: an unusable ``BOARDWISE_HOME`` is refused by the same
+    shared reader the settings use (598 moved it to :mod:`boardwise.home`, so the
+    bridge raises that refusal instead of importing ``core.config`` for
+    ``ConfigError``), and that refusal must not become a failed call.
     """
     try:
         directory = audit_dir(home)
@@ -620,7 +659,7 @@ def append_audit(home: Path | None, **fields: Any) -> None:
         path = directory / AUDIT_FILE_TEMPLATE.format(date=time.strftime("%Y-%m-%d"))
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except OSError:
+    except (OSError, BoardwiseHomeError):
         pass
 
 
@@ -1093,6 +1132,85 @@ def _project_hint_matches(hint: str, window: WindowConnection) -> bool:
     return False
 
 
+#: The one action the daemon asks for on its own before a design write (577).
+#: Spelled once: the frame it sends and the catalogue entry it addresses have to
+#: be the same string, and the entry is a plain read — nothing is opened,
+#: focused or written.
+IDENTITY_ACTION = "sys.identity"
+
+
+def _identity_project_name_uuid(project: Any) -> tuple[str, str]:
+    """``(name, uuid)`` of one ``sys.identity`` project object.
+
+    ``("", "")`` when the object is absent or the fields are not strings — the
+    same "only a non-empty string is a fact" rule :func:`merge_context` uses.
+    """
+    if not isinstance(project, dict):
+        return ("", "")
+    name = project.get("name") or project.get("friendlyName") or ""
+    uuid = project.get("projectUuid") or ""
+    return (
+        name.strip() if isinstance(name, str) else "",
+        uuid.strip() if isinstance(uuid, str) else "",
+    )
+
+
+def _verified_identity(payload: Any) -> tuple[tuple[str, str], str]:
+    """The project a ``sys.identity`` answer *proves* (577), or why it proves none.
+
+    Returns ``((name, uuid), "")`` on success and ``(("", ""), reason)`` when the
+    answer cannot be trusted, so a refusal can say which check failed without a
+    second parser. The rules, and why each one is fail-closed:
+
+    - **An active document makes ``consistent`` mandatory.** It is ``true`` only
+      when both project uuids were read and are equal; ``false`` is the measured
+      2026-09-21 disagreement (the write lands where the operator is not
+      looking), and ``null``/absent is "the editor could not decide" — the one
+      answer that must never be read as permission. When it holds, the
+      document's project is preferred, because that is what ``doc.*`` addresses;
+      the focused project is the fallback for the connector's
+      ``focused-project-listing`` basis, where membership is proven but the
+      document itself named no project.
+    - **No active document** is the legitimate empty-project case ("create the
+      first page"), where the connector reports ``consistent: null`` by design.
+      The focused project decides.
+    - **Either half identifies the project; only "neither" is unknown.** A name
+      and a uuid are both *names* for the allowlist — 537A3 has always matched
+      either one — so requiring both would refuse a project the operator had
+      already allowed (an editor that only filled ``parentProjectUuid``, or one
+      whose project index could not be read for a name). What is refused is the
+      answer that names nothing at all: a window that said neither is refused
+      rather than assumed safe, because "which project" being unknown is the same
+      danger as "the wrong project".
+    """
+    if not isinstance(payload, dict):
+        return (("", ""), "the answer is not an identity object")
+    focused = payload.get("focusedProject")
+    active = payload.get("activeDocument")
+    if isinstance(active, dict):
+        if payload.get("consistent") is not True:
+            return (
+                ("", ""),
+                "the editor's two identity layers are not proven to agree "
+                f"(consistent={payload.get('consistent')!r}, basis "
+                f"{payload.get('consistentBasis')!r})",
+            )
+        name, uuid = _identity_project_name_uuid(active.get("project"))
+        if not (name or uuid):
+            name, uuid = _identity_project_name_uuid(focused)
+        if name or uuid:
+            return ((name, uuid), "")
+        return (
+            ("", ""),
+            "the active document named no project and the focused project named "
+            "none either",
+        )
+    name, uuid = _identity_project_name_uuid(focused)
+    if name or uuid:
+        return ((name, uuid), "")
+    return (("", ""), "the editor named no focused project")
+
+
 #: The projects this daemon may **design-write** into when nobody says
 #: otherwise (537A3). The scratch projects are the only ones the project's own
 #: rules allow an AI to write at all, so "silence" has to mean them and nothing
@@ -1189,7 +1307,7 @@ class BridgeDaemon:
     """Routes frames between CLI callers and the connected editor windows."""
 
     token: str
-    home: Path = field(default_factory=lambda: BOARDWISE_HOME)
+    home: Path = field(default_factory=boardwise_home)
     #: Every connected editor window, keyed by its hub key (the ``hello``
     #: ``instanceId``, suffixed when two live sockets claim one). **All of them**:
     #: 023 replaced the single-active slot with a registry, so a second window is
@@ -1984,6 +2102,106 @@ class BridgeDaemon:
 
     # -- dispatch -------------------------------------------------------
 
+    def _design_write_needs_identity(self, spec: Action) -> bool:
+        """Whether this request must read the editor's identity before writing.
+
+        True for every design write unless ``*`` is in force (577 / W-D1).
+        ``*`` is the legacy full-allow switch (537A3), and freezing it is the
+        point: an old caller must keep the exact frame sequence it had, and a
+        round trip it never asked for is a new behaviour under an old name.
+
+        Reads cannot change anything; navigation and ``sys.self_update`` move the
+        focus or replace the connector, never a project byte. The probe itself
+        is a read forwarded through :meth:`_forward`, which never takes the
+        window's lock — so the fresh read can run inside it without recursion.
+        """
+        if spec.risk == "read" or not spec.design_write:
+            return False
+        return "*" not in (self.write_projects or frozenset())
+
+    async def _read_identity_for_write(
+        self, spec: Action, window: WindowConnection
+    ) -> None:
+        """Ask the routed window who it is, once, and refuse if it cannot say.
+
+        **Called inside ``window.write_lock`` and nowhere else.** That placement
+        is the whole fix for 566-D-1: ``window.project_name`` is a snapshot that
+        the *previous* response refreshed, so reading it before the lock judges a
+        call parked on the lock by a project the operator has already left. Read
+        after the lock is taken, the answer is as fresh as the frame that follows
+        it, which is the only ordering in which the gate describes the write it
+        is gating.
+
+        The success path **overwrites** the window's project from the answer, so
+        the routing table, the audit line and the relayed context all move to the
+        truth the editor just reported. Both halves are written as they came: the
+        gate matches a name or a uuid, so a project the editor named only one way
+        is still judged on that one half and on nothing stale beside it. An
+        answer that names neither half is refused, never pasted over the snapshot
+        as if it were a fact.
+
+        Failure modes are deliberately not one thing:
+
+        - an editor that does not have the action (``UNKNOWN_ACTION``) has **no
+          identity capability**, which for a design write is the same danger as
+          an unknown project — refused as ``WRITE_PROJECT_FORBIDDEN``;
+        - ``TIMEOUT`` / ``DISCONNECTED`` / a connector-side error is a fact about
+          *this call*, and rewriting it as a project refusal would tell the
+          caller something safely false. Those codes pass through untouched.
+        """
+        try:
+            payload = await self._forward(IDENTITY_ACTION, {}, ROLE_CLI, window)
+        except BridgeError as exc:
+            if exc.code != ErrorCodes.UNKNOWN_ACTION:
+                raise
+            raise self._identity_refusal(
+                spec,
+                window,
+                "this connector does not answer sys.identity (an older build), so "
+                "the project this write would land in cannot be read",
+                failure="connector-without-identity",
+            ) from None
+        project, reason = _verified_identity(payload)
+        if not (project[0] or project[1]):
+            raise self._identity_refusal(
+                spec, window, reason, failure="identity-unreadable"
+            )
+        window.project_name, window.project_uuid = project
+
+    def _identity_refusal(
+        self, spec: Action, window: WindowConnection, reason: str, *, failure: str
+    ) -> BridgeError:
+        """The refusal for "the editor could not prove which project this is".
+
+        Same four facts as :meth:`_check_design_write`'s refusal — the action, the
+        allowed set, the project as far as it is known, and that no design write
+        left — plus the reason the identity read failed, because "cannot tell"
+        has five different causes and the caller needs the one that happened.
+        """
+        allowed = self.write_projects or frozenset()
+        rendered_allowed = ", ".join(sorted(allowed)) or "(none)"
+        return BridgeError(
+            ErrorCodes.WRITE_PROJECT_FORBIDDEN,
+            f"{spec.name} is a design write, and the routed window's project "
+            f"could not be read from the editor ({reason}); an unknown project "
+            "is not a licence to write. "
+            f"No design write was forwarded to the editor — the only frame this "
+            f"call sent was the read-only {IDENTITY_ACTION} probe. Design writes "
+            f"are allowed only for: {rendered_allowed}. To allow a project, list "
+            "its name or uuid in BOARDWISE_WRITE_PROJECTS (comma-separated; '*' "
+            "restores legacy full access).",
+            {
+                "action": spec.name,
+                "project": None,
+                "projectName": window.project_name or None,
+                "projectUuid": window.project_uuid or None,
+                "allowed": sorted(allowed),
+                "risk": spec.risk,
+                "identity": failure,
+                "identityReason": reason,
+            },
+        )
+
     def _check_design_write(self, spec: Action, window: WindowConnection) -> None:
         """Refuse a design write into a project this daemon was not told to write.
 
@@ -2001,18 +2219,24 @@ class BridgeDaemon:
         is not a read is a design write and must name a project the operator
         allowed.
 
-        Identity is the window's own claim (``projectName`` / ``projectUuid``,
-        refreshed by every response) because the daemon cannot read a project
-        itself. A window that named neither is refused rather than assumed safe:
-        "which project" being unknown is the same danger as "the wrong project",
-        and refusing costs only a ``hello``-less connector's write.
+        Identity is the window's own claim (``projectName`` / ``projectUuid``),
+        and since 577 that claim is **re-read from the editor inside the write
+        lock** for every gated call (:meth:`_read_identity_for_write`), not taken
+        from the last response's snapshot — 566-D-1 was exactly that snapshot
+        being stale after a project switch. A window that named neither is still
+        refused rather than assumed safe: "which project" being unknown is the
+        same danger as "the wrong project", and refusing costs only a
+        ``hello``-less connector's write.
 
         The refusal happens **after routing** (so the message can name the
         project actually selected) and **before the out-parameter is marked and
-        before the frame is forwarded** (so a caller cannot report a write that
-        never left the daemon). It names the action, the project, the allowed set
-        and the fact that nothing was forwarded — the four things needed to fix
-        it without reading this code.
+        before the design write is forwarded** (so a caller cannot report a write
+        that never left the daemon). It names the action, the project, the
+        allowed set and the fact that no design write was forwarded — the four
+        things needed to fix it without reading this code. That last half is the
+        precise claim: the read-only identity probe has already been sent on this
+        path, so "nothing was forwarded" would be wrong in the one direction that
+        makes a reader stop looking for the frame that did go out.
         """
         if spec.risk == "read" or not spec.design_write:
             return
@@ -2034,10 +2258,12 @@ class BridgeDaemon:
         rendered_allowed = ", ".join(sorted(allowed)) or "(none)"
         raise BridgeError(
             ErrorCodes.WRITE_PROJECT_FORBIDDEN,
-            f"{spec.name} is a design write, and the routed window's project is "
-            f"{project!r}; design writes are allowed only for: "
-            f"{rendered_allowed}. Nothing was forwarded to the editor. To allow "
-            "a project, list its name or uuid in BOARDWISE_WRITE_PROJECTS "
+            f"{spec.name} is a design write, and the identity the editor reported "
+            f"inside this window's write lock is {project!r}; design writes are "
+            f"allowed only for: {rendered_allowed}. "
+            f"No design write was forwarded to the editor — the only frame this "
+            f"call sent was the read-only {IDENTITY_ACTION} probe. To allow a "
+            "project, list its name or uuid in BOARDWISE_WRITE_PROJECTS "
             "(comma-separated; '*' restores legacy full access).",
             {
                 "action": spec.name,
@@ -2078,11 +2304,20 @@ class BridgeDaemon:
         # routing, because the refusal has to name the project that *would* have
         # been written; before `routed` is marked and before `_forward`, because
         # a refused call was not sent anywhere and must not read as if it was.
-        self._check_design_write(spec, window)
-        if routed is not None:
-            routed["windowKey"] = window.key
-        if spec.risk == "read":
-            return await self._forward(action, params, role, window)
+        #
+        # 577 / W-D1: for a **design write** the gate moved inside the lock, and
+        # with it a fresh read of the editor's identity — the snapshot in
+        # `window.project_name` is refreshed only by responses, so a project
+        # switch left the gate judging the previous project (566-D-1), and a call
+        # parked on the lock would judge it even later. Reads, navigation,
+        # `sys.self_update` and the `*` legacy switch keep this order exactly.
+        fresh_identity = self._design_write_needs_identity(spec)
+        if not fresh_identity:
+            self._check_design_write(spec, window)
+            if routed is not None:
+                routed["windowKey"] = window.key
+            if spec.risk == "read":
+                return await self._forward(action, params, role, window)
         # Writes serialise **per window** and only per window (023 §per-window
         # 写互斥). One editor is a single thread of truth — two placements racing
         # inside one window is how a half-drawn page happens — while two windows
@@ -2109,6 +2344,14 @@ class BridgeDaemon:
                     "window's write lock",
                 )
             try:
+                if fresh_identity:
+                    # Inside the lock, immediately before the write: the answer
+                    # describes the editor this frame is about to land in, not
+                    # the one any earlier response described.
+                    await self._read_identity_for_write(spec, window)
+                    self._check_design_write(spec, window)
+                    if routed is not None:
+                        routed["windowKey"] = window.key
                 return await self._forward(action, params, role, window)
             except (websockets.ConnectionClosed, OSError) as exc:
                 # The re-check above is one instant old, and the socket can

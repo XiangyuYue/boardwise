@@ -9,7 +9,12 @@ dependency would be the one thing this path cannot carry.
 What the picture shows, and why each element is there:
 
 * the **page and the keep-outs**, the same boxes the readability checker tests
-  against, so "it fits" is visible rather than asserted;
+  against, so "it fits" is visible rather than asserted. When no page is stated
+  the frame is the drawing's own extent — parts, texts, labels, wires,
+  junctions, keep-outs and module frames together — because a keep-out that fell
+  outside the picture would hide exactly the collision it exists to show. A plan
+  with no geometry at all still gets a margin square: a zero-width document is a
+  blank one;
 * every **part** as its symbol's body box, with its pins and the reference/value
   text at the boxes the *compiler* computed — the font-metric boxes, drawn dashed,
   because a reviewer who sees only glyphs cannot tell whether a text was measured
@@ -30,6 +35,14 @@ The transform is a pure map from canvas to SVG pixels: SVG's y grows down and th
 canvas' grows up (010c measured), so ``Y = top - y``. Diagnostic text uses that
 map directly. Optional native symbol art is already captured in SVG coordinates
 at its stated pose; only its outer origin and positive scale are transformed.
+
+``scale`` magnifies the **drawing**: geometry, and with it every visual attribute
+a reader measures the drawing by — font sizes, stroke widths, dash pitch and dot
+radii. Shrinking only the coordinates left the glyphs at their 1:1 size inside
+boxes twice as tall, which is precisely the font-to-box relationship the preview
+exists to show. The caption strip stays in output pixels, so it reads at any
+magnification, and captured native art keeps its own captured size (only its
+origin and the one outer ``scale`` move it).
 """
 
 from __future__ import annotations
@@ -254,9 +267,18 @@ def render_svg(
         if key in art_by_pose:
             raise ValueError(f"native art {art.symbol_ref!r}: duplicate captured pose {key[1:]}")
         art_by_pose[key] = art
-    box = page_box if page_box is not None else _content_box(layout_plan, book)
+    box = _normalised_box(page_box) if page_box is not None else _content_box(
+        layout_plan, book, keepouts=keepouts, frames=frames
+    )
     width = (box[2] - box[0]) * scale
     height = (box[3] - box[1]) * scale
+    canvas_width = float(f"{width:.0f}")
+    canvas_height = float(f"{height:.0f}")
+    if canvas_width <= 0 or canvas_height <= 0:
+        raise ValueError(
+            f"preview canvas would be {canvas_width:.0f} x {canvas_height:.0f} pixels "
+            f"at scale {scale:g}: the drawing's extent is {width:g} x {height:g} units"
+        )
 
     def x(value: float) -> float:
         return (value - box[0]) * scale
@@ -264,11 +286,17 @@ def render_svg(
     def y(value: float) -> float:
         return (box[3] - value) * scale
 
+    #: A drawing attribute in output pixels. ``scale`` is a magnification of the
+    #: whole drawing, so glyphs, strokes, dash pitch and dots grow with it.
+    def px(value: float) -> float:
+        return value * scale
+
     def rect(item: Box, **attributes: str) -> str:
+        left, bottom, right, top = _normalised_box(item)
         return (
-            f'<rect x="{x(item[0]):.3f}" y="{y(item[3]):.3f}" '
-            f'width="{(item[2] - item[0]) * scale:.3f}" '
-            f'height="{(item[3] - item[1]) * scale:.3f}" '
+            f'<rect x="{x(left):.3f}" y="{y(top):.3f}" '
+            f'width="{(right - left) * scale:.3f}" '
+            f'height="{(top - bottom) * scale:.3f}" '
             + " ".join(f'{key}="{value}"' for key, value in attributes.items())
             + "/>"
         )
@@ -294,13 +322,15 @@ def render_svg(
     parts.extend(_grid(box, scale, x, y))
     for keep in keepouts:
         parts.append(rect(keep, fill="none", stroke=_COLOURS["keepout"],
-                          **{"stroke-dasharray": "4 3"}))
+                          **{"stroke-dasharray": f"{px(4):g} {px(3):g}"}))
     for name, frame in frames:
+        left, _, _, top = _normalised_box(frame)
         parts.append(rect(frame, fill="none", stroke=_COLOURS["frame"],
-                          **{"stroke-dasharray": "6 4", "stroke-width": "1.4"}))
+                          **{"stroke-dasharray": f"{px(6):g} {px(4):g}",
+                             "stroke-width": f"{px(1.4):g}"}))
         parts.append(
-            f'<text x="{x(frame[0]) + 5:.3f}" y="{y(frame[3]) + 13:.3f}" '
-            f'fill="{_COLOURS["frame"]}" font-size="12">{escape(str(name))}</text>'
+            f'<text x="{x(left) + px(5):.3f}" y="{y(top) + px(13):.3f}" '
+            f'fill="{_COLOURS["frame"]}" font-size="{px(12):g}">{escape(str(name))}</text>'
         )
 
     for symbol in layout_plan.power_symbols:
@@ -310,29 +340,15 @@ def render_svg(
         ) if profile is not None else None
         if glyph is not None:
             parts.append(rect(glyph, fill="none", stroke=_COLOURS["flag"],
-                              **{"stroke-width": "1.2"}))
+                              **{"stroke-width": f"{px(1.2):g}"}))
         parts.append(
-            f'<circle cx="{x(symbol.x):.3f}" cy="{y(symbol.y):.3f}" r="2.5" '
+            f'<circle cx="{x(symbol.x):.3f}" cy="{y(symbol.y):.3f}" r="{px(2.5):g}" '
             f'fill="{_COLOURS["flag"]}"/>'
         )
         parts.append(
-            f'<text x="{x(symbol.x) + 6:.3f}" y="{y(symbol.y) - 4:.3f}" '
-            f'fill="{_COLOURS["flag"]}" font-size="{NATIVE_TEXT_FONT_SIZE:g}">'
+            f'<text x="{x(symbol.x) + px(6):.3f}" y="{y(symbol.y) - px(4):.3f}" '
+            f'fill="{_COLOURS["flag"]}" font-size="{px(NATIVE_TEXT_FONT_SIZE):g}">'
             f"{escape(symbol.net)}</text>"
-        )
-
-    for segment in layout_plan.segments:
-        points = " ".join(
-            f"{x(point[0]):.3f},{y(point[1]):.3f}" for point in segment.points
-        )
-        parts.append(
-            f'<polyline points="{points}" fill="none" stroke="{_COLOURS["wire"]}" '
-            'stroke-width="1.8"/>'
-        )
-    for junction in layout_plan.junctions:
-        parts.append(
-            f'<circle cx="{x(junction.x):.3f}" cy="{y(junction.y):.3f}" r="3.2" '
-            f'fill="{_COLOURS["junction"]}"/>'
         )
 
     for part in layout_plan.parts:
@@ -355,33 +371,51 @@ def render_svg(
         body = _body_box(profile, pose, origin)
         if body is not None:
             parts.append(rect(body, fill=_COLOURS["body"], stroke=_COLOURS["bodyEdge"],
-                              **{"stroke-width": "1.2"}))
+                              **{"stroke-width": f"{px(1.2):g}"}))
         if profile is not None:
             for pin in profile.pins:
                 tip = _transform(pin.tip, pose, origin)
                 parts.append(
-                    f'<circle cx="{x(tip[0]):.3f}" cy="{y(tip[1]):.3f}" r="2.2" '
+                    f'<circle cx="{x(tip[0]):.3f}" cy="{y(tip[1]):.3f}" r="{px(2.2):g}" '
                     f'fill="{_COLOURS["pin"]}"/>'
                 )
                 parts.append(
-                    f'<text x="{x(tip[0]) + 4:.3f}" y="{y(tip[1]) - 3:.3f}" '
-                    f'fill="{_COLOURS["pin"]}" font-size="9">'
+                    f'<text x="{x(tip[0]) + px(4):.3f}" y="{y(tip[1]) - px(3):.3f}" '
+                    f'fill="{_COLOURS["pin"]}" font-size="{px(9):g}">'
                     f'{escape(str(pin.number))}</text>'
                 )
         parts.append(
-            f'<circle cx="{x(part.x):.3f}" cy="{y(part.y):.3f}" r="1.6" '
+            f'<circle cx="{x(part.x):.3f}" cy="{y(part.y):.3f}" r="{px(1.6):g}" '
             f'fill="{_COLOURS["bodyEdge"]}"/>'
+        )
+
+    # Wires and junctions after the bodies: a conductor crossing a symbol is a
+    # readability finding, so the preview must show it rather than let the
+    # opaque body box paint over it.
+    for segment in layout_plan.segments:
+        points = " ".join(
+            f"{x(point[0]):.3f},{y(point[1]):.3f}" for point in segment.points
+        )
+        parts.append(
+            f'<polyline points="{points}" fill="none" stroke="{_COLOURS["wire"]}" '
+            f'stroke-width="{px(1.8):g}"/>'
+        )
+    for junction in layout_plan.junctions:
+        parts.append(
+            f'<circle cx="{x(junction.x):.3f}" cy="{y(junction.y):.3f}" r="{px(3.2):g}" '
+            f'fill="{_COLOURS["junction"]}"/>'
         )
 
     for text in layout_plan.texts:
         parts.append(rect(text.bbox, fill="none", stroke=_COLOURS["textBox"],
-                          **{"stroke-dasharray": "2 2", "stroke-width": "0.8"}))
+                          **{"stroke-dasharray": f"{px(2):g} {px(2):g}",
+                             "stroke-width": f"{px(0.8):g}"}))
         centre_x = (text.bbox[0] + text.bbox[2]) / 2.0
         centre_y = (text.bbox[1] + text.bbox[3]) / 2.0
         parts.append(
-            f'<text x="{x(centre_x):.3f}" y="{y(centre_y) + 3:.3f}" '
+            f'<text x="{x(centre_x):.3f}" y="{y(centre_y) + px(3):.3f}" '
             f'fill="{_COLOURS["text"]}" text-anchor="middle" '
-            f'font-size="{NATIVE_TEXT_FONT_SIZE:g}">'
+            f'font-size="{px(NATIVE_TEXT_FONT_SIZE):g}">'
             f"{escape(text.text)}</text>"
         )
     for label in layout_plan.labels:
@@ -390,29 +424,31 @@ def render_svg(
             # No row the host prints (native label, no carrier, unmodelled
             # vertical run): the static box stays as the diagnostic it always was.
             parts.append(rect(label.bbox, fill="none", stroke=_COLOURS["label"],
-                              **{"stroke-dasharray": "2 2", "stroke-width": "0.8"}))
+                              **{"stroke-dasharray": f"{px(2):g} {px(2):g}",
+                                 "stroke-width": f"{px(0.8):g}"}))
             centre_x = (label.bbox[0] + label.bbox[2]) / 2.0
             centre_y = (label.bbox[1] + label.bbox[3]) / 2.0
             parts.append(
-                f'<text x="{x(centre_x):.3f}" y="{y(centre_y) + 3:.3f}" '
+                f'<text x="{x(centre_x):.3f}" y="{y(centre_y) + px(3):.3f}" '
                 f'fill="{_COLOURS["label"]}" text-anchor="middle" '
-                f'font-size="{NATIVE_TEXT_FONT_SIZE:g}">'
+                f'font-size="{px(NATIVE_TEXT_FONT_SIZE):g}">'
                 f"{escape(label.text)}</text>"
             )
         else:
             # The name is printed on its carrier's longest run: the dashed box is
             # that measured row, the glyphs start at the run's midpoint.
             parts.append(rect(row.box, fill="none", stroke=_COLOURS["label"],
-                              **{"stroke-dasharray": "2 2", "stroke-width": "0.8"}))
+                              **{"stroke-dasharray": f"{px(2):g} {px(2):g}",
+                                 "stroke-width": f"{px(0.8):g}"}))
             parts.append(
-                f'<text x="{x(row.box[0]):.3f}" y="{y(row.box[1]) - 3:.3f}" '
+                f'<text x="{x(row.box[0]):.3f}" y="{y(row.box[1]) - px(3):.3f}" '
                 f'fill="{_COLOURS["label"]}" text-anchor="start" '
-                f'font-size="{NATIVE_TEXT_FONT_SIZE:g}">'
+                f'font-size="{px(NATIVE_TEXT_FONT_SIZE):g}">'
                 f"{escape(label.text)}</text>"
             )
         # The anchor is the label's own fact and does not move with its name's row.
         parts.append(
-            f'<circle cx="{x(label.x):.3f}" cy="{y(label.y):.3f}" r="2.0" '
+            f'<circle cx="{x(label.x):.3f}" cy="{y(label.y):.3f}" r="{px(2.0):g}" '
             f'fill="{_COLOURS["label"]}"/>'
         )
 
@@ -521,13 +557,14 @@ def _grid(box: Box, scale: float, x, y) -> list[str]:
     """A faint every-50-units grid, so a reader can measure by eye."""
     out: list[str] = []
     step = 50.0
+    stroke_width = f"{0.6 * scale:g}"
     start = step * int(box[0] // step)
     while start <= box[2]:
         if start >= box[0]:
             out.append(
                 f'<line x1="{x(start):.3f}" y1="{y(box[3]):.3f}" '
                 f'x2="{x(start):.3f}" y2="{y(box[1]):.3f}" '
-                f'stroke="{_COLOURS["grid"]}" stroke-width="0.6"/>'
+                f'stroke="{_COLOURS["grid"]}" stroke-width="{stroke_width}"/>'
             )
         start += step
     start = step * int(box[1] // step)
@@ -536,10 +573,9 @@ def _grid(box: Box, scale: float, x, y) -> list[str]:
             out.append(
                 f'<line x1="{x(box[0]):.3f}" y1="{y(start):.3f}" '
                 f'x2="{x(box[2]):.3f}" y2="{y(start):.3f}" '
-                f'stroke="{_COLOURS["grid"]}" stroke-width="0.6"/>'
+                f'stroke="{_COLOURS["grid"]}" stroke-width="{stroke_width}"/>'
             )
         start += step
-    del scale
     return out
 
 
@@ -630,10 +666,30 @@ def _body_box(
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+def _normalised_box(item: Box) -> Box:
+    """``item`` with its lower corner first — the one convention `_body_box` uses.
+
+    A box read from a document may state either corner first; a ``rect`` written
+    from a reversed box carries a negative ``width`` and SVG drops it entirely,
+    which is how a text box used to vanish from the preview without a word.
+    """
+    left, right = sorted((float(item[0]), float(item[2])))
+    bottom, top = sorted((float(item[1]), float(item[3])))
+    return (left, bottom, right, top)
+
+
 def _content_box(
-    plan: LayoutPlan, book: Mapping[str, SymbolProfile]
+    plan: LayoutPlan,
+    book: Mapping[str, SymbolProfile],
+    keepouts: Sequence[Box] = (),
+    frames: Sequence[tuple[str, Box]] = (),
 ) -> Box:
-    """The drawing's own extent, used as the frame when no page is stated."""
+    """The drawing's own extent, used as the frame when no page is stated.
+
+    Everything the picture draws is in it — including the keep-outs and module
+    frames, which are exactly the boxes "does it fit" is answered with, and a
+    lone junction, which can be the only thing outside a symbol's own extent.
+    """
     boxes: list[Box] = []
     for part in plan.parts:
         profile = book.get(part.symbol_ref)
@@ -652,14 +708,20 @@ def _content_box(
     for symbol in plan.power_symbols:
         boxes.append((symbol.x, symbol.y, symbol.x, symbol.y))
     for text in plan.texts:
-        boxes.append(text.bbox)
+        boxes.append(_normalised_box(text.bbox))
     for label in plan.labels:
-        boxes.append(label.bbox)
+        boxes.append(_normalised_box(label.bbox))
     for segment in plan.segments:
         for point in segment.points:
             boxes.append((point[0], point[1], point[0], point[1]))
+    for junction in plan.junctions:
+        boxes.append((junction.x, junction.y, junction.x, junction.y))
+    for keep in keepouts:
+        boxes.append(_normalised_box(keep))
+    for _, frame in frames:
+        boxes.append(_normalised_box(frame))
     if not boxes:
-        return (0.0, 0.0, 0.0, 0.0)
+        return (-PREVIEW_MARGIN, -PREVIEW_MARGIN, PREVIEW_MARGIN, PREVIEW_MARGIN)
     return (
         min(box[0] for box in boxes) - PREVIEW_MARGIN,
         min(box[1] for box in boxes) - PREVIEW_MARGIN,

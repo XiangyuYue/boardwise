@@ -1394,7 +1394,7 @@ def test_the_audit_log_alone_contradicts_nothing_was_written(tmp_path, monkeypat
     from boardwise import cli as cli_module
     from boardwise.bridge import daemon as daemon_module
 
-    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
     client = FaultClient(_geo(), die_after=5)
     result = _run(run_draw(
         client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,
@@ -1443,7 +1443,7 @@ def test_the_persistence_state_reaches_the_audit_log(tmp_path, monkeypatch):
     from boardwise import cli as cli_module
     from boardwise.bridge import daemon as daemon_module
 
-    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
     result = _timed_out_run()
     cli_module._audit_draw_persistence(result, 3)
 
@@ -1477,7 +1477,7 @@ def test_the_verified_state_is_the_only_one_that_may_say_saved(tmp_path, monkeyp
     from boardwise import cli as cli_module
     from boardwise.bridge import daemon as daemon_module
 
-    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
     client = FakeClient(_geo())
     result = _run(run_draw(
         client, _golden_model(), confirm=lambda: True, offsets=GOLDEN_OFFSETS,

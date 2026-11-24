@@ -193,6 +193,13 @@ class _FakeEditor:
             "components": components,
             "wires": [dict(item) for item in (seed.get("wires") or [])],
             "flags": [dict(item) for item in (seed.get("flags") or [])],
+            # 570: the drawing primitives a page starts with (text/bus/circle/
+            # rectangle/arc/polygon), kept so `sch.geometry` can report them the
+            # way the connector does — a page holding only a note is *content*.
+            "drawing": {
+                key: [dict(entry) for entry in (seed.get(key) or [])]
+                for key in drawapply.DRAWING_SECTIONS
+            },
         }
         self.page_stores[page] = store
         return store
@@ -204,6 +211,7 @@ class _FakeEditor:
         self.components = store["components"]
         self.wires = store["wires"]
         self.flags = store["flags"]
+        self.drawing = store["drawing"]
 
     # ---------------------------------------------------------- the page
 
@@ -253,8 +261,17 @@ class _FakeEditor:
                 for index, item in enumerate(self.wires)
             ],
             "netlabels": [],
+            "pins": [],
+            **{
+                key: list(self.drawing.get(key) or [])
+                for key in drawapply.DRAWING_SECTIONS
+            },
             "bboxes": {"sheet-1": FRAME},
-            "meta": {"available": {"components": True, "wires": True, "bboxes": True}},
+            "meta": {"available": {
+                "components": True, "wires": True, "pins": True,
+                "netlabels": True, "bboxes": True,
+                **{key: True for key in drawapply.DRAWING_SECTIONS},
+            }},
         }
 
     # --------------------------------------------------------- the calls

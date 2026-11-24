@@ -22,15 +22,21 @@ from types import SimpleNamespace
 
 import pytest
 
+from boardwise.core.layoutplan import ROUTE_AUTOMATIC
 from boardwise.core.presentationspec import PresentationSpec
 from boardwise.engines import drawcompiler as dc
 from test_548p64_pre_group_lanes import _lcd_case
 
 #: canonical JSON of the built plan for the plain page with no declaration —
 #: captured from the pre-change compiler and byte-identical after the change.
+#: Since 590 the document states `route`/`provenanceSha256`, neither of which is
+#: part of `geometry_json`: the pin is compared against the projection with the
+#: two keys taken off, and the keys are asserted separately in the test.
 PLAIN_UNDECLARED_SHA = (
     "0f1a5299d9a5a2afb547538bee052ead4f6f43c472abe26d68f47c3fb420322f"
 )
+
+_ROUTE_KEYS = ("route", "provenanceSha256")
 
 
 def _document(base, *, declared=False, plain=False):
@@ -70,10 +76,20 @@ def _case(*, declared=False):
     return _rebuild(base_ctx, document)
 
 
-def _plan_sha(built):
-    payload = json.dumps(
-        built.plan.to_jsonable(), sort_keys=True, separators=(",", ":"),
-    ).encode()
+def _pre_590_sha(built) -> str:
+    """The pinned sha is the pre-590 document: compare its projection.
+
+    590 adds exactly `route`/`provenanceSha256`; neither is inside
+    `geometry_json`. A third moving key is a geometry change and the pin must not
+    absorb it. The new keys are asserted separately by the caller.
+    """
+    body = built.plan.to_jsonable()
+    projection = {key: value for key, value in body.items() if key not in _ROUTE_KEYS}
+    assert set(body) - set(projection) == set(_ROUTE_KEYS), (
+        "590 must add exactly `route` and `provenanceSha256`; any other key is a "
+        "changed field hiding behind the new ones"
+    )
+    payload = json.dumps(projection, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -169,7 +185,15 @@ def test_a_page_with_no_declaration_keeps_its_bytes():
 
     assert built is not None, failure
     assert dc._flag_grouping(ctx) is False
-    assert _plan_sha(built) == PLAIN_UNDECLARED_SHA
+    assert _pre_590_sha(built) == PLAIN_UNDECLARED_SHA, (
+        "the pre-590 fields and coordinates must be byte-identical to the pin; "
+        "only `route`/`provenanceSha256` may be new"
+    )
+    body = built.plan.to_jsonable()
+    assert body["route"] == ROUTE_AUTOMATIC and built.plan.route_declared is True
+    assert body["provenanceSha256"] == built.plan.provenance_sha256(), (
+        "the seal is this plan's own route + geometry digest"
+    )
 
 
 def test_a_gnd_only_declaration_keeps_the_undeclared_rail_geometry():

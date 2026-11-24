@@ -644,6 +644,9 @@ def test_an_object_that_is_not_a_parsed_symbol_is_refused_by_name():
 
 def _layout(**overrides):
     payload = {
+        # 夹具写的是生产文档本来就会写的身份：kind + 整数 planVersion（582 起载入必填）。
+        "kind": "boardwise-layout-plan",
+        "planVersion": 1,
         "source": {"circuitSha256": HEX, "presentationSha256": DIGEST_B},
         "target": {"projectUuid": "proj-1", "pageUuid": "page-1",
                    "hostVersion": "3.2.186", "connectorVersion": "0.9.0"},

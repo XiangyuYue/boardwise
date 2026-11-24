@@ -229,7 +229,13 @@ class _PageEditor:
             if ident in self.items and self.items[ident]["kind"] != "wire":
                 bboxes[ident] = self.extent(self.items[ident])
         return {"components": components, "wires": wires, "pins": [], "netlabels": [],
-                "bboxes": bboxes, "meta": {"available": {"components": True}}}
+                **{key: [] for key in drawapply.DRAWING_SECTIONS},
+                "bboxes": bboxes,
+                "meta": {"available": {
+                    "components": True, "wires": True, "pins": True,
+                    "netlabels": True,
+                    **{key: True for key in drawapply.DRAWING_SECTIONS},
+                }}}
 
     # ----------------------------------------------------------- the calls
 
@@ -247,6 +253,19 @@ class _PageEditor:
             }
         if action == "doc.focus":
             return {"activated": True}
+        if action == "sys.get_document_source":
+            # The page's own record stream, shaped the way the host writes one
+            # (533's `_source`) and stating the sheet this fake page **is**
+            # (`SHEET`, i.e. `PAGE_BOX` 0,0,1169,826).  A page plan carries the
+            # sheet it was packed for, and `draw apply`'s S-01 leg reads this to
+            # compare against it (569): without the answer the leg cannot judge
+            # the landing at all.
+            from test_533_island_guard import _source
+
+            return {"data": _source({
+                "Width": str(SHEET["maxX"] - SHEET["minX"]),
+                "Height": str(SHEET["maxY"] - SHEET["minY"]),
+            }, attached=True)}
         if action == "sys.identity":
             return {"consistent": True, "consistentBasis": "project-uuid"}
         if action == "sch.geometry":

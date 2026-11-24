@@ -135,7 +135,7 @@ def opted_out() -> bool:
 
 
 def log_dir(home: Path | None = None) -> Path:
-    return (home or _daemon.BOARDWISE_HOME) / LOG_DIR_NAME
+    return (home or _daemon.boardwise_home()) / LOG_DIR_NAME
 
 
 def log_path(home: Path | None = None) -> Path:
@@ -233,7 +233,7 @@ def log_tail(path: Path | None, lines: int = LOG_TAIL_LINES) -> str:
 
 
 def stamp_path(home: Path | None = None) -> Path:
-    return (home or _daemon.BOARDWISE_HOME) / START_STAMP_NAME
+    return (home or _daemon.boardwise_home()) / START_STAMP_NAME
 
 
 def _claim(stamp: Path) -> bool:

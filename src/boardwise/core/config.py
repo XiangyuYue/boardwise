@@ -13,18 +13,27 @@ Two spellings of the same setting are read, one is written:
 * nested — ``{"review": {"aesthetics": true}}`` — accepted because a human who
   opens the file by hand will reasonably try it.
 
-`BOARDWISE_HOME` overrides the directory, matching the daemon's own convention
-(`bridge/daemon.py`), so a test — or a second profile — never has to touch the
-real one.
+`BOARDWISE_HOME` overrides the directory, and since 598 the reader itself lives
+in :mod:`boardwise.home` (the package root), because the bridge has to resolve
+the same directory and may not import this module — the layer arrows run one
+way. See :func:`boardwise_home` below.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import stat
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# The settings error is re-exported from the shared home module (598), not
+# redeclared: 586/587 require a bad ``BOARDWISE_HOME`` to be the *same* named
+# error from every consumer, and the bridge may not import this module — a
+# second class would make the bridge's refusal uncatchable here.
+from ..home import ConfigError, boardwise_home as _shared_home
 
 #: The file name under the boardwise home.
 CONFIG_FILE = "config.json"
@@ -34,10 +43,6 @@ CONFIG_FILE = "config.json"
 #: string where a switch belongs and be silently trusted.
 _TRUE = frozenset({"on", "true", "1", "yes", "y", "开", "是"})
 _FALSE = frozenset({"off", "false", "0", "no", "n", "关", "否"})
-
-
-class ConfigError(ValueError):
-    """The configuration cannot be read, or the key/value is not one it knows."""
 
 
 @dataclass(frozen=True)
@@ -68,9 +73,14 @@ SETTINGS: dict[str, Setting] = {
 
 
 def boardwise_home() -> Path:
-    """The boardwise home directory (``BOARDWISE_HOME`` wins, else ``~/.boardwise``)."""
-    override = os.environ.get("BOARDWISE_HOME")
-    return Path(override) if override else Path.home() / ".boardwise"
+    """The boardwise home directory (``BOARDWISE_HOME`` wins, else ``~/.boardwise``).
+
+    Delegates to :func:`boardwise.home.boardwise_home` (598). The reader moved to
+    the package root because the bridge resolves the same directory and cannot
+    import this module; the refusals (relative, trailing dot or whitespace) and
+    the accepted spellings are the shared module's, unchanged from 586.
+    """
+    return _shared_home()
 
 
 def config_path(home: Path | None = None) -> Path:
@@ -107,11 +117,22 @@ def read_config(home: Path | None = None) -> dict[str, Any]:
     """The raw file contents, or ``{}`` when there is no file.
 
     A malformed file is an error, never silently empty: a settings file the tool
-    cannot read is a settings file the user believes is in force.
+    cannot read is a settings file the user believes is in force. The same holds
+    for a path that exists as something other than a regular file (a directory
+    in ``config.json``'s place) — that is not "no settings", it is settings the
+    tool cannot see.
     """
     path = config_path(home)
-    if not path.is_file():
+    try:
+        mode = path.stat().st_mode
+    except FileNotFoundError:
         return {}
+    except OSError as exc:
+        raise ConfigError(f"{path}: cannot read: {exc}") from exc
+    if not stat.S_ISREG(mode):
+        raise ConfigError(
+            f"{path}: expected a settings file, but this is not a regular file"
+        )
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
@@ -194,9 +215,10 @@ def set_setting(key: str, value: Any, *, home: Path | None = None) -> Path:
     """Write one key, atomically, and return the file's path.
 
     Read-modify-write over the whole document (a settings file is small and a
-    partial write would lose somebody else's key), with a `.tmp` sibling plus
-    `os.replace` so an interrupted write cannot leave a half file where the
-    settings used to be.
+    partial write would lose somebody else's key), with a uniquely-named `.tmp`
+    sibling plus `os.replace` so an interrupted write cannot leave a half file
+    where the settings used to be. A write that cannot land is a `ConfigError`
+    naming the path and the reason, and it takes its temporary file with it.
     """
     setting = SETTINGS.get(key)
     if setting is None:
@@ -209,12 +231,41 @@ def set_setting(key: str, value: Any, *, home: Path | None = None) -> Path:
     raw = {k: v for k, v in raw.items() if k != key}  # flat wins; no stale duplicate
     raw[key] = value
     path = config_path(home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(
-        json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    os.replace(tmp, path)
+    blob = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ConfigError(
+            f"{path}: cannot create {path.parent}: {exc}"
+        ) from exc
+    # A random sibling name (not a fixed `.tmp`) plus unlink on failure: a write
+    # that cannot land must report why, and must not leave its half behind.
+    temporary: str | None = None
+    try:
+        handle = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=str(path.parent),
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        )
+        temporary = handle.name
+        with handle:
+            handle.write(blob)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    except OSError as exc:
+        raise ConfigError(f"{path}: cannot write: {exc}") from exc
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
     return path
 
 

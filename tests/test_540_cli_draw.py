@@ -78,7 +78,8 @@ def test_owner_manifest_covers_the_two_command_modules():
     # 562 adds `core/livepath.py` (shared) and `pcb_path.py` (assembly) — 161.
     # 563A/B add `core/netlist.py` and `core/circuitsemantics.py` (shared), and
     # the smart-lock batch adds `engines/grammar/mixed_island.py` (draw) — 164.
-    assert len(data["modules"]) == 164
+    # 598 adds `home.py` (shared, the dynamic `BOARDWISE_HOME` resolver) — 165.
+    assert len(data["modules"]) == 165
     assert test_owner_rules.LEGACY_EDGES == frozenset()
 
 

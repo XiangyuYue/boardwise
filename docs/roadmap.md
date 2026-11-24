@@ -11,8 +11,21 @@
 
 ---
 
-## 1. 当前在哪（2026-11-22）
+## 1. 当前在哪（2026-11-25）
 
+- **568/569 第三批挖洞修复集成（2026-11-25，601 文档同步）**：`outputs/hole568/TRIAGE.md` 的 **32 条 reproduced** 已由 580–595 修复（页框 2 / 计划 schema 8 / CLI·config·HOME·parts 10 / 风格闸 3 / provenance·work-order·delivery 5 / lint 真值 1 / CLI 合同 2 / DSH 哨兵 1），580 另收 572-F 五项 SVG；597/597B、598、599 收口 R2 暴露的 7 项。**最终全量 `12 failed / 12743 passed / 26 skipped / 2 xfailed in 3100.49s`**，3 条 540 owner 计数由 600 单独修复（聚焦 50 passed），**剩 9 条已登记基线，未跑第三轮全量，12746 不是实测数**。Connector **900**、DSH **218/1**、Rust **177/4 ignored**；合同/卫生通过。**未提交、未推送、未部署、未发布**；真机/V3/V4/容器/多板/CBB 未覆盖，suspect 未修。汇总见 [`evidence/596/INTEGRATION.md`](../evidence/596/INTEGRATION.md)。
+- **566–579 修复集成（2026-11-24，历史读数）**：TRIAGE 的 14 条 reproduced 已逐批修复并独立复验，覆盖标题栏、空页、页面锁、量化/合线/census、文本、empty-legacy、实时写闸和删页回读；579 另关闭 575 引入的内置 sum 舍入回归。各批任务书与 `PARENT-ACCEPTANCE` 已落；Connector **900 passed + typecheck**，DSH **218 passed / 1 skipped** + typecheck/build，Rust fmt/clippy/test 通过（**177 passed / 4 ignored**）；最终全量 Python **12343 passed / 26 skipped / 2 xfailed / 9 failed**，9 条与 564 既有失败逐名一致，没有本批新增红项；不得写成全仓全绿、已提交或已发布。
+- **564 绘制验收与 P1 闭环（2026-11-24，`f508328`，未推送）**：已查明原会话绕过
+  `compile → plan → apply → lint → 独立视觉` 的根因，并修复电气硬闸、saved-page 标题栏双闸、
+  空复制属性身份判定、0.01 坐标量化回读及预览字号/名字载体模型。最终 P1 为 47 件/52 旗，
+  逐脚 **171 连接 + 18 NC = 189/189**，GND 41、+3V3 27、+5V 7，完整 lint **0E/1W/7I**，
+  独立原生视觉 ACCEPT，关闭重开 **saved_verified**（96 件、45 网、218 图元）。证据见
+  `.tmp_lock_p1/j7-final-candidate/live/delivery-summary.json`；自动编号映射保留在同目录。
+  本批只证明该页与该输入闭环，不宣称任意电路可自动布局。
+- **本批集成边界**：全量 Python **12101 passed / 18 failed**；其中 9 项在 HEAD 源码上同样失败，
+  4 项 CLI 合同和 4 项 owner 已修复，1 项为 POSIX 环境项。合同/owner 聚焦 **84 passed**；
+  connector 测试与 typecheck、DSH **218 passed / 1 skipped** + typecheck/build、Rust fmt/clippy/test
+  均通过。没有把全量称为全绿，也没有把基线红项归入本批新增。
 - **当前正式版**：`v0.6.3`（2026-11-22 发布，`prerelease=false`、latest；
   <https://github.com/XiangyuYue/boardwise/releases/tag/v0.6.3>）。本版提供在线 direct 与多跳
   PCB 铜路径、多单元器件身份、批量手册链、保存候选预检、零候选 `agent-adjusted` 恢复和
@@ -71,7 +84,7 @@
 | **v0.6.2**（正式版，2026-11-17 发布） | 离线铜路径、真实网络类、V4/PCB 证据、声明式服务支路与布局修复 | Python 11677 passed / 24 skipped / 2 xfailed；Connector 821；DSH 169/1；Rust 177/4 ignored；ARC 几何、非空网络类和任意自动整页不承诺 |
 | **v0.6.3**（正式版，2026-11-22 发布） | 在线 direct/多跳铜路径、多单元与跨板位号、手册链、保存候选与零候选恢复、页面/局部调整守卫 | 发布前挖洞修复 page lock 二次偏移和 path daemon 超时；Connector/DSH 893/218+1，Rust 177/4 ignored；完整验收与发布件哈希见 Release，未覆盖样本不关闭 |
 | **v0.6.x** | 041 跨板网络（DRAFT → 细化）+ **V4 适配** + **Rust strangler**：新工具/引擎默认 Rust，例外登记；旧工具垂直迁移 | 合同对齐 → Rust 默认 → 临时 Python fallback → 删除旧实现；迁移与算法不同批 |
-| **0.6.0 后（独立方向）** | **AI 电路语义编译层**：网表 → 类型化、类 C 的可读语言；AI 读编译后的电路语义，不再直接读原始网表 | 先调研语义合同与解释器/编译器边界及可验证还原；与 V3/V4 解析适配分批，不阻塞 0.6.0 |
+| **0.6.0 后（独立方向）** | **AI 电路语义编译层**：网表 → 类型化、类 C 的可读语言；AI 读编译后的电路语义，不再直接读原始网表 | **563A/B 首批完成聚焦验收**：统一读取、实例查询、原始事实回验与 two_pin/parallel/series 拓扑投影；合同见 [`docs/circuit-semantics.md`](circuit-semantics.md)。器件功能语义、真实 V3/V4 与真机未新验，后续分批 |
 | **v0.7.0** | Rust 接管全部受支持主流程；connector/DSH 薄适配可留 TS | 验收主流程，不追求逐行翻译全部 Python；无长期双业务实现 |
 | 远景 | R5 SPICE：等**绘制过关** + **041 跨板网络**两个前置 | 前置未满足不动 |
 
@@ -106,6 +119,7 @@
 | 520k–520v + 530A–530G | **多岛原理图**（设计 `evidence/523/DESIGN.md`）：岛内布局/连线/命名、跨岛命名、地/电源旗标、岛命令与标题栏 keepout | 已落；反激岛页 `draw compile` `ok=True`、真机 0 失配 / 10 旗标 / 标题栏零相交，证据 `evidence/530f/` |
 | 542 | 反激整页编译、落图、逐脚连通、live/replay lint、宿主视觉和关闭重开持久化 | **P0 完成，岳已确认人工锚**；证据 `evidence/542/final-p4.md`、`evidence/201h/live/` |
 | 543 | 拓扑角色驱动的构造式布局：**agent 声明功能岛、核心与阅读关系，解释器负责确定性几何**；CH343/CH340 两个拓扑 | **两拓扑三关通过**，随 `44901da` 提交；CH343 P38 `saved_verified`，CH340 P39 `saved_unverified`（待关闭重开）；证据 `evidence/543g/`、`evidence/543n/`、`evidence/543h/` |
+| 564 | **绘制验收链与 P1 闭环**：生产链旁路根因、电气硬闸、saved-page 标题栏双闸、空属性身份、量化回读与预览文字模型；原生逐脚/完整 lint/独立视觉/关闭重开 | **已完成并本地提交 `f508328`，未推送**：47 件/52 旗，171 连接+18 NC=189/189，lint 0E/1W/7I，独立视觉 ACCEPT，saved_verified。仅证明本页与当前输入，不宣称任意自动布局 |
 | 547 | SmartMedicineBox 固件约束逻辑原理图实测：30 件 / 31 网 / 8 岛，检验复杂 MCU 与多支路 | **自动整页仍未通过；547S 已通过**：共享网按 signal→非GND→GND 统一，87 passed / 1 strict xfailed + 独立变异通过。547D 暂停于 auto 标签走廊，547E 二件串联与自动整页真机串跑未开。**547F 命名脚/编号同脚修复已验收未提交**（仅聚焦 197 passed / 1 strict xfailed + 变异，不冒充自动整页），证据 `evidence/547/` |
 | 547G | **自动 / agent-adjusted 双轨**：自动线继续补通用几何；辅助线复用现有 LayoutPlan/ChangePlan，从 WiFi 单岛扩到整页，不互记成果 | **G1–G3 完成、G4 部分完成、当前暂停**：30件/31网/5NC/8岛辅助页过离线双层闸+独立逐脚/NC+逐岛视觉，主代理 lint 0E/0W/13I、宿主网表 30/30+31/31+5/5；DRC 0 error/200 warn `passed=false`，不得称通过；持久化仅 `saved_unverified`，待岳手动关闭重开。未跑完整四线；辅助成果不关闭 547D/E。详见 `tasks/547_smart_medicine_box.md` §547G |
 

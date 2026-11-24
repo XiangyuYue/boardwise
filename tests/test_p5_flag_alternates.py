@@ -27,6 +27,9 @@ What this file pins:
   through to the ordinary ladder instead of drawing the stale seat;
 * the hybrid walk keeps the **legacy** list and order first and adds only grades
   that share a legacy first run and corner and turn the opposite way;
+* a **non-native page whose ladder answers nothing** asks ``_flag_pin_lead``
+  exactly once: the expanded opposite-hang pass is native-attr only, and the
+  first call is already the empty one, so there is no second answer to rescue;
 * the ch343 four-island sheet compiles to its **8 pages / 0 failures** baseline.
 
 Restoring the old ``extra |= _lattice_nodes(...)`` / ``_nodes_in_box(...)`` lines
@@ -169,6 +172,56 @@ def test_alternates_reuse_the_first_run_and_turn_the_other_way(monkeypatch):
     assert picked[0][2] != picked[1][2], (
         "the pair that keeps apart must be the opposite-hang pair")
     assert not dc._corridor_pair_clash(*picked)
+
+
+# == 1b. an empty ladder has nothing the expanded pass could rescue (566C-01)
+
+
+def _counting_empty(monkeypatch):
+    """Ask the real shape once per rung, but always answer "no lead here"."""
+    asks: list[tuple] = []
+
+    def empty(ctx, placed, net_id, profile, member, point, router, blocked,
+              solids, bodies=None):
+        asks.append((member, point, frozenset(blocked)))
+        return dc._rounded(point), None, 1.0, []
+
+    monkeypatch.setattr(dc, "_flag_pin_lead", empty)
+    return asks
+
+
+def test_legacy_empty_ladder_asks_the_production_ladder_once(monkeypatch):
+    asks = _counting_empty(monkeypatch)
+    ctx = SimpleNamespace(presentation=SimpleNamespace(text_placement=""))
+    router = dc._Router(grid=5.0, residue=(0.0, 0.0), boxes=[],
+                        bounds=(0.0, 0.0, 800.0, 800.0))
+
+    answer = dc._flag_alternates(
+        ctx, None, "3V3", FLAG, "U1.1", (0.0, 0.0), router, set(), [], None)
+
+    assert answer == [], "an empty ladder has no grade to return"
+    assert len(asks) == 1, (
+        "a non-native page must not run the expanded opposite-hang pass at all; "
+        f"the production ladder was asked {len(asks)} times")
+
+
+def test_native_empty_ladder_still_walks_the_expanded_pass(monkeypatch):
+    asks = _counting_empty(monkeypatch)
+    ctx = SimpleNamespace(
+        presentation=SimpleNamespace(text_placement="native-attr"))
+    router = dc._Router(grid=5.0, residue=(0.0, 0.0), boxes=[],
+                        bounds=(0.0, 0.0, 800.0, 800.0))
+
+    answer = dc._flag_alternates(
+        ctx, None, "3V3", FLAG, "U1.1", (0.0, 0.0), router, set(), [], None)
+
+    assert answer == [], "an empty ladder has no grade to return"
+    assert len(asks) == 2, (
+        "the native page keeps its legacy walk plus the expanded pass; "
+        f"the production ladder was asked {len(asks)} times")
+    assert asks[0] == asks[1], (
+        "premise: the two passes ask the same first question, so an empty "
+        f"first answer is also an empty expanded one; asked {asks}")
 
 
 # ========= 2. the production ladder really answers both hangs; no duplicate

@@ -21,9 +21,10 @@ from boardwise.engines import svgpreview
 
 SVG = "http://www.w3.org/2000/svg"
 PAGE = (10.0, 20.0, 110.0, 120.0)
-# Includes the measured 7.006px native-text attribute on LayoutText; the rest of
-# the default diagnostic output is unchanged (see test_svgpreview_native_text.py).
-DEFAULT_SHA256 = "d66a1b4859e7beceaaf12ade8007c243e0fe053c430319628699f6f2ba7a3253"
+# Includes the measured 7.006px native-text attribute on LayoutText. Recomputed for
+# 580 F-3/F-4: at scale=2.0 every visual attribute is magnified together with the
+# geometry and wires/junctions are drawn after part bodies (was d66a1b48…).
+DEFAULT_SHA256 = "cf75ea98cc462b93423ecde019cf879ebbf4636c638b894c5476566cdf664aa4"
 SOURCE = "548P44 handwritten captured-pose test art; not a live calibration"
 ART = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="-15 -10 30 20">
 <style>*{stroke-linejoin:round}.pin-bar{stroke:#880000}</style>
@@ -75,6 +76,18 @@ def _probe(root, kind):
     return [node for node in root.iter() if node.get("data-probe") == kind]
 
 
+# The fallback pin dot (2.2) and origin dot (1.6) are magnified with the geometry,
+# so at the scale=2.0 this helper renders with they are emitted as r=4.4 / r=3.2.
+# 580C: asserting the pre-magnification 2.2 / 1.6 could never fail.
+FALLBACK_DOT_RADII = frozenset({"4.4", "3.2"})
+
+
+def _fallback_dots(root):
+    """Circles still drawn at the fallback diagnostic dot radii."""
+    return [node for node in root.iter()
+            if _local(node.tag) == "circle" and node.get("r") in FALLBACK_DOT_RADII]
+
+
 def _world(root, node, point):
     """Independently compose the actual SVG ancestors' affine transforms."""
     parents = {child: parent for parent in root.iter() for child in parent}
@@ -107,7 +120,8 @@ def _world(root, node, point):
 def test_no_art_default_matches_the_original_svg_snapshot():
     actual = _render()
     assert hashlib.sha256(actual.encode()).hexdigest() == DEFAULT_SHA256
-    assert 'r="2.2"' in actual and 'r="1.6"' in actual
+    # _render fixes scale=2.0, so the 2.2 / 1.6 diagnostic radii render as 4.4 / 3.2.
+    assert 'r="4.4"' in actual and 'r="3.2"' in actual
 
 
 def test_explicit_empty_art_keeps_the_original_default_bytes():
@@ -120,7 +134,9 @@ def test_native_geometry_and_pin_name_replace_fallback_marks_but_keep_plan_ink()
     assert len(_probe(root, "plate")) == len(_probe(root, "pin")) == 1
     assert "NATIVE_IN" in "".join(root.itertext())
     assert "PLAN_U1" in "".join(root.itertext())
-    assert 'r="2.2"' not in rendered and 'r="1.6"' not in rendered
+    assert not _fallback_dots(root), (
+        "native art must replace the diagnostic pin and origin circles"
+    )
     assert not any(node.get("fill") == "#e8e8e8" for node in root.iter())
     assert any(_local(node.tag) == "polyline" and node.get("stroke") == "#0b6b3a"
                for node in root.iter()), "plan conductors still use the existing renderer"
@@ -139,7 +155,7 @@ def test_native_art_replacement_has_independent_content_proofs(proof):
             "native pin segment must retain its captured endpoints"
         )
     else:
-        assert 'r="2.2"' not in rendered and 'r="1.6"' not in rendered, (
+        assert not _fallback_dots(root), (
             "native art must replace the diagnostic pin and origin circles"
         )
 
@@ -211,7 +227,8 @@ def test_material_selection_uses_exact_symbol_and_pose_and_preserves_the_source(
 
 def test_missing_material_keeps_the_diagnostic_part_fallback():
     rendered = _render(native_art=[_art(symbol_ref="OTHER")])
-    assert 'r="2.2"' in rendered and 'r="1.6"' in rendered
+    # same fallback marks, at the scale=2.0 radii this helper always renders with
+    assert 'r="4.4"' in rendered and 'r="3.2"' in rendered
     assert "NATIVE_IN" not in rendered
 
 

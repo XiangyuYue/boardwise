@@ -418,7 +418,7 @@ def test_the_census_is_the_pages_own_census(plan: ChangePlan) -> None:
     assert census.components == ["R1", "R2"]
     assert census.wire_count == len(plan.change.draw_wires)
     assert census.netflag_count == len(plan.change.draw_flags)
-    assert census.digest == drawapply.census_digest(census)
+    assert census.digest == drawapply.census_digest(census, page)
     # A flag has no designator (ComponentType netflag), which is why the
     # designator set cannot see it and the count exists.
     assert "R1" in census.components and census.netflag_count == 2

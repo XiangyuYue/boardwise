@@ -317,7 +317,7 @@ def bridge(monkeypatch, tmp_path):
     _FakeSearchBridge.answer = {}
     _FakeSearchBridge.calls = []
     monkeypatch.setattr(client_module, "BridgeClient", _FakeSearchBridge)
-    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
     return _FakeSearchBridge
 
 

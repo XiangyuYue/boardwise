@@ -66,8 +66,29 @@ function keyed(ids, poseOf = () => ({})) {
 /**
  * A host with the schematic + PCB primitive classes the dispatch walks.
  * `without` drops a namespace entirely (the API-missing structural case).
+ *
+ * `pages` is the project's **page table**, and `deleteEffect` is what the fake
+ * `deleteSchematicPage` actually does to it:
+ *
+ * | effect        | answer | table after the call                    |
+ * |---------------|--------|-----------------------------------------|
+ * | `remove`      | true   | the addressed page is gone              |
+ * | `none`        | true   | unchanged — the 566-D-3 shape           |
+ * | `other`       | true   | a page nobody asked about gone          |
+ * | `extra`       | true   | the addressed page **and** another gone |
+ *
+ * The handler is supposed to believe the table, not the answer, so a host whose
+ * answer and table disagree must not produce a success. `pageReadsBeforeFailure`
+ * lets the *n*-th read throw: the delete's before-read is read 1, its read-back
+ * read 2, and 566-D-3's fourth hole is what happens when the second one fails.
  */
-function host012({ without = [], poseById = {} } = {}) {
+function host012({
+  without = [],
+  poseById = {},
+  pages = [{ uuid: SCH_PAGE, name: 'P1', parentSchematicUuid: 'sch-9' }],
+  deleteEffect = 'remove',
+  pageReadsBeforeFailure = Infinity,
+} = {}) {
   const classes = {
     sch_PrimitiveComponent: keyed(['c1', 'c2'], (id) => poseById[id] ?? {}),
     sch_PrimitiveWire: keyed(['w1']),
@@ -80,6 +101,10 @@ function host012({ without = [], poseById = {} } = {}) {
     pcb_PrimitivePour: keyed(['po1']),
   };
   for (const name of without) delete classes[name];
+
+  const pageRows = pages.map((row) => ({ ...row }));
+  const pageReads = [];
+  const pageDeletes = [];
 
   const host = {
     sys_WebSocket: {
@@ -108,7 +133,27 @@ function host012({ without = [], poseById = {} } = {}) {
         return [{ uuid: 'sch-9', name: 'schematic1' }];
       },
       async getAllSchematicPagesInfo() {
-        return [{ uuid: SCH_PAGE, name: 'P1', parentSchematicUuid: 'sch-9' }];
+        pageReads.push(pageRows.map((row) => row.uuid));
+        if (pageReads.length > pageReadsBeforeFailure) {
+          throw new Error('getAllSchematicPagesInfo: the page table is unreadable');
+        }
+        return pageRows.map((row) => ({ ...row }));
+      },
+      async deleteSchematicPage(uuid) {
+        pageDeletes.push(uuid);
+        if (deleteEffect === 'remove') {
+          const at = pageRows.findIndex((row) => row.uuid === uuid);
+          if (at >= 0) pageRows.splice(at, 1);
+        } else if (deleteEffect === 'other') {
+          const other = pageRows.findIndex((row) => row.uuid !== uuid);
+          if (other >= 0) pageRows.splice(other, 1);
+        } else if (deleteEffect === 'extra') {
+          const target = pageRows.findIndex((row) => row.uuid === uuid);
+          if (target >= 0) pageRows.splice(target, 1);
+          const other = pageRows.findIndex((row) => row.uuid !== uuid);
+          if (other >= 0) pageRows.splice(other, 1);
+        }
+        return true;
       },
     },
     dmt_Pcb: {
@@ -155,6 +200,9 @@ function host012({ without = [], poseById = {} } = {}) {
     },
     ...classes,
   };
+  host.__pages = pageRows;
+  host.__pageReads = pageReads;
+  host.__pageDeletes = pageDeletes;
   return host;
 }
 
@@ -485,19 +533,30 @@ test('doc.focus refuses a document that has no open tab', async (t) => {
   assert.equal(host.__activated, undefined);
 });
 
-test('doc.delete_page removes a listed page and refuses an unknown uuid', async (t) => {
-  const host = host012();
-  host.dmt_Schematic.deleteSchematicPage = async (uuid) => {
-    host.__deletedPage = uuid;
-    return true;
-  };
+test('doc.delete_page answers only what the page table says, not the host\'s true', async (t) => {
+  // 566-D-3: `deleteSchematicPage() === true` is the host's claim. The success
+  // shape carries the read-back — the target is gone from the editor's own
+  // table and the table is exactly what it was minus that page — so a caller
+  // can tell a real deletion from an answer that only says it deleted.
+  const host = host012({
+    pages: [
+      { uuid: SCH_PAGE, name: 'P1', parentSchematicUuid: 'sch-9' },
+      { uuid: 'page-2', name: 'P2', parentSchematicUuid: 'sch-9' },
+    ],
+  });
   withEda(t, host);
   await connector.activate();
 
   const ok = await call(host, 'doc.delete_page', { pageUuid: SCH_PAGE });
   assert.equal(ok.ok, true, JSON.stringify(ok));
   assert.equal(ok.data.deleted, true);
-  assert.equal(host.__deletedPage, SCH_PAGE);
+  assert.equal(ok.data.confirmed, true);
+  assert.equal(ok.data.pageUuid, SCH_PAGE);
+  assert.equal(ok.data.name, 'P1');
+  assert.deepEqual(ok.data.readBack, { pagePresent: false, remaining: ['page-2'] });
+  assert.deepEqual(host.__pageDeletes, [SCH_PAGE]);
+  // Two readings of the table: before the call and after it. One is a claim.
+  assert.equal(host.__pageReads.length, 2, JSON.stringify(host.__pageReads));
 
   const ghost = await call(host, 'doc.delete_page', { pageUuid: 'not-a-page' });
   assert.equal(ghost.ok, false);
@@ -506,6 +565,95 @@ test('doc.delete_page removes a listed page and refuses an unknown uuid', async 
   const missing = await call(host, 'doc.delete_page', {});
   assert.equal(missing.ok, false);
   assert.equal(missing.error.code, 'BAD_REQUEST');
+  // Neither refusal reached the host.
+  assert.deepEqual(host.__pageDeletes, [SCH_PAGE]);
+});
+
+test('a true answer that deleted nothing is a failure, not a deletion', async (t) => {
+  const host = host012({ deleteEffect: 'none' });
+  withEda(t, host);
+  await connector.activate();
+
+  const frame = await call(host, 'doc.delete_page', { pageUuid: SCH_PAGE });
+  assert.equal(frame.ok, false, JSON.stringify(frame));
+  assert.equal(frame.error.code, 'CONNECTOR_ERROR');
+  assert.equal(frame.error.detail.confirmed, false);
+  assert.equal(frame.error.detail.targetPresent, true);
+  assert.deepEqual(frame.error.detail.readBack, { pagePresent: true, remaining: [SCH_PAGE] });
+  assert.match(frame.error.message, /still/i);
+  // The page really is still there — the answer must not have said otherwise.
+  assert.deepEqual(host.__pages.map((row) => row.uuid), [SCH_PAGE]);
+});
+
+test('a true answer that removed another page names the page that went missing', async (t) => {
+  const host = host012({
+    pages: [
+      { uuid: SCH_PAGE, name: 'P1', parentSchematicUuid: 'sch-9' },
+      { uuid: 'page-2', name: 'P2', parentSchematicUuid: 'sch-9' },
+    ],
+    deleteEffect: 'other',
+  });
+  withEda(t, host);
+  await connector.activate();
+
+  const frame = await call(host, 'doc.delete_page', { pageUuid: SCH_PAGE });
+  assert.equal(frame.ok, false, JSON.stringify(frame));
+  assert.equal(frame.error.code, 'CONNECTOR_ERROR');
+  assert.equal(frame.error.detail.confirmed, false);
+  // The addressed page is untouched and a different one is gone.
+  assert.equal(frame.error.detail.targetPresent, true);
+  assert.deepEqual(frame.error.detail.missing, ['page-2']);
+  assert.deepEqual(frame.error.detail.unexpected, [SCH_PAGE]);
+  assert.deepEqual(frame.error.detail.readBack, { pagePresent: true, remaining: [SCH_PAGE] });
+});
+
+test('a true answer that removed the target and one more is not a clean deletion', async (t) => {
+  const host = host012({
+    pages: [
+      { uuid: SCH_PAGE, name: 'P1', parentSchematicUuid: 'sch-9' },
+      { uuid: 'page-2', name: 'P2', parentSchematicUuid: 'sch-9' },
+    ],
+    deleteEffect: 'extra',
+  });
+  withEda(t, host);
+  await connector.activate();
+
+  const frame = await call(host, 'doc.delete_page', { pageUuid: SCH_PAGE });
+  assert.equal(frame.ok, false, JSON.stringify(frame));
+  assert.equal(frame.error.code, 'CONNECTOR_ERROR');
+  assert.equal(frame.error.detail.confirmed, false);
+  // "Is the target gone?" answers yes here — which is exactly why the whole
+  // set is compared: a caller asked for one page, not for one page and a half.
+  assert.equal(frame.error.detail.targetPresent, false);
+  assert.deepEqual(frame.error.detail.missing, ['page-2']);
+  assert.deepEqual(frame.error.detail.readBack, { pagePresent: false, remaining: [] });
+});
+
+test('a read-back that fails cannot be confirmed', async (t) => {
+  // Read 1 is the before-listing, read 2 the read-back.
+  const host = host012({ pageReadsBeforeFailure: 1 });
+  withEda(t, host);
+  await connector.activate();
+
+  const frame = await call(host, 'doc.delete_page', { pageUuid: SCH_PAGE });
+  assert.equal(frame.ok, false, JSON.stringify(frame));
+  assert.equal(frame.error.code, 'CONNECTOR_ERROR');
+  assert.equal(frame.error.detail.confirmed, false);
+  assert.equal(frame.error.detail.readBack, null);
+  assert.match(String(frame.error.detail.readBackError), /unreadable/);
+  assert.match(frame.error.message, /confirm/i);
+});
+
+test('an unreadable page table before the delete refuses instead of guessing', async (t) => {
+  const host = host012({ pageReadsBeforeFailure: 0 });
+  withEda(t, host);
+  await connector.activate();
+
+  const frame = await call(host, 'doc.delete_page', { pageUuid: SCH_PAGE });
+  assert.equal(frame.ok, false, JSON.stringify(frame));
+  assert.equal(frame.error.code, 'CONNECTOR_ERROR');
+  assert.equal(frame.error.detail.confirmed, false);
+  assert.deepEqual(host.__pageDeletes, [], 'nothing may be addressed while blind');
 });
 
 test('pcb modify moves a pad with rotation and reads the pcb guard', async (t) => {

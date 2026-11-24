@@ -154,7 +154,7 @@ def _auto_start_on(monkeypatch, tmp_path):
     # The default port comes from BOARDWISE_PORT when it is set, and a test that
     # asserted 61190 would then be measuring this shell instead of the code.
     monkeypatch.delenv("BOARDWISE_PORT", raising=False)
-    monkeypatch.setattr("boardwise.bridge.daemon.BOARDWISE_HOME", tmp_path)
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
     return tmp_path
 
 

@@ -229,8 +229,12 @@ KEEP_OUT_NOTE_PREFIX = "S-01 plan keep-out:"
 
 #: ``page box (x0, y0, x1, y1)`` and ``title block (...)`` as
 #: :func:`keep_out_note` writes them.  Parsed back by
-#: :func:`page_keep_out_from_notes`; both tuples are plain ``%g`` floats so the
-#: text is readable in a plan and exact enough to compare with a live page.
+#: :func:`page_keep_out_from_notes`; every value is spelled ``%.17g``, the
+#: shortest form that parses back to the same Python float, because the landing
+#: compares these boxes at 1e-6 (``cli._draw_same_box``) and the note is the only
+#: carrier of the sheet between the two runs.  ``%g``'s 6 significant digits wrote
+#: 1234.567 as ``1234.57`` and 1169.0049999 as ``1169``, which the landing then
+#: called a different sheet.
 _KEEP_OUT_PATTERN = re.compile(
     r"page box \(\s*([-0-9.eE+]+)\s*,\s*([-0-9.eE+]+)\s*,\s*([-0-9.eE+]+)\s*,\s*([-0-9.eE+]+)\s*\)"
     r"\s*,?\s*(?:title block|keep-out)\s*\(\s*"
@@ -251,10 +255,11 @@ def keep_out_note(page_box: Box, keepouts: Iterable[Box]) -> str:
         return f"{KEEP_OUT_NOTE_PREFIX} nothing was reserved"
     rect = boxes[0]
     return (
-        f"{KEEP_OUT_NOTE_PREFIX} page box ({page_box[0]:g}, {page_box[1]:g}, "
-        f"{page_box[2]:g}, {page_box[3]:g}), title block ({rect[0]:g}, {rect[1]:g}, "
-        f"{rect[2]:g}, {rect[3]:g}) — the sheet's own table (700x180, anchored to the "
-        "declared corner) is a keep-out, so the packing and the gate both cleared it"
+        f"{KEEP_OUT_NOTE_PREFIX} page box ({page_box[0]:.17g}, {page_box[1]:.17g}, "
+        f"{page_box[2]:.17g}, {page_box[3]:.17g}), title block ({rect[0]:.17g}, "
+        f"{rect[1]:.17g}, {rect[2]:.17g}, {rect[3]:.17g}) — the sheet's own table "
+        "(700x180, anchored to the declared corner) is a keep-out, so the packing "
+        "and the gate both cleared it"
     )
 
 

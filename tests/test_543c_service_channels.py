@@ -13,8 +13,10 @@ These tests pin what the drawing now has to show:
   30 units (the stated interval);
 * no GND conductor inside any label's name box (D+/D- and every other label);
 * the same page without `serviceLayout` keeps the old 60-unit branch, and the
-  USB module's own drawing is byte-identical with and without the key — the
-  channel work is scoped to the island that has a uniquely served shunt;
+  USB module's own drawn picture is identical with and without the key — the
+  documents differ only by the input digest and the two digests derived from it
+  (geometry + 590's seal), never by a drawn field. The channel work is scoped to
+  the island that has a uniquely served shunt;
 * every spec pin is on the drawing's node for its net, and no derived node mixes
   two spec nets (the per-pin connectivity evidence).
 
@@ -30,6 +32,7 @@ from pathlib import Path
 
 from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.geometry import transform_point
+from boardwise.core.layoutplan import ROUTE_AUTOMATIC
 from boardwise.core.presentationspec import PresentationSpec
 from boardwise.core.symbolprofile import SymbolProfile
 from boardwise.engines import drawcompiler as dc
@@ -124,12 +127,33 @@ def _pin(plan, member: str) -> tuple[float, float]:
 
 
 def _picture(plan) -> dict:
-    """The drawn picture without the input digests `geometry_json` also carries."""
+    """The drawn picture without the input digests `geometry_json` also carries.
+
+    590's `route`/`provenanceSha256` are claims *about* the picture (the seal is
+    the route bound to the geometry digest), not part of it: they are dropped
+    here and asserted separately below.
+    """
     doc = plan.to_jsonable()
     for key in ("source", "target", "evidence", "verdict", "notes", "kind",
-                "planVersion", "geometrySha256"):
+                "planVersion", "geometrySha256", "route", "provenanceSha256"):
         doc.pop(key, None)
     return doc
+
+
+def _usb_candidates():
+    """The USB island compiled from the same circuit under both presentations."""
+    presentation = _presentation(True)
+    without = _presentation(False)
+    with_module = presentation.module("usb_c")
+    without_module = without.module("usb_c")
+    with_circuit, with_spec = pc._module_view(CIRCUIT, presentation, with_module)
+    without_circuit, without_spec = pc._module_view(CIRCUIT, without, without_module)
+    with_result = dc.compile(with_circuit, with_spec, BOOK, dc.CompileBudget())
+    without_result = dc.compile(without_circuit, without_spec, BOOK, dc.CompileBudget())
+    assert with_result.ok, with_result.render_failures()
+    assert without_result.ok, without_result.render_failures()
+    return (with_result.candidates[0], without_result.candidates[0],
+            presentation, without)
 
 
 def _segment_between(plan, net: str, start, end):
@@ -220,26 +244,49 @@ def test_without_the_key_the_branch_keeps_its_old_sixty_units():
 
 
 def test_the_usb_module_draws_the_same_with_and_without_the_key():
-    presentation = _presentation(True)
-    without = _presentation(False)
+    with_plan, without_plan, presentation, without = _usb_candidates()
+
+    assert _picture(with_plan) == _picture(without_plan), (
+        "the USB island moved when the CH343 service key was stated"
+    )
+    for plan in (with_plan, without_plan):
+        assert plan.route == ROUTE_AUTOMATIC and plan.route_declared is True
+        assert plan.to_jsonable()["provenanceSha256"] == plan.provenance_sha256()
 
     with_module = presentation.module("usb_c")
     without_module = without.module("usb_c")
-    with_circuit, with_spec = pc._module_view(CIRCUIT, presentation, with_module)
-    without_circuit, without_spec = pc._module_view(CIRCUIT, without, without_module)
-
-    with_result = dc.compile(with_circuit, with_spec, BOOK, dc.CompileBudget())
-    without_result = dc.compile(without_circuit, without_spec, BOOK, dc.CompileBudget())
-    assert with_result.ok, with_result.render_failures()
-    assert without_result.ok, without_result.render_failures()
-    assert _picture(with_result.candidates[0]) == _picture(without_result.candidates[0]), (
-        "the USB island moved when the CH343 service key was stated"
-    )
-
     with_ctx = _context(CIRCUIT, presentation, with_module)
     without_ctx = _context(CIRCUIT, without, without_module)
     assert dc._service_channels(with_ctx) is False
     assert dc._service_channels(without_ctx) is False
+
+
+def test_the_usb_documents_differ_only_by_the_input_digest_and_its_seals():
+    """599 differential: the whole-document difference, named key by key.
+
+    Only a route/provenance difference may be absorbed by the byte pin above.
+    Here the two presentations differ by the `serviceLayout` key itself, so the
+    presentation digest must differ — and the geometry digest and the seal are
+    derived from it. Apart from those three values the documents are equal: no
+    drawn field moved.
+    """
+    with_plan, without_plan, _presentation, _without = _usb_candidates()
+    with_doc = with_plan.to_jsonable()
+    without_doc = without_plan.to_jsonable()
+
+    assert with_doc["route"] == without_doc["route"] == ROUTE_AUTOMATIC
+    assert with_doc["source"]["circuitSha256"] == without_doc["source"]["circuitSha256"]
+    assert (
+        with_doc["source"]["presentationSha256"]
+        != without_doc["source"]["presentationSha256"]
+    ), "the two documents handed to the compiler are not the same input"
+    for doc in (with_doc, without_doc):
+        for key in ("source", "geometrySha256", "provenanceSha256"):
+            doc.pop(key)
+    assert with_doc == without_doc, (
+        "apart from the input digest and the two digests derived from it, the "
+        "with-key and without-key documents are equal"
+    )
 
 
 def _context(circuit_spec, presentation_spec, module):

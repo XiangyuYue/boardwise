@@ -52,6 +52,7 @@ __all__ = [
     "RENDER_TEXT_SCALE",
     "TEXT_ADVANCE_EM",
     "TEXT_ADVANCE_EM_FALLBACK",
+    "TEXT_ADVANCE_EM_FALLBACK_ASCII",
     "TEXT_ROW_HEIGHT",
     "TEXT_WIRE_PENETRATION",
     "WIRE_NAME_AXIS_HORIZONTAL",
@@ -87,8 +88,9 @@ RENDER_TEXT_SCALE = CANVAS_TEXT_UNITS / RENDER_TEXT_PX
 #: Character advances of the render's canvas font, in em units. The render
 #: declares ``font-family: Arial`` for every canvas text class, and these are the
 #: standard Helvetica/Arial advance widths; anything not tabled falls back to
-#: :data:`TEXT_ADVANCE_EM_FALLBACK` (wide on purpose — over-estimating a box
-#: keeps room, under-estimating makes it overlap).
+#: :data:`TEXT_ADVANCE_EM_FALLBACK` (or, for the seven ASCII marks the table
+#: lacks, to :data:`TEXT_ADVANCE_EM_FALLBACK_ASCII`) — over-estimating a box
+#: keeps room, under-estimating makes it overlap.
 TEXT_ADVANCE_EM: dict[str, float] = {
     " ": 0.278, "!": 0.278, '"': 0.355, "#": 0.556, "$": 0.556, "%": 0.889,
     "&": 0.667, "'": 0.191, "(": 0.333, ")": 0.333, "*": 0.389, "+": 0.584,
@@ -110,7 +112,20 @@ TEXT_ADVANCE_EM: dict[str, float] = {
     "\u00b5": 0.556, "\u03bc": 0.556, "\u03a9": 0.833, "\u00b0": 0.4,
 }
 
-TEXT_ADVANCE_EM_FALLBACK = 0.9
+#: Charge for a code point the advance table lacks, in em. 575 raised it from
+#: 0.9: a fullwidth glyph (EAW=W/F — CJK, 全角 Latin, ideographic space) fills
+#: its em square and a colour emoji is at least as wide, so 0.9 measured such
+#: names **short** — 567-G measured a 20-character fullwidth name 14.297 canvas
+#: units narrow, past L1's 10-unit penetration floor (`outputs/hole567/g/`).
+#: 1.1 keeps the over-estimate direction for every wide script the table
+#: cannot name.
+TEXT_ADVANCE_EM_FALLBACK = 1.1
+
+#: Charge for an *ASCII* code point the table lacks, in em: the seven printable
+#: marks ``[ \ ] ^ ` { }``. They keep the 0.9 em every ASCII render was measured
+#: under, so 575's fullwidth floor cannot move an ASCII-only box — a fix for
+#: the wide scripts must not change ASCII geometry.
+TEXT_ADVANCE_EM_FALLBACK_ASCII = 0.9
 
 
 def render_width(text: str) -> float:
@@ -120,9 +135,36 @@ def render_width(text: str) -> float:
     itself declares. 150: it used to be ``x CANVAS_TEXT_UNITS`` (the row pitch,
     10), which made every box 1.39893x too wide and cost the lint its L1
     credibility on 岳's own page (`outputs/150/t2_verdict.md`).
+
+    A table miss is charged :data:`TEXT_ADVANCE_EM_FALLBACK` (1.1 em), except
+    for ASCII, which stays at :data:`TEXT_ADVANCE_EM_FALLBACK_ASCII` (0.9 em):
+    the fallback that only ever reaches a handful of ASCII punctuation marks
+    must not shift a box built from ASCII text.
+
+    **The builtin ``sum`` is part of the geometry (579).** 575 hand-rolled the
+    accumulator (``em = 0.0`` then ``em += advance``); the builtin sums floats
+    compensated, so on this table the two are different floats — ``VFB_NF``
+    totals ``3.834`` em builtin and ``3.8340000000000005`` by hand, 1 ulp,
+    3.55e-15 canvas units of row width (27.406743455497384 vs …88), which the
+    530e/530g/530d fingerprint records as a 1.42e-14 move of a stored bbox
+    corner. That was enough to move the flyback
+    page's shared fingerprint and fail 530e/530g/530d's equality tests, so the
+    generator below stays inside a builtin ``sum``: no second accumulator, no
+    rounding, no Kahan of our own.
     """
-    em = sum(TEXT_ADVANCE_EM.get(ch, TEXT_ADVANCE_EM_FALLBACK) for ch in text)
-    return em * RENDER_TEXT_PX
+    return (
+        sum(
+            TEXT_ADVANCE_EM[ch]
+            if ch in TEXT_ADVANCE_EM
+            else (
+                TEXT_ADVANCE_EM_FALLBACK
+                if ord(ch) > 0x7F
+                else TEXT_ADVANCE_EM_FALLBACK_ASCII
+            )
+            for ch in text
+        )
+        * RENDER_TEXT_PX
+    )
 
 
 #: The height of one row of a wire's net name as the host draws it. The same 10

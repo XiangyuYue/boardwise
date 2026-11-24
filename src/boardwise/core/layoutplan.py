@@ -29,6 +29,17 @@ CircuitSpec declares, that the poses are legal for their profiles, or that the
 nets are the declared nets. Every one of those needs a second document, and
 they belong to the checker — whose whole point (052 sec.8) is that it works
 from the plan and the specs alone, with no access to the compiler's insides.
+
+**Route and seal (590, hole568 D-1/D-2).** A plan now says *how* it was made
+(:data:`ROUTE_AUTOMATIC`, :data:`ROUTE_REFERENCE_REPLAY`,
+:data:`ROUTE_AGENT_ADJUSTED`), and an ``automatic`` one carries a
+``provenanceSha256`` computed from that route and its own geometry digest. The
+seal exists to catch **staleness**: hole568 measured a hand-edited plan whose
+``geometrySha256`` had been recomputed and which then loaded as the compiler's
+own output. It is *not* a signature and does not prove authorship — the
+algorithm is public, so anyone willing to recompute every value can re-seal a
+document. What it refuses is the cheap edit that updates one number and leaves
+the rest claiming to be a compilation.
 """
 
 from __future__ import annotations
@@ -37,6 +48,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +72,13 @@ __all__ = [
     "LayoutSource",
     "LayoutTarget",
     "LayoutText",
+    "PLAN_ROUTES",
+    "PROVENANCE_DOMAIN",
+    "ROUTE_AGENT_ADJUSTED",
+    "ROUTE_AUTOMATIC",
+    "ROUTE_REFERENCE_REPLAY",
     "label_wire_indices",
+    "provenance_sha256",
 ]
 
 #: Identifies the document; see `circuitspec.CIRCUIT_SPEC_KIND` for the rule.
@@ -92,9 +110,45 @@ EVIDENCE_VERDICT_NOT_RUN = "not-run"
 
 _SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 
+#: The three bookkeeping routes a plan can have been made by (590, hole568 D-2).
+#: ``automatic`` is the compiler's own candidate; ``reference-replay`` is a
+#: drawing reproduced from a reference page (and the reading a document from
+#: before this contract gets, because silence is not a compiler's output);
+#: ``agent-adjusted`` is a plan the agent edited by hand after a proposal.
+ROUTE_AUTOMATIC = "automatic"
+ROUTE_REFERENCE_REPLAY = "reference-replay"
+ROUTE_AGENT_ADJUSTED = "agent-adjusted"
+PLAN_ROUTES: tuple[str, ...] = (
+    ROUTE_AUTOMATIC,
+    ROUTE_REFERENCE_REPLAY,
+    ROUTE_AGENT_ADJUSTED,
+)
+
+#: What the seal below is computed over. Versioned, and kept out of the geometry
+#: digest on purpose: the route and its seal are *about* the picture, not part of
+#: it, so no plan this repo has recorded moves its `geometrySha256` for them.
+PROVENANCE_DOMAIN = "boardwise.layout-plan-provenance/1"
+
+
+def provenance_sha256(
+    route: str, geometry_sha256: str, domain: str = PROVENANCE_DOMAIN
+) -> str:
+    """The seal of a plan: (domain, route, geometry digest), one digest.
+
+    Staleness detection only. Re-sealing is a public recomputation, so this says
+    "the route and the geometry it names belong together", never "a particular
+    author wrote them" (590; see the module docstring).
+    """
+    return hashlib.sha256(
+        f"{domain}\n{route}\n{geometry_sha256}".encode("utf-8")
+    ).hexdigest()
+
+
 _TOP_KEYS = (
     "kind",
     "planVersion",
+    "route",
+    "provenanceSha256",
     "source",
     "target",
     "parts",
@@ -474,8 +528,29 @@ class LayoutPlan:
     evidence: LayoutEvidence = field(default_factory=LayoutEvidence)
     notes: list[str] = field(default_factory=list)
     plan_version: int = LAYOUT_PLAN_VERSION
+    #: How this plan was made (590). A plan built in process is the compiler's
+    #: own output, so `automatic` is the default: a document this build **writes**
+    #: is sealed, and one it only reads keeps whatever the file said.
+    route: str = ROUTE_AUTOMATIC
+    #: Did the document state a route? ``False`` for a file written before this
+    #: contract: it reads as :data:`ROUTE_REFERENCE_REPLAY` (silence is not a
+    #: compilation) and is written back **without** a route or seal, so the old
+    #: bytes survive `load` -> `dump` untouched.
+    route_declared: bool = True
+
+    def __post_init__(self) -> None:
+        if self.route not in PLAN_ROUTES:
+            raise LayoutPlanError(
+                f"route is {self.route!r}; expected one of {', '.join(PLAN_ROUTES)} "
+                "— the vocabulary is closed so that 'how was this made' is a fact "
+                "a reader can check (590)"
+            )
 
     # ------------------------------------------------------------ derived
+
+    def provenance_sha256(self) -> str:
+        """This plan's seal: its route bound to its own geometry digest (590)."""
+        return provenance_sha256(self.route, self.geometry_sha256())
 
     def part(self, part_id: str) -> LayoutPart | None:
         """The placement of this spec part, or ``None``."""
@@ -638,33 +713,43 @@ class LayoutPlan:
     # --------------------------------------------------------------- JSON
 
     def to_jsonable(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "kind": LAYOUT_PLAN_KIND,
             "planVersion": self.plan_version,
-            **self._geometry_payload(ownership=True),
-            "target": {
-                "projectUuid": self.target.project_uuid,
-                "boardUuid": self.target.board_uuid,
-                "pageUuid": self.target.page_uuid,
-                "hostVersion": self.target.host_version,
-                "connectorVersion": self.target.connector_version,
-                "snapshotSha256": self.target.snapshot_sha256,
-            },
-            "evidence": {
-                "checker": self.evidence.checker,
-                "hardViolations": list(self.evidence.hard_violations),
-                "grammarFindings": list(self.evidence.grammar_findings),
-                "softMetrics": dict(self.evidence.soft_metrics),
-                "softReasons": dict(self.evidence.soft_reasons),
-                "notes": list(self.evidence.notes),
-            },
-            # Derived, written for the consumer that only reads the document.
-            # A verdict is not an input: `from_dict` refuses a stated one, so no
-            # plan can claim to have passed a check whose findings contradict it.
-            "verdict": self.evidence.verdict,
-            "geometrySha256": self.geometry_sha256(),
-            "notes": list(self.notes),
         }
+        # 590: the route is written when the document has one. An ``automatic``
+        # plan also writes its seal — a reader of the file, with no compiler to
+        # ask, can then tell a re-sealed edit (stale seal) from a compilation.
+        # A file that predates this contract stated neither, and gets neither:
+        # its bytes are the bytes it came with.
+        if self.route_declared:
+            payload["route"] = self.route
+            if self.route == ROUTE_AUTOMATIC:
+                payload["provenanceSha256"] = self.provenance_sha256()
+        payload.update(self._geometry_payload(ownership=True))
+        payload["target"] = {
+            "projectUuid": self.target.project_uuid,
+            "boardUuid": self.target.board_uuid,
+            "pageUuid": self.target.page_uuid,
+            "hostVersion": self.target.host_version,
+            "connectorVersion": self.target.connector_version,
+            "snapshotSha256": self.target.snapshot_sha256,
+        }
+        payload["evidence"] = {
+            "checker": self.evidence.checker,
+            "hardViolations": list(self.evidence.hard_violations),
+            "grammarFindings": list(self.evidence.grammar_findings),
+            "softMetrics": dict(self.evidence.soft_metrics),
+            "softReasons": dict(self.evidence.soft_reasons),
+            "notes": list(self.evidence.notes),
+        }
+        # Derived, written for the consumer that only reads the document.
+        # A verdict is not an input: `from_dict` refuses a stated one, so no
+        # plan can claim to have passed a check whose findings contradict it.
+        payload["verdict"] = self.evidence.verdict
+        payload["geometrySha256"] = self.geometry_sha256()
+        payload["notes"] = list(self.notes)
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Any) -> LayoutPlan:
@@ -672,9 +757,26 @@ class LayoutPlan:
         root = _object(payload, "$")
         _check_keys(root, _TOP_KEYS, "$")
         kind = root.get("kind")
-        if kind is not None and kind != LAYOUT_PLAN_KIND:
+        if "kind" not in root:
+            raise LayoutPlanError(
+                "$.kind is missing — every document this build writes says what "
+                "it is, and a document with no identity can be read as whatever "
+                "the caller hoped it was"
+            )
+        if kind != LAYOUT_PLAN_KIND:
             raise LayoutPlanError(f"$.kind is {kind!r}, expected {LAYOUT_PLAN_KIND!r}")
-        version = root.get("planVersion", LAYOUT_PLAN_VERSION)
+        if "planVersion" not in root:
+            raise LayoutPlanError(
+                "$.planVersion is missing — a plan states the schema it was "
+                f"written against, and this build reads {LAYOUT_PLAN_VERSION}"
+            )
+        version = root["planVersion"]
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise LayoutPlanError(
+                f"$.planVersion is {version!r}; expected the integer "
+                f"{LAYOUT_PLAN_VERSION} — a version is a schema number, and "
+                "`True`/`1.0` only compare equal to 1 by accident"
+            )
         if version != LAYOUT_PLAN_VERSION:
             raise LayoutPlanError(
                 f"$.planVersion is {version!r}, this build reads "
@@ -683,6 +785,7 @@ class LayoutPlan:
         source = _source_from(root.get("source"))
         target = _target_from(root.get("target"))
         parts = _parts_from(root.get("parts"))
+        route, route_declared = _route_from(root)
         plan = cls(
             source=source,
             target=target,
@@ -695,13 +798,20 @@ class LayoutPlan:
             evidence=_evidence_from(root.get("evidence")),
             notes=_text_list(root.get("notes"), "$.notes"),
             plan_version=int(version),
+            route=route,
+            route_declared=route_declared,
         )
         _check_derived(root, plan)
         return plan
 
     def dump(self, path: str | Path) -> None:
+        # `allow_nan=False`: a non-finite coordinate reaching this point is a bug
+        # in whatever built the plan, and a file with `NaN` in it is a document
+        # no other JSON reader can load.
         Path(path).write_text(
-            json.dumps(self.to_jsonable(), ensure_ascii=False, indent=2) + "\n",
+            json.dumps(
+                self.to_jsonable(), ensure_ascii=False, indent=2, allow_nan=False
+            ) + "\n",
             encoding="utf-8",
         )
 
@@ -711,6 +821,8 @@ class LayoutPlan:
         source = Path(path)
         try:
             text = source.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise LayoutPlanError(f"{source}: is not UTF-8 ({exc})") from exc
         except OSError as exc:
             raise LayoutPlanError(f"{source}: cannot be read ({exc})") from exc
         try:
@@ -911,15 +1023,39 @@ def _texts_from(value: Any) -> list[LayoutText]:
     return out
 
 
+def _route_from(root: dict[str, Any]) -> tuple[str, bool]:
+    """The plan's route, and whether the document stated one (590).
+
+    A file written before this contract has no route, and silence is **not** a
+    compilation: it reads as :data:`ROUTE_REFERENCE_REPLAY` — the third of
+    hole568 D-2's three accounts, the one that had no machine-readable form —
+    with ``declared`` false so :meth:`LayoutPlan.to_jsonable` writes the old
+    bytes back with no route and no seal. A stated route must be one of the
+    three; anything else (a trailing space, ``Automatic``, a number, null) is
+    refused by name rather than coerced.
+    """
+    if "route" not in root:
+        return ROUTE_REFERENCE_REPLAY, False
+    route = root["route"]
+    if not isinstance(route, str) or route not in PLAN_ROUTES:
+        raise LayoutPlanError(
+            f"$.route is {route!r}; expected one of {', '.join(PLAN_ROUTES)} — "
+            "a closed vocabulary, so a misspelling cannot pass as 'some route' "
+            "and a document cannot claim a fourth way of being made (590)"
+        )
+    return route, True
+
+
 def _check_derived(root: dict[str, Any], plan: LayoutPlan) -> None:
-    """The two derived fields, checked rather than read.
+    """The derived fields, checked rather than read.
 
     `verdict` and `geometrySha256` are computed from the document, and the
     writer emits them for consumers that only read. A stated value that
     disagrees is refused, not ignored: a plan claiming `pass` while carrying
     hard violations is exactly the claim the evidence slot exists to make
     impossible, and a stale geometry digest would let a preview be bound to the
-    wrong picture.
+    wrong picture. The provenance seal (590) is checked the same way, in
+    :func:`_check_seal`.
     """
     if "verdict" in root:
         stated = root["verdict"]
@@ -939,6 +1075,55 @@ def _check_derived(root: dict[str, Any], plan: LayoutPlan) -> None:
                 f"{computed!r} — a preview bound to the stated value would not be "
                 "bound to this picture (052 sec.4)"
             )
+    _check_seal(root, plan)
+
+
+def _check_seal(root: dict[str, Any], plan: LayoutPlan) -> None:
+    """The provenance seal: staleness only, and it says so (590, hole568 D-1).
+
+    hole568 D-1 reproduced the hole this closes: a plan whose coordinates were
+    edited and whose ``geometrySha256`` was recomputed loaded as the compiler's
+    own output. The seal is the route bound to the geometry digest, so that one
+    cheap edit now leaves a **stale** value behind and the document is refused.
+
+    Two edges are deliberate:
+
+    * a seal belongs to an ``automatic`` plan only — a hand-adjusted or replayed
+      drawing must not carry the compiler's claim;
+    * the seal is compared **whenever it is stated**, whether or not the document
+      also states ``geometrySha256``. The digest is an optional display of a
+      derived number; the seal is the promise, and it is a promise about the
+      geometry the document carries. hole568 D-1's edit with the digest simply
+      deleted is the same forgery (590B measured it: the earlier
+      "no digest, nothing to compare" short cut let it through).
+
+    This detects "geometry moved, seal did not". It does not, and cannot, prove
+    who made the document: recomputing the seal is a public operation.
+    """
+    seal = root.get("provenanceSha256")
+    if seal is None:
+        if plan.route_declared and plan.route == ROUTE_AUTOMATIC:
+            raise LayoutPlanError(
+                "$.provenanceSha256 is missing — an automatic plan states the seal "
+                "of its own geometry (route + geometry digest). A document that "
+                "carries the compiler's route without its seal cannot be told from "
+                "a re-sealed edit (590 / hole568 D-1)"
+            )
+        return
+    if not plan.route_declared or plan.route != ROUTE_AUTOMATIC:
+        raise LayoutPlanError(
+            f"$.provenanceSha256 is stated but this plan's route is {plan.route!r} "
+            "— the seal says 'the compiler produced this picture', so only an "
+            f"{ROUTE_AUTOMATIC!r} plan may carry one (590)"
+        )
+    computed = plan.provenance_sha256()
+    if seal != computed:
+        raise LayoutPlanError(
+            f"$.provenanceSha256 is {seal!r} but this plan's route and geometry "
+            f"seal to {computed!r} — the geometry moved after the plan was sealed, "
+            "and recomputing `geometrySha256` alone does not re-seal it. A re-sealed "
+            "document is a new drawing: state its route and rebuild it (590)"
+        )
 
 
 def _evidence_from(value: Any) -> LayoutEvidence:
@@ -998,14 +1183,13 @@ def _digest(value: Any, where: str) -> str:
 
 
 def _point(value: Any, where: str) -> tuple[float, float]:
-    if (
-        not isinstance(value, (list, tuple))
-        or len(value) < 2
-        or any(isinstance(item, bool) or not isinstance(item, (int, float))
-               for item in value[:2])
-    ):
-        raise LayoutPlanError(f"{where} must be [x, y] in canvas units, got {value!r}")
-    return (float(value[0]), float(value[1]))
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise LayoutPlanError(
+            f"{where} must be exactly [x, y] in canvas units, got {value!r} — a "
+            "point is two numbers; a third component names no field of this "
+            "document and used to be dropped in silence"
+        )
+    return (_number(value[0], f"{where}[0]"), _number(value[1], f"{where}[1]"))
 
 
 def _number(value: Any, where: str) -> float:
@@ -1017,7 +1201,20 @@ def _number(value: Any, where: str) -> float:
         raise LayoutPlanError(
             f"{where} must be a number in canvas units, got {value!r}"
         )
-    return float(value)
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise LayoutPlanError(
+            f"{where} is {value!r} — every coordinate must be finite, and this "
+            "integer is larger than any canvas unit can be"
+        ) from exc
+    if not isfinite(number):
+        raise LayoutPlanError(
+            f"{where} is {value!r} — every coordinate must be finite: NaN and "
+            "infinity are not positions, and `json` writes them as tokens no "
+            "other reader of JSON has"
+        )
+    return number
 
 
 def _pose(value: Any, where: str) -> float:

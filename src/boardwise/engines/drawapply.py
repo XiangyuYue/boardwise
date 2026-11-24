@@ -120,6 +120,8 @@ _LABEL_ROW_PREFIXES: tuple[str, ...] = (
 __all__ = [
     "CENSUS_CLEARANCE",
     "CENSUS_FALLBACK_HALF",
+    "DRAWING_SECTIONS",
+    "DRAWING_SECTION_NOUNS",
     "GEOMETRY_SECTIONS",
     "DiscardSelection",
     "DrawPlanError",
@@ -135,6 +137,7 @@ __all__ = [
     "census_phrase",
     "discard_selection",
     "designator_problems",
+    "drawing_section_counts",
     "expected_pin_points",
     "flag_kind",
     "guard_problems",
@@ -148,11 +151,14 @@ __all__ = [
     "named_wire_nets",
     "net_name_problems",
     "netlabel_items",
+    "page_is_not_empty",
+    "page_phrase",
     "plan_pins",
     "planned_net_names",
     "placement_problems",
     "posed_pin_offsets",
     "postcondition_problems",
+    "primitive_fingerprint",
     "profile_table",
     "source_digest",
     "validate_layout_partition",
@@ -4631,6 +4637,13 @@ def canvas_census(geometry: Any) -> PlanDrawBaseline:
     why ``unnumbered_count`` exists rather than the count being folded into
     ``components`` — the designator set keeps 036's meaning, and the count carries
     the fact.
+
+    The counters are still this function's return shape (`PlanDrawBaseline`'s
+    public one); what the census *hashes* is now every primitive on the page, not
+    the counters alone — see :func:`primitive_fingerprint` and
+    :func:`census_digest` (574 / 567-E-1: with only counters, a part moved 30
+    units, a re-routed wire, a moved flag and a changed value all hashed the
+    same).
     """
     components = sorted(addcomponent.component_origins(geometry))
     counts = {key: _section_count(geometry, key) for key in GEOMETRY_SECTIONS}
@@ -4643,8 +4656,51 @@ def canvas_census(geometry: Any) -> PlanDrawBaseline:
         pin_count=int(counts["pins"]),
         unnumbered_count=int(unnumbered),
     )
-    census.digest = census_digest(census)
+    census.digest = census_digest(
+        census, geometry if isinstance(geometry, dict) else {}
+    )
     return census
+
+
+def drawing_section_counts(geometry: Any) -> dict[str, int]:
+    """How many primitives each :data:`DRAWING_SECTIONS` entry carries (0 if absent)."""
+    return {key: _section_count(geometry, key) for key in DRAWING_SECTIONS}
+
+
+def page_is_not_empty(census: PlanDrawBaseline, geometry: Any = None) -> bool:
+    """Is there **anything** on the page — electrical counters *and* drawing sections?
+
+    143d fixed a census that read three of five counters; 566-A-2 is the same hole
+    one layer out: the census speaks for the electrical primitives only, so a page
+    whose only content is a text, bus, circle, rectangle, arc or polygon looked
+    exactly like a blank one. The scan and the pre-write guard both ask this one
+    function, so "provably empty" and "still empty" cannot be two different
+    judgements.
+
+    ``geometry`` is optional only so an electrical-only assertion can be made
+    against a census (143d does that); the empty-page proof always passes the dump.
+    """
+    if (
+        census.components or census.wire_count or census.netflag_count
+        or census.netlabel_count or census.unnumbered_count or census.pin_count
+    ):
+        return True
+    return any(drawing_section_counts(geometry).values())
+
+
+def page_phrase(census: PlanDrawBaseline, geometry: Any) -> str:
+    """A whole page in words: the electrical census plus the six drawing sections.
+
+    :func:`census_phrase` is the electrical half and stays the string every C5
+    refusal quotes; this is the one a *page emptiness* refusal prints, so it can
+    never say "0 part(s), 0 wire(s) …" about a page it just called non-empty.
+    """
+    counts = drawing_section_counts(geometry)
+    return (
+        census_phrase(census)
+        + ", "
+        + ", ".join(f"{counts[key]} {DRAWING_SECTION_NOUNS[key]}" for key in DRAWING_SECTIONS)
+    )
 
 
 def _unnumbered_part_count(geometry: Any) -> int:
@@ -4680,27 +4736,161 @@ def _unnumbered_part_count(geometry: Any) -> int:
     return count
 
 
-def census_digest(census: PlanDrawBaseline) -> str:
+def _counts_payload(census: PlanDrawBaseline) -> dict[str, Any]:
+    """The counter payload a pre-574 digest hashed — kept byte-for-byte.
+
+    Every counter in :class:`PlanDrawBaseline` is in it. A counter left out is a
+    change the digest cannot see, which is the failure 143d reports (labels and
+    un-numbered parts both had no entry here). It is no longer the digest a page
+    gets (574): it is the *old* answer, kept so an old plan's recorded digest can
+    be recognised rather than misread as a page somebody changed.
+    """
+    return {
+        "components": sorted(census.components),
+        "wireCount": int(census.wire_count),
+        "netflagCount": int(census.netflag_count),
+        "netlabelCount": int(census.netlabel_count),
+        "pinCount": int(census.pin_count),
+        "unnumberedCount": int(census.unnumbered_count),
+    }
+
+
+def _canonical_state(value: Any) -> Any:
+    """``value`` as JSON-safe data, so a fingerprint can be hashed canonically.
+
+    A ``sch.geometry`` dump is JSON by construction (the connector's `deepDump`
+    reads `getState_*` scalars, lists and maps), so this is a guard rather than a
+    conversion: a value that is none of those is named by its **type**, never
+    stringified — `repr` of an object carries its memory address, which differs
+    on every read and would turn "the page moved" into "the page was re-read".
+    """
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_canonical_state(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _canonical_state(item) for key, item in value.items()}
+    return f"<{type(value).__name__}>"
+
+
+def primitive_fingerprint(geometry: Any) -> list[dict[str, Any]]:
+    """Every primitive the page holds, one canonical row each (574 / 567-E-1).
+
+    The census's counters say *how many* things are on the page; this says *which*,
+    *where* and *with what*. 567-E-1 measured why the difference matters: the
+    counts-only digest was byte-identical for a part moved 30 units, an existing
+    wire re-routed, a flag moved 20 units and a value changed, so C5 reported the
+    page unchanged over four different pages.
+
+    The rows are ``section`` + the page's own ``primitiveId`` + the primitive's
+    stable state — designator, value, net, origin, pose, point list, text; every
+    `getState_*` field the dump carries, because a field left out is the same
+    blindness one level down. The rules, in order:
+
+    * every section of :data:`GEOMETRY_SECTIONS` **and** :data:`DRAWING_SECTIONS`
+      is walked (570's six drawing namespaces are content too, and a page whose
+      only content is a note was already a hole once — 566-A-2);
+    * the sheet is skipped: it is the page, not a primitive on it (`census_items`
+      reads it the same way), so moving the frame is not "the drawing's page
+      changed";
+    * rows are ordered by ``(section, id)`` and hashed with sorted keys, so
+      re-reading the same page — or a dump whose section/entry/key order drifted —
+      hashes the same;
+    * ``bboxes`` and ``meta`` are not read: they are measurements of the page, not
+      the page's content (:func:`census_keepouts` consumes them separately).
+    """
+    rows: list[dict[str, Any]] = []
+    if not isinstance(geometry, dict):
+        return rows
+    for section in GEOMETRY_SECTIONS + DRAWING_SECTIONS:
+        items = geometry.get(section)
+        if not isinstance(items, list):
+            continue
+        for entry in items:
+            if not isinstance(entry, dict):
+                rows.append({
+                    "section": section,
+                    "id": "",
+                    "state": _canonical_state(entry),
+                })
+                continue
+            state = _state(entry)
+            if section == "components" and _text(state.get("ComponentType")) == "sheet":
+                continue
+            rows.append({
+                "section": section,
+                "id": str(entry.get("primitiveId") or state.get("PrimitiveId") or ""),
+                "state": _canonical_state(state),
+            })
+    return sorted(
+        rows,
+        key=lambda row: (
+            row["section"],
+            row["id"],
+            json.dumps(row["state"], sort_keys=True, ensure_ascii=False),
+        ),
+    )
+
+
+def census_digest(census: PlanDrawBaseline, geometry: Any = None) -> str:
     """One string for a census, so a report can quote it and a guard can compare.
 
-    Every counter in :class:`PlanDrawBaseline` is in the payload. A counter left
-    out is a change the digest cannot see, which is the whole failure 143d reports
-    (labels and un-numbered parts both had no entry in this dictionary).
+    Two answers, one per kind of caller (574 / 567-E-1):
+
+    * ``geometry`` given — the page's **every primitive** is in the payload
+      (:func:`primitive_fingerprint`) beside the counters, so a moved part, a
+      re-routed wire, a moved flag, a changed value, a new pin, a new text or a
+      reshaped drawing primitive all move the digest. This is the answer
+      :func:`canvas_census` records and the one C5 compares.
+    * ``geometry`` omitted — the counts-only algorithm this module shipped before
+      574, kept **byte-for-byte** (same payload, same hash). It is not a weaker
+      guard to fall back on: it is how an old plan's recorded digest is
+      *recognised*, so :func:`guard_problems` can refuse it with "this summary
+      cannot prove the page unchanged, regenerate" instead of blaming a hand
+      edit it never looked for.
     """
-    payload = json.dumps(
-        {
-            "components": sorted(census.components),
-            "wireCount": int(census.wire_count),
-            "netflagCount": int(census.netflag_count),
-            "netlabelCount": int(census.netlabel_count),
-            "pinCount": int(census.pin_count),
-            "unnumberedCount": int(census.unnumbered_count),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
+    if geometry is None:
+        payload: dict[str, Any] = _counts_payload(census)
+    else:
+        payload = {
+            "census": _counts_payload(census),
+            "primitives": primitive_fingerprint(geometry),
+        }
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _counts_only_refusal(role: str, stated: str) -> str:
+    """The refusal an old, counts-only digest earns: recognised, never accepted.
+
+    ``role`` is ``"plan"`` (the digest the plan recorded) or ``"expect"`` (the one
+    a run was told to expect). Neither can be compared into "the page did not
+    change": the digest never looked at position, pose, value or point list, so a
+    match proves only that the counts agree. Saying "somebody changed the canvas"
+    would be the opposite error — a definite accusation from a summary that cannot
+    support one — and accepting it would restore 567-E-1.
+    """
+    if role == "plan":
+        return (
+            f"the plan's recorded page census ({stated[:12]}…) is a counts-only "
+            "digest: it covers the designators and six counters, not each "
+            "primitive's position, pose, value or point list, so it cannot show "
+            "that the page is unchanged (a part moved, a wire re-routed, a flag "
+            "moved or a value changed all leave it byte-identical). This plan was "
+            "made before the per-primitive census (574 / 567-E-1): regenerate it "
+            "(`boardwise draw plan`) so its baseline records a digest that covers "
+            "the page's primitives"
+        )
+    return (
+        f"the census digest this run was told to expect ({stated[:12]}…) is a "
+        "counts-only digest: it covers the designators and six counters, not each "
+        "primitive's position, pose, value or point list, so it cannot show that "
+        "the page is unchanged. Re-read the page's census and pass the digest it "
+        "reports now (`--expect-census`), or regenerate the plan — this run is "
+        "refused, not accepted"
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def library_problems(
@@ -4772,7 +4962,10 @@ def guard_problems(
        report quoted — an **explicit demand**, which is checked whenever a
        geometry was handed over. An unbound plan with neither is not silently
        unguarded: the landing then has to be a *fresh* page, which apply checks by
-       reading it.
+       reading it. An **old counts-only digest** (the algorithm this module
+       shipped before 574 / 567-E-1) is recognised on either leg and refused with
+       its own reason — it never looked at pose, value or points, so it is never
+       accepted and never reported as if it were evidence of a hand edit.
 
     ``plan_census=False`` defers the recorded-baseline leg, and apply does exactly
     that for its first pass: the plan's own postconditions have to be read first,
@@ -4802,21 +4995,33 @@ def guard_problems(
     if geometry is not None:
         now = canvas_census(geometry)
         if plan_census and plan.change.draw_baseline.digest:
-            if now.digest != plan.change.draw_baseline.digest:
-                problems.append(
-                    "the page's primitives are not the ones the plan was built against: "
-                    f"the plan recorded {census_phrase(plan.change.draw_baseline)} "
-                    f"({plan.change.draw_baseline.digest[:12]}…), the page now has "
-                    f"{census_phrase(now)} ({now.digest[:12]}…) — somebody changed "
-                    "the canvas after the plan was made (054 C5)"
-                )
+            stated = plan.change.draw_baseline.digest
+            if now.digest != stated:
+                if stated == census_digest(plan.change.draw_baseline):
+                    # 574: the baseline's digest is exactly what the counts-only
+                    # algorithm answers for the counters the baseline itself
+                    # recorded — so it *is* an old summary, whatever the page looks
+                    # like now, and the refusal says so instead of accusing a hand
+                    # edit the digest could never have seen.
+                    problems.append(_counts_only_refusal("plan", stated))
+                else:
+                    problems.append(
+                        "the page's primitives are not the ones the plan was built against: "
+                        f"the plan recorded {census_phrase(plan.change.draw_baseline)} "
+                        f"({plan.change.draw_baseline.digest[:12]}…), the page now has "
+                        f"{census_phrase(now)} ({now.digest[:12]}…) — somebody changed "
+                        "the canvas after the plan was made (054 C5)"
+                    )
         if expect_census and now.digest != expect_census:
-            problems.append(
-                "the page's primitives are not the ones this run was told to expect: "
-                f"expected {expect_census[:12]}…, the page holds "
-                f"{census_phrase(now)} ({now.digest[:12]}…) — somebody changed the "
-                "canvas since the run that quoted that digest (054 C5)"
-            )
+            if expect_census == census_digest(now):
+                problems.append(_counts_only_refusal("expect", expect_census))
+            else:
+                problems.append(
+                    "the page's primitives are not the ones this run was told to expect: "
+                    f"expected {expect_census[:12]}…, the page holds "
+                    f"{census_phrase(now)} ({now.digest[:12]}…) — somebody changed the "
+                    "canvas since the run that quoted that digest (054 C5)"
+                )
     return problems
 
 
@@ -4833,6 +5038,23 @@ def plan_pins(plan: ChangePlan) -> list[tuple[str, str]]:
 
 
 def _near(left: tuple[float, float], right: tuple[float, float], tol: float) -> bool:
+    """Are these two readings the same point, within `tol`?
+
+    At the page's own precision (`tol == PAGE_POINT_PRECISION / 2`) "the same
+    point" is **the same 0.01 cell**, not `abs(...) <= tol`. Half a step is
+    exactly the most the page's rounding can move a coordinate, so the
+    difference between a planned point and the page's reading of it is *at most*
+    0.005 — and in binary it can land a hair above: `-15.955` reads back as
+    `-15.96` with a difference of `0.0050000000000008`, which `<=` calls a miss
+    (measured, 567-E-3: 348 of the 4001 half-cent readings in `[-20, 20]`). A
+    wider tolerance would answer it by swallowing the neighbouring grid step;
+    comparing the cells says the page rounded the two readings onto the same
+    step and cannot widen.
+    """
+    if tol == PAGE_POINT_PRECISION / 2.0:
+        return round(left[0], 2) == round(right[0], 2) and round(left[1], 2) == round(
+            right[1], 2
+        )
     return abs(left[0] - right[0]) <= tol and abs(left[1] - right[1]) <= tol
 
 
@@ -5841,17 +6063,28 @@ def _near_polyline(
     points: Sequence[tuple[float, float]],
     tolerance: float = PAGE_POINT_PRECISION / 2.0,
 ) -> bool:
-    """`:func:`_on_polyline`` asked within `tolerance`, by real distance.
+    """`:func:`_on_polyline`` asked within `tolerance`.
 
     The same question — is `point` a vertex of the polyline or on one of its
     segments — but the page's coordinates are rounded readings (measured, see
     :data:`PAGE_POINT_PRECISION`), so a planned point and the page's reading of it
-    are never exactly equal. Distance to the nearest point of each segment rather
-    than an axis box plus a cross product, so a segment at an angle is judged by
-    how far the point really is from it.
+    are never exactly equal. At the page's own precision both readings are first
+    quantized to that step and then handed to the exact :func:`_on_polyline`, so
+    "on the line" means the page rounded them onto the same cells; comparing the
+    real distance against half a step misses the readings whose binary difference
+    lands just above it (567-E-3), and a wider tolerance would take the
+    neighbouring cells. Any other `tolerance` keeps the real-distance reading:
+    distance to the nearest point of each segment rather than an axis box plus a
+    cross product, so a segment at an angle is judged by how far the point really
+    is from it.
     """
     if not points:
         return False
+    if tolerance == PAGE_POINT_PRECISION / 2.0:
+        return _on_polyline(
+            (round(point[0], 2), round(point[1], 2)),
+            [(round(p[0], 2), round(p[1], 2)) for p in points],
+        )
     segments = list(zip(points, points[1:])) if len(points) > 1 else [(points[0], points[0])]
     for start, end in segments:
         dx, dy = end[0] - start[0], end[1] - start[1]
@@ -5866,6 +6099,52 @@ def _near_polyline(
             + (point[1] - (start[1] + t * dy)) ** 2
             <= tolerance * tolerance
         ):
+            return True
+    return False
+
+
+def _parallel_segments(
+    first: tuple[tuple[float, float], tuple[float, float]],
+    second: tuple[tuple[float, float], tuple[float, float]],
+) -> bool:
+    """Are two non-degenerate segments drawn along the same direction?
+
+    A sine of 1e-3, not exact equality: the page reports coordinates at 0.01
+    (:data:`PAGE_POINT_PRECISION`) while a planned line keeps full precision, so
+    a merge of ten-odd units can differ in direction by a hair. A re-routed
+    wire (the other shape a host merge shows) is off by tens of degrees.
+    """
+    ax = first[1][0] - first[0][0]
+    ay = first[1][1] - first[0][1]
+    bx = second[1][0] - second[0][0]
+    by = second[1][1] - second[0][1]
+    a_length = math.hypot(ax, ay)
+    b_length = math.hypot(bx, by)
+    if a_length == 0.0 or b_length == 0.0:
+        return False
+    return abs(ax * by - ay * bx) <= 1e-3 * a_length * b_length
+
+
+def _page_segment_on_plan_line(
+    start: tuple[float, float],
+    stop: tuple[float, float],
+    line: Sequence[tuple[float, float]],
+    spot: tuple[float, float],
+) -> bool:
+    """Is a page segment through `spot` drawn along the planned line there?
+
+    `spot` is a planned end of `line`, so one or two planned segments pass
+    through it (one, at either end of a straight wire). The page segment has to
+    be parallel to one of them — the page's copper continuing this wire, not
+    another conductor of the same net crossing it.
+    """
+    segments = list(zip(line, line[1:])) or [(line[0], line[0])]
+    for first, second in segments:
+        if (
+            _near_polyline(spot, (first, second))
+            or _near(spot, first, 1e-6)
+            or _near(spot, second, 1e-6)
+        ) and _parallel_segments((start, stop), (first, second)):
             return True
     return False
 
@@ -5885,6 +6164,16 @@ def _page_segment_holds_end(
     wire's copper (or an unplanned extension) and does not answer for this end; a
     page vertex somewhere else does not either. A named wire additionally requires
     the segment to carry its net — the condition the named branch has always had.
+
+    567-E-2 (573): the host merges touching wires of one net into **one**
+    primitive (pit 32), and a planned endpoint that was the joint between two
+    collinear ones is then interior to a segment that reaches past this wire's
+    own polyline — the strict form above refuses a landing that did land. A
+    segment that carries *this* net and is drawn along this wire's own line is
+    that merge, and answers for the end. Everything else keeps the strict
+    reading: a foreign net, a segment with no net at all (nothing proves it is
+    this wire's copper), a segment at an angle, and a vertex off the line are
+    all still reported.
     """
     for seg_net, start, stop, length in page_segments:
         if length <= 0.0:
@@ -5894,6 +6183,8 @@ def _page_segment_holds_end(
         if named and seg_net != net:
             continue
         if _near_polyline(start, line) and _near_polyline(stop, line):
+            return True
+        if net and seg_net == net and _page_segment_on_plan_line(start, stop, line, spot):
             return True
     return False
 
@@ -6070,7 +6361,11 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
             if wire.net:
                 unnamed_nets.add(wire.net)
             unnamed_wires.append(
-                ([(float(point[0]), float(point[1])) for point in wire.points], length)
+                (
+                    [(float(point[0]), float(point[1])) for point in wire.points],
+                    length,
+                    wire.net,
+                )
             )
     # The unnamed wires (069 sec.9) cannot be counted per net — the page holds them
     # under no name — so their lengths are compared as one bucket. They are still
@@ -6084,19 +6379,33 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     # This keeps 163b's deliberate permissiveness and still recognises the V4
     # merge without letting it mask a missing different segment.
     page_unnamed_length = lengths.get("", 0.0)
-    for line, planned in unnamed_wires:
+    for line, planned, wire_net in unnamed_wires:
         has_unnamed = any(
             not net and _on_polyline(start, line) and _on_polyline(end, line)
             for net, start, end, _segment in page_segments
         )
         if has_unnamed:
             continue
-        covered_named = sum(
+        inside = sum(
             segment
             for net, start, end, segment in page_segments
             if net and _on_polyline(start, line) and _on_polyline(end, line)
         )
-        page_unnamed_length += min(covered_named, planned)
+        # 573 (567-E-2): the host merged this wire into a **longer** primitive of
+        # the same net (pit 32), so the page segment no longer lies inside the
+        # planned line — it contains it. Count the planned line when every planned
+        # point is on that segment: the copper covers the wire even though the
+        # wire does not cover the copper. The two readings are alternatives (a
+        # segment cannot both contain and be contained without being the same
+        # line), so the larger one is the coverage; a segment that covers only
+        # part of the wire still fails below.
+        covering = sum(
+            segment
+            for net, start, end, segment in page_segments
+            if net and net == wire_net
+            and all(_near_polyline(point, (start, end)) for point in line)
+        )
+        page_unnamed_length += min(max(inside, covering), planned)
     if unnamed_length and page_unnamed_length + HALF_GRID < unnamed_length:
         problems.append(
             f"the plan draws {unnamed_length:g} units of unnamed wire (nets "
@@ -6141,19 +6450,41 @@ CENSUS_CLEARANCE = DRAW_GRID
 #: stubs; the note that goes with it says the box is an assumption, not a reading.
 CENSUS_FALLBACK_HALF = 10 * DRAW_GRID
 
-#: The primitive sections a `sch.geometry` dump is contracted to carry — the same
-#: four `bridge/protocol.py`'s `sch.geometry` promises and
-#: `engines.draw.geometry_fingerprint` counts. Named once, here, because the census
-#: is the reader that has to see **every** one of them: 143d found the census
-#: reading `components` and `wires` only, so a page that gained a `netlabels`
-#: entry (or a `pins` one) had a byte-identical census and a C5 guard that said
-#: "nobody touched this page" over a page somebody had touched. Measured on this
-#: host (3.2.186, and every recorded dump — 142 of them, `pins` and `netlabels`
-#: always empty): the two sections come back empty today, so this is insurance
-#: against a host that fills them rather than a live refusal — but a guard that
-#: covers three of four contracted sections is a guard whose "checked" is a claim
-#: it cannot support, which is the whole defect 143d reports.
+#: The **electrical** primitive sections a `sch.geometry` dump is contracted to
+#: carry — the four `bridge/protocol.py`'s `sch.geometry` promises and
+#: `engines.draw.geometry_fingerprint` counts (the drawing primitives the dump
+#: also carries are named separately in :data:`DRAWING_SECTIONS`; the census keeps
+#: this electrical shape because that is `PlanDrawBaseline`'s public one). Named
+#: once, here, because the census is the reader that has to see **every** one of
+#: them: 143d found the census reading `components` and `wires` only, so a page
+#: that gained a `netlabels` entry (or a `pins` one) had a byte-identical census
+#: and a C5 guard that said "nobody touched this page" over a page somebody had
+#: touched. Measured on this host (3.2.186, and every recorded dump — 142 of them,
+#: `pins` and `netlabels` always empty): the two sections come back empty today, so
+#: this is insurance against a host that fills them rather than a live refusal — but
+#: a guard that covers three of four contracted sections is a guard whose "checked"
+#: is a claim it cannot support, which is the whole defect 143d reports.
 GEOMETRY_SECTIONS: tuple[str, ...] = ("components", "wires", "pins", "netlabels")
+
+#: The **drawing** primitives a `sch.geometry` dump carries beside the electrical
+#: census — text, bus, circle, rectangle, arc and polygon, keyed exactly as the
+#: connector answers them. 566-A-2: `canvas_census` speaks for the electrical
+#: four, so a page whose only content is a hand-written note (a text) or a frame
+#: line was "provably empty" and got reused. These six are the host namespaces
+#: that actually exist (`sch_PrimitiveText/Bus/Circle/Rectangle/Arc/Polygon`);
+#: there is no `sch_PrimitiveLine`, and none is invented here. The noun is the
+#: word a refusal prints, kept beside the key so a section cannot gain one without
+#: the other.
+DRAWING_SECTION_NOUNS: dict[str, str] = {
+    "texts": "text(s)",
+    "buses": "bus(es)",
+    "circles": "circle(s)",
+    "rectangles": "rectangle(s)",
+    "arcs": "arc(s)",
+    "polygons": "polygon(s)",
+}
+
+DRAWING_SECTIONS: tuple[str, ...] = tuple(DRAWING_SECTION_NOUNS)
 
 
 def _state(entry: Any) -> dict[str, Any]:
@@ -6437,6 +6768,113 @@ def census_changes(
                 + ", ".join(f"{key} {row.get(key)!r} → {found.get(key)!r}" for key in fields)
             )
     return problems
+
+
+def _one_straight_line(points: Sequence[tuple[float, float]]) -> bool:
+    """Is this polyline one straight, non-degenerate segment (possibly more points)?"""
+    if len(points) < 2:
+        return False
+    start, stop = points[0], points[-1]
+    if _near(start, stop, 1e-6):
+        return False
+    return all(_on_polyline(point, (start, stop)) for point in points)
+
+
+def _page_points(row: Mapping[str, Any]) -> list[tuple[float, float]]:
+    return [(float(point[0]), float(point[1])) for point in row.get("points") or ()]
+
+
+def host_merges(
+    plan: ChangePlan,
+    before: Sequence[Mapping[str, Any]],
+    after: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Existing wires the host merged a planned wire of the same net into (573).
+
+    567-E-2 shape 2: a plan wire lands onto copper that was already on the page,
+    touching it and collinear with it. The host makes **one** primitive of the
+    two (pit 32), so the existing wire's id comes back with a longer point list —
+    `census_changes` reads that as "an existing primitive was changed" and the
+    range gate refuses a landing that landed. This is the one exemption, and it
+    has to be provable item by item, not "anything collinear changed":
+
+    * the row is a **wire**, still on the page under the same id;
+    * its net is the same before and after, is not an auto name, and is a net
+      **the plan draws** — a wire whose name changed (`''` → `VIN`) is the host
+      naming its primitive, which is a change to somebody's primitive;
+    * the merged point list is **one straight line**, and the existing wire is
+      completely contained in it (every point of it on the merged segment);
+    * a planned wire of that net is likewise on the merged segment, reaches
+      **beyond** the existing wire, and touches it — the extension the plan
+      asked for is what the primitive grew by;
+    * the merged primitive is exactly that: every point it reports lies on the
+      hull of the existing wire plus that planned wire. Copper the plan did not
+      draw is not covered by this exemption.
+
+    The returned records are the evidence, one per merged wire, and their ``id``
+    is what :func:`census_changes` is asked to ignore — the caller also prints
+    them (`range.outOfScope.hostMerges`), because an exemption nobody can see is
+    indistinguishable from a gate that stopped looking.
+    """
+    now = {row["id"]: row for row in after if row.get("id")}
+    planned = [
+        (wire.net, [(float(point[0]), float(point[1])) for point in wire.points])
+        for wire in plan.change.draw_wires
+        if wire.net and wire.points
+    ]
+    merges: list[dict[str, Any]] = []
+    for row in before:
+        ident = row.get("id") or ""
+        if not ident or row.get("kind") != "wire":
+            continue
+        found = now.get(ident)
+        if found is None or found.get("kind") != "wire":
+            continue
+        net = _stable_net(row)
+        if not net or net != _stable_net(found):
+            continue
+        existing = _page_points(row)
+        merged = _page_points(found)
+        if not existing or existing == merged:
+            continue
+        if not _one_straight_line(merged):
+            continue
+        if not all(_on_polyline(point, merged) for point in existing):
+            continue
+        wire = next(
+            (
+                line for line_net, line in planned
+                if line_net == net
+                and all(_near_polyline(point, merged) for point in line)
+                and any(not _near_polyline(point, existing) for point in line)
+                and any(_near_polyline(point, existing) for point in line)
+            ),
+            None,
+        )
+        if wire is None:
+            continue
+        # The merged primitive may only be these two wires: the plan's line is
+        # the far end, the existing wire the near one, and nothing else.
+        corners = existing + wire
+        dx = wire[-1][0] - wire[0][0]
+        dy = wire[-1][1] - wire[0][1]
+        first = min(corners, key=lambda point: point[0] * dx + point[1] * dy)
+        second = max(corners, key=lambda point: point[0] * dx + point[1] * dy)
+        if not all(_near_polyline(point, (first, second)) for point in merged):
+            continue
+        merges.append({
+            "id": ident,
+            "net": net,
+            "before": [list(point) for point in existing],
+            "after": [list(point) for point in merged],
+            "planned": [list(point) for point in wire],
+            "criterion": (
+                "same net, merged points are one straight line, the existing wire is "
+                "completely contained, and this planned wire lies on the merged "
+                "segment, touches the existing wire and reaches beyond it"
+            ),
+        })
+    return merges
 
 
 @dataclass

@@ -270,18 +270,22 @@ def test_a_caption_with_notes_keeps_every_line_inside_the_canvas():
 
 
 def test_a_caption_that_already_fitted_keeps_the_height_it_had():
-    """The five lines a plan with at most one note produces stay inside 90 units.
+    """The five lines a plan with at most one note produces keep their 90-unit strip.
 
-    The strip guessed right for 4 and 5 lines, which is most plans: deriving the
-    height from the line count may not move those previews — every recorded SVG
-    of a plan with ≤1 note has to stay byte-identical (the batch's zero-movement
-    check).
+    The strip always guessed right for 4 and 5 lines, and it still does: the
+    caption block itself is unchanged. What moved (580 F-1) is the canvas under an
+    empty plan — it used to be ``width=0`` and now carries the renderer's
+    ``2 * PREVIEW_MARGIN`` frame, so the total is 80 + 90 = 170.
     """
-    assert _caption_geometry(svgpreview.render_svg(LayoutPlan(), {}, title="t"))[0] == 90.0
+    empty = _caption_geometry(svgpreview.render_svg(LayoutPlan(), {}, title="t"))[0]
+    assert empty == 170.0
+    assert empty - 2 * svgpreview.PREVIEW_MARGIN == 90.0, (
+        "the four-line caption strip itself must not grow"
+    )
     one_note = LayoutPlan(notes=["one note"])
     height, baselines = _caption_geometry(
         svgpreview.render_svg(one_note, {}, title="t"))
-    assert height == 90.0
+    assert height == 170.0
     assert len(baselines) == 5
     assert max(baselines) + svgpreview.PREVIEW_FONT_SIZE <= height
 

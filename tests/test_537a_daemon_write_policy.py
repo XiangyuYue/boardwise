@@ -46,6 +46,10 @@ from boardwise.bridge.protocol import ACTIONS, BridgeError, ErrorCodes, action_s
 
 TOKEN = "test-token-not-a-real-secret"
 
+#: 577 / W-D1: the read-only identity probe every design write now carries.
+PROBE = "sys.identity"
+
+
 #: A project the daemon must never write without being told to. Synthetic on
 #: purpose — no real board's name or uuid belongs in a test.
 REAL_NAME = "我的真实工程"
@@ -137,10 +141,48 @@ def _daemon(tmp_path, monkeypatch, *, env: str | None = None, **kwargs):
 
     async def fake_forward(action, params, role, window):
         forwarded.append((action, dict(params), window.key))
+        if action == PROBE:
+            # 577 / W-D1: every design write is now preceded by one read-only
+            # identity probe. This fake *is* the editor, and the identity it
+            # reports is the one the window claims — so a test written before 577
+            # keeps the meaning it had. A stale, disagreeing or unreadable
+            # identity needs a test that stages one: tests/test_577_fresh_write_gate.py.
+            return _identity_of(window)
         return {"spy": action}
 
     monkeypatch.setattr(daemon, "_forward", fake_forward)
     return daemon, forwarded
+
+
+def _identity_of(window: WindowConnection) -> dict:
+    """What this fake editor reports about itself: the window's own claim."""
+    if not (window.project_name and window.project_uuid):
+        return {
+            "focusedProject": None,
+            "activeDocument": None,
+            "consistent": None,
+            "consistentBasis": "unavailable",
+            "readOnly": True,
+        }
+    project = {"projectUuid": window.project_uuid, "name": window.project_name}
+    return {
+        "focusedProject": project,
+        "activeDocument": {
+            "uuid": "doc-1",
+            "type": "schematic",
+            "projectUuid": window.project_uuid,
+            "project": project,
+        },
+        "consistent": True,
+        "consistentBasis": "project-uuid",
+        "readOnly": True,
+    }
+
+
+def _writes(forwarded: list[tuple[str, dict, str]]) -> list[tuple[str, dict, str]]:
+    """The design writes among the frames the spy saw (577: the probe is a read)."""
+    return [entry for entry in forwarded if entry[0] != PROBE]
+
 
 
 def _attach(daemon: BridgeDaemon, window: WindowConnection) -> WindowConnection:
@@ -179,10 +221,11 @@ def test_a_write_into_a_real_project_is_refused_before_it_is_forwarded(
     """The hole this task closes, at the choke point.
 
     Four facts travel with the refusal: the action, the project actually
-    selected, the allowed set, and that the editor never saw the call. The
+    selected, the allowed set, and that the editor never saw the **write**. The
     out-parameter stays **unmarked** too: a caller that later writes an audit
     line must not be told this request was routed to a window when nothing was
-    sent to it.
+    written. Since 577 the one frame that does go out is the read-only identity
+    probe — which is why the sentence says "no design write", not "nothing".
     """
     daemon, forwarded = _daemon(tmp_path, monkeypatch)
     window = _attach(daemon, _window(name=REAL_NAME, uuid=REAL_UUID))
@@ -197,9 +240,10 @@ def test_a_write_into_a_real_project_is_refused_before_it_is_forwarded(
     assert REAL_NAME in error.message or REAL_UUID in error.message
     assert "test" in error.message and "test2" in error.message
     assert "allowed" in error.message
-    assert "Nothing was forwarded" in error.message
-    # The spy is the proof: not a message claim.
-    assert forwarded == []
+    assert "No design write was forwarded" in error.message
+    # The spy is the proof: not a message claim — one read, zero writes.
+    assert _writes(forwarded) == []
+    assert [entry[0] for entry in forwarded] == [PROBE]
     assert window.websocket.sent == []
     assert routed == {}, "a refused call must not be marked as routed"
     assert error.detail["action"] == "sch.place_component"
@@ -211,7 +255,8 @@ def test_a_window_whose_project_cannot_be_read_is_refused(tmp_path, monkeypatch)
 
     A window that named no project (an old connector, or a read that failed)
     would otherwise be the cheapest way to write into a real board by simply not
-    saying which one it is.
+    saying which one it is. Since 577 the editor is asked directly, and an answer
+    with no project is the same refusal.
     """
     daemon, forwarded = _daemon(tmp_path, monkeypatch)
     window = _attach(daemon, _window(name="", uuid=""))
@@ -221,8 +266,8 @@ def test_a_window_whose_project_cannot_be_read_is_refused(tmp_path, monkeypatch)
 
     assert error.code == ErrorCodes.WRITE_PROJECT_FORBIDDEN
     assert "unknown" in error.message.lower() or "unnamed" in error.message.lower()
-    assert "Nothing was forwarded" in error.message
-    assert forwarded == []
+    assert "No design write was forwarded" in error.message
+    assert _writes(forwarded) == []
     assert window.websocket.sent == []
     assert routed == {}
 
@@ -235,7 +280,7 @@ def test_writes_into_test_and_test2_are_allowed(tmp_path, monkeypatch, name):
     result = _call(daemon, "sch.place_component", params={"designator": "R1"})
 
     assert result == {"spy": "sch.place_component"}
-    assert [entry[0] for entry in forwarded] == ["sch.place_component"]
+    assert [entry[0] for entry in forwarded] == [PROBE, "sch.place_component"]
 
 
 # --------------------------------------------------------------------------
@@ -307,7 +352,7 @@ def test_overwriting_a_documents_source_is_still_a_design_write(tmp_path, monkey
     )
 
     assert error.code == ErrorCodes.WRITE_PROJECT_FORBIDDEN
-    assert forwarded == []
+    assert _writes(forwarded) == []
 
 
 # --------------------------------------------------------------------------
@@ -328,8 +373,11 @@ def test_an_explicitly_empty_environment_denies_every_project(tmp_path, monkeypa
     assert daemon.write_projects == frozenset()
     error = _refusal(daemon, "sch.place_wire", params={"points": [[0, 0], [1, 0]]})
     assert error.code == ErrorCodes.WRITE_PROJECT_FORBIDDEN
-    assert "Nothing was forwarded" in error.message
-    assert forwarded == []
+    assert "No design write was forwarded" in error.message
+    # The probe still runs: the refusal names the project the write would have
+    # landed in, and that is only true if it was read now.
+    assert _writes(forwarded) == []
+    assert [entry[0] for entry in forwarded] == [PROBE]
 
 
 def test_an_injected_empty_set_also_denies_everything(tmp_path, monkeypatch):
@@ -338,7 +386,7 @@ def test_an_injected_empty_set_also_denies_everything(tmp_path, monkeypatch):
 
     assert daemon.write_projects == frozenset()
     assert _refusal(daemon, "sch.doc.save").code == ErrorCodes.WRITE_PROJECT_FORBIDDEN
-    assert forwarded == []
+    assert _writes(forwarded) == []
 
 
 def test_the_environment_can_allow_named_projects(tmp_path, monkeypatch):
@@ -348,7 +396,7 @@ def test_the_environment_can_allow_named_projects(tmp_path, monkeypatch):
 
     _attach(daemon, _window(name="/Alpha", uuid="uuid-alpha"))
     _call(daemon, "sch.doc.save")
-    assert forwarded == [("sch.doc.save", {}, "w1")]
+    assert forwarded == [(PROBE, {}, "w1"), ("sch.doc.save", {}, "w1")]
 
 
 def test_an_allowed_uuid_lets_a_differently_named_project_through(tmp_path, monkeypatch):
@@ -366,7 +414,7 @@ def test_an_operator_allowlist_does_not_keep_test_enabled(tmp_path, monkeypatch)
     _attach(daemon, _window(name="test", uuid="uuid-test"))
 
     assert _refusal(daemon, "sch.doc.save").code == ErrorCodes.WRITE_PROJECT_FORBIDDEN
-    assert forwarded == []
+    assert _writes(forwarded) == []
 
 
 @pytest.mark.parametrize(
@@ -395,14 +443,14 @@ def test_an_injected_policy_wins_over_the_environment(tmp_path, monkeypatch):
 
     _attach(daemon, _window(name="test", uuid="uuid-test"))
     _call(daemon, "sch.doc.save")
-    assert forwarded == [("sch.doc.save", {}, "w1")]
+    assert forwarded == [(PROBE, {}, "w1"), ("sch.doc.save", {}, "w1")]
 
     forwarded.clear()
     _attach(daemon, _window(key="w2", name="alpha", uuid="uuid-alpha"))
     assert _refusal(
         daemon, "sch.doc.save", target_project="alpha",
     ).code == ErrorCodes.WRITE_PROJECT_FORBIDDEN
-    assert forwarded == []
+    assert _writes(forwarded) == []
 
 
 # --------------------------------------------------------------------------
@@ -494,4 +542,4 @@ def test_a_create_action_still_asks_for_confirmation_first(tmp_path, monkeypatch
 
     error = _refusal(daemon, "sch.doc.new", params={"name": "scratch", "confirm": True})
     assert error.code == ErrorCodes.WRITE_PROJECT_FORBIDDEN
-    assert forwarded == []
+    assert _writes(forwarded) == []

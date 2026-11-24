@@ -14,37 +14,68 @@ The snapshot is captured through the bridge (``sch.geometry`` + the render the
 same page already produces); the predicates run on the captured dict alone, so
 a lint run can be replayed from a file with no daemon at all.
 
-**The eleven predicates** (each maps to a defect class 110 actually showed;
-L10 and L5b are the 111a addendum — 岳's editor DRC run, 2026-10-04):
+**The :data:`PREDICATES` table is the machine source, and this docstring lists
+all of it** — the same ids, in the same order, nothing omitted (568A-H3: the
+table here used to list only a subset of what the engine ran). The families
+are three: (a) **text geometry** — a rendered text box against a conductor, a
+part body or another text box (L1/L2/L3/L7); (b) **page geometry** — conductors,
+part bodies, flags, crossings and the sheet itself (L4/L5/L6/L8/L9/L10/L11/L13);
+(c) **netlist-only** — the three L12 questions, which run *only* when a netlist
+was handed to the run (see :data:`NETLIST_PREDICATES`; their silence without
+one is not evidence of a consistent board).
 
 =================================  ============================================  ======
 predicate                          what it refuses                               level
 =================================  ============================================  ======
-``L1 text-on-wire``                a text box × a wire segment (own net's        ERROR
+``L1-text-on-wire``                a text box × a wire segment (own net's        ERROR
                                    attachment / same-net label excluded)
-``L2 text-on-text``                two text boxes intersecting                   ERROR
-``L3 text-on-part``                a text box × a *foreign* part's body          ERROR
-``L4 wire-through-part``           a wire segment × a part body / foreign        ERROR
+``L2-text-on-text``                two text boxes intersecting                   ERROR
+``L3-text-on-part``                a text box × a *foreign* part's body          ERROR
+``L4-wire-through-part``           a wire segment × a part body / foreign        ERROR
                                    pin (non-endpoint)
-``L5 duplicate-annotation``        same-net flag + label, or two labels          ERROR
+``L5-duplicate-annotation``        same-net flag + label, or two labels          ERROR
                                    closer than :data:`L5_DUPLICATE_NET_GAP`
-``L6 wire-crossing``               wire × wire proper crossing, no junction      INFO/WARN
-                                   (clustered per wire pair; ≥ :data:`L6_CLUSTER_WARN`
-                                   crossings in a cluster, or more than
-                                   :data:`L6_PAGE_WARN` clusters on the page, warn)
-``L7 label-wire-clearance``        label/pin × foreign wire gap below            WARN
-                                   :data:`L7_LABEL_WIRE_GAP`
-``L8 flag-orientation``            a power/ground flag rotated off the vertical  ERROR/INFO
-                                   — a **sideways** one (90/270) is reported
-                                   and never fatal (168), an odd tilt still is
-``L9 board-fill``                  the placed extent under-fills the sheet       INFO
-``L10 out-of-bounds``              a part body, wire point, flag anchor or       ERROR
-                                   text box beyond the sheet frame
-                                   (:data:`L10_EDGE_EPS` inside the edge is legal)
 ``L5-wire-multiname``              one wire primitive carrying more than one     WARN
                                    same-net annotation — the host DRC reports
                                    导线有多个网络名 (the 110 named-stub shape)
+``L5-wire-rail-conflict``          one conductor stating two *different* names,  ERROR
+                                   at least one of them a rail (P1: GND + +5V
+                                   on one wire)
+``L6-wire-crossing``               wire × wire proper crossing, no junction      INFO/WARN
+                                   (clustered per wire pair; ≥ :data:`L6_CLUSTER_WARN`
+                                   crossings in a cluster, or more than
+                                   :data:`L6_PAGE_WARN` clusters on the page, warn)
+``L7-label-wire-clearance``        label/pin × foreign wire gap below            WARN
+                                   :data:`L7_LABEL_WIRE_GAP`
+``L8-flag-orientation``            a power/ground flag rotated off the vertical  ERROR/INFO
+                                   — a **sideways** one (90/270) is reported
+                                   and never fatal (168), an odd tilt still is
+``L9-board-fill``                  the placed extent under-fills the sheet       INFO
+``L10-out-of-bounds``              a part body, wire point, flag anchor or       ERROR
+                                   text box beyond the sheet frame
+                                   (:data:`L10_EDGE_EPS` inside the edge is legal)
+``L11-part-overlap``               two parts' measured bodies share area         ERROR
+``L11-rail-without-flag``          a conductor names a rail the page carries     ERROR
+                                   no flag for
+``L12-two-pin-same-net``           a two-terminal passive with both pins on      ERROR
+                                   one net (:data:`NETLIST_PREDICATES`)
+``L12-ground-supply-pin-short``    one device's ground pin and supply pin on     ERROR
+                                   the *same* net (:data:`NETLIST_PREDICATES`)
+``L12-ground-flag-absent-from-netlist``
+                                   the page's ground flag names a net the        ERROR
+                                   netlist never mentions
+                                   (:data:`NETLIST_PREDICATES`)
+``L13-non-orthogonal``             a drawn sub-edge whose x **and** y both       ERROR
+                                   change — S-08 is 100% 横平竖直, a slanted
+                                   conductor is 判废 (589)
+``L13-crossing-budget``            more distinct crossing sites than            ERROR
+                                   ``max(L6_PAGE_WARN, S11_CROSSING_BUDGET ×
+                                   segments)`` — S-11's 2% ceiling with a
+                                   small-page floor, both strictly exceeded (589)
 =================================  ============================================  ======
+
+The ``L12-ground-flag-absent-from-netlist`` row is long on purpose: the id is
+the netlist question, not a short label.
 
 **Text geometry is estimated, and says so.** The host exposes no text-extent
 read (``sch_PrimitiveNetLabel`` is absent on this build — pit 9; ``sch.geometry``
@@ -84,7 +115,7 @@ from ..core.netlist import Netlist, NetlistPart, NetlistPin, read_netlist_docume
 #: blue/blue-black (#0000FF / #000000), all under ``c_partid="part_attr"``;
 #: page annotations (net labels, flag names) draw blue #0000FF with **no**
 #: ``c_partid``. Sheet frame and title block draw #A00000 at 10px and in no
-#: canvas class at all — both skipped. See ``_svg_text_nodes`` for the table.
+#: canvas class at all — both skipped. See ``_svg_text_records`` for the table.
 FILL_DESIGNATOR = "#000080"
 FILL_VALUE = "#0000FF"
 FILL_PIN_NAME = "#000000"
@@ -251,6 +282,33 @@ L10_EDGE_EPS = 0.5
 #: (pit 24/26: the host reports attachment by point-set membership). Any
 #: endpoint within this distance of a pin counts as landing on it.
 PIN_LANDING_EPS = 1.0
+
+#: L13-non-orthogonal — S-08's 判废线 (568A-H1): a drawn sub-edge whose x **and**
+#: y both move by more than this is a 斜线. The unit is canvas units, and the
+#: tolerance only has to keep float noise out: every vertex the host reported on
+#: the measured pages is integral (P1/P22/P23/P24: 0 diagonal sub-edges), while a
+#: hand-drawn or pasted diagonal is tens of units off both axes.
+NON_ORTHO_EPS = 0.01
+
+#: L13-crossing-budget — S-11's hard ceiling (568A-H2), with a **small-page
+#: floor** (589B, 岳 2026-11-24): the page-level ERROR fires only when
+#: ``sites > max(L6_PAGE_WARN, S11_CROSSING_BUDGET * segments)`` — i.e. both the
+#: absolute limit of 3 sites and the 2% ratio must be exceeded.
+#:
+#: Numerator and denominator are the same ruler L6 already uses: a site is one
+#: cluster of crossings of one unordered wire-primitive pair
+#: (:data:`L6_CLUSTER_GAP`), and the segments are the ``Wire.segments`` of every
+#: wire the check read (``w.points`` non-empty).
+#:
+#: Why the floor: 2% has no absolute scale, so without one any page under 150
+#: segments carrying a single crossing would be 判废 — the accepted P24 measures
+#: 2 sites / 27 segments = 7.41% (evidence/589/P24_s11_conflict.txt). The floor
+#: is a **general** rule, not a P24 exception: the same page at 4 sites still
+#: errors, and on a big page the ratio wins (21 sites / 1000 segments = 2.10% >
+#: 2% → ERROR while 3 sites would not). ``S11_CROSSING_BUDGET`` is unchanged;
+#: the 2% value is still computed and reported in the message so the binding
+#: limit is never hidden.
+S11_CROSSING_BUDGET = 0.02
 
 #: The render sidecar a lint run wants next to the snapshot: the text geometry
 #: comes from the editor's own render of the same page, and the run that
@@ -630,15 +688,33 @@ def text_width(text: str) -> float:
     return textmetrics.render_width(text)
 
 
+def _size_scale(size: float | None) -> float:
+    """The factor a node's declared ``font-size`` scales its box by.
+
+    The box is modelled at :data:`RENDER_TEXT_PX`, the size the render declares
+    for canvas text; a node that declares a different one is drawn that much
+    larger or smaller and the estimate follows it (575 — the size used to be
+    parsed and dropped, so a 2x node measured the same as a 1x one). A node
+    that declares nothing — or declares 0 — keeps the constants: exactly 1.0.
+    """
+    if not size:
+        return 1.0
+    return size / RENDER_TEXT_PX
+
+
 def render_box(
-    x: float, y: float, text: str, *, anchor: str = "start"
+    x: float, y: float, text: str, *, anchor: str = "start", size: float | None = None
 ) -> tuple[float, float, float, float]:
     """The box canvas text occupies, from the render's anchor.
 
     The width is :func:`text_width` — the Arial advance table times the em the
     render declares (:data:`boardwise.core.textmetrics.RENDER_TEXT_PX`); 150
     corrected that from the row pitch, which had made every box 1.39893x too
-    wide. Box height is the text *row* (:data:`CANVAS_TEXT_UNITS`). The box
+    wide. ``size`` is the node's own declared ``font-size`` px, when it
+    declares one: the host draws that node at that size, so both the width and
+    the row height scale by ``size / RENDER_TEXT_PX`` (:func:`_size_scale`);
+    ``None``/0 — no declaration — is the pre-575 box. Box height is otherwise
+    the text *row* (:data:`CANVAS_TEXT_UNITS`). The box
     starts at the anchor for ``start``-anchored nodes, is centred on it for
     ``middle``, and grows **left** from it for ``end`` — the host draws a wire's
     net name end-anchored at the conductor's endpoint (measured on V4 Board2 P1:
@@ -658,15 +734,16 @@ def render_box(
     the ``<text y=…>`` attribute: the host shifts a row with a ``<tspan dy=…>``
     and that offset moves the ink (534 measured it — a rot-180 rail flag's name
     carries ``dy="8"``, its ink 707..712 on the page while the attribute says
-    715). :func:`_svg_text_nodes` folds the offsets in, so the box below is
+    715). :func:`_svg_text_records` folds the offsets in, so the box below is
     always built from the baseline the glyphs were drawn at.
     The box therefore spans ``canvas_y .. canvas_y + height`` — verified
     against C20 (test/P23): designator baseline at canvas 720, glyphs
     720..730 above the symbol's body; value baseline at 710, glyphs
     710..720 below the body (2026-10-04).
     """
-    width = text_width(text)
-    height = CANVAS_TEXT_UNITS
+    scale = _size_scale(size)
+    width = text_width(text) * scale
+    height = CANVAS_TEXT_UNITS * scale
     if anchor == "middle":
         x0 = x - width / 2
     elif anchor == "end":
@@ -692,8 +769,26 @@ def _tspan_dy(inner: str) -> float:
     return sum(float(value) for value in re.findall(r"dy=\"([-\d.eE]+)\"", inner))
 
 
-def _svg_text_nodes(svg: str) -> list[tuple[float, float, str, str, str]]:
-    """``(x, y, text, role, anchor)`` of the canvas text nodes in one render.
+@dataclass(frozen=True)
+class _SvgText:
+    """One canvas text node of a render, as the render declares it.
+
+    ``size`` is the node's own ``font-size`` in px — 0.0 when it declares none.
+    :func:`render_box` scales the box by it, so the reader hands it on rather
+    than dropping it (575: 567-G-2 measured a 2x node and a 1x node at one box
+    because this number was parsed for the body-content test and discarded).
+    """
+
+    x: float
+    y: float
+    text: str
+    role: str
+    anchor: str
+    size: float
+
+
+def _svg_text_records(svg: str) -> list[_SvgText]:
+    """Every canvas text node of one render, with its declared size.
 
     ``y`` is the **effective baseline** in the render's own frame: the
     ``<text y=…>`` attribute plus every ``<tspan dy=…>`` inside it
@@ -715,7 +810,7 @@ def _svg_text_nodes(svg: str) -> list[tuple[float, float, str, str, str]]:
       net label or a flag's net name, the free text the predicates judge.
     - no style class at all — title block / sheet zones; skipped.
     """
-    out: list[tuple[float, float, str, str, str]] = []
+    out: list[_SvgText] = []
     pattern = re.compile(
         r"<text ([^>]*?)style=\"([^\"]*)\"([^>]*?)>(.*?)</text>",
         re.S,
@@ -764,21 +859,36 @@ def _svg_text_nodes(svg: str) -> list[tuple[float, float, str, str, str]]:
         if not (x_match and y_match):
             continue
         out.append(
-            (
+            _SvgText(
                 float(x_match.group(1)),
                 float(y_match.group(1)) + _tspan_dy(match.group(4)),
                 content,
                 role,
                 anchor,
+                size,
             )
         )
     return out
 
 
+def _svg_text_nodes(svg: str) -> list[tuple[float, float, str, str, str]]:
+    """``(x, y, text, role, anchor)`` of :func:`_svg_text_records`.
+
+    The five-field view 163b's :func:`render_text_nodes` hands out (and
+    test_111 unpacks). Boxes are built from the records, so a node's declared
+    size still reaches the geometry — this projection is a reading convenience,
+    not a place where the size is dropped on the way to a box.
+    """
+    return [
+        (node.x, node.y, node.text, node.role, node.anchor)
+        for node in _svg_text_records(svg)
+    ]
+
+
 def text_boxes_from_render(svg: str, sheet: "Sheet | None" = None) -> list[TextBox]:
     """Every canvas text node of one render, as estimated boxes.
 
-    The roles come from the render's own classes (see ``_svg_text_nodes``):
+    The roles come from the render's own classes (see ``_svg_text_records``):
     an annotation is a page statement (a net label, a flag name), a
     designator/value is a symbol's own row. L3 exempts a part's own
     designator/value from its body by that role plus geometry; L1 keeps the
@@ -792,14 +902,14 @@ def text_boxes_from_render(svg: str, sheet: "Sheet | None" = None) -> list[TextB
     which net, and L2 tell one statement from two.
     """
     boxes: list[TextBox] = []
-    for x, y, content, role, anchor in _svg_text_nodes(svg):
+    for node in _svg_text_records(svg):
         boxes.append(
             TextBox(
-                content,
-                render_box(x, y, content, anchor=anchor),
-                kind=role,
+                node.text,
+                render_box(node.x, node.y, node.text, anchor=node.anchor, size=node.size),
+                kind=node.role,
                 # anchor in canvas coordinates (the render reports SVG y, pit 11's flip)
-                anchor=(x, -y),
+                anchor=(node.x, -node.y),
                 estimate=True,
             )
         )
@@ -823,7 +933,7 @@ def _rotate_vertical_boxes(boxes: list[TextBox], svg: str) -> None:
         r"<text ([^>]*?)style=\"([^\"]*)\"([^>]*?)>(.*?)</text>",
         re.S,
     )
-    vertical: dict[tuple[float, float, str], str] = {}
+    vertical: dict[tuple[float, float, str], tuple[str, float]] = {}
     for match in pattern.finditer(svg):
         whole = match.group(0)
         rot = re.search(r'transform="rotate\((-?[\d.]+)', whole)
@@ -834,6 +944,8 @@ def _rotate_vertical_boxes(boxes: list[TextBox], svg: str) -> None:
         content = re.sub(r"<[^>]+>", "", content).strip()
         x_match = re.search(r'[\"\s]x="([-\d.eE]+)"', whole)
         y_match = re.search(r'[\"\s]y="([-\d.eE]+)"', whole)
+        size_match = re.search(r"font-size:\s*([\d.]+)px", match.group(2))
+        size = float(size_match.group(1)) if size_match else 0.0
         if content and x_match and y_match:
             vertical[
                 (
@@ -841,18 +953,22 @@ def _rotate_vertical_boxes(boxes: list[TextBox], svg: str) -> None:
                     float(y_match.group(1)) + _tspan_dy(match.group(4)),
                     content,
                 )
-            ] = rot.group(1)
+            ] = (rot.group(1), size)
     for box in boxes:
         key = (box.anchor[0], -box.anchor[1], box.text)
-        angle = vertical.get(key) or vertical.get(
+        entry = vertical.get(key) or vertical.get(
             (box.anchor[0], box.anchor[1], box.text)
         )
-        if angle is None:
+        if entry is None:
             continue
-        width = text_width(box.text)
+        _angle, size = entry
+        # The node's own declared size scales the pivoted box exactly as it
+        # scales the horizontal one (575); an undeclared size is 1.0.
+        scale = _size_scale(size)
+        width = text_width(box.text) * scale
         x0 = box.box[0]
         y0 = box.box[1]
-        box.box = (x0, y0, x0 + CANVAS_TEXT_UNITS, y0 + width)
+        box.box = (x0, y0, x0 + CANVAS_TEXT_UNITS * scale, y0 + width)
 
 
 def _assign_annotation_nets(boxes: list[TextBox], sheet: "Sheet") -> None:
@@ -2055,6 +2171,18 @@ def check_crossings(sheet: Sheet) -> list[LintFinding]:
     the same two conductors crossing repeatedly is 岳's 「不必要交叉」 — and
     a page with more than :data:`L6_PAGE_WARN` distinct clusters adds one
     page-level WARN. Same-net pairs never pair up (that is connected wiring).
+
+    S-11's ceiling is a **separate, fatal** row (589, 568A-H2; floored by 589B):
+    when the page's distinct crossing sites exceed
+    ``max(L6_PAGE_WARN, S11_CROSSING_BUDGET * segments)`` — both the absolute
+    3-site limit and the 2% ratio strictly exceeded — one
+    ``L13-crossing-budget`` ERROR is added beside the L6 rows. The floor keeps
+    the 2% ruler from condemning small pages (P24: 2 sites / 27 segments), and
+    the ratio keeps binding on big ones (21 sites / 1000 segments = 2.10%).
+    The old >:data:`L6_PAGE_WARN` WARN stays exactly as it was — a WARN never
+    reaches the exit code, and letting the new ERROR replace it would hide the
+    two rulers. The denominator is the segments this function actually read, so
+    a page with no wires answers nothing rather than dividing by zero.
     """
     wires = [w for w in sheet.wires if w.points]
     pairs: dict[tuple[str, str], tuple[Wire, Wire, list[tuple[float, float]]]] = {}
@@ -2146,6 +2274,73 @@ def check_crossings(sheet: Sheet) -> list[LintFinding]:
                 ),
             )
         )
+    segment_count = sum(len(wire.segments) for wire in wires)
+    if segment_count:
+        ratio_budget = S11_CROSSING_BUDGET * segment_count
+        threshold = max(float(L6_PAGE_WARN), ratio_budget)
+        if cluster_count > threshold:
+            out.append(
+                LintFinding(
+                    "L13-crossing-budget",
+                    "ERROR",
+                    f"the page carries {cluster_count} distinct crossing sites "
+                    f"over {segment_count} drawn wire segments = "
+                    f"{cluster_count / segment_count * 100:.2f}% — S-11's ceiling "
+                    f"is max({L6_PAGE_WARN}, 2% of {segment_count} segments "
+                    f"(0.02 × {segment_count} = {ratio_budget:.2f})) = "
+                    f"{threshold:g} sites, and "
+                    "both limits are strictly exceeded: reroute one of each "
+                    "crossing pair or cut the run and name the nets",
+                    x=sheet.sheet_box[0] if sheet.sheet_box else 0.0,
+                    y=sheet.sheet_box[1] if sheet.sheet_box else 0.0,
+                    objects=tuple(
+                        primitive
+                        for pair in pairs
+                        for primitive in pair
+                    ),
+                )
+            )
+    return out
+
+
+def check_wire_orthogonality(sheet: Sheet) -> list[LintFinding]:
+    """L13-non-orthogonal (ERROR): S-08's 判废线 — 100% 横平竖直.
+
+    568A-H1: S-08 was marked ``[硬]`` 「出现斜线即判废」 while no predicate ever
+    judged orthogonality — the 45° wire the 568-A probe added to a copy of the
+    P1 snapshot was named by L6 (it *was* in the judged set) and still exited 0.
+    The generator's 「not orthogonal」 refusal in ``drawcompiler`` is a
+    construction invariant of *its own* routing, not a gate over the page a
+    human drew or the editor already holds; this predicate is that gate.
+
+    The judged unit is :attr:`Wire.segments` — the sub-edges the render actually
+    draws (the ``<polyline>`` reading, 146) — so a bent run reports only its
+    slanted leg, never the whole primitive, and the pairwise reading means no
+    phantom diagonal is invented at a corner. A horizontal run (only x moves),
+    a vertical run (only y moves) and a zero-length segment (nothing moves,
+    S-13's legal 脚对脚 contact) are all silent; the tolerance that keeps float
+    noise out is :data:`NON_ORTHO_EPS`, far below any hand-drawn diagonal.
+    """
+    out: list[LintFinding] = []
+    for wire in sheet.wires:
+        for (ax, ay), (bx, by) in wire.segments:
+            dx = bx - ax
+            dy = by - ay
+            if abs(dx) <= NON_ORTHO_EPS or abs(dy) <= NON_ORTHO_EPS:
+                continue
+            out.append(
+                LintFinding(
+                    "L13-non-orthogonal",
+                    "ERROR",
+                    f"wire {wire.primitive[:8]} ({wire.net or 'unnamed'}) draws "
+                    f"a diagonal from ({ax:.0f},{ay:.0f}) to ({bx:.0f},{by:.0f}) "
+                    f"— {abs(dx):.0f} units across × {abs(dy):.0f} down: S-08 is "
+                    "100% 横平竖直 and 出现斜线即判废; reroute it on the two axes",
+                    x=(ax + bx) / 2,
+                    y=(ay + by) / 2,
+                    objects=(wire.primitive,),
+                )
+            )
     return out
 
 
@@ -2293,6 +2488,8 @@ PREDICATES: tuple[tuple[str, str], ...] = (
     ("L12-two-pin-same-net", "ERROR"),
     ("L12-ground-supply-pin-short", "ERROR"),
     ("L12-ground-flag-absent-from-netlist", "ERROR"),
+    ("L13-non-orthogonal", "ERROR"),
+    ("L13-crossing-budget", "ERROR"),
 )
 
 #: The predicates that only run when a netlist was handed to the run. A caller
@@ -2328,6 +2525,7 @@ def run_lint(
     findings.extend(check_text_on_text(sheet))
     findings.extend(check_text_on_part(sheet))
     findings.extend(check_wire_through_part(sheet, pin_positions))
+    findings.extend(check_wire_orthogonality(sheet))
     findings.extend(check_duplicate_annotation(sheet))
     findings.extend(check_wire_multiname(sheet))
     findings.extend(check_wire_rail_conflict(sheet))
@@ -2362,7 +2560,12 @@ def render_text_nodes(svg: str | None) -> list[tuple[float, float, str, str, str
     return _svg_text_nodes(svg)
 
 
-def render_report(findings: list[LintFinding], *, text_readable: bool = True) -> str:
+def render_report(
+    findings: list[LintFinding],
+    *,
+    text_readable: bool = True,
+    skipped: Sequence[str] = (),
+) -> str:
     """The human report: grouped by severity, each line with its predicate.
 
     ``text_readable`` is the caller's answer to "did the render hand this run
@@ -2373,17 +2576,34 @@ def render_report(findings: list[LintFinding], *, text_readable: bool = True) ->
     (:func:`render_text_nodes`) and says so; the default is the honest reading
     for a run that did read text — including the replay path with no render at
     all, where the "unreadable" note is already printed beside this line.
+
+    ``skipped`` names the predicates this run could not fully run (593: no
+    netlist, no/partial measured bodies). It is the same claim one level out —
+    an empty family from a predicate that never ran is not a pass — so a run
+    with any skipped predicate is never called clean, with or without findings.
+    The default (empty) keeps every run whose materials were complete
+    byte-identical.
     """
+    skipped = tuple(str(name) for name in skipped)
     if not findings:
-        if text_readable:
+        if text_readable and not skipped:
             return "draw lint: no findings — the page reads clean."
-        return (
-            "draw lint: no findings in the geometry that could be read — the "
-            "text predicates (L1/L2/L3/L7) judged nothing, because the render "
-            "carried no text node this reader could classify; this page is NOT "
-            "called clean"
-        )
-    lines: list[str] = []
+        lines: list[str] = []
+        if not text_readable:
+            lines.append(
+                "draw lint: no findings in the geometry that could be read — the "
+                "text predicates (L1/L2/L3/L7) judged nothing, because the render "
+                "carried no text node this reader could classify; this page is NOT "
+                "called clean"
+            )
+        if skipped:
+            lines.append(
+                "draw lint: these predicates did NOT run or did not run over the "
+                "whole page — " + ", ".join(skipped) + "; an empty family is not "
+                "a pass, so this page is NOT called clean"
+            )
+        return "\n".join(lines)
+    lines = []
     for severity in ("ERROR", "WARN", "INFO"):
         rows = [f for f in findings if f.severity == severity]
         if not rows:
@@ -2391,6 +2611,9 @@ def render_report(findings: list[LintFinding], *, text_readable: bool = True) ->
         lines.append(f"{severity} ({len(rows)}):")
         for finding in rows:
             lines.append(f"  [{finding.predicate}] {finding.message}")
+    if skipped:
+        lines.append("not run / not fully checked:")
+        lines.append("  " + ", ".join(skipped))
     return "\n".join(lines)
 
 

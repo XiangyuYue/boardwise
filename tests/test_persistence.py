@@ -123,7 +123,7 @@ def test_an_identical_reopen_is_saved_verified(tmp_path, monkeypatch):
     """The pass case — and it is the only one allowed to print `saved_verified`."""
     from boardwise.bridge import daemon as daemon_module
 
-    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
     code = _compare_persistence(_snapshot(), _snapshot())
 
     assert code == 0
@@ -203,7 +203,7 @@ def test_a_reopen_that_only_gained_content_is_still_verified(capsys, tmp_path, m
     """
     from boardwise.bridge import daemon as daemon_module
 
-    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
     code = _compare_persistence(_snapshot(), _snapshot(netlist_text=_grown_netlist()))
     printed = capsys.readouterr().out
 
@@ -224,7 +224,7 @@ def test_an_unchanged_reopen_reports_no_extras(capsys, tmp_path, monkeypatch):
     """`extras: 0` is the unchanged project, and it reads exactly as it did before."""
     from boardwise.bridge import daemon as daemon_module
 
-    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
     code = _compare_persistence(_snapshot(), _snapshot())
     printed = capsys.readouterr().out
 
@@ -511,7 +511,7 @@ def test_an_auto_net_renumbering_is_saved_verified(capsys, tmp_path, monkeypatch
     """The measured P38 shape: only editor-generated names moved."""
     from boardwise.bridge import daemon as daemon_module
 
-    monkeypatch.setattr(daemon_module, "BOARDWISE_HOME", tmp_path)
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
     reopened = _rewritten()
     assert _nets_of(reopened) != _nets_of(_netlist_text()), "the names really moved"
     before = json.loads(_netlist_text())

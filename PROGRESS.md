@@ -1933,3 +1933,27 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - DSH 新工具 `boardwise_parts_hunt` 位于旧八工具后、draw 前；fromReport、answers、claims、显式 shelf 和四产物已接入。真实适配层 offline 冒烟 exit 0、四产物 present、0 outbound；插件包 `.tmp_555/boardwise-dsh-0.6.3-beta.3.tgz` 已生成并验证 parts-hunt 三处内容，未部署未发布。
 - 聚焦 Python **218 passed**；DSH **207 passed / 1 skipped**，typecheck/build 通过；两份 SKILL 字节一致且各 320 行，diff --check 通过。主代理两组独立变异均先红后 cp+SHA 恢复。未跑全量；CLI 合同快照原本已有绘制线/bridge 漂移，本批 hunt 新增项留待 shared 集成，未把他人 hunks 烘进快照。
 - 试点货架与缓存均在 `.tmp_555/`，全局货架和真实设计未写。临时 daemon 已停止，61190 无 listener。未提交、未推送、未发布。任务书 `tasks/555_datasheet_hunt_integration.md`，证据 `evidence/555/trial-summary.md`。
+
+
+## 2026-11-24 · 共享网表与电路语义 563
+
+- 563A：绘制线薄 Netlist 读取器下移 shared，candidate/drawlint 统一消费；PinRef 以 source_id+pin_key 保留同名实例和同号脚，无名歧义查询拒绝，candidate 的 UID、重复实例成员、脚序、NC 与 raw 尾段保持。563B：新增 `boardwise.circuitSemantics/1`，完整原始事实、two_pin/parallel/series、unknowns、确定性类 C 和整体回验；series 含端网，三脚中间网、闭环及 unproven 不得误产串联。
+- 最终聚焦 **246 passed**。主代理独立变异：去 pin_key 身份 5 failed、去 entry UID 回退 1 failed、series 去端网 5 failed、允许闭环串联 1 failed；均 cp+SHA-256 恢复并复绿。测试还覆盖重复位号不合并、同号脚不折叠、NC/单脚命名网、完整结构篡改拒绝。
+- `f508328` 已含 563A/B 主体；最终闭环修复、563 测试与文档仍在工作树，未提交、未推送。公开合同 `docs/circuit-semantics.md`，任务书 `tasks/563_netlist_semantics.md`。无新 CLI/DSH/真机/全量；不声称器件功能语义、CBB 内部、跨板或真实 V3/V4 新兼容。
+
+## [2026-11-24] 566–578 修复集成在途
+
+- TRIAGE 的 14 条 reproduced 已逐批修复并独立复验：569 标题栏、570 空页、571 页面锁、572/573/574 量化/合线/census、575 文本、576 empty-legacy、577 实时写闸、578 删页回读。任务书与各批 `PARENT-ACCEPTANCE.md` 已落；Connector **900 passed + typecheck**。
+- Connector **900 passed + typecheck**；DSH **218 passed / 1 skipped** + typecheck/build；Rust fmt/clippy/test 通过（**177 passed / 4 ignored**）；最终全量 Python **12343 passed / 26 skipped / 2 xfailed / 9 failed**，9 条与 564 既有失败逐名一致，没有本批新增红项。不得写成全仓全绿、已提交或已发布；混合工作树保留，零 git 写、零真机、零部署。
+
+## [2026-11-24] 579 textmetrics 内置 sum 舍入回归
+
+- 首轮全量 12 failed 中 9 条与 564 既有失败逐名一致；新增的 530e/530g/530d 由 575 手动累加引入。内置 `sum()` 为 `3.834` em，手动累加为 `3.8340000000000005`，VFB_NF 行宽差 1 ulp。恢复内置 `sum(<generator>)`，保留 575 的非 ASCII 1.1 与 ASCII 0.9 分流，不改三条 530 的既有 hash。
+- 主代理聚焦 **36 passed**；同点变异 **8 failed / 28 passed** 后 cp+SHA 恢复并复绿。最终全量 Python **12343 passed / 26 skipped / 2 xfailed / 9 failed**，9 条与 564 既有失败逐名一致，没有本批新增红项；不得写成全仓全绿、已提交或已发布。执行者自报约 40 步，超过 15 步/10 分钟上限，已记流程违例。
+
+## [2026-11-25] 568/569 第三批挖洞修复集成（601 文档同步）
+
+- `outputs/hole568/TRIAGE.md` 的 32 条 reproduced 已由 580–595 在工作树修复并逐批做先红/变异：581 页框 `isfinite`+100000 上界、582/583 计划 schema 往返、584–588 CLI 输出预检与 config/HOME/parts 隔离、589/589B 风格闸（L13 正交 + S-11 `> max(3, 2%)`）、590–592 provenance/work order/交付恒 `unverified`、593 lint 真值、594 CLI 合同、595 DSH 全 argv 哨兵；580/580B/580C 另收 572-F 五项 SVG（非 32 条）。suspect（568-A-H4、568-B-03、569-G-08/09 等）未当实锤修。
+- 最终全量（第二轮完整复跑，`.tmp_596_full_pytest_final.utf8-clean.log`）：`12 failed / 12743 passed / 26 skipped / 2 xfailed in 3100.49s`。其中 3 条 540 owner 计数（`home.py` 使模块 164→165）已由 600 单独修复、聚焦 `50 passed`；**剩 9 条已登记基线（564/579 线），未跑第三轮全量，12746 不是实测数**。首次全量在约 91% 因 587 动态 HOME 后旧测试仍 setattr 存在写真实目录风险而主动停止（该轮无完整汇总），597/597B 把 9 处隔离改 `monkeypatch.setenv`，真实审计 SHA/mtime 不变。
+- 各线独立读数：Connector **900 passed + typecheck**；DSH **218 passed / 1 skipped** + typecheck/build；Rust fmt/clippy/test **177 passed / 4 ignored**；`tools.cli_contract` 一致、`check_repo_hygiene` 与 `git diff --check` 通过。**未提交、未推送、未部署、未发布**；真机/bridge/EDA 未碰，V3/V4、容器、多板/CBB 未覆盖。
+- 本批（601）只做文档与证据同步：新建 `evidence/596/INTEGRATION.md`，更新 `docs/handoff.md`、`docs/roadmap.md`、`tasks/TASKMAP.md`、`tasks/SCHEDULE.md`、`tasks/draw-line.md` 与本节；零生产改动、零 git 写、零删除、零全量、零 bridge/EDA。任务书 `tasks/596_integration.md`、`tasks/601_integration_docs.md`。

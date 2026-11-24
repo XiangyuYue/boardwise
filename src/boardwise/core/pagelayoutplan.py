@@ -41,6 +41,12 @@ carries a hard violation, ``not-run`` when neither has been filled) and
 origins, ports, the flow, the page box) **plus the merged plan's geometry
 digest** — the page picture is those two things, and a digest over one of them
 would let a preview be bound to a page whose drawing had moved.
+
+**Route and seal (590)**: like the merged drawing, the page states *how* it was
+made and, when that is ``automatic``, carries a ``provenanceSha256`` over the
+route and its own digest. The page needs its own seal because moving a module
+frame changes the page picture while the nested plan's digest stands still (the
+hole568 D-1 edit, one level up).
 """
 
 from __future__ import annotations
@@ -49,6 +55,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -57,8 +64,12 @@ from .layoutplan import (
     EVIDENCE_VERDICT_NOT_RUN,
     EVIDENCE_VERDICT_PASS,
     LAYOUT_PLAN_KIND,
+    PLAN_ROUTES,
+    ROUTE_AUTOMATIC,
+    ROUTE_REFERENCE_REPLAY,
     LayoutEvidence,
     LayoutPlan,
+    provenance_sha256,
 )
 from .presentationspec import FlowEdge
 from .symbolprofile import Box, check_box
@@ -70,6 +81,7 @@ __all__ = [
     "PAGE_PORT_KINDS",
     "PAGE_PORT_LABEL",
     "PAGE_PORT_WIRE",
+    "PAGE_PROVENANCE_DOMAIN",
     "PageLayoutPlan",
     "PageLayoutPlanError",
     "PageModule",
@@ -93,9 +105,15 @@ PAGE_PORT_KINDS: tuple[str, ...] = (PAGE_PORT_LABEL, PAGE_PORT_FLAG, PAGE_PORT_W
 
 _SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 
+#: The seal's domain for a **page**: its own, so a page seal and a drawing seal
+#: are different values even when both wrap the same geometry digest (590).
+PAGE_PROVENANCE_DOMAIN = "boardwise.page-layout-plan-provenance/1"
+
 _TOP_KEYS = (
     "kind",
     "planVersion",
+    "route",
+    "provenanceSha256",
     "source",
     "pageBox",
     "flow",
@@ -197,8 +215,30 @@ class PageLayoutPlan:
     page_evidence: LayoutEvidence = field(default_factory=LayoutEvidence)
     notes: list[str] = field(default_factory=list)
     plan_version: int = PAGE_LAYOUT_PLAN_VERSION
+    #: How this page was made (590): the same closed vocabulary the merged
+    #: drawing uses, so editing a module frame cannot pass as a compilation even
+    #: though it moves no part of the nested plan. A page built in process is
+    #: the page compiler's own output, hence `automatic`; a document from before
+    #: this contract reads as `reference-replay` with ``route_declared`` false
+    #: and is written back unchanged.
+    route: str = ROUTE_AUTOMATIC
+    route_declared: bool = True
+
+    def __post_init__(self) -> None:
+        if self.route not in PLAN_ROUTES:
+            raise PageLayoutPlanError(
+                f"route is {self.route!r}; expected one of {', '.join(PLAN_ROUTES)} "
+                "— the vocabulary is closed so that 'how was this made' is a fact "
+                "a reader can check (590)"
+            )
 
     # ------------------------------------------------------------ derived
+
+    def page_provenance_sha256(self) -> str:
+        """This page's seal: its route bound to its own page geometry digest."""
+        return provenance_sha256(
+            self.route, self.page_geometry_sha256(), PAGE_PROVENANCE_DOMAIN
+        )
 
     def module(self, module_id: str) -> PageModule | None:
         """The placed module with this id, or ``None``."""
@@ -296,42 +336,67 @@ class PageLayoutPlan:
         # the merged plan is written out in full under `plan`, and a second copy of
         # its hash would be a value a reader could believe instead of recompute.
         payload.pop("planGeometrySha256", None)
-        return {
+        document: dict[str, Any] = {
             "kind": PAGE_LAYOUT_PLAN_KIND,
             "planVersion": self.plan_version,
-            **payload,
-            "flow": [
-                {
-                    "from": edge.from_module,
-                    "to": edge.to_module,
-                    "mainPath": edge.main_path,
-                }
-                for edge in self.flow
-            ],
-            "plan": self.plan.to_jsonable(),
-            "pageEvidence": {
-                "checker": self.page_evidence.checker,
-                "hardViolations": list(self.page_evidence.hard_violations),
-                "grammarFindings": list(self.page_evidence.grammar_findings),
-                "softMetrics": dict(self.page_evidence.soft_metrics),
-                "softReasons": dict(self.page_evidence.soft_reasons),
-                "notes": list(self.page_evidence.notes),
-            },
-            "verdict": self.verdict,
-            "geometrySha256": self.page_geometry_sha256(),
-            "notes": list(self.notes),
         }
+        # 590: written when the document has a route; an `automatic` page also
+        # writes the seal of its page geometry. A pre-590 page states neither and
+        # keeps its bytes.
+        if self.route_declared:
+            document["route"] = self.route
+            if self.route == ROUTE_AUTOMATIC:
+                document["provenanceSha256"] = self.page_provenance_sha256()
+        document.update(payload)
+        document["flow"] = [
+            {
+                "from": edge.from_module,
+                "to": edge.to_module,
+                "mainPath": edge.main_path,
+            }
+            for edge in self.flow
+        ]
+        document["plan"] = self.plan.to_jsonable()
+        document["pageEvidence"] = {
+            "checker": self.page_evidence.checker,
+            "hardViolations": list(self.page_evidence.hard_violations),
+            "grammarFindings": list(self.page_evidence.grammar_findings),
+            "softMetrics": dict(self.page_evidence.soft_metrics),
+            "softReasons": dict(self.page_evidence.soft_reasons),
+            "notes": list(self.page_evidence.notes),
+        }
+        document["verdict"] = self.verdict
+        document["geometrySha256"] = self.page_geometry_sha256()
+        document["notes"] = list(self.notes)
+        return document
 
     @classmethod
     def from_dict(cls, payload: Any) -> PageLayoutPlan:
         root = _object(payload, "$")
         _check_keys(root, _TOP_KEYS, "$")
         kind = root.get("kind")
-        if kind is not None and kind != PAGE_LAYOUT_PLAN_KIND:
+        if "kind" not in root:
+            raise PageLayoutPlanError(
+                "$.kind is missing — every document this build writes says what "
+                "it is, and a document with no identity can be read as whatever "
+                "the caller hoped it was"
+            )
+        if kind != PAGE_LAYOUT_PLAN_KIND:
             raise PageLayoutPlanError(
                 f"$.kind is {kind!r}, expected {PAGE_LAYOUT_PLAN_KIND!r}"
             )
-        version = root.get("planVersion", PAGE_LAYOUT_PLAN_VERSION)
+        if "planVersion" not in root:
+            raise PageLayoutPlanError(
+                "$.planVersion is missing — a page states the schema it was "
+                f"written against, and this build reads {PAGE_LAYOUT_PLAN_VERSION}"
+            )
+        version = root["planVersion"]
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise PageLayoutPlanError(
+                f"$.planVersion is {version!r}; expected the integer "
+                f"{PAGE_LAYOUT_PLAN_VERSION} — a version is a schema number, and "
+                "`True`/`1.0` only compare equal to 1 by accident"
+            )
         if version != PAGE_LAYOUT_PLAN_VERSION:
             raise PageLayoutPlanError(
                 f"$.planVersion is {version!r}, this build reads "
@@ -341,6 +406,7 @@ class PageLayoutPlan:
         _check_keys(source, _SOURCE_KEYS, "source")
         modules = _modules_from(root.get("modules"))
         plan = _plan_from(root.get("plan"))
+        route, route_declared = _route_from(root)
         page = cls(
             plan=plan,
             modules=modules,
@@ -349,6 +415,8 @@ class PageLayoutPlan:
             page_evidence=_evidence_from(root.get("pageEvidence")),
             notes=_text_list(root.get("notes"), "$.notes"),
             plan_version=int(version),
+            route=route,
+            route_declared=route_declared,
         )
         if plan.source.circuit_sha256 != _digest(
             source.get("circuitSha256"), "source.circuitSha256"
@@ -364,8 +432,12 @@ class PageLayoutPlan:
         return page
 
     def dump(self, path: str | Path) -> None:
+        # `allow_nan=False`: see `LayoutPlan.dump` — a page file with `NaN` in it
+        # is a document no other JSON reader can load.
         Path(path).write_text(
-            json.dumps(self.to_jsonable(), ensure_ascii=False, indent=2) + "\n",
+            json.dumps(
+                self.to_jsonable(), ensure_ascii=False, indent=2, allow_nan=False
+            ) + "\n",
             encoding="utf-8",
         )
 
@@ -375,6 +447,8 @@ class PageLayoutPlan:
         source = Path(path)
         try:
             text = source.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise PageLayoutPlanError(f"{source}: is not UTF-8 ({exc})") from exc
         except OSError as exc:
             raise PageLayoutPlanError(f"{source}: cannot be read ({exc})") from exc
         try:
@@ -504,6 +578,24 @@ def _flow_from(value: Any, module_ids: set[str]) -> list[FlowEdge]:
     return out
 
 
+def _route_from(root: dict[str, Any]) -> tuple[str, bool]:
+    """The page's route, and whether the document stated one (590).
+
+    Same rule as `layoutplan._route_from`, and the reason it exists here too: a
+    hand-edited module frame moves no part of the nested plan, so without a page
+    seal the page document would be the one picture nothing could tell apart.
+    """
+    if "route" not in root:
+        return ROUTE_REFERENCE_REPLAY, False
+    route = root["route"]
+    if not isinstance(route, str) or route not in PLAN_ROUTES:
+        raise PageLayoutPlanError(
+            f"$.route is {route!r}; expected one of {', '.join(PLAN_ROUTES)} — "
+            "the same closed vocabulary the merged drawing uses (590)"
+        )
+    return route, True
+
+
 def _plan_from(value: Any) -> LayoutPlan:
     """The merged drawing, read by the 053 schema's own reader.
 
@@ -533,7 +625,7 @@ def _evidence_from(value: Any) -> LayoutEvidence:
     raw_metrics = body.get("softMetrics")
     if raw_metrics is not None:
         for key, item in _object(raw_metrics, "pageEvidence.softMetrics").items():
-            metrics[str(key)] = _number(item, f"pageEvidence.softMetrics.{key}")
+            metrics[str(key)] = _metric(item, f"pageEvidence.softMetrics.{key}")
     reasons: dict[str, str] = {}
     raw_reasons = body.get("softReasons")
     if raw_reasons is not None:
@@ -566,7 +658,8 @@ def _check_derived(root: dict[str, Any], page: PageLayoutPlan) -> None:
     The same rule `layoutplan._check_derived` applies, for the same reason: a page
     claiming `pass` while a layer recorded a violation is exactly the claim the
     two evidence slots exist to make impossible, and a stale page digest would
-    let a preview be bound to the wrong page.
+    let a preview be bound to the wrong page. The provenance seal (590) is checked
+    the same way, in :func:`_check_seal`.
     """
     if "verdict" in root:
         stated = root["verdict"]
@@ -587,6 +680,40 @@ def _check_derived(root: dict[str, Any], page: PageLayoutPlan) -> None:
                 f"{computed!r} — a preview bound to the stated value would not be "
                 "bound to this page"
             )
+    _check_seal(root, page)
+
+
+def _check_seal(root: dict[str, Any], page: PageLayoutPlan) -> None:
+    """The page's provenance seal, same contract as `layoutplan._check_seal` (590).
+
+    The page needs its own seal because its geometry is not only the merged
+    drawing: moving a module's frame or origin changes the page picture while the
+    nested plan's digest stands still, and hole568 D-1's edit is exactly the kind
+    that would then slip through re-sealed as an automatic page.
+    """
+    seal = root.get("provenanceSha256")
+    if seal is None:
+        if page.route_declared and page.route == ROUTE_AUTOMATIC:
+            raise PageLayoutPlanError(
+                "$.provenanceSha256 is missing — an automatic page states the seal "
+                "of its own geometry (route + page geometry digest), so that a "
+                "re-sealed edit cannot pass as a compilation (590)"
+            )
+        return
+    if not page.route_declared or page.route != ROUTE_AUTOMATIC:
+        raise PageLayoutPlanError(
+            f"$.provenanceSha256 is stated but this page's route is "
+            f"{page.route!r} — only an {ROUTE_AUTOMATIC!r} page carries the "
+            "compiler's seal (590)"
+        )
+    computed = page.page_provenance_sha256()
+    if seal != computed:
+        raise PageLayoutPlanError(
+            f"$.provenanceSha256 is {seal!r} but this page's route and geometry "
+            f"seal to {computed!r} — the page moved after it was sealed (a frame, "
+            "an origin or the merged drawing), and recomputing `geometrySha256` "
+            "alone does not re-seal it (590)"
+        )
 
 
 # ------------------------------------------------------------------ helpers
@@ -637,6 +764,34 @@ def _number(value: Any, where: str) -> float:
         raise PageLayoutPlanError(
             f"{where} must be a number in canvas units, got {value!r}"
         )
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise PageLayoutPlanError(
+            f"{where} is {value!r} — every coordinate must be finite, and this "
+            "integer is larger than any canvas unit can be"
+        ) from exc
+    if not isfinite(number):
+        raise PageLayoutPlanError(
+            f"{where} is {value!r} — every coordinate must be finite: NaN and "
+            "infinity are not positions, and `json` writes them as tokens no "
+            "other reader of JSON has"
+        )
+    return number
+
+
+def _metric(value: Any, where: str) -> float:
+    """A page soft metric, kept in the form the writer gave it (582, E-06).
+
+    ``readability`` computes ``page_cross_module_wire_length`` as ``sum(...)``,
+    which is the Python ``int`` 0 on a page no wire crosses; the metric is
+    evidence, not geometry (it is not in the page digest), so reading it as the
+    number that was written is what makes ``dump(load(x))`` byte for byte ``x``.
+    Everything else keeps the ordinary number gate.
+    """
+    _number(value, where)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
     return float(value)
 
 
@@ -669,14 +824,13 @@ def _box_or_none(value: Any, where: str) -> Box | None:
 
 
 def _point(value: Any, where: str) -> tuple[float, float]:
-    if (
-        not isinstance(value, (list, tuple))
-        or len(value) < 2
-        or any(isinstance(item, bool) or not isinstance(item, (int, float))
-               for item in value[:2])
-    ):
-        raise PageLayoutPlanError(f"{where} must be [x, y] in canvas units, got {value!r}")
-    return (float(value[0]), float(value[1]))
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise PageLayoutPlanError(
+            f"{where} must be exactly [x, y] in canvas units, got {value!r} — a "
+            "point is two numbers; a third component names no field of this "
+            "document and used to be dropped in silence"
+        )
+    return (_number(value[0], f"{where}[0]"), _number(value[1], f"{where}[1]"))
 
 
 def _check_keys(body: dict[str, Any], allowed: tuple[str, ...], where: str) -> None:

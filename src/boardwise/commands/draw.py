@@ -464,10 +464,8 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
     draw_lint = draw_sub.add_parser(
         "lint",
         help=(
-            "Read-only readability lint of one page: nine geometric predicates "
-            "(text-on-wire, text-on-text, text-on-part, wire-through-part, "
-            "duplicate-annotation, crossings, label-wire-clearance, flag "
-            "orientation, board fill), findings by severity (task 111)."
+            "Read-only readability lint of one page: 19 predicates "
+            "(16 geometric + 3 netlist-only), findings by severity (task 111)."
         ),
         description=(
             "The machine gate for the defects 110's re-review caught by eye: "
@@ -815,6 +813,21 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
     draw_move_propose.add_argument("--dy", required=True, metavar="UNITS")
     draw_move_propose.add_argument("--reason", required=True, metavar="TEXT")
     draw_move_propose.add_argument(
+        "--presentation", default="", metavar="PATH",
+        help=(
+            "The PresentationSpec that already describes this page. It is the "
+            "member proof for --strategy recompile-with-locks: a page lock derives "
+            "the named part's whole module origin, so every member of each module "
+            "the group touches must be in --designators, and a subset is refused "
+            "naming the companions it would drag along. The spec proves "
+            "membership only: the measured evidence must also give every name in "
+            "the group a pose a page lock can keep (rotation a multiple of 360, "
+            "not mirrored), and refuses otherwise. When given it is read and "
+            "validated for either strategy, but a direct move's work order is the "
+            "same document with or without it."
+        ),
+    )
+    draw_move_propose.add_argument(
         "--strategy", choices=MOVE_STRATEGIES, default=DEFAULT_MOVE_STRATEGY,
         help=(
             "The work order's alternative (default: %(default)s). direct-move is "
@@ -1011,6 +1024,20 @@ def register_edit_parser(sub: Any, *, force_help: str) -> None:
     edit_plan.add_argument(
         "--dy", default=None, metavar="UNITS",
         help="For `--move`: the vertical delta, in canvas units (a multiple of 5).",
+    )
+    edit_plan.add_argument(
+        "--work-order", dest="work_order", default=None, metavar="PATH",
+        help=(
+            "For `--move`: the agent-adjusted work order the move comes from "
+            "(`draw move-propose -o work.json`). Read and judged **before** the "
+            "editor is opened: it must be a `boardwise.agent-adjusted-move/1` "
+            "object with mode `agent-adjusted`, status `proposed`, and the same "
+            "designators and delta the command names — a missing file, bad JSON, "
+            "another schema and a disagreeing group are all named refusals (exit 5, "
+            "no bridge call). The plan then records `route: \"agent-adjusted\"`, a "
+            "label for where the proposal came from — not a proof that the move is "
+            "right: the live move-block guards still decide that."
+        ),
     )
     for flag, text in (
         ("--r", "For `--insert rc-lowpass`: the series resistor's value (e.g. 1k)."),

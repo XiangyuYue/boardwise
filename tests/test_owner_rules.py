@@ -192,6 +192,9 @@ def _package_edges() -> set[tuple[str, str]]:
 
 
 def test_the_scan_sees_the_package():
+    # 165 since 598 added `home.py` (shared: the dynamic `BOARDWISE_HOME`
+    # reader and its refusal, at the package root so `core.config` and
+    # `bridge.daemon` resolve one home without a `bridge -> core` arrow).
     # 164 since 563B added `core/circuitsemantics.py` (shared: the versioned
     # `boardwise.circuitSemantics/1` projection compiled from a `NetlistView`,
     # with its structural re-verification and its C-like rendering).
@@ -211,8 +214,8 @@ def test_the_scan_sees_the_package():
     # ``assembly`` owner line; 151 was 038Y4's count (``rules/pcb/silkbody.py``),
     # 150 was 038Y3B's (``rules/pcb/silkpad.py``), 149 was 038Y2's
     # (``rules/pcb/overlap.py``), 148 was 540B6's.
-    assert len(PATHS) == 164, (
-        f"found {len(PATHS)} modules, expected the 164 this batch owns — "
+    assert len(PATHS) == 165, (
+        f"found {len(PATHS)} modules, expected the 165 this batch owns — "
         "a new module needs an owner line in contracts/module-owners.json"
     )
     assert {"core", "parsers", "rules", "engines", "bridge"} <= {

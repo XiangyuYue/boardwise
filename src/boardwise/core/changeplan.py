@@ -29,13 +29,27 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
 from .model import is_ground_net
 from .symbolprofile import POSE_ROTATIONS
+
+#: The three bookkeeping routes a plan can have been made by — the same closed
+#: vocabulary 590 writes into a `LayoutPlan` (hole568 D-2), spelled here rather
+#: than imported: `core/layoutplan.py` is the drawing line's module, and a shared
+#: module importing it would be a new cross-owner edge (`test_owner_rules`).
+#: `tests/test_591_work_order.py` pins the two lists equal, so neither can drift
+#: without a red test.
+PLAN_ROUTES: tuple[str, ...] = (
+    "automatic",
+    "reference-replay",
+    "agent-adjusted",
+)
 
 __all__ = [
     "ADD_COMPONENT_KIND",
@@ -54,6 +68,7 @@ __all__ = [
     "INSERT_TEMPLATES",
     "MOVE_BLOCK_KIND",
     "MOVE_GRID",
+    "PLAN_ROUTES",
     "PLAN_VERSION",
     "SUPPORTED_KINDS",
     "TEMPLATE_DIVIDER",
@@ -607,12 +622,18 @@ class PlanDrawBaseline:
     made" has to be detectable **before** the first write (054's C5). Designators,
     wire count, flag count, label count and the count of not-yet-numbered parts are
     the census; ``digest`` is the same census hashed, so a report can quote one
-    string. An empty ``digest`` means the plan was built **offline** and records no
-    baseline — a fact, not a missing guard, exactly as
-    `core.layoutplan.LayoutTarget.snapshot_sha256` is.
+    string. Since 574 / 567-E-1 the hash covers **every primitive** the page holds
+    — each one's id, pose, value, net and point list, across the four electrical
+    sections and the six drawing sections — not the counters alone; a digest
+    written by the counts-only algorithm before that is *recognised* by
+    `engines.drawapply.guard_problems` and refused as "cannot prove the page
+    unchanged, regenerate", never accepted. An empty ``digest`` means the plan was
+    built **offline** and records no baseline — a fact, not a missing guard,
+    exactly as `core.layoutplan.LayoutTarget.snapshot_sha256` is.
 
-    Every primitive kind a `sch.geometry` dump reports has a counter here, because
-    a kind the census does not count is a change the census cannot see (143d:
+    The electrical primitive kinds have counters here; the drawing primitives
+    are covered by ``digest`` instead of adding public counter fields. A kind
+    the census does not count or fingerprint is a change it cannot see (143d:
     labels and `?`-suffixed parts were both invisible, and both are things a hand
     edit adds).
     """
@@ -635,10 +656,13 @@ class PlanDrawBaseline:
     #: occupancy reading), so without this count a part placed by hand on the page
     #: was invisible to the digest in exactly the same way a label was.
     unnumbered_count: int = 0
-    #: The ``pins`` section, counted for the same reason as the label count: the
-    #: dump contract names four sections and a census that reads three cannot
-    #: answer "nothing on this page moved". Measured empty on this host (3.2.186)
-    #: and in every recorded dump, so it is insurance, not a live refusal.
+    #: The ``pins`` section, counted for the same reason as the label count: this
+    #: versioned baseline's electrical contract names four sections and a census
+    #: that reads three cannot answer "nothing on this page moved". The six
+    #: drawing sections do not change this public shape; since 574 their primitives
+    #: are in ``digest`` (and the empty-page proof requires them readable).
+    #: Measured empty on this host (3.2.186) and in every recorded dump, so it is
+    #: insurance, not a live refusal.
     pin_count: int = 0
     digest: str = ""
     #: Were the *findings* baseline read with the census? An offline plan cannot
@@ -753,6 +777,124 @@ class PlanChange:
     draw_keep_names: bool = False
 
 
+# ------------------------------------------------------- closed schema (583)
+#
+# Every key below is one `to_jsonable` writes and one of the per-kind readers
+# consumes. The schema is closed for the same reason its two sibling plan
+# modules' `_check_keys` are: an executable plan whose key this build does not
+# read is an instruction nobody executes, and accepting it on load made `dump`
+# drop it on the next write (569-E-01). The lists are per kind because the
+# kinds' documents genuinely differ — a single wide set would let a
+# `component-value` plan carry `attributeMoves` and look executable.
+
+_SOURCE_KEYS: tuple[str, ...] = (
+    "inputSha256",
+    "projectUuid",
+    "pageUuid",
+    "hostVersion",
+    "connectorVersion",
+)
+
+_TOP_KEYS: tuple[str, ...] = (
+    "planVersion",
+    # 591: optional, and written only by a plan that has one — see `_route_from`.
+    "route",
+    "source",
+    "target",
+    "change",
+    "preconditions",
+    "expectedPostcondition",
+)
+
+_TARGET_BASE_KEYS: tuple[str, ...] = ("primitiveId", "designator", "expectedValue")
+
+_TARGET_KEYS: dict[str, tuple[str, ...]] = {
+    COMPONENT_VALUE_KIND: _TARGET_BASE_KEYS,
+    PATCH_PIN_KIND: _TARGET_BASE_KEYS + ("pin",),
+    ADD_COMPONENT_KIND: _TARGET_BASE_KEYS + (
+        "anchor", "assignedDesignator", "x", "y", "connection", "connectionDetail",
+    ),
+    INSERT_SUBCIRCUIT_KIND: _TARGET_BASE_KEYS + ("anchor", "anchorNet", "pin", "x", "y"),
+    MOVE_BLOCK_KIND: _TARGET_BASE_KEYS + ("designators", "dx", "dy"),
+    DRAW_MODULE_KIND: _TARGET_BASE_KEYS + ("module", "pageUuid"),
+}
+
+_CHANGE_KEYS: dict[str, tuple[str, ...]] = {
+    COMPONENT_VALUE_KIND: ("kind", "before", "after"),
+    PATCH_PIN_KIND: ("kind", "beforeNet", "afterNet", "connections", "attachment"),
+    ADD_COMPONENT_KIND: ("kind", "part", "connections", "recipeSource"),
+    INSERT_SUBCIRCUIT_KIND: (
+        "kind", "template", "parts", "connections", "beforeNet", "attachment",
+        "baselineFindings",
+    ),
+    MOVE_BLOCK_KIND: (
+        "kind", "moves", "wireOps", "islands", "baselineFindings",
+    ),
+    DRAW_MODULE_KIND: (
+        "kind", "candidate", "layoutSha256", "circuitSha256", "presentationSha256",
+        "profiles", "parts", "wires", "flags", "islands", "attributeMoves",
+        "baseline", "downgrades", "notes", "baselineFindings", "keepNames",
+    ),
+}
+
+#: `change.connections[*]` — `insert-subcircuit` rows also name the part they
+#: belong to and may end at another planned part's pin.
+_CONNECTION_KEYS: dict[str, tuple[str, ...]] = {
+    PATCH_PIN_KIND: ("pin", "net", "kind", "detail", "to"),
+    ADD_COMPONENT_KIND: ("pin", "net", "kind", "detail", "to"),
+    INSERT_SUBCIRCUIT_KIND: (
+        "designator", "pin", "net", "kind", "detail", "to", "toPin",
+    ),
+}
+
+_ATTACHMENT_KEYS: tuple[str, ...] = ("kind", "primitiveId", "detail", "at")
+_ADD_PART_KEYS: tuple[str, ...] = ("lcsc", "value", "footprint")
+_INSERT_PART_KEYS: tuple[str, ...] = (
+    "designator", "role", "lcsc", "value", "footprint", "x", "y", "rotation",
+)
+_MOVE_KEYS: tuple[str, ...] = ("designator", "primitiveId", "from", "to")
+_MOVE_FROM_KEYS: tuple[str, ...] = ("x", "y", "rotation")
+_MOVE_TO_KEYS: tuple[str, ...] = ("x", "y")
+_WIRE_OP_KEYS: tuple[str, ...] = (
+    "primitiveId", "kind", "net", "pointsBefore", "pointsAfter",
+)
+_ISLAND_KEYS: tuple[str, ...] = ("pin", "mates")
+_PROFILE_KEYS: tuple[str, ...] = ("symbolRef", "geometryHash")
+_BASELINE_KEYS: tuple[str, ...] = (
+    "pageUuid", "components", "wireCount", "netflagCount", "netlabelCount",
+    "unnumberedCount", "pinCount", "digest", "findingsRead",
+)
+_DRAW_PART_KEYS: tuple[str, ...] = (
+    "specId", "designator", "prefix", "lcsc", "deviceUuid", "libraryUuid", "mpn",
+    "value", "footprint", "symbolRef", "symbolHash", "x", "y", "rotation",
+    "mirror", "valueKey", "valueVisible", "pins",
+)
+_DRAW_PIN_KEYS: tuple[str, ...] = ("number", "dx", "dy")
+_DRAW_WIRE_KEYS: tuple[str, ...] = ("net", "points", "fromPin", "purpose")
+_DRAW_FLAG_KEYS: tuple[str, ...] = (
+    "net", "kind", "symbolRef", "symbolHash", "x", "y", "rotation", "onPin",
+)
+
+#: Documents written by the two sibling plan modules and mis-fed here. Named as
+#: literals rather than imported: `changeplan` is shared, `layoutplan` and
+#: `pagelayoutplan` are draw modules, and shared must not import draw.
+_FOREIGN_PLAN_KINDS: tuple[str, ...] = (
+    "boardwise-layout-plan",
+    "boardwise-page-layout-plan",
+)
+
+
+def _check_keys(body: dict[str, Any], allowed: tuple[str, ...], where: str) -> None:
+    unknown = sorted(set(body) - set(allowed))
+    if unknown:
+        raise ChangePlanError(
+            f"{where}: unknown key(s) {', '.join(unknown)}; allowed: "
+            f"{', '.join(allowed)} — the schema is closed on purpose: a key this "
+            "build does not read would otherwise be accepted and dropped on the "
+            "next dump, so the plan would not be the document it claims"
+        )
+
+
 @dataclass
 class ChangePlan:
     """One authorised local change, as data.
@@ -769,6 +911,13 @@ class ChangePlan:
     preconditions: list[str] = field(default_factory=list)
     expected_postcondition: list[str] = field(default_factory=list)
     plan_version: int = PLAN_VERSION
+    #: 591: which bookkeeping route proposed this change, when the plan knows.
+    #: Empty on every plan written before the field and on every plan whose
+    #: producer does not state one — and then nothing is written back, so those
+    #: documents keep their exact bytes. It is a *source* label, not a quality
+    #: proof: ``agent-adjusted`` says a human/agent edited the proposal, not that
+    #: the edit is right, and no reader may treat it as an automatic result.
+    route: str = ""
 
     # ---------------------------------------------------------------- JSON
 
@@ -1068,6 +1217,10 @@ class ChangePlan:
             }
         return {
             "planVersion": self.plan_version,
+            # 591: written only when the plan has one, so a document from before
+            # the field (or from a producer that states no route) keeps the
+            # exact document it had.
+            **({"route": self.route} if self.route else {}),
             "source": {
                 "inputSha256": self.source.input_sha256,
                 "projectUuid": self.source.project_uuid,
@@ -1093,7 +1246,30 @@ class ChangePlan:
                 "the plan must be a JSON object, not "
                 f"{type(payload).__name__}"
             )
-        version = payload.get("planVersion")
+        # Identity before shape: a LayoutPlan or PageLayoutPlan has none of the
+        # three blocks this reader wants, so reading them first would report
+        # "change must be a JSON object, got NoneType" about a document whose
+        # identity is the one useful thing to say (569-E-08).
+        foreign = payload.get("kind")
+        if foreign in _FOREIGN_PLAN_KINDS:
+            raise ChangePlanError(
+                f"this is a {foreign} document, not a ChangePlan — a {foreign} "
+                "describes geometry, and this reader only executes edit plans; "
+                "feed the file to the reader that owns that kind"
+            )
+        _check_keys(payload, _TOP_KEYS, "$")
+        if "planVersion" not in payload:
+            raise ChangePlanError(
+                "$.planVersion is missing — a plan states the schema it was "
+                f"written against, and this build reads {PLAN_VERSION}"
+            )
+        version = payload["planVersion"]
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise ChangePlanError(
+                f"$.planVersion is {version!r}; expected the integer "
+                f"{PLAN_VERSION} — a version is a schema number, and `True`/`1.0` "
+                "only compare equal to 1 by accident"
+            )
         if version != PLAN_VERSION:
             raise ChangePlanError(
                 f"planVersion is {version!r}, this build reads {PLAN_VERSION} "
@@ -1102,6 +1278,7 @@ class ChangePlan:
         source = _object(payload, "source")
         target = _object(payload, "target")
         change = _object(payload, "change")
+        route = _route_from(payload)
 
         kind = change.get("kind")
         if kind not in SUPPORTED_KINDS:
@@ -1131,6 +1308,7 @@ class ChangePlan:
                 change=_insert_change_from(change),
                 preconditions=_string_list(payload, "preconditions"),
                 expected_postcondition=_string_list(payload, "expectedPostcondition"),
+                route=route,
             )
         if kind == MOVE_BLOCK_KIND:
             # Also no `target.designator`: a move is about a *group*, and the
@@ -1142,6 +1320,7 @@ class ChangePlan:
                 change=_move_change_from(change),
                 preconditions=_string_list(payload, "preconditions"),
                 expected_postcondition=_string_list(payload, "expectedPostcondition"),
+                route=route,
             )
         if kind == DRAW_MODULE_KIND:
             # Also no `target.designator`: 054's payload is a whole drawing, and
@@ -1154,6 +1333,7 @@ class ChangePlan:
                 change=_draw_change_from(change),
                 preconditions=_string_list(payload, "preconditions"),
                 expected_postcondition=_string_list(payload, "expectedPostcondition"),
+                route=route,
             )
         designator = target.get("designator")
         if not isinstance(designator, str) or not designator.strip():
@@ -1167,6 +1347,7 @@ class ChangePlan:
                 change=_patch_pin_change_from(change),
                 preconditions=_string_list(payload, "preconditions"),
                 expected_postcondition=_string_list(payload, "expectedPostcondition"),
+                route=route,
             )
         if kind == ADD_COMPONENT_KIND:
             return cls(
@@ -1175,7 +1356,10 @@ class ChangePlan:
                 change=_add_change_from(change),
                 preconditions=_string_list(payload, "preconditions"),
                 expected_postcondition=_string_list(payload, "expectedPostcondition"),
+                route=route,
             )
+        _check_keys(target, _TARGET_KEYS[COMPONENT_VALUE_KIND], "target")
+        _check_keys(change, _CHANGE_KEYS[COMPONENT_VALUE_KIND], "change")
         before, after = change.get("before"), change.get("after")
         if not isinstance(before, str) or not isinstance(after, str):
             raise ChangePlanError(
@@ -1209,13 +1393,26 @@ class ChangePlan:
             expected_postcondition=_string_list(
                 payload, "expectedPostcondition"
             ),
+            route=route,
         )
 
     def dump(self, path: str | Path) -> None:
-        Path(path).write_text(
-            json.dumps(self.to_jsonable(), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        """Write the plan as JSON. Every failure is a :class:`ChangePlanError`.
+
+        569-G-05: this is the second writer of a plan — the CLI's preflight
+        (584) is the first — so a caller that dumps directly is judged here
+        too. An impossible target is refused by name before a byte is
+        attempted, and a write that fails anyway (a volume that says no) is
+        wrapped instead of escaping as an ``OSError``. The document goes
+        through a sibling temporary file plus :func:`os.replace`, the same
+        discipline as ``runmanifest`` and ``cli._write_json_atomic``: a reader
+        never sees half a plan, and a failed write leaves the previous file
+        alone.
+        """
+        target = Path(path)
+        _check_dump_target(target)
+        payload = json.dumps(self.to_jsonable(), ensure_ascii=False, indent=2) + "\n"
+        _write_text_atomically(target, payload)
 
     @classmethod
     def load(cls, path: str | Path) -> ChangePlan:
@@ -1223,6 +1420,13 @@ class ChangePlan:
         source_path = Path(path)
         try:
             text = source_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            # A decode failure is a `ValueError`, not an `OSError`, so the
+            # documented "every failure is a ChangePlanError" contract used to
+            # leak here and turn `edit apply` into a traceback (569-E-03).
+            raise ChangePlanError(
+                f"{source_path}: is not UTF-8 ({exc})"
+            ) from exc
         except OSError as exc:
             raise ChangePlanError(f"{source_path}: cannot be read ({exc})") from exc
         try:
@@ -1235,8 +1439,100 @@ class ChangePlan:
             raise ChangePlanError(f"{source_path}: {exc}") from exc
 
 
+def _check_dump_target(target: Path) -> None:
+    """Refuse a plan target `dump` cannot write, by name, before the write.
+
+    The three shapes 569-G-05 measured are the same three a direct `dump` call
+    can be handed: the parent directory is missing, the parent is a file, and
+    the target itself is a directory. Judging them here rather than catching
+    the write's `OSError` keeps the message about the *target* instead of about
+    whatever `open` said, and keeps the temporary file from ever being created.
+    A missing parent is refused, not created: the CLI refuses the same shape
+    (`cli._draw_output_check`), and two entry points must not disagree.
+    """
+    if target.is_dir():
+        raise ChangePlanError(
+            f"{target}: is a directory — a plan is a single JSON file; give a "
+            "file path"
+        )
+    parent = target.parent
+    if not parent.exists():
+        raise ChangePlanError(
+            f"{target}: its directory {parent} does not exist — dump does not "
+            "create output directories; give a path in a directory that exists"
+        )
+    if not parent.is_dir():
+        raise ChangePlanError(
+            f"{target}: cannot be written — {parent} is a file, not a directory"
+        )
+
+
+def _write_text_atomically(target: Path, text: str) -> None:
+    """Write `text` through a sibling temporary file + :func:`os.replace`.
+
+    A failed write must not leave half a plan where a whole one was, so the
+    bytes land in `.<name>.<random>.tmp` in the target's own directory first.
+    On failure the temporary file this call created is unlinked (the convention
+    `cli._write_json_atomic` uses) and the `OSError` becomes a
+    :class:`ChangePlanError` naming the target; a previous file at the target is
+    untouched. The newline translation is deliberately left at the platform
+    default, which is what `Path.write_text` did: the plans already on disk were
+    written that way, and changing it would break their byte-for-byte round trip.
+    """
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(target.parent),
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = handle.name
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except OSError as exc:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+        raise ChangePlanError(f"{target}: cannot be written ({exc})") from exc
+
+
+def _route_from(payload: dict[str, Any]) -> str:
+    """The plan's optional bookkeeping route (591, closes hole568 D-4's downstream).
+
+    A plan written before this field has none: silence returns ``""`` and
+    :meth:`ChangePlan.to_jsonable` writes no key back, so those documents keep
+    their exact bytes. A stated route must be one of the three the drawing line
+    records (590's closed vocabulary, stated here as `PLAN_ROUTES` and pinned to
+    that module's list by the tests); anything else — a trailing space,
+    ``Automatic``, a number — is refused by name rather than coerced.
+
+    The route says **who proposed** the change, never that the change is right:
+    ``agent-adjusted`` means a human/agent edited a proposal and the live guards
+    still had to pass, and ``automatic`` is not a quality proof either.
+    """
+    if "route" not in payload:
+        return ""
+    route = payload["route"]
+    if not isinstance(route, str) or route not in PLAN_ROUTES:
+        raise ChangePlanError(
+            f"$.route is {route!r}; expected one of {', '.join(PLAN_ROUTES)} — "
+            "a closed vocabulary, so a misspelling cannot pass as 'some route' "
+            "and this plan cannot claim a fourth way of being made (591, the "
+            "same three 590 records for drawing plans)"
+        )
+    return route
+
+
 def _source_from(source: dict[str, Any], digest: str) -> PlanSource:
     """The `source` block both kinds share (016 §2.2)."""
+    _check_keys(source, _SOURCE_KEYS, "source")
     return PlanSource(
         input_sha256=digest,
         project_uuid=str(source.get("projectUuid") or ""),
@@ -1253,6 +1549,7 @@ def _add_target_from(target: dict[str, Any], designator: str) -> PlanTarget:
     connection mode so the write is a decision and not a choice made at the
     wire, and the landing coordinates so two runs land in the same place.
     """
+    _check_keys(target, _TARGET_KEYS[ADD_COMPONENT_KIND], "target")
     anchor = target.get("anchor")
     if not isinstance(anchor, str) or not anchor.strip():
         raise ChangePlanError(
@@ -1290,11 +1587,13 @@ def _add_target_from(target: dict[str, Any], designator: str) -> PlanTarget:
 
 def _add_change_from(change: dict[str, Any]) -> PlanChange:
     """Read an `add-component` change: the part and the pins it must reach."""
+    _check_keys(change, _CHANGE_KEYS[ADD_COMPONENT_KIND], "change")
     part = change.get("part")
     if not isinstance(part, dict):
         raise ChangePlanError(
             f"change.part must be a JSON object, got {type(part).__name__}"
         )
+    _check_keys(part, _ADD_PART_KEYS, "change.part")
     lcsc = str(part.get("lcsc") or "").strip()
     if not lcsc:
         raise ChangePlanError(
@@ -1320,6 +1619,9 @@ def _add_change_from(change: dict[str, Any]) -> PlanChange:
             raise ChangePlanError(
                 f"change.connections[{index}] must be an object, got {item!r}"
             )
+        _check_keys(
+            item, _CONNECTION_KEYS[ADD_COMPONENT_KIND], f"change.connections[{index}]"
+        )
         pin = str(item.get("pin") or "").strip()
         net = str(item.get("net") or "").strip()
         if not pin or not net:
@@ -1387,6 +1689,7 @@ def _move_target_from(target: dict[str, Any]) -> PlanTarget:
     agree — a plan whose delta does not match its moves is a plan whose two halves
     describe different changes.
     """
+    _check_keys(target, _TARGET_KEYS[MOVE_BLOCK_KIND], "target")
     raw = target.get("designators")
     names = [str(item).strip() for item in (raw or []) if str(item).strip()]
     if not names:
@@ -1417,11 +1720,12 @@ def _grid_aligned(value: float, grid: float = MOVE_GRID) -> bool:
     return abs(round(value / grid) * grid - value) <= 1e-6
 
 
-def _move_point(value: Any, where: str) -> tuple[float, float]:
+def _move_point(value: Any, where: str, allowed: tuple[str, ...]) -> tuple[float, float]:
     if not isinstance(value, dict):
         raise ChangePlanError(
             f"change.moves[*].{where} must be an object with x and y, got {value!r}"
         )
+    _check_keys(value, allowed, f"change.moves[*].{where}")
     out = []
     for key in ("x", "y"):
         number = value.get(key)
@@ -1453,6 +1757,7 @@ def _move_change_from(change: dict[str, Any]) -> PlanChange:
     * the baseline findings are listed, because "no new findings" cannot be
       judged without them (036's rule, unchanged).
     """
+    _check_keys(change, _CHANGE_KEYS[MOVE_BLOCK_KIND], "change")
     raw = change.get("moves")
     if not isinstance(raw, list) or not raw:
         raise ChangePlanError(
@@ -1463,6 +1768,7 @@ def _move_change_from(change: dict[str, Any]) -> PlanChange:
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise ChangePlanError(f"change.moves[{index}] must be an object, got {item!r}")
+        _check_keys(item, _MOVE_KEYS, f"change.moves[{index}]")
         designator = str(item.get("designator") or "").strip()
         if not designator:
             raise ChangePlanError(
@@ -1491,8 +1797,8 @@ def _move_change_from(change: dict[str, Any]) -> PlanChange:
             )
         moves.append(PlanMove(
             designator=designator, primitive_id=primitive_id,
-            from_at=_move_point(before, "from"), from_rotation=float(rotation),
-            to_at=_move_point(after, "to"),
+            from_at=_move_point(before, "from", _MOVE_FROM_KEYS), from_rotation=float(rotation),
+            to_at=_move_point(after, "to", _MOVE_TO_KEYS),
         ))
     raw_ops = change.get("wireOps")
     if raw_ops is not None and not isinstance(raw_ops, list):
@@ -1503,6 +1809,7 @@ def _move_change_from(change: dict[str, Any]) -> PlanChange:
     for index, item in enumerate(raw_ops or []):
         if not isinstance(item, dict):
             raise ChangePlanError(f"change.wireOps[{index}] must be an object, got {item!r}")
+        _check_keys(item, _WIRE_OP_KEYS, f"change.wireOps[{index}]")
         primitive_id = str(item.get("primitiveId") or "").strip()
         if not primitive_id:
             raise ChangePlanError(
@@ -1538,6 +1845,7 @@ def _move_change_from(change: dict[str, Any]) -> PlanChange:
             raise ChangePlanError(
                 f"change.islands[{index}] must be an object, got {item!r}"
             )
+        _check_keys(item, _ISLAND_KEYS, f"change.islands[{index}]")
         pin = str(item.get("pin") or "").strip()
         if "." not in pin:
             raise ChangePlanError(
@@ -1591,6 +1899,7 @@ def _insert_target_from(target: dict[str, Any]) -> PlanTarget:
     plan recorded. Exactly one of the two shapes, and the point is required either
     way: apply re-reads it before writing anything.
     """
+    _check_keys(target, _TARGET_KEYS[INSERT_SUBCIRCUIT_KIND], "target")
     anchor = str(target.get("anchor") or "").strip()
     anchor_net = str(target.get("anchorNet") or "").strip()
     pin = str(target.get("pin") or "").strip()
@@ -1638,6 +1947,7 @@ def _insert_change_from(change: dict[str, Any]) -> PlanChange:
     * the baseline findings are listed, because apply's "no new findings" check
       has nothing to compare against otherwise.
     """
+    _check_keys(change, _CHANGE_KEYS[INSERT_SUBCIRCUIT_KIND], "change")
     template = str(change.get("template") or "").strip()
     if template not in INSERT_TEMPLATES:
         raise ChangePlanError(
@@ -1656,6 +1966,7 @@ def _insert_change_from(change: dict[str, Any]) -> PlanChange:
             raise ChangePlanError(
                 f"change.parts[{index}] must be an object, got {item!r}"
             )
+        _check_keys(item, _INSERT_PART_KEYS, f"change.parts[{index}]")
         designator = str(item.get("designator") or "").strip()
         if not designator:
             raise ChangePlanError(
@@ -1703,6 +2014,11 @@ def _insert_change_from(change: dict[str, Any]) -> PlanChange:
             raise ChangePlanError(
                 f"change.connections[{index}] must be an object, got {item!r}"
             )
+        _check_keys(
+            item,
+            _CONNECTION_KEYS[INSERT_SUBCIRCUIT_KIND],
+            f"change.connections[{index}]",
+        )
         designator = str(item.get("designator") or "").strip()
         if designator not in seen:
             raise ChangePlanError(
@@ -1815,6 +2131,7 @@ def _insert_attachment_from(change: dict[str, Any]) -> PlanAttachment | None:
         raise ChangePlanError(
             f"change.attachment must be an object, got {type(raw).__name__}"
         )
+    _check_keys(raw, _ATTACHMENT_KEYS, "change.attachment")
     kind = raw.get("kind")
     if kind not in ATTACHMENT_KINDS:
         raise ChangePlanError(
@@ -1868,6 +2185,7 @@ def _draw_source_from(
 
 def _draw_target_from(target: dict[str, Any]) -> PlanTarget:
     """A draw plan's target: the module it draws (there is no single component)."""
+    _check_keys(target, _TARGET_KEYS[DRAW_MODULE_KIND], "target")
     return PlanTarget(
         primitive_id=str(target.get("primitiveId") or ""),
         expected_value=str(target.get("expectedValue") or ""),
@@ -1899,6 +2217,7 @@ def _draw_change_from(change: dict[str, Any]) -> PlanChange:
     * the islands are pins of these parts (a netlist expectation about a pin the
       plan does not place would be unchecked in both directions).
     """
+    _check_keys(change, _CHANGE_KEYS[DRAW_MODULE_KIND], "change")
     candidate = change.get("candidate", 0)
     if isinstance(candidate, bool) or not isinstance(candidate, int) or candidate < 0:
         raise ChangePlanError(
@@ -2179,6 +2498,7 @@ def _draw_profile_hashes(value: Any) -> list[tuple[str, str]]:
             raise ChangePlanError(
                 f"change.profiles[{index}] must be an object, got {item!r}"
             )
+        _check_keys(item, _PROFILE_KEYS, f"change.profiles[{index}]")
         ref = str(item.get("symbolRef") or "").strip()
         digest = item.get("geometryHash")
         if not ref:
@@ -2211,6 +2531,7 @@ def _draw_parts_from(value: Any, profile_hashes: list[tuple[str, str]]) -> list[
         spot = f"change.parts[{index}]"
         if not isinstance(item, dict):
             raise ChangePlanError(f"{spot} must be an object, got {item!r}")
+        _check_keys(item, _DRAW_PART_KEYS, spot)
         spec_id = str(item.get("specId") or "").strip()
         designator = str(item.get("designator") or "").strip()
         if not spec_id:
@@ -2376,6 +2697,7 @@ def _draw_pins_from(value: Any, spot: str) -> list[PlanDrawPin]:
         where = f"{spot}.pins[{index}]"
         if not isinstance(item, dict):
             raise ChangePlanError(f"{where} must be an object, got {item!r}")
+        _check_keys(item, _DRAW_PIN_KEYS, where)
         number = str(item.get("number") or "").strip()
         if not number:
             raise ChangePlanError(f"{where}.number is empty")
@@ -2402,6 +2724,7 @@ def _draw_wires_from(value: Any, parts: list[PlanDrawPart]) -> list[PlanDrawWire
         spot = f"change.wires[{index}]"
         if not isinstance(item, dict):
             raise ChangePlanError(f"{spot} must be an object, got {item!r}")
+        _check_keys(item, _DRAW_WIRE_KEYS, spot)
         net = str(item.get("net") or "").strip()
         if not net:
             raise ChangePlanError(f"{spot}.net is empty — an unnamed wire is not a net")
@@ -2459,6 +2782,7 @@ def _draw_flags_from(value: Any, parts: list[PlanDrawPart]) -> list[PlanDrawFlag
         spot = f"change.flags[{index}]"
         if not isinstance(item, dict):
             raise ChangePlanError(f"{spot} must be an object, got {item!r}")
+        _check_keys(item, _DRAW_FLAG_KEYS, spot)
         net = str(item.get("net") or "").strip()
         kind = str(item.get("kind") or "").strip()
         if not net:
@@ -2512,6 +2836,7 @@ def _draw_islands_from(value: Any, parts: list[PlanDrawPart]) -> list[PlanIsland
         spot = f"change.islands[{index}]"
         if not isinstance(item, dict):
             raise ChangePlanError(f"{spot} must be an object, got {item!r}")
+        _check_keys(item, _ISLAND_KEYS, spot)
         pin = str(item.get("pin") or "").strip()
         if not _draw_pin_name(pin, designators):
             raise ChangePlanError(
@@ -2543,6 +2868,7 @@ def _draw_baseline_from(value: Any) -> PlanDrawBaseline:
         raise ChangePlanError(
             f"change.baseline must be an object, got {type(value).__name__}"
         )
+    _check_keys(value, _BASELINE_KEYS, "change.baseline")
     digest = value.get("digest") or ""
     if digest and (not isinstance(digest, str) or not _SHA256_RE.match(digest)):
         raise ChangePlanError(
@@ -2702,6 +3028,7 @@ def move_block_plan(
     dx: float,
     dy: float,
     baseline_findings: list[str] | None = None,
+    route: str = "",
 ) -> ChangePlan:
     """The fifth plan shape: a group of parts moves by a delta (037).
 
@@ -2722,6 +3049,11 @@ def move_block_plan(
     """
     if not moves:
         raise ValueError("a move-block plan needs at least one move")
+    if route and route not in PLAN_ROUTES:
+        raise ValueError(
+            f"route must be one of {', '.join(PLAN_ROUTES)} when stated, "
+            f"got {route!r}"
+        )
     if source.page_uuid:
         page_line = f"pageUuid {source.page_uuid} is still the focused page"
     else:
@@ -2767,6 +3099,7 @@ def move_block_plan(
             ),
             "no rule reports a finding it did not report before",
         ],
+        route=route,
     )
 
 
@@ -2900,6 +3233,7 @@ def insert_subcircuit_plan(
 
 def _patch_pin_target_from(target: dict[str, Any], designator: str) -> PlanTarget:
     """Read a `patch-pin` target: the component **and the pin** it repairs."""
+    _check_keys(target, _TARGET_KEYS[PATCH_PIN_KIND], "target")
     pin = str(target.get("pin") or "").strip()
     if not pin:
         raise ChangePlanError(
@@ -2930,6 +3264,7 @@ def _patch_pin_change_from(change: dict[str, Any]) -> PlanChange:
     * an empty ``afterNet`` (a pure disconnect) requires **no** connection —
       "disconnect, and also draw something" is not a shape this slice executes.
     """
+    _check_keys(change, _CHANGE_KEYS[PATCH_PIN_KIND], "change")
     before = change.get("beforeNet", "")
     after = change.get("afterNet", "")
     if not isinstance(before, str) or not isinstance(after, str):
@@ -2952,6 +3287,9 @@ def _patch_pin_change_from(change: dict[str, Any]) -> PlanChange:
             raise ChangePlanError(
                 f"change.connections[{index}] must be an object, got {item!r}"
             )
+        _check_keys(
+            item, _CONNECTION_KEYS[PATCH_PIN_KIND], f"change.connections[{index}]"
+        )
         kind = item.get("kind")
         if kind not in CONNECTION_KINDS:
             raise ChangePlanError(
@@ -2989,6 +3327,7 @@ def _patch_pin_change_from(change: dict[str, Any]) -> PlanChange:
             raise ChangePlanError(
                 f"change.attachment must be an object, got {attachment_raw!r}"
             )
+        _check_keys(attachment_raw, _ATTACHMENT_KEYS, "change.attachment")
         attachment_kind = attachment_raw.get("kind")
         if attachment_kind not in ATTACHMENT_KINDS:
             raise ChangePlanError(

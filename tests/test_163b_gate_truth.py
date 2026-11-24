@@ -398,7 +398,13 @@ def test_cli_lint_says_the_text_predicates_judged_nothing(tmp_path, capsys):
 
 
 def test_cli_lint_with_a_readable_render_still_calls_a_clean_page_clean(tmp_path, capsys):
-    """The other direction: a parsed render keeps the sentence honest and unchanged."""
+    """The other direction: a parsed render keeps the sentence honest and unchanged.
+
+    593: 「reads clean」 is now reserved for a run whose **materials were
+    complete** — the render was read, the netlist ran, and the measured bodies
+    cover every part. The page itself is the same; the netlist and bodies are
+    what a run has to supply before its silence may be called clean.
+    """
     snapshot = _page(parts=[("U1", "p-U1", 100.0, 100.0, 0.0)])
     snap = tmp_path / "snap.json"
     snap.write_text(json.dumps(snapshot), encoding="utf-8")
@@ -407,14 +413,38 @@ def test_cli_lint_with_a_readable_render_still_calls_a_clean_page_clean(tmp_path
         '<svg><text style="fill:#0000FF" x="10" y="-10">VCC</text></svg>',
         encoding="utf-8",
     )
+    bodies = tmp_path / "bodies.json"
+    bodies.write_text(
+        json.dumps({"p-U1": [90.0, 90.0, 110.0, 110.0]}), encoding="utf-8"
+    )
+    netlist = tmp_path / "netlist.json"
+    netlist.write_text(
+        json.dumps({
+            "type": "EasyEDA",
+            "text": json.dumps({"components": {"gge0": {
+                "props": {"Designator": "U1"},
+                "pinInfoMap": {
+                    "1": {"name": "1", "number": "1", "net": "VIN"},
+                    "2": {"name": "2", "number": "2", "net": "VOUT"},
+                },
+            }}}),
+        }),
+        encoding="utf-8",
+    )
     assert cli._cmd_draw_lint(_lint_args(
         "--snapshot", str(snap), "--render", str(render),
+        "--bodies", str(bodies), "--netlist", str(netlist),
         "--json", str(tmp_path / "report.json"),
     )) == 0
     out = capsys.readouterr().out
     assert "reads clean" in out
+    assert "NOT called clean" not in out
     payload = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert payload["textReadable"] is True
+    assert payload["skipped"] == []
+    assert payload["bodies"] == {
+        "provided": True, "count": 1, "measured": 1, "parts": 1,
+    }
 
 
 # ===========================================================================
