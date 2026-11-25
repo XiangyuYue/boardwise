@@ -28,7 +28,7 @@ from boardwise.core.layoutplan import (
     LayoutSegment,
     TEXT_MODE_NATIVE,
 )
-from boardwise.core.textmetrics import WIRE_NAME_ROW, render_width
+from boardwise.core.textmetrics import RENDER_TEXT_PX, WIRE_NAME_ROW, render_width
 from boardwise.engines import svgpreview
 
 SVG = "{http://www.w3.org/2000/svg}"
@@ -200,9 +200,11 @@ def test_a_label_with_no_carrier_keeps_the_bbox_diagnostic() -> None:
 
 def test_the_carried_name_keeps_the_measured_host_font_size() -> None:
     """The row is a host text like any other: 7.006, and no other text moves."""
+    # 565d S6-H1: a printed row is painted at the em its own measured box was laid
+    # out with (RENDER_TEXT_PX), which is a different host text class
+    # from a V4 native text (NATIVE_TEXT_FONT_SIZE) — the two must not be merged.
+    assert svgpreview.LABEL_ROW_FONT_SIZE == RENDER_TEXT_PX
     assert svgpreview.NATIVE_TEXT_FONT_SIZE == 7.006
     root = _render(_plan(("RFID_MOSI",)))
-    assert _text(root, "RFID_MOSI").get("font-size") == "7.006"
-    assert [node for node in _texts(root) if node.get("font-size") == "7.006"] == [
-        _text(root, "RFID_MOSI")
-    ]
+    assert _text(root, "RFID_MOSI").get("font-size") == f"{RENDER_TEXT_PX:g}"
+    assert [node for node in _texts(root) if node.get("font-size") == "7.006"] == []

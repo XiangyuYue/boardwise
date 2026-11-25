@@ -430,7 +430,11 @@ def test_cli_netlist_is_a_gate_not_a_note(tmp_path, capsys):
     assert cli_module._cmd_draw_lint(args) == 1
     report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert report["netlist"]["provided"] is True
-    assert report["netlist"]["predicates"]["L12-two-pin-same-net"] == 1
+    # 565g: U1 is stated as a *two-pin* part (VSSA/VDDA on +3V3), so the
+    # two-pin short rule reports it as well — the same defect is also the
+    # supply short the next line counts. Two true findings from two rules,
+    # not one rule counted twice: C3 (1/2 on +3V3) is the passive short.
+    assert report["netlist"]["predicates"]["L12-two-pin-same-net"] == 2
     assert report["netlist"]["predicates"]["L12-ground-supply-pin-short"] == 1
     printed = capsys.readouterr().out
     assert "netlist" in printed.lower()

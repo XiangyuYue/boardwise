@@ -1429,9 +1429,20 @@ def _check_bodies(
     """Constraint 4: a wire may not cross a part or a flag it is not the end of.
 
     053 sec.2's wording is "非两端器件", so the exemption is exactly that: a part
-    whose own pin tip sits at one of the segment's two outer points. A part that
+    whose own pin tip sits at one end of the piece of wire under test. A part that
     merely has a pin somewhere along the wire is *not* exempt — a wire running
     through a symbol's drawn extent is unreadable whichever pin it touches.
+
+    **571F: the exemption is per sub-edge, not per segment.** Until 571F it was
+    `any(pin tip == segment.points[0] or segment.points[-1])` and then the whole
+    polyline was skipped, so a rerouted conductor that leaves a part's own pin,
+    loops back and crosses that same part's body was never tested against it
+    (`outputs/hole571/f/REPRO.md`: a 16.0u chord through C1, `ok=True`). The
+    exemption now belongs to the sub-edge that actually ends on the tip — the one
+    that arrives through the part's own pin — and every other sub-edge of the
+    same polyline is measured as usual. The ruler is the one
+    :func:`_first_box_crossing` already uses; ``exempt_ends`` is that same clip
+    with one sub-edge skipped, never a second copy of it.
 
     Since 147 the extents include every flag's glyph box. A flag has no pins, so
     nothing is exempt: a wire that reaches the flag's own anchor only touches that
@@ -1442,16 +1453,12 @@ def _check_bodies(
     out: list[HardViolation] = []
     extents = _drawn_extents(layout_plan, placed, profile_map)
     for index, segment in enumerate(layout_plan.segments):
-        ends = (segment.points[0], segment.points[-1])
         for name, box, owner in extents:
             if owner == "":
                 continue
             part = next((p for p in placed if p.part_id == owner), None)
-            if part is not None and any(
-                _same_point(tip, end) for tip in part.pins.values() for end in ends
-            ):
-                continue
-            hit = _first_box_crossing(segment.points, box)
+            tips = () if part is None else tuple(part.pins.values())
+            hit = _first_box_crossing(segment.points, box, exempt_ends=tips)
             if hit is None:
                 continue
             out.append(HardViolation(
@@ -1566,7 +1573,9 @@ def _collinear_overlap(a, b, c, d) -> float:
 
 
 def _first_box_crossing(
-    points: list[tuple[float, float]], box: Box
+    points: Sequence[tuple[float, float]],
+    box: Box,
+    exempt_ends: Sequence[tuple[float, float]] = (),
 ) -> tuple[float, float] | None:
     """The midpoint of the first sub-edge with positive-length overlap, or None.
 
@@ -1580,8 +1589,19 @@ def _first_box_crossing(
     overlap and does not count as crossing it. Measured per sub-edge — the
     bounding box of an L-shaped detour covers the box it went around, which is
     exactly the false positive this per-segment clip removes.
+
+    ``exempt_ends`` (571F) names points where a sub-edge may **end** without
+    being measured: constraint 4 passes the tested part's own pin tips, so the
+    sub-edge that arrives through that part's pin is exempt while the rest of
+    the same polyline is still clipped against the box. This is a per-sub-edge
+    skip inside the one clip, not a second ruler; an empty sequence (the default,
+    and what constraint 6 passes) measures every sub-edge.
     """
     for start, end in _edges(points):
+        if any(
+            _same_point(tip, start) or _same_point(tip, end) for tip in exempt_ends
+        ):
+            continue
         inside = _clip_to_box(start, end, box)
         if inside is None:
             continue

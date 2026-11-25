@@ -4775,7 +4775,7 @@ def _canonical_state(value: Any) -> Any:
     return f"<{type(value).__name__}>"
 
 
-def primitive_fingerprint(geometry: Any) -> list[dict[str, Any]]:
+def primitive_fingerprint(geometry: Any, attributes: Any = None) -> list[dict[str, Any]]:
     """Every primitive the page holds, one canonical row each (574 / 567-E-1).
 
     The census's counters say *how many* things are on the page; this says *which*,
@@ -4799,7 +4799,13 @@ def primitive_fingerprint(geometry: Any) -> list[dict[str, Any]]:
       re-reading the same page — or a dump whose section/entry/key order drifted —
       hashes the same;
     * ``bboxes`` and ``meta`` are not read: they are measurements of the page, not
-      the page's content (:func:`census_keepouts` consumes them separately).
+      the page's content (:func:`census_keepouts` consumes them separately);
+    * ``attributes`` is the page's `sch.list_attributes` answer, when the caller
+      has one: its rows are appended under ``section: "attributes"`` (571-H-1),
+      because the attribute namespace is not a `sch.geometry` section and the
+      primitives `attributeMoves` writes live only there. Omitted (the plan-time
+      and old-plan calls), the fingerprint is the geometry-only one, byte for
+      byte, so a recorded digest is still recognised.
     """
     rows: list[dict[str, Any]] = []
     if not isinstance(geometry, dict):
@@ -4824,6 +4830,14 @@ def primitive_fingerprint(geometry: Any) -> list[dict[str, Any]]:
                 "id": str(entry.get("primitiveId") or state.get("PrimitiveId") or ""),
                 "state": _canonical_state(state),
             })
+    for row in attribute_items(attributes):
+        rows.append({
+            "section": "attributes",
+            "id": row["id"],
+            "state": _canonical_state(
+                {key: value for key, value in row.items() if key != "id"}
+            ),
+        })
     return sorted(
         rows,
         key=lambda row: (
@@ -4834,7 +4848,9 @@ def primitive_fingerprint(geometry: Any) -> list[dict[str, Any]]:
     )
 
 
-def census_digest(census: PlanDrawBaseline, geometry: Any = None) -> str:
+def census_digest(
+    census: PlanDrawBaseline, geometry: Any = None, attributes: Any = None
+) -> str:
     """One string for a census, so a report can quote it and a guard can compare.
 
     Two answers, one per kind of caller (574 / 567-E-1):
@@ -4842,8 +4858,10 @@ def census_digest(census: PlanDrawBaseline, geometry: Any = None) -> str:
     * ``geometry`` given — the page's **every primitive** is in the payload
       (:func:`primitive_fingerprint`) beside the counters, so a moved part, a
       re-routed wire, a moved flag, a changed value, a new pin, a new text or a
-      reshaped drawing primitive all move the digest. This is the answer
-      :func:`canvas_census` records and the one C5 compares.
+      reshaped drawing primitive all move the digest. An `sch.list_attributes`
+      answer passed as ``attributes`` puts its rows in the same payload
+      (571-H-1), which is what lets an attribute-only edit move the digest. This
+      is the answer :func:`canvas_census` records and the one C5 compares.
     * ``geometry`` omitted — the counts-only algorithm this module shipped before
       574, kept **byte-for-byte** (same payload, same hash). It is not a weaker
       guard to fall back on: it is how an old plan's recorded digest is
@@ -4856,7 +4874,7 @@ def census_digest(census: PlanDrawBaseline, geometry: Any = None) -> str:
     else:
         payload = {
             "census": _counts_payload(census),
-            "primitives": primitive_fingerprint(geometry),
+            "primitives": primitive_fingerprint(geometry, attributes),
         }
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -6556,14 +6574,59 @@ def netlabel_items(geometry: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def census_items(geometry: Any) -> list[dict[str, Any]]:
+def attribute_items(listing: Any) -> list[dict[str, Any]]:
+    """Every attribute primitive a `sch.list_attributes` answer holds, one row (571-H-1).
+
+    An attribute row (`ISCH_PrimitiveAttribute`: a part's Designator/Name text, a
+    wire's own name) is a page primitive the **host** reports through
+    `sch.list_attributes`, and `sch.geometry` does not carry that namespace at
+    all. So the geometry census was blind to exactly the primitive
+    `attributeMoves` writes: measured 571-H-1, the same page with one ATTR moved
+    ``x 10 -> 40`` had a byte-identical digest and ``census_changes == 0``.
+
+    The row keeps the fields the move can change — the parent primitive, the
+    role (the host's ``key``), the text it prints and its pose — plus the
+    visibility flag, which is a legitimate edit of its own (053U). ``id`` is the
+    attribute's own page primitive id; rows are ordered by ``(id, role, parent)``
+    so a re-read, or an answer whose rows arrived in another order, sorts the
+    same.
+    """
+    rows: list[dict[str, Any]] = []
+    raw = listing.get("attributes") if isinstance(listing, dict) else listing
+    if not isinstance(raw, list):
+        return rows
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        align = entry.get("alignMode")
+        visible = entry.get("valueVisible")
+        rows.append({
+            "id": str(entry.get("primitiveId") or ""),
+            "kind": "attribute",
+            "parent": str(entry.get("parentPrimitiveId") or ""),
+            "role": _text(entry.get("key")),
+            "text": "" if entry.get("value") is None else str(entry.get("value")),
+            "x": _num(entry.get("x")),
+            "y": _num(entry.get("y")),
+            "rotation": _num(entry.get("rotation")),
+            "alignMode": (
+                int(align) if isinstance(align, int) and not isinstance(align, bool) else None
+            ),
+            "valueVisible": visible if isinstance(visible, bool) else None,
+        })
+    return sorted(rows, key=lambda row: (row["id"], row["role"], row["parent"]))
+
+
+def census_items(geometry: Any, attributes: Any = None) -> list[dict[str, Any]]:
     """Every primitive the page holds, one row each, with its identity fields.
 
     The rows are what "zero change" is judged on: a part's designator, value,
     LCSC number, origin and pose; a flag's net and origin; a wire's net and its
-    point list; a net label's net, text, origin and angle. Keyed by the page's own
-    primitive id — the one identity the host keeps stable across reads. The sheet
-    (the drawing frame) is the page, not an item on it, and is left out.
+    point list; a net label's net, text, origin and angle; and — when the page's
+    `sch.list_attributes` answer is handed in as ``attributes`` — one row per
+    attribute primitive (:func:`attribute_items`, 571-H-1). Keyed by the page's
+    own primitive id — the one identity the host keeps stable across reads. The
+    sheet (the drawing frame) is the page, not an item on it, and is left out.
 
     Every section :data:`GEOMETRY_SECTIONS` names has a branch here. It did not
     until 143d: the ``netlabels`` section had none, so this function's own
@@ -6606,6 +6669,11 @@ def census_items(geometry: Any) -> list[dict[str, Any]]:
             "points": [list(point) for point in _line_points(state)],
         })
     rows.extend(netlabel_items(geometry))
+    # 571-H-1: the attribute namespace is not in `sch.geometry`, so an
+    # `attributeMoves` edit had no row to be seen as one. Given the page's
+    # `sch.list_attributes` answer, its rows join the census with `kind`
+    # `"attribute"` — see :func:`attribute_items`.
+    rows.extend(attribute_items(attributes))
     return sorted(rows, key=lambda row: (row["kind"], row["id"]))
 
 
@@ -6708,6 +6776,14 @@ def _stable_net(row: Mapping[str, Any]) -> str:
 def _identity(row: Mapping[str, Any]) -> tuple:
     if row["kind"] == "wire":
         return ("wire", _stable_net(row), tuple(tuple(point) for point in row["points"]))
+    if row["kind"] == "attribute":
+        # 571-H-1: what an attribute *is* = the primitive it belongs to, the role
+        # (the host's `key`), the text it prints, where and how it prints it, and
+        # whether that text is visible (053U's hide is an edit like a move).
+        return (
+            "attribute", row["parent"], row["role"], row["text"], row["x"], row["y"],
+            row["rotation"], row["alignMode"], row["valueVisible"],
+        )
     if row["kind"] == "netlabel":
         # 143d: what a label *is* = the net it states, the text it prints and where
         # it prints it. The two name fields are compared separately because a label
@@ -6750,6 +6826,13 @@ def census_changes(
         name = row.get("designator") or (
             f"{row.get('net')} {row['kind']}" if row.get("net") else row["kind"]
         )
+        if row.get("kind") == "attribute":
+            # 571-H-1: a line a reader can act on names the owner and the role —
+            # "existing Name attribute on c-R1 (a1) changed: y 120.0 → 170.0".
+            name = (
+                f"{row.get('role') or 'unnamed'} attribute on "
+                f"{row.get('parent') or '(no parent)'}"
+            )
         found = now.get(ident)
         if found is None:
             problems.append(f"existing {name} ({ident}) is no longer on the page")
@@ -6757,7 +6840,8 @@ def census_changes(
         if _identity(found) != _identity(row):
             fields = [
                 key for key in ("designator", "value", "lcsc", "net", "text", "x", "y",
-                                "rotation", "mirror", "points")
+                                "rotation", "mirror", "points", "parent", "role",
+                                "alignMode", "valueVisible")
                 if (
                     _stable_net(row) != _stable_net(found) if key == "net"
                     else row.get(key) != found.get(key)

@@ -30613,7 +30613,23 @@ def _distance_to_polyline(
 def _uniform_gnd_finding(
     layout_plan: LayoutPlan, circuit_spec: CircuitSpec, net_id: str
 ) -> GrammarFinding | None:
-    """Is this ground expressed one way throughout — one symbol, or one label?"""
+    """Is this ground expressed one way throughout — one symbol, or one label?
+
+    571-A-H1: **no mark at all** is not "uniform", it is unexpressed. A ground net
+    carrying neither a power symbol nor a label reads as a bare conductor named by
+    nothing — exactly what the neighbouring ``_gnd_outlet_finding`` (088b) already
+    refuses ("a ground with none reads as a bare conductor named by nothing at
+    all"). One net must not get two answers, so the naked case gets its own
+    finding that names the *missing* expression instead
+    of a mixed one.
+
+    口径裁决 (571-A-H1, and deliberately **no second ruler**): the judgement stays
+    **net-level**. One expression anywhere on the net is an expression of it, so
+    "one label plus the rest bare feet" still passes — electrical join is the
+    wire's job, and 053 sec.3's 「地表达统一」 is about not *mixing* styles, not
+    about marking every pin. A per-pin marking rule is not in 053 sec.3 and is not
+    added here.
+    """
     net = circuit_spec.net(net_id)
     if net is None or net.cls != "gnd":
         return None
@@ -30624,6 +30640,18 @@ def _uniform_gnd_finding(
     }
     if any(label.net == net_id for label in layout_plan.labels):
         styles.add("label")
+    if not styles:
+        return GrammarFinding(
+            kind=KIND_OBLIGATION_MISSING,
+            objects=(f"circuitSpec.nets[{net_id}]",),
+            detail=(
+                f"net {net_id!r} carries no power symbol and no label — the "
+                "reader sees a bare conductor named by nothing at all; "
+                "053 sec.3: 地表达统一 requires the ground to be expressed "
+                "(同符号或同标签不混用), and 088b already refuses a ground with "
+                "no outlet symbol, so one net must not get two answers"
+            ),
+        )
     if len(styles) > 1:
         return GrammarFinding(
             kind=KIND_OBLIGATION_MISSING,

@@ -38,14 +38,20 @@ the parallel case, not a ring, and are reported once, there.)
 
 **Determinism and verification.** Every array follows the source's own order
 (parts and pins by first appearance, net members as the source lists them), the
-derived lists are sorted by identity, and ``as_dict`` hands out a deep copy. The
-C-like text uses ASCII-escaped string literals so the same program renders to
-byte-identical output. ``verify_semantics`` recompiles the view and compares the
-**whole** structure, so an edited pin, net, unknown, relation or empty-net entry
-fails; ``roundtrip_members`` compares only the raw per-pin/per-net facts and is
-what a consumer re-reads the base with. Neither accepts a program it did not
-compile from this view, and this batch deliberately ships **no** C parser: the
-text is a projection an outside tool may read, not a second input format.
+derived lists are sorted by identity, and ``as_dict`` hands out a deep copy.
+Pin **names** are read from the view's construction-time snapshot, not from the
+mutable source, so one view always compiles to one document. The C-like text
+uses ASCII-escaped string literals so the same program renders to
+byte-identical output, and it refuses to render a ``parts[].pin_count`` that is
+not a real ``int`` — that is the one value interpolated unquoted, so a string
+there could forge a statement. ``verify_semantics`` recompiles the view and
+compares the **whole** structure **by type as well as by value** (``true`` and
+``1.0`` never stand in for ``1``), so an edited pin, net, unknown, relation or
+empty-net entry fails; ``roundtrip_members`` compares only the raw
+per-pin/per-net facts, with the same strictness, and is what a consumer
+re-reads the base with. Neither accepts a program it did not compile from this
+view, and this batch deliberately ships **no** C parser: the text is a
+projection an outside tool may read, not a second input format.
 """
 
 from __future__ import annotations
@@ -55,8 +61,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from .model import DesignModel
-from .netlist import Netlist, NetlistView, PinRef
+from .netlist import NetlistView, PinRef
 
 __all__ = [
     "SCHEMA",
@@ -96,33 +101,6 @@ def _part_sort_key(part: dict[str, Any]) -> tuple[str, str]:
     return (str(part["designator"]), str(part["source_id"]))
 
 
-def _pin_names(view: NetlistView) -> dict[PinRef, str]:
-    """Each addressable pin's **spelled** name; ``""`` when none is spelled.
-
-    The view answers connectivity, not names, so the names are read from the
-    same source the view was built on, with the identity rules 563A states: the
-    host entry key plus the ``pinInfoMap`` key for a document, the component uid
-    plus the pin position for a model. A pin whose name the document leaves out
-    keeps ``""`` rather than borrowing its number — this projection must not
-    spell a name the netlist never spelled.
-    """
-    names: dict[PinRef, str] = {}
-    source = view.source
-    if isinstance(source, Netlist):
-        for part in source.parts:
-            for pin in part.pins:
-                ref = PinRef(part.designator, pin.number, part.source_id, pin.key)
-                names[ref] = pin.raw_name
-    elif isinstance(source, DesignModel):
-        for designator, component in source.components.items():
-            uid = str(getattr(component, "uid", "") or "")
-            for index, pin in enumerate(component.pins):
-                names[PinRef(str(designator), str(pin.number), uid, str(index))] = str(
-                    getattr(pin, "name", "") or ""
-                )
-    return names
-
-
 @dataclass
 class _Facts:
     """The raw projection, plus the index the derivations walk."""
@@ -147,7 +125,9 @@ class _Facts:
 
 def _facts(view: NetlistView) -> _Facts:
     """Every part, pin, net member and empty-net pin the view states."""
-    names = _pin_names(view)
+    # Names come from the view's construction-time snapshot, never from the
+    # mutable source (565b S1-6): one view must compile to one document.
+    names = view.pin_names()
     facts = _Facts()
     for ref in view.pin_refs():
         key: _Part = (ref.designator, ref.source_id)
@@ -165,7 +145,27 @@ def _facts(view: NetlistView) -> _Facts:
         }
         facts.pins.append(pin)
         facts.by_ref[ref] = pin
+    # Parts come from the view's own inventory, not from `part_pins`: a part
+    # with a designator and no pins is still a part, and a projection built
+    # from `pin_refs` alone made it vanish from both the document and the text
+    # (565b S1-1). The count is what the pin facts state; a pin-less part keeps
+    # the count the source read it with. Order is first appearance.
+    seen: set[_Part] = set()
+    for designator, source_id, stated_pins in view.part_inventory():
+        key = (designator, source_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        fact = _part_fact(key)
+        pins_here = facts.part_pins.get(key)
+        fact["pin_count"] = len(pins_here) if pins_here else stated_pins
+        facts.parts.append(fact)
+    # Defensive: a pin-bearing part the inventory somehow omitted is still
+    # stated, so "every part" holds even for a source that under-reports.
     for key in facts.order:
+        if key in seen:
+            continue
+        seen.add(key)
         fact = _part_fact(key)
         fact["pin_count"] = len(facts.part_pins[key])
         facts.parts.append(fact)
@@ -364,6 +364,7 @@ def _series(
     adjacency, incident = _degree(facts, owner, unproven)
     visited: set[_Part] = set()
     chains: list[tuple[list[_Part], list[str]]] = []
+    cycles: list[tuple[list[_Part], list[str]]] = []
     for key in facts.order:
         if key in visited or len(adjacency.get(key, [])) != 1:
             continue
@@ -383,10 +384,16 @@ def _series(
         # netlist states as such; a two-part "chain" would restate it wrongly.
         if len(parts) == 2 and start_end == end_end:
             continue
+        # Three or more parts whose two ends carry the same net close a loop:
+        # a third pin on that net keeps it from being a two-degree link, it does
+        # not turn the loop into a chain. The net would also repeat, and a chain
+        # may repeat neither a part nor a net.
+        if start_end and start_end == end_end:
+            cycles.append((parts, [*internal, start_end]))
+            continue
         if parts[-1] < parts[0]:
             parts, nets = parts[::-1], nets[::-1]
         chains.append((parts, nets))
-    cycles: list[tuple[list[_Part], list[str]]] = []
     for key in facts.order:
         if key in visited or len(adjacency.get(key, [])) != 2:
             continue
@@ -495,19 +502,54 @@ def _payload_of(program: SemanticProgram | dict[str, Any]) -> dict[str, Any] | N
     return None
 
 
+def _strict_equal(left: Any, right: Any) -> bool:
+    """Compare two structure values **by type as well as by value**.
+
+    ``1 == True == 1.0`` in Python, so a plain ``==`` let a JSON ``true`` or
+    ``1.0`` stand in for an int ``1`` and reported an edited program as the
+    unedited one (565b S1-2). Here the two sides must have the same type —
+    ``bool`` is not ``int`` — dicts must carry the same key set (compared with
+    the same law, so ``{1: …}`` and ``{True: …}`` differ), lists and tuples must
+    have the same length and order, and every scalar compares exactly (floats
+    included: no tolerance).
+    """
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        if len(left) != len(right):
+            return False
+        for key, value in left.items():
+            matches = [
+                other
+                for other in right
+                if type(other) is type(key) and other == key
+            ]
+            if len(matches) != 1:
+                return False
+            if not _strict_equal(value, right[matches[0]]):
+                return False
+        return True
+    if isinstance(left, (list, tuple)):
+        if len(left) != len(right):
+            return False
+        return all(_strict_equal(a, b) for a, b in zip(left, right))
+    return bool(left == right)
+
+
 def verify_semantics(
     view: NetlistView, program: SemanticProgram | dict[str, Any]
 ) -> bool:
-    """Recompile the view and compare the **whole** structure.
+    """Recompile the view and compare the **whole** structure, strictly.
 
-    An edited pin, net, unknown, relation or empty-net entry, a dropped array or
-    a changed schema all answer ``False`` — the comparison is the full document,
-    not the relations alone, so the raw facts are verified too.
+    An edited pin, net, unknown, relation or empty-net entry, a dropped array,
+    a changed schema — or a value of the right text and the wrong **type**
+    (``true``/``1.0`` for ``1``) — all answer ``False``. The comparison is the
+    full document, not the relations alone, so the raw facts are verified too.
     """
     payload = _payload_of(program)
     if payload is None:
         return False
-    return payload == compile_semantics(view).as_dict()
+    return _strict_equal(payload, compile_semantics(view).as_dict())
 
 
 def roundtrip_members(
@@ -517,14 +559,14 @@ def roundtrip_members(
 
     This is the base a consumer re-reads: repeated instances, the two pins of
     one number, empty-net pins and net members the model can no longer resolve
-    must all come back exactly as stated. Relations and unknowns are not this
-    function's business.
+    must all come back exactly as stated — same types included (565b S1-2).
+    Relations and unknowns are not this function's business.
     """
     payload = _payload_of(program)
     if payload is None:
         return False
     facts = _facts(view).as_dict()
-    return all(payload.get(name) == facts[name] for name in facts)
+    return all(_strict_equal(payload.get(name), facts[name]) for name in facts)
 
 
 # ------------------------------------------------------------- the C-like text
@@ -563,8 +605,33 @@ def _two_pin_token(pin: dict[str, Any]) -> str:
     return token + ":" + str(pin["net"])
 
 
+def _check_pin_counts(payload: dict[str, Any]) -> None:
+    """Refuse a program whose ``parts[].pin_count`` is not a real ``int``.
+
+    ``pin_count`` is the one value the text interpolates **unquoted**; a string
+    there is emitted as C source, so an outside program could forge a whole
+    statement (565b S1-3). ``bool`` is refused too — it is an ``int`` subclass
+    and would render as ``True``, which no reader of this format spells. Every
+    part is checked before a single line is rendered, so a refusal produces no
+    text at all.
+    """
+    for part in payload.get("parts", []):
+        if not isinstance(part, dict):
+            raise ValueError(
+                f"not a part record: {type(part).__name__} — refusing to render"
+            )
+        count = part.get("pin_count")
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ValueError(
+                f"parts[].pin_count for {part.get('designator')!r} is "
+                f"{type(count).__name__} ({count!r}), not an int — "
+                "refusing to render"
+            )
+
+
 def _render(payload: dict[str, Any]) -> str:
     """Render the program as deterministic ``function(...)`` text."""
+    _check_pin_counts(payload)
     lines = [SCHEMA_HEADER]
     for part in payload.get("parts", []):
         lines.append(

@@ -519,8 +519,16 @@ def islands(live: Mapping[tuple[str, str], str]) -> dict[tuple[str, str], frozen
 
 
 def pin_key(text: str) -> tuple[str, str]:
-    designator, _, number = str(text).partition(".")
-    return (designator, number)
+    """``"DESIGNATOR.NUMBER"`` -> ``(designator, number)`` — the draw line's one ruler.
+
+    Delegates to :func:`boardwise.engines.patchpin.split_pin_ref` so a plan's
+    island pin, a plan's ``toPin`` and a subcircuit's node member are read the
+    same way: split on the **last** dot (``"U1.1.2"`` is ``U1.1``/``2``, never
+    ``U1``/``1.2``) and the pin number re-spelled (``"01"`` is ``"1"``). This
+    used to split on the first dot and hand back whatever followed, which read a
+    dotted designator as a pin number (571-D-3).
+    """
+    return patchpin.split_pin_ref(text)
 
 
 def plan_islands(

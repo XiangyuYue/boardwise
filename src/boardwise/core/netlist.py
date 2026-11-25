@@ -120,6 +120,12 @@ def read_netlist_document(document: Any) -> Netlist:
     Anything else is a **refusal**, never a silent skip: the caller prints the
     reason and exits 2. A netlist this reader cannot understand is not
     evidence that the board is consistent.
+
+    The same applies **inside** the component table (565b S1-4): a row that is
+    not an object, and a row that carries no ``Designator``, are both refused
+    with the entry key and the reason. Skipping them made six stated entries
+    read as two parts, with nothing said about the four that went missing — a
+    part this reader cannot name must not silently leave the design.
     """
     payload: Any = document
     if isinstance(payload, dict) and "components" not in payload and "text" in payload:
@@ -145,15 +151,40 @@ def read_netlist_document(document: Any) -> Netlist:
     parts: list[NetlistPart] = []
     for key, component in entries:
         if not isinstance(component, dict):
-            continue
+            raise ValueError(
+                f"component entry {str(key)!r} is not a component object "
+                f"({type(component).__name__}) — refusing to read a netlist that "
+                "states a row this reader cannot account for"
+            )
         declared = component.get("props")
         props = declared if isinstance(declared, dict) else {}
         designator = str(props.get("Designator") or component.get("Designator") or "").strip()
         if not designator:
-            continue
-        pin_map = component.get("pinInfoMap")
-        if not isinstance(pin_map, (dict, list)):
-            pin_map = component.get("pins")
+            raise ValueError(
+                f"component entry {str(key)!r} carries no `Designator` — a part "
+                "this reader cannot name is not one it will silently drop"
+            )
+        # A pin map this reader cannot read is **refused**, never folded into
+        # 「this part has no pins」 (565b §⑦). JSON ``null`` is the one exception:
+        # in a real export it means 「not written」, so ``pinInfoMap: null`` is
+        # treated as undeclared — a sibling ``pins`` mapping still answers, and
+        # a part with neither is a legal zero-pin part (the S1-1 contract). Only
+        # a **non-null** member of the wrong type is refused; the old 「any bad
+        # type falls back to `pins`」 silent fallback stays gone.
+        pin_info = component.get("pinInfoMap")
+        sibling = component.get("pins")
+        if pin_info is not None:
+            pin_map, member = pin_info, "pinInfoMap"
+        elif sibling is not None:
+            pin_map, member = sibling, "pins"
+        else:
+            pin_map, member = None, ""
+        if member and not isinstance(pin_map, (dict, list)):
+            raise ValueError(
+                f"component {designator!r}: `{member}` is not a mapping or a "
+                f"list ({type(pin_map).__name__}) — refusing to read a netlist "
+                "that states pins this reader cannot account for"
+            )
         pins: list[NetlistPin] = []
         if isinstance(pin_map, dict):
             pin_items = [(str(number), row) for number, row in pin_map.items()]
@@ -165,7 +196,10 @@ def read_netlist_document(document: Any) -> Netlist:
             pin_items = []
         for number, info in pin_items:
             if not isinstance(info, dict):
-                continue
+                raise ValueError(
+                    f"component {designator!r}: pin entry {str(number)!r} is not "
+                    f"a pin object ({type(info).__name__})"
+                )
             pin_number = str(info.get("number") or number or "")
             pin_props = info.get("props")
             raw_name = str(info.get("name") or "")
@@ -283,7 +317,9 @@ class NetlistView:
     - ``neighbors`` is "other pins on my net" and nothing else, so a
       single-member net has none;
     - ``nets_of`` follows the part's own pin order, deduplicated, and skips
-      empty nets;
+      empty nets; it refuses a designator more than one instance answers to,
+      with the same law as ``net_of`` (a shared ``source_id`` does not merge
+      two instances);
     - ``unconnected`` is exactly the empty-net pins — a named single-pin net is
       a statement of intent, not a dangling stub;
     - ``duplicate_designators`` discloses clashes; it never merges or picks.
@@ -298,6 +334,15 @@ class NetlistView:
         self._nets_by_part: dict[tuple[str, str], list[str]] = {}
         self._net_by_pin: dict[PinRef, str] = {}
         self._duplicates: list[str] = []
+        #: Every part the source states, in source order, as
+        #: ``(designator, source_id, pin count as read)``. A part with no pins
+        #: is in here: it is a part, so a projection must be able to state it
+        #: (565b S1-1) instead of inferring parts from ``pin_refs`` alone.
+        self._part_inventory: list[tuple[str, str, int]] = []
+        #: Each addressable pin's spelled name, snapshotted **now** (565b S1-6):
+        #: reading ``source`` again on every query let a later edit to the
+        #: source change what this view says about one unchanged netlist.
+        self._pin_names: dict[PinRef, str] = {}
         self._unproven: dict[str, tuple[str, ...]] = {}
         if isinstance(source, Netlist):
             self._read_netlist(source)
@@ -308,6 +353,11 @@ class NetlistView:
                 "NetlistView reads a Netlist or a DesignModel, "
                 f"not {type(source).__name__}"
             )
+        # One entry per instance, repeats kept: a designator two entries answer
+        # to is ambiguous **even when both entries say the same source_id** —
+        # `nets_of` refuses then for the same reason `net_of` does (565b S1-5).
+        for designator, source_id, _stated_pins in self._part_inventory:
+            self._instance_ids.setdefault(designator, []).append(source_id)
 
     # -- construction helpers
 
@@ -324,9 +374,6 @@ class NetlistView:
         if ref not in self._instances:
             self._instances[ref] = ref
             self._pins.append(ref)
-            ids = self._instance_ids.setdefault(ref.designator, [])
-            if ref.source_id not in ids:
-                ids.append(ref.source_id)
         if net:
             nets = self._nets_by_part.setdefault((ref.designator, ref.source_id), [])
             if net not in nets:
@@ -337,8 +384,12 @@ class NetlistView:
         seen: dict[str, int] = {}
         for part in netlist.parts:
             seen[part.designator] = seen.get(part.designator, 0) + 1
+            self._part_inventory.append(
+                (part.designator, part.source_id, len(part.pins))
+            )
             for pin in part.pins:
                 ref = PinRef(part.designator, pin.number, part.source_id, pin.key)
+                self._pin_names[ref] = pin.raw_name
                 self._add_pin(ref, pin.net)
                 if pin.net:
                     self._members.setdefault(pin.net, []).append(ref)
@@ -347,11 +398,15 @@ class NetlistView:
     def _read_model(self, model: DesignModel) -> None:
         for designator, component in model.components.items():
             source_id = str(getattr(component, "uid", "") or "")
+            self._part_inventory.append(
+                (str(designator), source_id, len(component.pins))
+            )
             for index, pin in enumerate(component.pins):
                 # A model pin has no host key; its position inside the
                 # component is the stable one, and it keeps two same-number
                 # pins of one component two pins (it invents no pin).
                 ref = PinRef(designator, str(pin.number), source_id, str(index))
+                self._pin_names[ref] = str(getattr(pin, "name", "") or "")
                 self._add_pin(ref, (pin.net or "").strip())
         # Membership is whatever the model states (``model.nets``), in its own
         # order, repeated instances included. A member whose component the
@@ -469,29 +524,48 @@ class NetlistView:
         return tuple(other for other in self._members.get(net, ()) if other != ref)
 
     def nets_of(self, designator: str, source_id: str | None = None) -> tuple[str, ...]:
-        """The nets one part's pins sit on, in pin order, deduplicated."""
+        """The nets one part's pins sit on, in pin order, deduplicated.
+
+        One refusal law with :meth:`net_of` (565b S1-5): a designator that more
+        than one instance answers to is refused — never merged — and that holds
+        **even when the instances share a source_id**. Naming a ``source_id``
+        answers only when exactly one instance carries it.
+        """
         name = str(designator).strip()
-        ids = list(self._instance_ids.get(name, ()))
+        ids = self._instance_ids.get(name, [])
         if source_id is not None:
-            if source_id not in ids:
+            ids = [source for source in ids if source == source_id]
+            if not ids:
                 raise UnknownPinError(
                     f"no part {name} with source_id {source_id!r} in this netlist"
                 )
-            ids = [source_id]
         elif not ids:
             raise UnknownPinError(f"no part {name} in this netlist")
-        elif len(ids) > 1:
+        if len(ids) > 1:
             raise AmbiguousPinError(
                 f"part {name} is addressed by {len(ids)} instances "
                 f"({', '.join(source or '<no source id>' for source in ids)}) "
                 "— name the source_id, this reading will not pick one"
             )
-        out: list[str] = []
-        for source in ids:
-            for net in self._nets_by_part.get((name, source), ()):
-                if net not in out:
-                    out.append(net)
-        return tuple(out)
+        return tuple(self._nets_by_part.get((name, ids[0]), ()))
+
+    def part_inventory(self) -> tuple[tuple[str, str, int], ...]:
+        """Every part the source states, in source order.
+
+        ``(designator, source_id, pin count)`` per instance, a part with **no
+        pins** included — which is exactly why it exists: a projection built
+        from ``pin_refs`` alone cannot state a pin-less part (565b S1-1).
+        """
+        return tuple(self._part_inventory)
+
+    def pin_names(self) -> dict[PinRef, str]:
+        """Each addressable pin's spelled name, snapshotted at construction.
+
+        ``""`` means the source spelled no name; the number is never borrowed
+        to fill it. A later edit to ``source`` does not change this mapping
+        (565b S1-6).
+        """
+        return dict(self._pin_names)
 
     def unconnected(self) -> tuple[PinRef, ...]:
         """The empty-net pins, in source order. A named one-pin net is not one."""

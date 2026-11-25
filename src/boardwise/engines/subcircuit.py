@@ -484,7 +484,13 @@ def divider_connections(
 
 
 def _pin_key(designator: str, pin: str) -> tuple[str, str]:
-    return (str(designator), str(pin))
+    """``(designator, pin)`` -> the one key :func:`patchpin.split_pin_ref` produces.
+
+    Kept as a pair-taking wrapper rather than a second parser: the spelling rule
+    (strip, leading zeros dropped when numeric) is ``patchpin``'s, so a plan pin
+    read here and an island pin read by ``moveblock.pin_key`` cannot disagree.
+    """
+    return (str(designator).strip(), patchpin.normalize_pin_number(pin))
 
 
 def _island_name(live: Mapping[tuple[str, str], str], designator: str, pin: str) -> str:
@@ -509,7 +515,7 @@ def node_members(plan: Any) -> list[tuple[str, str]]:
             continue
         members.append(_pin_key(item.designator, item.pin))
         if item.to_pin:
-            designator, _, pin = str(item.to_pin).partition(".")
+            designator, pin = patchpin.split_pin_ref(item.to_pin)
             members.append(_pin_key(designator, pin))
     return list(dict.fromkeys(members))
 
@@ -689,7 +695,7 @@ def wire_target(
 ) -> tuple[float, float] | None:
     """Where a wire ends: the plan's own ``to``, or the pin it names with ``toPin``."""
     if item.to_pin:
-        designator, _, pin = str(item.to_pin).partition(".")
+        designator, pin = patchpin.split_pin_ref(item.to_pin)
         return pins.get(_pin_key(designator, pin))
     return item.to
 

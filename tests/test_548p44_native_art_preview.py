@@ -24,7 +24,11 @@ PAGE = (10.0, 20.0, 110.0, 120.0)
 # Includes the measured 7.006px native-text attribute on LayoutText. Recomputed for
 # 580 F-3/F-4: at scale=2.0 every visual attribute is magnified together with the
 # geometry and wires/junctions are drawn after part bodies (was d66a1b48…).
-DEFAULT_SHA256 = "cf75ea98cc462b93423ecde019cf879ebbf4636c638b894c5476566cdf664aa4"
+DEFAULT_SHA256 = "ff856010f0e604847a4c7f90c9dbf82abfe953d47c1987453be76140d6aee0f4"
+# Re-recorded for 565d S6-H1: the only byte delta is the root font-family
+# ("DejaVu Sans, Consolas, monospace" → "Arial, Helvetica, sans-serif"), the family
+# the advance table was measured for; geometry, boxes and every font-size are
+# unchanged (`.tmp_565d/golden_diff.txt`).
 SOURCE = "548P44 handwritten captured-pose test art; not a live calibration"
 ART = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="-15 -10 30 20">
 <style>*{stroke-linejoin:round}.pin-bar{stroke:#880000}</style>

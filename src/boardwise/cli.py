@@ -13322,7 +13322,9 @@ def _draw_attribute_report(moves) -> dict:
     }
 
 
-async def _draw_attribute_capability(call, page: str, moves=()) -> list[str]:
+async def _draw_attribute_capability(
+    call, page: str, moves=(),
+) -> tuple[list[str], dict | None]:
     """053R: the attribute read/write API must exist **before** the first write.
 
     The check proves the API surface and nothing else — it is deliberately not
@@ -13335,7 +13337,10 @@ async def _draw_attribute_capability(call, page: str, moves=()) -> list[str]:
     surface — a hide nobody can read back is not attempted. The page's own rows
     are the evidence: an attribute row without the `valueVisible` field, or a
     `readErrors` entry naming it, means this connector/host cannot confirm the
-    write, and the run stops here, before any part is placed.
+    write, and the run stops here, before any part is placed. 571-H-1: the
+    listing it read is also the run's **before** table — returned to the caller
+    so the attribute census below can compare it with a post-write re-read
+    instead of paying for a second pre-write call.
     """
     problems: list[str] = []
     listing = await call(
@@ -13375,7 +13380,7 @@ async def _draw_attribute_capability(call, page: str, moves=()) -> list[str]:
             + str(status.get("modify", "sys.probe 没有答复"))
             + "）"
         )
-    return problems
+    return problems, listing if isinstance(listing, dict) else None
 
 
 #: The `to` key -> the attribute row field it is compared by (053R's idempotence probe).
@@ -13689,6 +13694,45 @@ async def _draw_attribute_moves(
             )
             break
     return problems
+
+
+async def _draw_attribute_census(
+    call, page: str, geometry, census, before, notes
+) -> dict:
+    """571-H-1: the page's attribute primitives, before and after the moves.
+
+    `attributeMoves` writes an `ISCH_PrimitiveAttribute`, which is not a
+    `sch.geometry` section — so the census and the digest were blind to an
+    attribute-only edit (the move's own `applied` was the only evidence). The
+    before table is the one 4b already read; this re-reads it and hands both to
+    `drawapply`'s own census. A plan without moves makes exactly the calls it
+    always did.
+    """
+    after = await call(
+        "sch.list_attributes", {"pageUuid": page},
+        "read the page's attributes back after the moves (571-H-1)",
+    )
+    from .engines import drawapply
+
+    ledger: dict = {
+        "basis": "sch.list_attributes before the first write and after the moves; "
+                 "the two digests hash the same post-write geometry with the two "
+                 "listings, so only attribute rows differ — drawapply.census_digest",
+    }
+    before_rows = drawapply.attribute_items(before) if before is not None else []
+    after_rows = drawapply.attribute_items(after)
+    ledger["before"], ledger["after"] = len(before_rows), len(after_rows)
+    ledger["changes"] = drawapply.census_changes(before_rows, after_rows)
+    if before is None or not isinstance(after, dict):
+        half = "写前" if before is None else "写后"
+        ledger["problems"] = [f"{half}的整页属性表没有读到 —— changes 为空不代表零改动"]
+        notes.append("属性 census（571-H-1）：" + ledger["problems"][0])
+    else:
+        ledger["digestBefore"] = drawapply.census_digest(
+            census, geometry, attributes=before)
+        ledger["digestAfter"] = drawapply.census_digest(
+            census, geometry, attributes=after)
+    return ledger
 
 
 async def _draw_apply_flow(
@@ -14445,10 +14489,11 @@ async def _draw_apply_flow(
     # without `sch_PrimitiveAttribute.getAll/modify` has to refuse here, not after
     # placing parts nobody then moves. A plan without moves makes exactly the
     # calls it always did — the section is absent from the report too.
+    attribute_listing_before: dict | None = None
     if plan.change.attribute_moves:
         if "attributeMoves" not in report:
             report["attributeMoves"] = _draw_attribute_report(plan.change.attribute_moves)
-        problems = await _draw_attribute_capability(
+        problems, attribute_listing_before = await _draw_attribute_capability(
             call, page, plan.change.attribute_moves
         )
         report["attributeMoves"]["capability"] = {
@@ -15436,6 +15481,13 @@ async def _draw_apply_flow(
     after_model = _model_from_export(after_export, notes) if after_export else None
     wanted = sorted(part.designator for part in parts)
     census_after = drawapply.canvas_census(verify)
+    # 571-H-1: the attribute primitives are not in `sch.geometry`, so they get
+    # their own before/after ledger (and a digest pair over this same verify
+    # dump) here — before the range judgement, so a failure still carries it.
+    if plan.change.attribute_moves:
+        report["attributeMoves"]["census"] = await _draw_attribute_census(
+            call, page, verify, census_after, attribute_listing_before, notes,
+        )
     diff: dict = {
         "basis": "the live project export plus the canvas census — this run deletes "
                  "nothing, so the export recomputes (035)",
@@ -16152,6 +16204,7 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
     import asyncio
 
     from .core import pageframe
+    from .core.layoutplan import LAYOUT_PLAN_KIND
     from .core.pagelayoutplan import PageLayoutPlan, PageLayoutPlanError
     from .engines import drawapply, islandlayout, pagecompiler, readability
 
@@ -16163,6 +16216,20 @@ def _cmd_draw_plan_page(args: argparse.Namespace) -> int:
         lcsc = _draw_pairs(args.lcsc, "--lcsc")
         values = _draw_pairs(args.value, "--value")
         if layout_path:
+            # 565f S5-H3: a single-module LayoutPlan (`draw compile`'s
+            # candN.layout.json) is not a page and never will be: the closed
+            # schema would report it as a list of unknown keys, which names
+            # neither the document nor the page candidate `--layout` wants.
+            kind = _draw_document_kind(layout_path)
+            if kind == LAYOUT_PLAN_KIND:
+                raise _DrawInputError(
+                    f"{layout_path}: is a single-module LayoutPlan (kind {kind!r}), "
+                    "not a PageLayoutPlan — `draw plan --layout` takes the page "
+                    "candidate compile writes beside a module candidate: "
+                    "candN.page.json, not candN.layout.json. A candN.layout.json "
+                    "is one module's drawing for `draw plan --candidate N`; "
+                    "compile the page and hand its candN.page.json here."
+                )
             saved_page = PageLayoutPlan.load(layout_path)
             if args.candidate != 0:
                 raise _DrawInputError("--layout selects its own candidate; --candidate must be 0")

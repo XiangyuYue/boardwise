@@ -2845,9 +2845,17 @@ def _energy(terms: Iterable[CostTerm]) -> float:
     """The scalar the search minimises.
 
     Every term carries its own weight; a hard term is multiplied by
-    :data:`W_HARD` so a drawing that leaves the page or overlaps itself is never
-    preferred to one that does not, while still being *reachable* — a search that
-    refuses to visit a bad state cannot climb out of one.
+    :data:`W_HARD` so a drawing that leaves the page or overlaps itself is
+    *expensive* while still being **reachable** — a search that refuses to visit
+    a bad state cannot climb out of one.
+
+    This scalar is the **walk**'s ruler (the Metropolis test and the stall rule),
+    not the one that chooses between drawings. A finite penalty on one axis can
+    always be paid for on another, so "cheaper scalar" does not mean "better
+    drawing": which of two drawings wins is :func:`_selection_key`'s question and
+    it answers lexicographically. Hole 571-C-1 measured this scalar answering it
+    wrongly — clean/dirty pairs 500/400, 200/100, 10/9.2 and 2780/2595 all went to
+    the drawing with the hard violation (`outputs/hole571/c/probes/probe_energy.py`).
     """
     total = 0.0
     for item in terms:
@@ -2872,6 +2880,54 @@ def _energy(terms: Iterable[CostTerm]) -> float:
         elif item.name == "pin-text":
             total += item.value * W_PIN_TEXT
     return total
+
+
+def _selection_key(terms: Iterable[CostTerm]) -> tuple[bool, float, float]:
+    """Rank one drawing: ``(a hard violation is in effect, its cost, the scalar)``.
+
+    Compared **lexicographically**, by :func:`_key_better`. The first component is
+    a veto, not a price: a drawing that leaves the page, sits on a keep-out or
+    overlaps itself loses to every drawing that does none of those, whatever the
+    soft terms would pay to keep it (571-C-1). Only answers at the same level are
+    separated by the next component — the hard cost first, so a smaller excursion
+    beats a larger one — and the ordinary :func:`_energy` scalar last.
+
+    The first component is read by **value** (:attr:`CostTerm.violated`), not by
+    the term's presence: :func:`evaluate` appends ``page`` / ``keepout`` /
+    ``overlap`` unconditionally (``hard=True`` even when the answer keeps all
+    three at 0, see the comment at the "5. the three hard ones" block), so "the
+    list contains a hard term" is true of every clean drawing and a presence test
+    would demote one for carrying an unpriced term.
+    """
+    materialised = list(terms)
+    hard_total = 0.0
+    any_hard = False
+    for item in materialised:
+        if not item.hard:
+            continue
+        hard_total += item.value * W_HARD
+        if item.violated:
+            any_hard = True
+    return (any_hard, hard_total, _energy(materialised))
+
+
+def _key_better(
+    candidate: tuple[bool, float, float],
+    incumbent: tuple[bool, float, float],
+) -> bool:
+    """Is ``candidate`` a better drawing than ``incumbent``?
+
+    Lexicographic on :func:`_selection_key`, with the historical ``1e-9`` slack
+    kept on both numeric components: a violation-free answer must still be chosen
+    by exactly the rule the scalar alone applied, or every pinned drawing in the
+    ladder could move over a rounding difference. The boolean has no slack — a
+    hard violation either is in effect or is not.
+    """
+    if candidate[0] != incumbent[0]:
+        return candidate[0] < incumbent[0]
+    if abs(candidate[1] - incumbent[1]) > 1e-9:
+        return candidate[1] < incumbent[1]
+    return candidate[2] < incumbent[2] - 1e-9
 
 
 # ------------------------------------------------------- the constructive seed
@@ -6054,7 +6110,11 @@ def _anneal_with_seed(
     terms = evaluate(request, current, plans, panels)
     energy = _energy(terms)
     best = _State(dict(current.origins), dict(current.poses))
-    best_energy = energy
+    #: What the run keeps is the **drawing**, ranked by
+    #: :func:`_selection_key` — not the cheapest scalar (571-C-1). The walk below
+    #: still uses ``energy``; only the record of the best answer is lexicographic,
+    #: so a cheaper candidate with a hard violation cannot take the run's answer.
+    best_key = _selection_key(terms)
     ids = request.part_ids()
     certainty = {part.part_id for part in request.parts if part.locked is not None}
     #: Parts whose *origin* is a lock's (515A hole 3): never translated, never
@@ -6195,9 +6255,10 @@ def _anneal_with_seed(
         ):
             current, terms, energy = candidate, new_terms, new_energy
             accepted += 1
-            if energy < best_energy - 1e-9:
+            new_key = _selection_key(new_terms)
+            if _key_better(new_key, best_key):
                 best = _State(dict(current.origins), dict(current.poses))
-                best_energy = energy
+                best_key = new_key
                 stall = 0
             else:
                 stall += 1
@@ -8479,7 +8540,11 @@ def place(request: PlacementInput) -> PlacementResult:
     where it ended up (:func:`evaluate`). A hard violation is **not** a reason to
     return nothing: the caller gets the best drawing the search found together
     with its own account of what is wrong with it, which is the opposite of the
-    silent zero-candidate answer the compiler gives today.
+    silent zero-candidate answer the compiler gives today. What such a drawing is
+    **never** allowed to be is *preferred*: the ranking is :func:`_selection_key`'s
+    lexicographic one, so a restart that carries a hard violation cannot win on a
+    cheaper soft total (571-C-1), and the note on the answer says in so many words
+    that this is a drawing with hard violations, not a clean result.
 
     **The pin-tip repair is a second pass, not a term in the first one**
     (:attr:`PlacementInput.pin_clearance`). The search runs exactly as it always
@@ -8640,8 +8705,18 @@ def place(request: PlacementInput) -> PlacementResult:
         )
     hard = result.hard
     if hard:
+        # 571-C-1: the caller may switch on this answer — the contract is "a note,
+        # not an exception" — but it must not read like a clean drawing: the note
+        # says the drawing is a hard-violating one, not merely that the search
+        # could not tidy it up. The ranking above never prefers it to a
+        # violation-free drawing, so this is the search's honest best, not a
+        # better one that was passed over.
         result.notes.append(
-            "the search could not remove every hard violation: "
+            "HARD VIOLATIONS PRESENT — this is a drawing WITH HARD VIOLATIONS, "
+            f"not a clean result: {len(hard)} hard term(s) are in effect "
+            "(out-of-page / keep-out / overlap / a declared reservation), the "
+            "selection key ranks every such drawing below every violation-free "
+            "one, and the search found no violation-free drawing to return: "
             + "; ".join(item.render() for item in hard)
         )
     return result
@@ -8654,17 +8729,29 @@ def _best_of(
     panels: Sequence[BoundPanelSeatPlan] = (),
     services: Sequence[BoundPanelSeatPlan] = (),
 ) -> tuple[float, _State, int, int, int]:
-    """Every restart searched, the best drawing kept — ``place``'s own search."""
+    """Every restart searched, the best drawing kept — ``place``'s own search.
+
+    "Best" is :func:`_selection_key`'s lexicographic answer, not the cheapest
+    :func:`_energy` scalar (571-C-1): a restart that left a hard violation cannot
+    win by being cheaper on the soft terms. The returned float stays the **scalar
+    of the winning drawing**, because ``place``'s pin-tip second pass compares the
+    scalars of two answers to the same question.
+    """
     best: tuple[float, _State, int, int, int] | None = None
+    best_key: tuple[bool, float, float] | None = None
     for index in range(max(1, request.restarts)):
         attempt = request.seed + index
         state, iterations, accepted = _anneal_with_seed(
             request, seed, attempt, plans, panels, services)
-        energy = _energy(
+        terms = (
             evaluate(request, state, plans, panels)
             if not services else
-            evaluate(request, state, plans, panels, services))
-        if best is None or energy < best[0] - 1e-9:
+            evaluate(request, state, plans, panels, services)
+        )
+        energy = _energy(terms)
+        key = _selection_key(terms)
+        if best is None or _key_better(key, best_key):
             best = (energy, state, iterations, accepted, attempt)
+            best_key = key
     assert best is not None
     return best

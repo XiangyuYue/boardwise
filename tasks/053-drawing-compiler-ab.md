@@ -114,6 +114,8 @@ check(layoutPlan, circuitSpec, presentationSpec, profiles)
 | rc-lowpass | series / shunt / in / out / gnd | in→R→out 主干水平；C 从 out 节点向下支路到地，**视觉归属 out 节点**（贴近不跨模块） | 主干直连；支路直连 | 多 C 并联、R 换磁珠（同构） |
 | ldo | core / in_caps[] / out_caps[] / in / out / gnd | in 左 core 中 out 右；电容各归所属节点就近；地表达统一（同符号或同标签不混用） | in→core→out 主干；各电容与所属节点直连 | EN 脚、NR 电容、可调版（组合 voltage-divider） |
 
+**571-A-H4 裁决（2026-11-25 补写；此前本表没有臂的「类型」合同）**：上表 voltage-divider 的「两电阻竖排同轴」是**画法示例**——描述相对位置与可见拓扑，**不是器件族合同**。分压语法的臂按**拓扑**定义：恰好两脚、落在两个不同网上（`base.two_terminal_parts`），语法**不读** `symbolRef`/`value` 的器件族，全仓也没有一张可校验的族表（`SpecPart` 只有 `id/value/lcsc/params`，`pins` 由 CircuitSpec 的 net members 派生）。因此「R 串 + C 对地」被 `voltage-divider` 绑成 `ok=True` **是设计行为，不是缺陷**：它的画法拓扑（in→upper→tap→lower→gnd）与分压完全一致，差异在电气功能，而功能的作者表达在 `CircuitSpec` 与调用方所选的 `grammarRef`。**补偿与反向约束**：① 这类拓扑不会得到「臂类型已验证」的声明，也不得在别的文档里写成已验证；② 若将来要把器件族变成硬合同，必须先给出一张经校准的族表（来源限 `symbolprofile`/`blocklib`，**不得用 `symbolRef` 前缀猜**）并附两条反向断言（电容臂必拒、阻性臂必过），不得在本表一句话之下直接加启发式；③ 现状由 `tests/test_571a4_arm_family_ruling.py` 钉住——有人按前缀加拒绝，该用例会先红，迫使先补族表与裁决。裁决前状态见 `outputs/hole571/a/REPRO.md` 的 571A-H4 行（`suspect`：当时缺的就是这一句）。
+
 ## 四、离线编译管线（阶段 B 实现形状，`engines/drawcompiler.py`）
 
 ```

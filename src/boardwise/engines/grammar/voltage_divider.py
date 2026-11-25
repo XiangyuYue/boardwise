@@ -128,6 +128,7 @@ from .base import (
     nets_of_class,
     part_clause,
     part_provenance,
+    pins_of_part,
     refused_result,
     series_paths,
     shared_module,
@@ -834,7 +835,10 @@ def _no_chain_failure(
     The two shapes worth naming are the parallel pair (both arms across the same
     two nets: no midpoint exists) and the dead-ended chain (the walk stopped
     somewhere that is not ground). Both are `circuit-invalid`: the connections,
-    not a missing fact, are why the topology does not match.
+    not a missing fact, are why the topology does not match. A *single* part
+    across the rails is not a parallel pair — it is one arm short of
+    :data:`MIN_ARMS`, and the no-chain branch says so instead of inventing a
+    second arm.
     """
     parallel = sorted(
         part_id
@@ -843,7 +847,7 @@ def _no_chain_failure(
         or (nets[1] in power and nets[0] in ground)
     )
     listing = _connection_listing(circuit, edges)
-    if parallel:
+    if parallel and len(parallel) >= 2:
         crossing = ", ".join(f"{pid}({','.join(edges[pid])})" for pid in parallel)
         detail = (
             f"{crossing} sit directly across a power rail and ground — two arms "
@@ -858,8 +862,11 @@ def _no_chain_failure(
     else:
         detail = (
             f"no chain of two or more two-terminal arms runs from {list(power)} to "
-            f"{list(ground)} inside the {MAX_CHAIN_ARMS}-arm budget; what the "
-            f"two-terminal parts connect is: {listing}"
+            f"{list(ground)} inside the {MAX_CHAIN_ARMS}-arm budget (the grammar "
+            f"needs at least MIN_ARMS={MIN_ARMS} arms on one chain; this page "
+            f"reads {len(edges)} two-terminal "
+            f"{'arm' if len(edges) == 1 else 'arms'}); what the parts on this page "
+            f"connect is: {listing}"
         )
         action = (
             "check the CircuitSpec connections (a missing arm, an arm ending on "
@@ -875,14 +882,27 @@ def _no_chain_failure(
     )
 
 
+def _pin_phrase(count: int) -> str:
+    """``1 pin`` / ``3 pins`` — the real pin count of a part that is not an arm."""
+    return f"{count} pin" if count == 1 else f"{count} pins"
+
+
 def _connection_listing(
     circuit: CircuitSpec, edges: dict[str, tuple[str, str]]
 ) -> str:
-    """``R1(VIN,TAP), R2(TAP,X)`` — bounded, sorted, for a failure message."""
+    """``R1(VIN,TAP), R2(TAP,X), U1(3 pins, not an arm: GND/VIN/X)``.
+
+    Bounded and sorted, for a failure message. The listing names every part that
+    states a connection, not only the two-terminal arms: a part that is **not**
+    an arm — three or more pins, or two pins sitting on one net — is tagged with
+    its real pin count and ``not an arm``, so the reader never reads it as one.
+    """
     items = [f"{part_id}({','.join(edges[part_id])})" for part_id in sorted(edges)]
-    others = sorted(set(connected_net_sets(circuit)) - set(edges))
+    net_sets = connected_net_sets(circuit)
+    others = sorted(set(net_sets) - set(edges))
     items.extend(
-        f"{part_id}({'/'.join(connected_net_sets(circuit)[part_id])})"
+        f"{part_id}({_pin_phrase(len(pins_of_part(circuit, part_id)))}, not an "
+        f"arm: {'/'.join(net_sets[part_id])})"
         for part_id in others[:4]
     )
     if len(items) > 12:

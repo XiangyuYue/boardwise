@@ -34,6 +34,7 @@ from typing import Any
 from ..core.changeplan import ATTACHMENT_NETLABEL, ATTACHMENT_WIRE
 from ..core.connectivity import nc_violation, pin_net
 from ..core.model import DesignModel, Net
+from ..core.netlist import PinRef
 
 #: How close a coordinate has to be to count as "the same point" on the canvas.
 #: The editor speaks integer canvas units; anything under half a unit is the same
@@ -54,6 +55,49 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+class LivePinConflict(ValueError):
+    """Two different pins answer to one ``(designator, number)`` on two nets (571-D-1).
+
+    The host netlist separates two units of one part by their ``components`` key
+    and two pins of one number inside an entry by their ``pinInfoMap`` key
+    (:class:`boardwise.core.netlist.PinRef`), but the whole draw line addresses a
+    pin as ``(designator, number)``. Folding the four-field identity onto that
+    pair used to keep whichever entry came last — a net name vanished and the
+    surviving pin then read as 「connects to nothing」. This is that collision,
+    refused instead of answered.
+    """
+
+
+def normalize_pin_number(number: Any) -> str:
+    """The one pin-number spelling: stripped, and leading zeros dropped when numeric.
+
+    ``"01"`` and ``"1"`` are the same pin on this host, ``"1.2"`` is a pin named
+    ``1.2`` (not two fields) and ``"PAD1"``/``"NC"`` stay exactly as spelled, so
+    only a **pure ASCII digit** string is re-spelled. ``"10"`` stays ``"10"`` —
+    normalization must never borrow a shorter number.
+    """
+    text = str(number).strip()
+    if text.isascii() and text.isdigit():
+        text = str(int(text))
+    return text
+
+
+def split_pin_ref(text: Any) -> tuple[str, str]:
+    """``"DESIGNATOR.NUMBER"`` -> the one ``(designator, number)`` ruler.
+
+    Split on the **last** dot, exactly as :meth:`boardwise.core.netlist.PinRef.parse`
+    documents: ``"U15.1"`` is ``U15``/``1`` and a designator that itself carries
+    dots (``"U9.3"``) stays whole in ``"U9.3.1"``. The number is re-spelled by
+    :func:`normalize_pin_number`. A string that is not a reference at all is
+    refused here rather than read as a designator with an empty pin.
+    """
+    designator, separator, number = str(text).rpartition(".")
+    designator, number = designator.strip(), normalize_pin_number(number)
+    if not separator or not designator or not number:
+        raise ValueError(f"not a DESIGNATOR.NUMBER pin reference: {text!r}")
+    return designator, number
 
 
 def same_point(a: tuple[float | None, float | None] | None,
@@ -380,6 +424,63 @@ def net_label_on_pin(geometry: Any, pin_at: tuple[float, float]) -> bool:
     return False
 
 
+def _ref_label(ref: PinRef) -> str:
+    """Name a pin's host identity in a message: ``uidA/1`` (never just the pair)."""
+    return f"{ref.source_id or '<no source id>'}/{ref.pin_key or '<no key>'}"
+
+
+def _live_pin_entries(payload: Any) -> list[tuple[PinRef, str]]:
+    """Every pin an ``sch.netlist`` answer states, in host order, identity intact."""
+    data = payload
+    if isinstance(payload, dict) and isinstance(payload.get("text"), str):
+        import json
+
+        try:
+            data = json.loads(payload["text"])
+        except ValueError:
+            return []
+    if not isinstance(data, dict):
+        return []
+    entries: list[tuple[PinRef, str]] = []
+    for source_id, component in (data.get("components") or {}).items():
+        if not isinstance(component, dict):
+            continue
+        props = component.get("props") if isinstance(component.get("props"), dict) else {}
+        designator = _text(props.get("Designator"))
+        pins = component.get("pinInfoMap")
+        if not designator or not isinstance(pins, dict):
+            continue
+        for key, info in pins.items():
+            net = _text((info or {}).get("net")) if isinstance(info, dict) else ""
+            entries.append(
+                (
+                    PinRef(
+                        designator=designator,
+                        number=str(key),
+                        source_id=str(source_id),
+                        pin_key=str(key),
+                    ),
+                    net,
+                )
+            )
+    return entries
+
+
+def live_pin_refs(payload: Any) -> dict[PinRef, str]:
+    """``PinRef -> net name`` from an ``sch.netlist`` answer — the identity-keeping read.
+
+    Same document, same names as :func:`live_pin_nets`, but the key is the
+    four-field :class:`boardwise.core.netlist.PinRef` (designator, number, the
+    ``components`` key as ``source_id``, the ``pinInfoMap`` key as ``pin_key``),
+    so two units of one part carrying the same designator stay **two** entries
+    and neither can overwrite the other. This is the entry point the drawing
+    line consumes; ``live_pin_nets`` keeps its pair shape for the twelve call
+    sites already written against it and refuses conflicts instead of folding
+    them (see its docstring).
+    """
+    return dict(_live_pin_entries(payload))
+
+
 def live_pin_nets(payload: Any) -> dict[tuple[str, str], str]:
     """``(designator, pin) -> net name`` from an ``sch.netlist`` answer (035 round 3).
 
@@ -394,29 +495,35 @@ def live_pin_nets(payload: Any) -> dict[tuple[str, str], str]:
     That last fact is why the flow pairs this with a canvas leg and refuses to
     call a half-checked repair done: the name proves what it can prove, the canvas
     proves the rest, and "one leg only" is `unknown`, not success.
-    """
-    data = payload
-    if isinstance(payload, dict) and isinstance(payload.get("text"), str):
-        import json
 
-        try:
-            data = json.loads(payload["text"])
-        except ValueError:
-            return {}
-    if not isinstance(data, dict):
-        return {}
+    **The projection is lossy, so a loss is an error (571-D-1).** The returned
+    key is a pair while a pin's identity has four fields (``PinRef``: designator,
+    number, the ``components`` key, the ``pinInfoMap`` key), and the callers that
+    were written against this shape keep getting it. What they no longer get is a
+    silent overwrite: when two *different* pins answer to one pair and report
+    **different** net names, :class:`LivePinConflict` is raised naming the
+    designator, the pin number, both ``source_id``s and both net names. Two pins
+    of one number that agree on the net still answer once — the pair is then a
+    faithful reading, not a guess. Use :func:`live_pin_refs` when the identity
+    itself matters.
+    """
     out: dict[tuple[str, str], str] = {}
-    for component in (data.get("components") or {}).values():
-        if not isinstance(component, dict):
+    seen: dict[tuple[str, str], tuple[PinRef, str]] = {}
+    for ref, net in _live_pin_entries(payload):
+        here = (ref.designator, ref.number)
+        first = seen.get(here)
+        if first is None:
+            seen[here] = (ref, net)
+            out[here] = net
             continue
-        props = component.get("props") if isinstance(component.get("props"), dict) else {}
-        designator = _text(props.get("Designator"))
-        pins = component.get("pinInfoMap")
-        if not designator or not isinstance(pins, dict):
-            continue
-        for number, info in pins.items():
-            net = _text((info or {}).get("net")) if isinstance(info, dict) else ""
-            out[(designator, str(number))] = net
+        first_ref, first_net = first
+        if first_ref != ref and first_net != net:
+            raise LivePinConflict(
+                f"{ref.designator} pin {ref.number!r} is claimed by two different "
+                f"pins on two different nets: {_ref_label(first_ref)} reads "
+                f"{first_net!r}, {_ref_label(ref)} reads {net!r} — "
+                "refusing to fold one of them away"
+            )
     return out
 
 

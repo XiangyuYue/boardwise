@@ -81,6 +81,7 @@ from .base import (
     nets_of_class,
     part_clause,
     part_provenance,
+    pins_of_part,
     refused_result,
     shared_module,
     two_terminal_parts,
@@ -463,7 +464,8 @@ def _no_lowpass_failure(
     else:
         detail = (
             "every two-terminal part reaches ground directly — there is no series "
-            f"element between two non-ground nets: {listing}"
+            "element between two non-ground nets; what the parts on this page "
+            f"connect is: {listing}"
         )
         action = (
             "check the CircuitSpec connections of the series element (one end "
@@ -479,11 +481,25 @@ def _named(edges: dict[str, tuple[str, str]], part_ids: list[str]) -> str:
     return ", ".join(f"{part_id}({','.join(edges[part_id])})" for part_id in part_ids)
 
 
+def _pin_phrase(count: int) -> str:
+    """``1 pin`` / ``3 pins`` — the real pin count of a part that is not an arm."""
+    return f"{count} pin" if count == 1 else f"{count} pins"
+
+
 def _connection_listing(circuit: CircuitSpec, edges: dict[str, tuple[str, str]]) -> str:
+    """``R1(VIN,OUT), C1(OUT,GND), U1(3 pins, not an arm: GND/OUT/VIN)``.
+
+    Bounded and sorted, for a failure message. The listing names every part that
+    states a connection, not only the two-terminal arms: a part that is **not**
+    an arm — three or more pins, or two pins sitting on one net — is tagged with
+    its real pin count and ``not an arm``, so the reader never reads it as one.
+    """
     items = [f"{part_id}({','.join(edges[part_id])})" for part_id in sorted(edges)]
-    others = sorted(set(connected_net_sets(circuit)) - set(edges))
+    net_sets = connected_net_sets(circuit)
+    others = sorted(set(net_sets) - set(edges))
     items.extend(
-        f"{part_id}({'/'.join(connected_net_sets(circuit)[part_id])})"
+        f"{part_id}({_pin_phrase(len(pins_of_part(circuit, part_id)))}, not an "
+        f"arm: {'/'.join(net_sets[part_id])})"
         for part_id in others[:4]
     )
     if len(items) > 12:

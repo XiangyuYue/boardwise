@@ -511,6 +511,23 @@ def _check_budget(budget: PageCompileBudget) -> None:
             f"budget.max_variants is {budget.max_variants!r}; the search is finite "
             "and its size has to be positive"
         )
+    # 571-B-H1: the floor was declared and copied into the module budget, and
+    # read nowhere else — so `min_candidates=0` and `min_candidates > max` were
+    # accepted and the answer silently ignored them. A floor is a demand on the
+    # answer: one below a single page can never be honoured, and one above the
+    # ceiling is a contradiction the ceiling truncates away.
+    if budget.min_candidates < 1:
+        raise PageCompileError(
+            f"budget.min_candidates is {budget.min_candidates!r}; a floor below "
+            "one page cannot be honoured by any answer"
+        )
+    if budget.min_candidates > budget.max_candidates:
+        raise PageCompileError(
+            f"budget.min_candidates is {budget.min_candidates!r} but "
+            f"budget.max_candidates is {budget.max_candidates!r}; the ceiling "
+            "truncates the pages the floor asks for, so no result could satisfy "
+            "both"
+        )
     if not budget.gap_ladder:
         raise PageCompileError(
             "budget.gap_ladder is empty — the ladder is the whole reason a page can "
@@ -754,6 +771,19 @@ def compile_page(
         "the page domain on the frames), and the ranking compares its layers "
         "without summing them"
     )
+    # 571-B-H1: the floor does not invent pages — it is *reported*. `max_candidates`
+    # has already taken every page the gate passed (`min_candidates <= max_candidates`
+    # was checked), so a short answer means the finite search itself found fewer
+    # legal pages than the caller asked for, and saying so is the only honest
+    # answer: the alternatives would be a second search or a padded list.
+    if len(result.pages) < budget.min_candidates:
+        result.notes.append(
+            f"{PAGE_COMPILER_NAME}: {len(result.pages)} legal page(s) is fewer "
+            f"than budget.min_candidates={budget.min_candidates}; the finite "
+            f"search built {len(result.ranked)} distinct legal page(s) and no "
+            "variant beyond those exists to be shown, so the shortfall is "
+            "reported rather than filled"
+        )
     return result
 
 

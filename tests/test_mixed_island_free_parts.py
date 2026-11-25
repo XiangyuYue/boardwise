@@ -111,13 +111,14 @@ def sheet(
 def two_shunts(*, free_parts: list[str] | None) -> tuple[CircuitSpec, PresentationSpec]:
     circuit_spec = circuit(
         [
-            part("J1", "CONN-4P"), part("C9", "C0402", "100nF"),
+            part("J1", "CONN-4P"), part("J2", "CONN-4P"),
+            part("C9", "C0402", "100nF"),
             part("C10", "C0402", "1uF"),
         ],
         [
             net("A", "signal", ["J1.1", "C9.1"]),
             net("B", "signal", ["J1.2", "C10.1"]),
-            net("C", "signal", ["J1.3"]),
+            net("C", "signal", ["J1.3", "J2.1"]),
             net(GND, "gnd", ["J1.4", "C9.2", "C10.2"]),
         ],
     )
@@ -229,13 +230,13 @@ def test_b3_a_repeated_or_non_string_element_is_refused():
 
 def test_b4_a_non_two_terminal_free_part_is_circuit_invalid_not_ignored():
     circuit_spec, presentation_spec = two_shunts(free_parts=None)
-    declared = sheet(("J1", "C9", "C10"), free_parts=["J1"])
+    declared = sheet(("J1", "J2", "C9", "C10"), free_parts=["J2"])
     result = bind(circuit_spec, declared)
     assert not result.ok
     assert len(result.failures) == 1
     failure = result.failures[0]
     assert failure.category == FAILURE_CIRCUIT_INVALID
-    assert failure.subject == "J1"
+    assert failure.subject == "J2"
     assert "freeParts" in failure.detail and "two-terminal" in failure.detail
 
 

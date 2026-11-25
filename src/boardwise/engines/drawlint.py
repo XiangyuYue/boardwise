@@ -1747,8 +1747,15 @@ def check_wire_multiname(sheet: Sheet) -> list[LintFinding]:
 #: zero-false-positive rule outranks the extra recall. Ground is never
 #: re-spelled here: ``core.model.is_ground_net`` stays the one place a name is
 #: called ground.
+#:
+#: 565g (S2-H5): AGENTS' drawing red line names ``HVDC`` and the secondary
+#: ``SEC_<n>V...`` spelling (``SEC_12V``, ``SEC_5V0``) as rails, so exactly those
+#: two families are added here and nowhere else — a name outside these shapes
+#: (``VIN``, ``3V3``, ``SEC_12``) stays a signal name, because this table is the
+#: repo's vocabulary narrowed, not a second one widened by resemblance.
 _RAIL_SUPPLY_RE = re.compile(
-    r"^(?:\+\d+(?:\.\d+)?V\d*|V(?:CC|DD|BAT|PP)\d*)$", re.IGNORECASE
+    r"^(?:\+\d+(?:\.\d+)?V\d*|V(?:CC|DD|BAT|PP)\d*|HVDC|SEC_\d+V\d*)$",
+    re.IGNORECASE,
 )
 
 #: L12 — the pin-name families the netlist gate reads. A ground pin is a GND
@@ -1792,8 +1799,22 @@ def _is_flag_own_name(sheet: Sheet, box: TextBox) -> bool:
     as a name *on the 3V3 wire* would invent a ground label the page never
     drew; L5-rail-name-conflict therefore only counts names that are not a
     flag's own statement.
+
+    565g (S2-H6): proximity alone is not identity. A flag's name is drawn in
+    the gap, but the page can print *another* name in that same radius — the
+    probe's ``+5V`` label 8 units from a GND flag — and dropping every box in
+    the radius threw that real conflict away (it reappeared once the flag moved
+    farther off). The exemption is therefore the flag's **own statement**:
+    within the gap *and* the box's text is that flag's net under the page-side
+    identity (``strip().upper()``). Text that differs is a second name on the
+    conductor and stays readable; an unnamed flag exempts nothing.
     """
     for flag in sheet.flags:
+        net = (flag.net or "").strip().upper()
+        if not net:
+            continue
+        if (box.text or "").strip().upper() != net:
+            continue
         if (
             math.hypot(box.anchor[0] - flag.x, box.anchor[1] - flag.y)
             <= L5_FLAG_OWN_NAME_GAP
@@ -1974,9 +1995,14 @@ def check_netlist_electrical(sheet: Sheet, netlist: Netlist) -> list[LintFinding
 
     * ``L12-two-pin-same-net``: a two-terminal passive whose two pins land on
       one non-empty net is shorted to itself (P1's C3/C4, both pins on +3V3).
-      The shape is read from the part's **pin naming**, not its designator: two
-      pins, both numeric. A one-pin part, a sheet and a net flag have no such
-      pair by construction.
+      The shape is read from the part's **nets**, not its pin naming: ``A``/``K``
+      and ``1.1``/``1.2`` are the same two-terminal part as ``1``/``2`` (565g,
+      S2-H3), so a two-pin device is read whatever it calls its pins. A part
+      with more pins is read too when **every** pin name is the numeric passive
+      shape (a power package's third pin does not make its two ends less
+      shorted); a named-pin device stays out of this gate and remains
+      ``L12-ground-supply-pin-short``'s case, or every multi-rail IC would
+      report as a shorted passive.
     * ``L12-ground-supply-pin-short``: one device's ground-family pin and its
       positive-supply pin on the *same* non-empty net (P1's U1: VSSA/VSS_1..3
       and VDD/VDDA all on +3V3). A negative-rail design puts VSS on a
@@ -1986,30 +2012,64 @@ def check_netlist_electrical(sheet: Sheet, netlist: Netlist) -> list[LintFinding
       (P1: the labels said GND; the netlist had no GND). Two artifacts that
       disagree about the return path are exactly what a page-level review
       must not wave through.
+
+    Net identity inside this family is the page-side one — ``strip().upper()``
+    (565g, S2-H4): a page flag ``gnd`` and a netlist ``GND`` are one net, and
+    ``GND``/``gnd`` on one part's two pins is one end twice. The three places
+    are the two-pin set, the per-part grouping and the netlist membership test;
+    only the *reading* is normalised, every message keeps the spelling its own
+    document used.
     """
     out: list[LintFinding] = []
     for part in netlist.parts:
         pins = part.pins
-        if len(pins) == 2 and all(_numeric_pin_name(pin) for pin in pins):
-            nets = {pin.net for pin in pins}
-            if len(nets) == 1 and "" not in nets:
-                net = next(iter(nets))
+        if len(pins) == 2:
+            first, second = pins
+            key = (first.net or "").strip().upper()
+            if key and key == (second.net or "").strip().upper():
+                net = first.net.strip()
                 out.append(
                     LintFinding(
                         "L12-two-pin-same-net",
                         "ERROR",
                         f"netlist: {part.designator}'s two pins "
-                        f"({pins[0].number}, {pins[1].number}) both land on net "
+                        f"({first.number}, {second.number}) both land on net "
                         f"{net} — a two-terminal part with both ends on one net "
                         "is shorted to itself",
                         objects=(part.designator, net),
                     )
                 )
+        elif len(pins) > 2 and all(_numeric_pin_name(pin) for pin in pins):
+            seen_pins: dict[str, NetlistPin] = {}
+            pair: tuple[NetlistPin, NetlistPin] | None = None
+            for pin in pins:
+                key = (pin.net or "").strip().upper()
+                if not key:
+                    continue
+                if pair is None and key in seen_pins:
+                    pair = (seen_pins[key], pin)
+                else:
+                    seen_pins.setdefault(key, pin)
+            if pair is not None:
+                first, second = pair
+                net = (first.net or "").strip()
+                out.append(
+                    LintFinding(
+                        "L12-two-pin-same-net",
+                        "ERROR",
+                        f"netlist: {part.designator} puts pins {first.number} and "
+                        f"{second.number} both on net {net} — its pins are all "
+                        "the passive numeric shape, so two ends on one net is "
+                        "still a part shorted to itself",
+                        objects=(part.designator, net),
+                    )
+                )
         by_net: dict[str, list[NetlistPin]] = {}
         for pin in pins:
-            if pin.net:
-                by_net.setdefault(pin.net, []).append(pin)
-        for net, group in by_net.items():
+            key = (pin.net or "").strip().upper()
+            if key:
+                by_net.setdefault(key, []).append(pin)
+        for group in by_net.values():
             if len(group) < 2:
                 continue
             grounds = [p for p in group if _GROUND_PIN_RE.match(p.name or "")]
@@ -2017,6 +2077,7 @@ def check_netlist_electrical(sheet: Sheet, netlist: Netlist) -> list[LintFinding
             if not grounds or not supplies:
                 continue
             ground, supply = grounds[0], supplies[0]
+            net = (group[0].net or "").strip()
             out.append(
                 LintFinding(
                     "L12-ground-supply-pin-short",
@@ -2029,10 +2090,11 @@ def check_netlist_electrical(sheet: Sheet, netlist: Netlist) -> list[LintFinding
                 )
             )
     netlist_nets = netlist.pin_nets()
+    netlist_keys = {name.strip().upper() for name in netlist_nets if name.strip()}
     for net in sorted({(f.net or "").strip() for f in sheet.flags if (f.net or "").strip()}):
         if _rail_kind(net) != "Ground":
             continue
-        if net in netlist_nets:
+        if net.strip().upper() in netlist_keys:
             continue
         out.append(
             LintFinding(

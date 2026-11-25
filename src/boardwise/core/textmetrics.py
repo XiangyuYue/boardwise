@@ -48,6 +48,7 @@ __all__ = [
     "CANVAS_TEXT_UNITS",
     "DESIGNATOR_GROWTH",
     "FLAG_NAME_ROW",
+    "RENDER_TEXT_FAMILY",
     "RENDER_TEXT_PX",
     "RENDER_TEXT_SCALE",
     "TEXT_ADVANCE_EM",
@@ -60,6 +61,7 @@ __all__ = [
     "WIRE_NAME_MODEL_EXCEPTION",
     "WIRE_NAME_ROW",
     "WireNameRow",
+    "advance",
     "flag_name_box",
     "host_row_box",
     "pin_rows",
@@ -76,6 +78,22 @@ __all__ = [
 #: (2026-10-10): the render declares ``font-size:7.148342059336824px`` for every
 #: canvas text class.
 RENDER_TEXT_PX = 7.148342059336824
+
+#: The font family the render's canvas text is drawn in — and the only one
+#: :data:`TEXT_ADVANCE_EM` was measured for. It is **one constant** because the
+#: drawing and the box have to name the same face: a preview that declares a
+#: family nobody measured the advances for draws a different width from the box it
+#: drew around it (565d S6-H1: ``font-family="DejaVu Sans, Consolas, monospace"``
+#: fell back to a monospace face on a machine without DejaVu, painting
+#: ``WWWWWWWW`` 43% narrower and ``IIIIIIII`` 94% wider than their own boxes).
+#: The fallbacks after Arial are stated so a machine without Arial still has a
+#: definite face; Helvetica is metrically identical, and the generic last resort
+#: is the one case this model cannot predict.
+RENDER_TEXT_FAMILY = "Arial, Helvetica, sans-serif"
+
+#: The faces :data:`TEXT_ADVANCE_EM` is valid for, read off the *first* entry of a
+#: ``font-family`` list: Arial and its metric clone Helvetica.
+_MODELLED_FAMILIES = frozenset({"arial", "helvetica"})
 
 #: The pitch of the host's text rows, in canvas units: how far apart it stacks a
 #: symbol's designator and value rows, and the height one row's box is modelled
@@ -128,13 +146,54 @@ TEXT_ADVANCE_EM_FALLBACK = 1.1
 TEXT_ADVANCE_EM_FALLBACK_ASCII = 0.9
 
 
+def advance(text: str, family: str = RENDER_TEXT_FAMILY, font_px: float = RENDER_TEXT_PX) -> float:
+    """``text``'s advance in canvas units, drawn in ``family`` at ``font_px``.
+
+    The one measurement both halves of a text box read: the width of a string is
+    its advance table times the ``font-size`` it is actually painted at. A caller
+    that draws at another size passes that size and gets that size's width
+    instead of :data:`RENDER_TEXT_PX`.
+
+    ``family`` is refused when it is not one the table models: the advances are
+    Arial's (the standard Helvetica ones), so a face nobody measured would make
+    this a guess — and a guessed width is how a preview draws a box around text
+    that is not the width of the text inside it (565d S6-H1). Read the first entry
+    of a ``font-family`` list, which is the face the browser picks first.
+    """
+    faces = [face.strip().strip("'\"").lower() for face in str(family).split(",")]
+    first = faces[0] if faces else ""
+    if first not in _MODELLED_FAMILIES:
+        raise ValueError(
+            f"advance(): no measured advances for font family {family!r}; the "
+            f"table models {RENDER_TEXT_FAMILY!r} (first entry must be "
+            f"{sorted(_MODELLED_FAMILIES)})"
+        )
+    if not math.isfinite(font_px) or font_px <= 0:
+        raise ValueError(f"advance(): font_px must be positive and finite, got {font_px!r}")
+    return (
+        sum(
+            TEXT_ADVANCE_EM[ch]
+            if ch in TEXT_ADVANCE_EM
+            else (
+                TEXT_ADVANCE_EM_FALLBACK
+                if ord(ch) > 0x7F
+                else TEXT_ADVANCE_EM_FALLBACK_ASCII
+            )
+            for ch in text
+        )
+        * font_px
+    )
+
+
 def render_width(text: str) -> float:
     """``text``'s advance in canvas units, as the render draws it.
 
     ``sum(em) x RENDER_TEXT_PX`` — the advance table times the em the render
     itself declares. 150: it used to be ``x CANVAS_TEXT_UNITS`` (the row pitch,
     10), which made every box 1.39893x too wide and cost the lint its L1
-    credibility on 岳's own page (`outputs/150/t2_verdict.md`).
+    credibility on 岳's own page (`outputs/150/t2_verdict.md`). 565d: the sum lives
+    in :func:`advance`, which takes the family and the ``font-size`` as arguments,
+    so a drawing and its box can no longer be measured with two different ones.
 
     A table miss is charged :data:`TEXT_ADVANCE_EM_FALLBACK` (1.1 em), except
     for ASCII, which stays at :data:`TEXT_ADVANCE_EM_FALLBACK_ASCII` (0.9 em):
@@ -152,19 +211,7 @@ def render_width(text: str) -> float:
     generator below stays inside a builtin ``sum``: no second accumulator, no
     rounding, no Kahan of our own.
     """
-    return (
-        sum(
-            TEXT_ADVANCE_EM[ch]
-            if ch in TEXT_ADVANCE_EM
-            else (
-                TEXT_ADVANCE_EM_FALLBACK
-                if ord(ch) > 0x7F
-                else TEXT_ADVANCE_EM_FALLBACK_ASCII
-            )
-            for ch in text
-        )
-        * RENDER_TEXT_PX
-    )
+    return advance(text)
 
 
 #: The height of one row of a wire's net name as the host draws it. The same 10

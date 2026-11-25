@@ -9,6 +9,7 @@ observable behavior and the command module cannot become a second implementation
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -30,6 +31,48 @@ MOVE_STRATEGIES = ("direct-move", "recompile-with-locks")
 DEFAULT_MOVE_STRATEGY = "direct-move"
 
 
+class _ParentDrawOption(argparse.Action):
+    """A legacy `draw` option that also records *that it was given* (565f §⑦).
+
+    The namespace value cannot answer "was this stated?": a subcommand that
+    registers the same option (`--render` on `draw apply` / `draw lint`) parses
+    into a fresh namespace and copies its own default over the parent's value,
+    and `--naming auto` is stated while the value equals the default. The flag
+    string is appended to a private attribute no subparser touches, so the
+    position survives the parse.
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        _record_parent_draw_option(namespace, option_string)
+
+
+class _ParentDrawSwitch(_ParentDrawOption):
+    """`store_true` semantics, with the flag recorded as given."""
+
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(
+            option_strings, dest, nargs=0, const=True, default=False, **kwargs
+        )
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, True)
+        _record_parent_draw_option(namespace, option_string)
+
+
+def _record_parent_draw_option(
+    namespace: argparse.Namespace, option_string: str | None
+) -> None:
+    if not option_string:
+        return
+    seen = getattr(namespace, "_parent_draw_seen", None)
+    if not isinstance(seen, list):
+        seen = []
+        setattr(namespace, "_parent_draw_seen", seen)
+    if option_string not in seen:
+        seen.append(option_string)
+
+
 def register_draw_parser(sub: Any, *, force_help: str) -> None:
     """Register the legacy draw flow and its seven subcommands, in old order."""
     from ..core.portmeta import default_port_meta_path
@@ -48,33 +91,33 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
         ),
     )
     draw.add_argument(
-        "--from", dest="from_file", default=None,
+        "--from", dest="from_file", default=None, action=_ParentDrawOption,
         help="Path to the golden .epro2 whose connectivity is the design input.",
     )
     draw.add_argument(
-        "--spec", default=None,
+        "--spec", default=None, action=_ParentDrawOption,
         help=(
             "Path to a board spec. The design is assembled from its block "
             "templates; --from is then only used for the double-check."
         ),
     )
     draw.add_argument(
-        "--golden", default=None,
+        "--golden", default=None, action=_ParentDrawOption,
         help=(
             "With --spec: the .epro2 to double-check the spec netlist against "
             "**before** anything is created. A mismatch aborts the run."
         ),
     )
     draw.add_argument(
-        "--yes", action="store_true",
+        "--yes", action=_ParentDrawSwitch,
         help="Skip the execution gate (print the plan and go).",
     )
     draw.add_argument(
-        "--screenshot", default=None,
+        "--screenshot", default=None, action=_ParentDrawOption,
         help="Where to write the post-draw canvas screenshot (PNG path).",
     )
     draw.add_argument(
-        "--overrides", default=None,
+        "--overrides", default=None, action=_ParentDrawOption,
         help=(
             "Golden-corrections sidecar (JSON). Default: the file next to the "
             "golden fixture, `<stem>.overrides.json`. The fixture itself is "
@@ -83,14 +126,14 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
         ),
     )
     draw.add_argument(
-        "--render", default=None,
+        "--render", default=None, action=_ParentDrawOption,
         help=(
             "Where to write the acceptance image — an `export.render` document "
             "render (PNG). A viewport screenshot is NOT evidence (cached frames)."
         ),
     )
     draw.add_argument(
-        "--solver", action="store_true",
+        "--solver", action=_ParentDrawSwitch,
         help=(
             "Use the generic layout solver instead of replaying the golden "
             "page's own geometry (the default)."
@@ -98,6 +141,7 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
     )
     draw.add_argument(
         "--naming", choices=NAMING_STRATEGIES, default=DEFAULT_NAMING_STRATEGY,
+        action=_ParentDrawOption,
         help=(
             "How signal nets are named (default: %(default)s). "
             "auto: name a signal net only when it is long or cross-page — "
@@ -112,7 +156,7 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
         ),
     )
     draw.add_argument(
-        "--port-meta", default=default_port_meta_path(),
+        "--port-meta", default=default_port_meta_path(), action=_ParentDrawOption,
         help=(
             "Spec mode only: the port-metadata sidecar the pre-draw validation "
             "reads (default: %(default)s, same convention as `validate`). "
@@ -121,7 +165,7 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
         ),
     )
     draw.add_argument(
-        "--library", default="",
+        "--library", default="", action=_ParentDrawOption,
         help=(
             "Spec mode only: curated part library a `part` reference in the "
             "spec can cite (default: none; a part citation without a library "
@@ -1280,6 +1324,25 @@ def register_pintable_parser(sub: Any) -> None:
         "--json", action="store_true", help="Print the machine-readable report.",
     )
 
+#: Parent options a subcommand registers for itself: `--render` on `draw apply`
+#: (read by the render step) and on `draw lint` (the captured SVG). Argparse
+#: gives both the same `render` dest, and a value written *before* the
+#: subcommand is overwritten by the subparser's own default. The parse-time
+#: seen list keeps that position, so the guard can tell the two apart.
+_SUBCOMMAND_OWN_PARENT_OPTIONS = {"apply": ("--render",), "lint": ("--render",)}
+
+
+def _parent_draw_options_given(args: argparse.Namespace) -> list[str]:
+    """The parent `draw` options the parse actually saw (565f S5-H2 §⑦).
+
+    Not a value comparison: `--naming auto` equals the default, and a parent
+    `--render` written before a subcommand is overwritten by that subcommand's
+    own default. The flag list recorded by :class:`_ParentDrawOption` answers
+    both, because it is written while the position is still known.
+    """
+    return list(getattr(args, "_parent_draw_seen", ()) or ())
+
+
 def dispatch_draw(
     args: argparse.Namespace,
     handlers: Mapping[str, Callable[[argparse.Namespace], int]],
@@ -1288,6 +1351,32 @@ def dispatch_draw(
     """Resolve the old handler registry at call time; never bind a second copy."""
     command = getattr(args, "draw_command", None)
     if command:
+        seen = _parent_draw_options_given(args)
+        if seen:
+            owned = tuple(_SUBCOMMAND_OWN_PARENT_OPTIONS.get(command, ()))
+            swallowed = [flag for flag in seen if flag not in owned]
+            misplaced = [flag for flag in seen if flag in owned]
+            if swallowed:
+                flags = ", ".join(swallowed)
+                print(
+                    f"boardwise draw: the parent option(s) {flags} never reach the "
+                    f"subcommand {command!r} — the parent options drive the legacy "
+                    "whole-redraw flow only, and no subcommand reads them, so giving "
+                    "them beside a subcommand would be a setting nobody applied. "
+                    "Drop them, or run `draw` without a subcommand.",
+                    file=sys.stderr,
+                )
+            if misplaced:
+                flags = ", ".join(misplaced)
+                print(
+                    f"boardwise draw: {flags} is read by the subcommand "
+                    f"{command!r}, but it was written before the subcommand, where "
+                    "argparse overwrites it with that subcommand's own default for "
+                    "the same option — the value is lost, so write it after the "
+                    "subcommand (or drop it).",
+                    file=sys.stderr,
+                )
+            return 2
         return handlers[command](args)
     return legacy_handler(args)
 

@@ -198,6 +198,15 @@ GRAMMARS: tuple[str, ...] = (
     "flyback", "mixed-island",
 )
 
+#: 565e: the only grammars that **consume** `modules[].freeParts`. The two
+#: readers are `engines/grammar/ic_periphery.py` and `engines/grammar/
+#: mixed_island.py` (`pagecompiler` only passes the declaration through), so a
+#: document that states it under any other grammar would be accepted and then
+#: silently dropped — `_modules_from` refuses that instead of reading it as a
+#: request nobody honours. Adding a third grammar here means teaching that
+#: grammar to read the key in the same batch.
+_FREE_PART_GRAMMARS: tuple[str, ...] = ("ic-periphery", "mixed-island")
+
 #: How a net may be expressed locally (052 sec.5: a key local topology is drawn
 #: as wire; a label across modules or at high fan-out).
 LABEL_WIRE = "wire"
@@ -1536,6 +1545,10 @@ def _islands_from(
 def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
     out: list[PresentationModule] = []
     seen: set[str] = set()
+    # 565e S4-2: the document's grammar is the fallback for a module that states
+    # none. Read once and only when a declared `freeParts` actually needs it, so
+    # a document without that key keeps the refusal order it has always had.
+    document_grammar: str | None = None
     for index, item in enumerate(_list(root.get("modules"), "modules")):
         spot = f"modules[{index}]"
         body = _object(item, spot)
@@ -1552,7 +1565,7 @@ def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
                 f"{spot}.parts is empty — a module with no parts is a caption, "
                 "not a group the layout can place"
             )
-        out.append(PresentationModule(
+        module = PresentationModule(
             id=module_id,
             parts=parts,
             role=_text(body.get("role"), f"{spot}.role", required=True),
@@ -1564,9 +1577,62 @@ def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
                 body.get("freeParts"), f"{spot}.freeParts", parts
             ),
             attach=_module_attach(body.get("attach"), spot, module_id),
-        ))
+        )
+        _check_declaration_roles(module, spot)
+        if module.free_parts:
+            if document_grammar is None:
+                document_grammar = _grammar(root)
+            grammar_name = module.grammar_ref or document_grammar
+            source = (
+                f"modules[{module_id}].grammarRef" if module.grammar_ref
+                else "$.grammarRef"
+            )
+            consumers = " and ".join(repr(name) for name in _FREE_PART_GRAMMARS)
+            if not grammar_name:
+                raise PresentationSpecError(
+                    f"{spot}.freeParts is declared, but no drawing grammar is "
+                    f"stated ({source} is empty) — freeParts is only consumed by "
+                    f"{consumers}; with no grammar it would be accepted and "
+                    "silently dropped"
+                )
+            if grammar_name not in _FREE_PART_GRAMMARS:
+                raise PresentationSpecError(
+                    f"{spot}.freeParts is declared, but the effective grammar is "
+                    f"{grammar_name!r} ({source}) — freeParts is only consumed by "
+                    f"{consumers}; under {grammar_name!r} it would be accepted "
+                    "and silently dropped, so state one of those two grammars or "
+                    "remove freeParts"
+                )
+        out.append(module)
     _check_attachments(out)
     return out
+
+
+def _check_declaration_roles(
+    module: PresentationModule, spot: str
+) -> None:
+    """565e S4-1: one part has one role — ``core`` and ``freeParts`` are exclusive.
+
+    Both keys are read from the *same* module, so the clash is a fact about this
+    document alone and belongs here rather than in a grammar: ``core`` says the
+    part is what the others hang off, ``freeParts`` says the part binds no core
+    role, and the two readings cannot both be honoured. It used to surface only
+    as an unrelated refusal (a two-terminal part cannot be a core) or not at all
+    (a multi-pin part, or the page path), which is the silent face 565e closes.
+
+    A part named twice in ``freeParts`` is already refused by
+    :func:`_module_free_parts`; this is the cross-key half.
+    """
+    if not module.core or module.core not in module.free_parts:
+        return
+    free_index = module.free_parts.index(module.core)
+    raise PresentationSpecError(
+        f"{spot}.core is {module.core!r}, and {spot}.freeParts[{free_index}] names "
+        f"the same part — one part has one role: modules[{module.id}].core makes it "
+        f"the module's core, modules[{module.id}].freeParts[{free_index}] makes it "
+        "a free branch, and a document cannot say both"
+    )
+
 
 
 def _module_attach(

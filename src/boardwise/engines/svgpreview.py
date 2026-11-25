@@ -62,9 +62,15 @@ from boardwise.core.symbolprofile import (
     SymbolProfile,
     flag_glyph_box,
 )
-from boardwise.core.textmetrics import WireNameRow, wire_name_row
+from boardwise.core.textmetrics import (
+    RENDER_TEXT_FAMILY,
+    RENDER_TEXT_PX,
+    WireNameRow,
+    wire_name_row,
+)
 
 __all__ = [
+    "LABEL_ROW_FONT_SIZE",
     "NATIVE_TEXT_FONT_SIZE",
     "PREVIEW_FONT_SIZE",
     "PREVIEW_KIND",
@@ -83,16 +89,20 @@ PREVIEW_MARGIN = 40.0
 #: The caption's font size in SVG units (the drawing itself is 1:1).
 PREVIEW_FONT_SIZE = 11.0
 
-#: The host font size of a placed text, a net label and a power symbol's net
-#: name. It is the size a real V4 native SVG uses: in the y173 export
-#: ``KEY_C1``, ``RFID_MISO``, ``HALL_LOCK``, ``+3V3``, ``GND`` and
-#: ``STM32F103C8T6`` all carry ``font-size:7.006200555911909px`` (the label box
-#: height the host claims for them is 9). Those three text kinds used to inherit
-#: the 11-unit diagnostic default, which made them look larger — and therefore
-#: more overlapping — than the native drawing they stand in for. The 11 stays the
-#: canvas default for caption and other diagnostic text; a pin number stays 9
-#: and a frame name 12, each stated where it is drawn.
+#: The host font size of a **native** placed text (:class:`LayoutText`), a flag's
+#: net name, and a label's static box when no row is printed: the V4 native-text
+#: measurement, ``font-size:7.006200555911909px`` (y173 export), stated to the
+#: three decimals the renderer prints. This is a **different host text class** from
+#: the render's canvas text (:data:`boardwise.core.textmetrics.RENDER_TEXT_PX`,
+#: 7.148342…) and stays its own number: one class's measurement must not be
+#: written into the other's box.
 NATIVE_TEXT_FONT_SIZE = 7.006
+
+#: The size a **printed label row** is painted at: the em its own dashed box was
+#: measured with (:data:`boardwise.core.textmetrics.RENDER_TEXT_PX`). A row and the
+#: box drawn around it are one fact, so they use one number — the host's
+#: ``wire_name_row`` lays the row out with that em (565d S6-H1).
+LABEL_ROW_FONT_SIZE = RENDER_TEXT_PX
 
 #: The caption strip's own metrics, in canvas units: the first line's baseline
 #: below the drawing, the line pitch, and the room a line needs under its own
@@ -150,6 +160,28 @@ class NativeSymbolArt:
 #: way, so the wire it prints a name on is the wire the readability gate measures.
 _CARRIER_TOL = 1e-6
 
+#: Code points XML 1.0 cannot carry at all: the C0 range minus tab, newline and
+#: carriage return, which are legal. ``html.escape`` handles the markup characters
+#: (``& < > " '``) but cannot help here — a C0 byte makes the document stop being
+#: XML however it is written, and ``write_preview`` used to write such a file and
+#: return its path (565d S6-H2).
+_XML_FORBIDDEN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _text_safe(value: object) -> str:
+    """``value`` as text with the C0 characters XML 1.0 forbids removed.
+
+    Removed, not replaced: the preview has no glyph to stand in for them, and an
+    unopenable file is worse than a name missing one invisible byte. ``\\t``,
+    ``\\n`` and ``\\r`` are legal and kept.
+    """
+    return _XML_FORBIDDEN.sub("", "" if value is None else str(value))
+
+
+def _text(value: object) -> str:
+    """One drawn value: XML-representable first, then escaped."""
+    return escape(_text_safe(value))
+
 
 def _anchor_on_run(
     start: tuple[float, float],
@@ -177,17 +209,22 @@ def _anchor_on_run(
     return False
 
 
-def _label_carrier_row(layout_plan: LayoutPlan, label: LayoutLabel) -> WireNameRow | None:
-    """The row the host prints this label's **name** in, or ``None``.
+def _label_carrier_row(layout_plan: LayoutPlan, label: LayoutLabel) -> list[WireNameRow]:
+    """Every row the host prints this label's **name** in — one per named carrier.
 
     A label on this host has no primitive of its own (029): the net's name is
     printed by a *wire*, at the midpoint of that wire's longest straight run and
     **start-anchored** from there (:func:`boardwise.core.textmetrics.wire_name_row`,
-    measured on the 145e/147 renders). The carrier is the wire whose same-net
-    orthogonal run the label's own anchor lies on — the one statement
-    ``core.layoutplan.label_wire_indices`` makes for the landing, the readability
+    measured on the 145e/147 renders). A carrier is a wire whose same-net
+    orthogonal run the label's own anchor lies on — the fact
+    ``core.layoutplan.label_wire_indices`` states for the landing, the readability
     gate and the connectivity re-verification, so the preview must not invent a
-    second reading.
+    second reading of it.
+
+    A T junction reaches the anchor with **two** same-net segments and the landing
+    names both: the host prints the name on each of them, so this returns a row for
+    each, in plan order (565d S6-H4 — returning only the first painted one row
+    where the landing named two).
 
     Nowhere does the name sit at the label's static ``bbox`` centre: on the y173
     page the four J7 RFID labels all anchor at ``x=827.75`` while their static boxes
@@ -198,21 +235,24 @@ def _label_carrier_row(layout_plan: LayoutPlan, label: LayoutLabel) -> WireNameR
     static box is what made an independent visual review reject the preview as
     "the RFID names hang off their stubs".
 
-    ``None`` means **no row may be drawn**, and the caller keeps the old
+    An **empty list** means no row may be drawn, and the caller keeps the old
     ``bbox``-centred text as a diagnostic:
 
     * ``text_mode="native"`` (:data:`TEXT_MODE_NATIVE`): the host prints the name
       with its attribute API at the label's own box, so the box *is* the row;
     * a label with no carrier on its net: nothing prints a name there, and no row
-      is invented;
-    * a carrier whose longest run is **vertical**. Only the horizontal row is this
-      preview's contract (the measured rule above); a vertical row is a real host
-      case (534 r18, the CH343 sheet) the preview does not model yet, so it is
-      disclosed by falling back to the diagnostic box rather than guessed.
+      is invented.
+
+    A row whose ``axis`` is **vertical** is a real host case (534 r18, the CH343
+    sheet) this preview does not model yet. It is returned rather than hidden, so
+    the caller can draw every horizontal row and **disclose** each vertical one in
+    the caption instead of quietly falling back to the static box — where the host
+    prints no name at all.
     """
     if not label.net or getattr(label, "text_mode", "") == TEXT_MODE_NATIVE:
-        return None
+        return []
     anchor = (float(label.x), float(label.y))
+    rows: list[WireNameRow] = []
     for segment in layout_plan.segments:
         points = [(float(point[0]), float(point[1])) for point in segment.points]
         if segment.net != label.net or len(points) < 2:
@@ -223,10 +263,9 @@ def _label_carrier_row(layout_plan: LayoutPlan, label: LayoutLabel) -> WireNameR
         ):
             continue
         row = wire_name_row(points, label.text)
-        # The first carrier in plan order is the one the landing named; a
-        # vertical row is unmodelled, not silently replaced by a second carrier.
-        return row if row is not None and row.horizontal else None
-    return None
+        if row is not None:
+            rows.append(row)
+    return rows
 
 
 def render_svg(
@@ -301,6 +340,23 @@ def render_svg(
             + "/>"
         )
 
+    #: Every row the landing names, decided before the caption is built: a
+    #: carrier whose row is unmodelled has to be *said* in the strip, and the strip
+    #: is sized from its own line count (565d S6-H4).
+    label_rows: dict[int, list[WireNameRow]] = {
+        index: _label_carrier_row(layout_plan, label)
+        for index, label in enumerate(layout_plan.labels)
+    }
+    unmodelled: list[str] = []
+    for index, label in enumerate(layout_plan.labels):
+        for row in label_rows[index]:
+            if row.horizontal:
+                continue
+            unmodelled.append(
+                f"vertical carrier not modelled: {label.text!r} on "
+                f"({row.run[0][0]:g},{row.run[0][1]:g})->({row.run[1][0]:g},{row.run[1][1]:g})"
+            )
+
     #: The strip is derived from the caption it holds — the caption is four fixed
     #: lines plus up to four notes, and the hardcoded 90 it used to reserve clipped
     #: everything from the sixth line down: the plan's own provenance footer, the
@@ -308,12 +364,13 @@ def render_svg(
     caption = _caption_lines(layout_plan, title, box, scale)
     if native_art:
         caption.append("Native symbol art only; wires, flags and planned text remain diagnostic.")
+    caption.extend(note[:150] for note in unmodelled)
     strip = _caption_height(len(caption))
 
     parts: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" '
         f'height="{height + strip:.0f}" viewBox="0 0 {width:.0f} {height + strip:.0f}" '
-        f'font-family="DejaVu Sans, Consolas, monospace" '
+        f'font-family="{RENDER_TEXT_FAMILY}" '
         f'font-size="{PREVIEW_FONT_SIZE:g}">',
         f'<rect x="0" y="0" width="{width:.0f}" height="{height + strip:.0f}" '
         f'fill="{_COLOURS["background"]}"/>',
@@ -330,7 +387,7 @@ def render_svg(
                              "stroke-width": f"{px(1.4):g}"}))
         parts.append(
             f'<text x="{x(left) + px(5):.3f}" y="{y(top) + px(13):.3f}" '
-            f'fill="{_COLOURS["frame"]}" font-size="{px(12):g}">{escape(str(name))}</text>'
+            f'fill="{_COLOURS["frame"]}" font-size="{px(12):g}">{_text(name)}</text>'
         )
 
     for symbol in layout_plan.power_symbols:
@@ -348,7 +405,7 @@ def render_svg(
         parts.append(
             f'<text x="{x(symbol.x) + px(6):.3f}" y="{y(symbol.y) - px(4):.3f}" '
             f'fill="{_COLOURS["flag"]}" font-size="{px(NATIVE_TEXT_FONT_SIZE):g}">'
-            f"{escape(symbol.net)}</text>"
+            f"{_text(symbol.net)}</text>"
         )
 
     for part in layout_plan.parts:
@@ -382,7 +439,7 @@ def render_svg(
                 parts.append(
                     f'<text x="{x(tip[0]) + px(4):.3f}" y="{y(tip[1]) - px(3):.3f}" '
                     f'fill="{_COLOURS["pin"]}" font-size="{px(9):g}">'
-                    f'{escape(str(pin.number))}</text>'
+                    f'{_text(pin.number)}</text>'
                 )
         parts.append(
             f'<circle cx="{x(part.x):.3f}" cy="{y(part.y):.3f}" r="{px(1.6):g}" '
@@ -416,13 +473,14 @@ def render_svg(
             f'<text x="{x(centre_x):.3f}" y="{y(centre_y) + px(3):.3f}" '
             f'fill="{_COLOURS["text"]}" text-anchor="middle" '
             f'font-size="{px(NATIVE_TEXT_FONT_SIZE):g}">'
-            f"{escape(text.text)}</text>"
+            f"{_text(text.text)}</text>"
         )
-    for label in layout_plan.labels:
-        row = _label_carrier_row(layout_plan, label)
-        if row is None:
-            # No row the host prints (native label, no carrier, unmodelled
-            # vertical run): the static box stays as the diagnostic it always was.
+    for index, label in enumerate(layout_plan.labels):
+        rows = [row for row in label_rows[index] if row.horizontal]
+        if not rows:
+            # No printed row (native label, no carrier, or only vertical carriers,
+            # which the caption names as unmodelled): the static box stays as the
+            # diagnostic it always was — never a claim that a name is printed there.
             parts.append(rect(label.bbox, fill="none", stroke=_COLOURS["label"],
                               **{"stroke-dasharray": f"{px(2):g} {px(2):g}",
                                  "stroke-width": f"{px(0.8):g}"}))
@@ -432,19 +490,21 @@ def render_svg(
                 f'<text x="{x(centre_x):.3f}" y="{y(centre_y) + px(3):.3f}" '
                 f'fill="{_COLOURS["label"]}" text-anchor="middle" '
                 f'font-size="{px(NATIVE_TEXT_FONT_SIZE):g}">'
-                f"{escape(label.text)}</text>"
+                f"{_text(label.text)}</text>"
             )
-        else:
-            # The name is printed on its carrier's longest run: the dashed box is
-            # that measured row, the glyphs start at the run's midpoint.
+        for row in rows:
+            # One row per carrier the landing names: the dashed box is that
+            # measured row, and the glyphs are painted at the em that box was
+            # measured with (:data:`LABEL_ROW_FONT_SIZE`), start-anchored from the
+            # run's midpoint — a row and its own box are one fact.
             parts.append(rect(row.box, fill="none", stroke=_COLOURS["label"],
                               **{"stroke-dasharray": f"{px(2):g} {px(2):g}",
                                  "stroke-width": f"{px(0.8):g}"}))
             parts.append(
                 f'<text x="{x(row.box[0]):.3f}" y="{y(row.box[1]) - px(3):.3f}" '
                 f'fill="{_COLOURS["label"]}" text-anchor="start" '
-                f'font-size="{px(NATIVE_TEXT_FONT_SIZE):g}">'
-                f"{escape(label.text)}</text>"
+                f'font-size="{px(LABEL_ROW_FONT_SIZE):g}">'
+                f"{_text(label.text)}</text>"
             )
         # The anchor is the label's own fact and does not move with its name's row.
         parts.append(
@@ -463,13 +523,25 @@ def write_preview(
     profiles: Mapping[str, SymbolProfile] | Sequence[SymbolProfile],
     **options: object,
 ) -> Path:
-    """Render and write one preview; returns where it went."""
+    """Render and write one preview; returns where it went.
+
+    The document is parsed **before** the disk sees it (565d S6-H2): a preview is
+    something a reviewer opens, so writing a file that is not XML and returning
+    its path is the one failure this writer must not have. A document that does
+    not parse raises :class:`ValueError` and nothing is written — the same
+    discipline ``_native_fragment`` already applies to captured art.
+    """
+    svg = render_svg(layout_plan, profiles, **options)  # type: ignore[arg-type]
+    try:
+        ET.fromstring(svg)
+    except ET.ParseError as exc:
+        raise ValueError(
+            f"preview for {layout_plan.geometry_sha256()[:12]}: the rendered SVG is "
+            f"not well-formed XML ({exc}); nothing was written to {path}"
+        ) from exc
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        render_svg(layout_plan, profiles, **options),  # type: ignore[arg-type]
-        encoding="utf-8",
-    )
+    target.write_text(svg, encoding="utf-8")
     return target
 
 
@@ -618,7 +690,7 @@ def _caption(lines: list[str], height: float) -> list[str]:
     for index, line in enumerate(lines):
         out.append(
             f'<text x="8" y="{height + CAPTION_TOP + index * CAPTION_LINE_HEIGHT:.3f}" '
-            f'fill="{_COLOURS["caption"]}">{escape(line)}</text>'
+            f'fill="{_COLOURS["caption"]}">{_text(line)}</text>'
         )
     return out
 
