@@ -602,6 +602,49 @@ async def _search_items(client: Any, keyword: str, limit: int) -> tuple[list[Any
     return items, ""
 
 
+#: The keys a C-number hit's own part number is read from when it is checked
+#: against a given MPN. `MPN_ITEM_KEYS` is the **search** set and includes
+#: `name`, because the host also addresses a device by the name it gave it (180
+#: measured `Ground-<net>`); a name is not evidence about the MPN, so it is not
+#: read here — refusing on it would refuse real parts the host named itself.
+CROSSCHECK_MPN_KEYS = tuple(key for key in MPN_ITEM_KEYS if key != "name")
+
+
+def _carried_under(item: Any, keys: tuple[str, ...]) -> tuple[str, str]:
+    """``(key, value)`` of the first of ``keys`` the item carries non-empty."""
+    for key in keys:
+        value = _item_value(item, key)
+        if value:
+            return key, value
+    return "", ""
+
+
+def _pair_refusal(item: Any, *, term: str, given_lcsc: str, given_mpn: str) -> str:
+    """Why a hit contradicts the term it was *not* found by, or ``""``.
+
+    Both directions say it the same way: the hit is quoted by the field that
+    disagrees, and the pair is refused rather than one side preferred. Only a
+    field the item **does** carry can contradict — a hit that carries nothing
+    under the other side's keys is not evidence and is let through, which is the
+    rule the MPN→C direction has always had.
+    """
+    if term == "mpn" and given_lcsc:
+        carried_key, carried = _carried_under(item, LCSC_ITEM_KEYS)
+        if carried and carried.upper() != given_lcsc.upper():
+            return (
+                f"the MPN hit carries {carried_key}={carried}, "
+                f"not the given {given_lcsc}; refusing a pair that disagrees"
+            )
+    elif term == "lcsc" and given_mpn:
+        carried_key, carried = _carried_under(item, CROSSCHECK_MPN_KEYS)
+        if carried and carried.upper() != given_mpn.upper():
+            return (
+                f"the LCSC hit carries {carried_key}={carried}, "
+                f"not the given {given_mpn}; refusing a pair that disagrees"
+            )
+    return ""
+
+
 async def resolve_identity(
     client: Any, *, mpn: str = "", lcsc: str = "", limit: int = 8
 ) -> Resolution:
@@ -614,9 +657,10 @@ async def resolve_identity(
     * **both** uuids are required. The shelf's own validator refuses an entry a
       rule acts on without the pair (`entry_from_json`, 039), so a half-answer
       here would only move the refusal later and lose the reason;
-    * the record's two terms must agree: when the MPN search is the one that hit
-      and the item carries a C-number of its own, a disagreement with the
-      C-number on the command line is a refusal, not a preference for one.
+    * the record's two terms must agree: whichever search hit, a field the item
+      carries on the other side (a C-number under `LCSC_ITEM_KEYS`, a part
+      number under `CROSSCHECK_MPN_KEYS`) that disagrees with the command line
+      is a refusal, not a preference for one.
 
     The C-number is tried **first**: it is an exact key (013 F4 measured
     `supplierId` as the only property 3.2.186 indexes), where the MPN is a
@@ -665,23 +709,16 @@ async def resolve_identity(
             continue
 
         key, item = hits[0]
-        # Only an exact, self-evident key is cross-checked: a C-number is a
-        # C-number, so a hit whose own C-number differs is a different part and
-        # the entry would carry an identity nobody can place. The MPN is not
-        # compared that way — the host names devices by its own convention
-        # (`Ground-GND`), and a disagreement there would refuse real parts.
-        if term == "mpn" and wanted_lcsc:
-            carried_key = next(
-                (k for k in LCSC_ITEM_KEYS if _item_value(item, k)), ""
-            )
-            carried = _item_value(item, carried_key).upper()
-            if carried and carried != wanted_lcsc:
-                result.reason = (
-                    f"the MPN hit carries {carried_key}={_item_value(item, carried_key)}, "
-                    f"not the given {result.lcsc}; refusing a pair that disagrees"
-                )
-                result.candidates = [describe_item(item)]
-                return result
+        # Whichever term hit, the other one must not contradict it: a C-number
+        # is exact, and a part number the item spells out under an MPN key is
+        # just as checkable. An item that carries neither is not guessed at.
+        refusal = _pair_refusal(
+            item, term=term, given_lcsc=result.lcsc, given_mpn=wanted_mpn
+        )
+        if refusal:
+            result.reason = refusal
+            result.candidates = [describe_item(item)]
+            return result
         device_uuid = _item_value(item, "uuid") or _item_value(item, "deviceUuid")
         library_uuid = _item_value(item, "libraryUuid") or _item_value(item, "library_uuid")
         if not device_uuid or not library_uuid:
@@ -710,6 +747,7 @@ async def resolve_identity(
 __all__ = [
     "CANDIDATE_FIELDS",
     "CANDIDATE_LIMIT",
+    "CROSSCHECK_MPN_KEYS",
     "Candidate",
     "IDENTITY_FIELDS",
     "LCSC_ITEM_KEYS",

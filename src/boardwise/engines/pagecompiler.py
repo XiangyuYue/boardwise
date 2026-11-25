@@ -3032,6 +3032,19 @@ def _reseat_native_labels(
     P27's `CTS`/`RI` did. The chosen box is the one the readability gate measures
     and the one `_native_attribute_moves` targets, because both read
     `LayoutLabel.bbox` afterwards — one position, not three.
+
+    617D: being on the axis is necessary, not sufficient. A box **past the seat
+    ladder's own reach** was not chosen by this search — it is the module
+    compiler's reservation, made against that module's coarse part boxes. When
+    such a box also stands inside another part's text band
+    (:func:`_in_foreign_text_band`, S-21's floor) the name is read as that
+    neighbour's own row: the 543d page printed U1.3 `RXD` 84 units from its pin
+    and one unit from C3's reference, so the pin read as C3's. Those boxes go
+    back on the ladder like any off-carrier box; if no rung is legal the
+    reservation is kept and said so in the notes (the page drew it before this
+    pass, and refusing it would take a legal page away without a nearer seat to
+    offer). A far box outside a foreign text band — a module's own rung, a
+    same-net label band — is not this sentence and does not move.
     """
     if not _native_text_placement(ctx):
         return [], None
@@ -3049,11 +3062,24 @@ def _reseat_native_labels(
         box = tuple(float(value) for value in label.bbox)
         anchor = (float(label.x), float(label.y))
         centre = ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
-        if (
-            abs(centre[0] - anchor[0]) <= readability.TOL
-            or abs(centre[1] - anchor[1]) <= readability.TOL
-        ):
-            continue
+        on_row = abs(centre[1] - anchor[1]) <= readability.TOL
+        on_column = abs(centre[0] - anchor[0]) <= readability.TOL
+        stranded = False
+        if on_row or on_column:
+            # 617D: on the carrier's axis is necessary, not sufficient. A box the
+            # seat ladder could not have produced *and* that stands in another
+            # part's own text band prints this net's name where a reader reads
+            # the neighbour's designator — U1.3 `RXD` 84 units left of its pin,
+            # one unit from C3's reference row. That box is re-seated on the same
+            # ladder as any off-carrier box; a far box that is *not* in a foreign
+            # text band (a module's own rung, a label band) is left alone, so the
+            # batch's only move is the misattributed name.
+            stranded = (
+                not _within_seat_reach(label.net, box, anchor, on_row)
+                and _in_foreign_text_band(box, label, plan.texts)
+            )
+            if not stranded:
+                continue
         dx, dy = centre[0] - anchor[0], centre[1] - anchor[1]
         if abs(dx) >= abs(dy):
             preferred = (1.0 if dx > 0 else -1.0, 0.0)
@@ -3061,8 +3087,25 @@ def _reseat_native_labels(
             preferred = (0.0, 1.0 if dy > 0 else -1.0)
         if box in occupied:
             occupied.remove(box)
-        seat = _native_label_seat(label.net, anchor, preferred, occupied, wires)
+        seat = _native_label_seat(
+            label.net, anchor, preferred, occupied, wires,
+            owned_pin_sites=_owned_pin_sites(
+                plan, label, ctx.book, ctx.circuit,
+            ),
+        )
         if seat is None:
+            if stranded:
+                # The ladder has no legal rung either; keeping the module's own
+                # reservation is not a repair but it is not a new refusal either:
+                # the page would have drawn this box before this pass, and the
+                # carrier check judges the axis it stands on.
+                occupied.append(box)
+                notes.append(
+                    f"net {label.net!r}: its name box {_box_text(box)} stands in "
+                    "another part's text band and off this page's seat ladder, "
+                    "and no rung around the anchor is legal — kept as reserved"
+                )
+                continue
             return None, GrammarFailure(
                 category=FAILURE_LAYOUT_UNSAT,
                 subject=f"labels[{index}]",
@@ -3081,11 +3124,63 @@ def _reseat_native_labels(
             )
         occupied.append(seat)
         label.bbox = seat
-        notes.append(
-            f"net {label.net!r}: label box {_box_text(box)} was off its carrier "
-            f"and is re-seated at {_box_text(seat)}"
-        )
+        if stranded:
+            notes.append(
+                f"net {label.net!r}: label box {_box_text(box)} stood "
+                f"{abs(centre[0] - anchor[0]) + abs(centre[1] - anchor[1]):g} "
+                "units from its anchor in another part's text band, past this "
+                f"page's seat ladder, and is re-seated at {_box_text(seat)}"
+            )
+        else:
+            notes.append(
+                f"net {label.net!r}: label box {_box_text(box)} was off its "
+                f"carrier and is re-seated at {_box_text(seat)}"
+            )
     return notes, None
+
+
+def _within_seat_reach(
+    net_id: str, box: Box, anchor: tuple[float, float], on_row: bool
+) -> bool:
+    """Is this box no farther out than the ladder's own last rung? (617D)
+
+    The ladder in :func:`_native_label_seat` tries rings
+    :data:`_NATIVE_LABEL_SEATS` only, so a box past the last ring was not chosen
+    by this page's search — it is the module compiler's reservation, made without
+    the page's own occupancy. Whether that matters is the next question
+    (:func:`_in_foreign_text_band`); this one only measures the distance, on the
+    axis the stub runs along, against the ladder's own reach.
+    """
+    half = (
+        drawcompiler.text_width(net_id) / 2.0 + drawcompiler.TEXT_GAP if on_row
+        else drawcompiler.TEXT_SIZE / 2.0 + drawcompiler.TEXT_GAP
+    )
+    distance = abs(
+        (box[0] + box[2]) / 2.0 - anchor[0] if on_row
+        else (box[1] + box[3]) / 2.0 - anchor[1]
+    )
+    return distance <= max(_NATIVE_LABEL_SEATS) * half + readability.TOL
+
+
+def _in_foreign_text_band(
+    box: Box, label: Any, texts: Sequence[Any]
+) -> bool:
+    """Does this name's box stand inside **another part's** own text band? (617D)
+
+    S-21's floor: two text rows keep at least
+    :data:`readability.SOFT_FLOOR_TEXT_GAP` units between them. A net name inside
+    that band is read as the neighbour's own row — the U1.3 `RXD` one unit from
+    C3's reference made the reader attribute the pin to C3. Rows of the label's
+    own part are its own typography and are not this question.
+    """
+    own = getattr(label, "part_id", "")
+    for text in texts:
+        if getattr(text, "part_id", "") == own:
+            continue
+        other = tuple(float(value) for value in text.bbox)
+        if readability._box_gap(box, other) < readability.SOFT_FLOOR_TEXT_GAP:
+            return True
+    return False
 
 
 def _plan_wires(
@@ -3100,6 +3195,71 @@ def _plan_wires(
         for segment in plan.segments
         if len(segment.points) >= 2
     ]
+
+
+def _owned_pin_sites(
+    plan: LayoutPlan,
+    label: Any,
+    book: Mapping[str, SymbolProfile],
+    circuit: Any,
+) -> list[tuple[str, tuple[float, float]]]:
+    """``(net, posed tip)`` for the pins of the part **this label belongs to** (620D).
+
+    A net name printed on a part's pin is that part's own text
+    (:func:`readability._check_text`, 099b), and the same reading covers the lead
+    that leaves that pin: the pin pitch and the symbol's own rows are the
+    part's typography, not a wire the page chose to run there. That is the
+    **only** class a native label's seat may stand closer than
+    :data:`readability.NATIVE_LABEL_CARRIER_LIMIT` to — everything else keeps
+    the 10-unit clearance 534z pins.
+
+    The proof is the drawing's own geometry plus the circuit's membership, never
+    the label's ``part_id`` alone:
+
+    1. the label names a part that is **placed** in this plan and whose symbol
+       states its pins in `book`;
+    2. each pin's tip is the page's own posed point (:func:`_posed_pin`);
+    3. the circuit puts that pin on a **named net**
+       (:meth:`CircuitSpec.net_of_pin`), which is what the lead's own net has to
+       match.
+
+    Anything missing — no owner, no placed part, no profile, no pin, no net —
+    returns no site, so the seat keeps the strict limit. A caller that hands the
+    seat a run which merely *contains* one of these nets but does not terminate
+    on the tip gets nothing: the termination test is made on the run itself in
+    :func:`_native_label_seat`.
+    """
+    part_id = getattr(label, "part_id", "")
+    if not part_id or not book or circuit is None:
+        return []
+    placed = [part for part in plan.parts if part.part_id == part_id]
+    if not placed:
+        return []
+    sites: list[tuple[str, tuple[float, float]]] = []
+    for part in placed:
+        profile = book.get(part.symbol_ref)
+        if profile is None:
+            continue
+        for pin in profile.pins:
+            net = circuit.net_of_pin(f"{part_id}.{pin.number}")
+            if net:
+                sites.append((str(net), _posed_pin(profile, part, pin)))
+    return sites
+
+
+def _ends_on_pin(
+    points: Sequence[tuple[float, float]],
+    net: str,
+    sites: Sequence[tuple[str, tuple[float, float]]],
+) -> bool:
+    """Does this run terminate on a pin of `net` (620D's ownership test)?
+
+    Both ends are compared with :func:`_round` — the fold :func:`_posed_pin` and
+    the module compiler's own points share — so "the run ends on the pin" is the
+    drawing's statement and not a proximity guess.
+    """
+    ends = (_round(points[0]), _round(points[-1]))
+    return any(other == net and tip in ends for other, tip in sites)
 
 
 def _native_text_placement(ctx: _Context) -> bool:
@@ -5281,6 +5441,8 @@ def _native_label_seat(
     preferred: tuple[float, float],
     occupied: Sequence[Box],
     wires: Sequence[tuple[str, tuple[tuple[float, float], ...]]],
+    *,
+    owned_pin_sites: Sequence[tuple[str, tuple[float, float]]] = (),
 ) -> Box | None:
     """The first legal box for a **visible native** label, or ``None`` (053Z).
 
@@ -5294,9 +5456,34 @@ def _native_label_seat(
     2. its **centre** stands on the anchor's row or column, so one straight,
        axis-aligned stub reaches it (:func:`drawapply._label_stub` lands exactly
        that run, and `readability._check_native_label_carriers` measures it);
-    3. it stands at least :data:`readability.NATIVE_LABEL_CARRIER_LIMIT` units
-       from every conductor of another net — the artifact the row would otherwise
-       be printed on — and the stub that reaches it crosses none of them.
+    3. it is not printed on another net's conductor — no run of another net
+       enters the box, and the stub that reaches it crosses none
+       (:data:`readability.NATIVE_LABEL_CARRIER_LIMIT`). 617D read
+       :data:`readability.FLAG_BODY_CLEARANCE` here so the 543d page's `RXD`
+       could take its near rung; 053Z's contract
+       (`tests/test_534z_label_carriers.py`, "a seat under one grid step from
+       another net's conductor is skipped") pins the 10 back. 620C: with 10
+       restored, **no** seat on that page's `RXD` row is legal — the box's near
+       edge stands :data:`drawcompiler.TEXT_GAP` (8) from the pin and its top
+       edge :data:`drawcompiler.TEXT_SIZE`/2 (4.5) below the neighbouring lead of
+       a 10-unit pin pitch, so the farthest a 20-unit rung can ever stand is
+       ``hypot(8, 5.5) = 9.71``; 617E pins that rung's stub at 20. The two
+       contracts are measured incompatible on this pitch — the adjudication is in
+       `tasks/620c_rxd_clearance_repair.md`, and this constant must not go back
+       to 5 without it.
+
+    620D: the 10-unit limit is kept for every conductor **except** a run that is
+    the label's own part's pin lead. The proof of that exception is
+    :func:`_owned_pin_sites`: a placed part with a profile, a posed pin tip, and
+    a named net the circuit puts that pin on; the run must *terminate* on that
+    tip (:func:`_ends_on_pin`) and carry that net. Such a lead is the part's own
+    typography (a net name on a pin is the part's own text, 099b), and its
+    distance is the symbol's own pitch, so the seat reads it at
+    :data:`readability.FLAG_BODY_CLEARANCE` — the grazing distance — while a run
+    that is foreign, cross-island, same-named-but-not-terminating, or unknown
+    keeps :data:`readability.NATIVE_LABEL_CARRIER_LIMIT`. The default is the
+    strict list: an old caller that passes no sites gets the 10-unit seat 053Z
+    and 534z measured, and a stub still may not cross any run at either limit.
 
     ``None`` is the measured answer "no seat on this ladder is legal": the caller
     refuses the page (`layout-unsat`) rather than keeping the off-carrier box, so
@@ -5305,10 +5492,22 @@ def _native_label_seat(
     if not net_id:
         return None
     gap_limit = readability.NATIVE_LABEL_CARRIER_LIMIT
+    sites = tuple(
+        (str(net), (float(point[0]), float(point[1])))
+        for net, point in owned_pin_sites
+        if net
+    )
     half_x = drawcompiler.text_width(net_id) / 2.0 + drawcompiler.TEXT_GAP
     half_y = drawcompiler.TEXT_SIZE / 2.0 + drawcompiler.TEXT_GAP
     foreign = [
-        (name, points) for name, points in wires if name and name != net_id
+        (
+            name,
+            points,
+            readability.FLAG_BODY_CLEARANCE
+            if sites and _ends_on_pin(points, name, sites)
+            else gap_limit,
+        )
+        for name, points in wires if name and name != net_id
     ]
     for ring in _NATIVE_LABEL_SEATS:
         for direction in _directions(preferred):
@@ -5328,9 +5527,9 @@ def _native_label_seat(
                 (candidate[1] + candidate[3]) / 2.0,
             )
             if any(
-                readability._box_run_gap(candidate, points) < gap_limit
+                readability._box_run_gap(candidate, points) < limit
                 or readability._run_on_polyline(anchor, centre, points)
-                for _name, points in foreign
+                for _name, points, limit in foreign
             ):
                 continue
             return candidate

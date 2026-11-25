@@ -39,11 +39,13 @@ types, and `core` is allowed to import nothing from inside the package.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ..core.changeplan import resolve_on_page
 from ..core.decap import CapDecision, CapCandidate, cap_candidates_on, decide_required_cap
 
 #: The landing ladder's step, in canvas units. Deliberately the same 5-unit grid
@@ -88,6 +90,11 @@ ROUTE_MARGIN = 20.0
 
 _DESIGNATOR_RE = re.compile(r"^([A-Za-z]+)(\d+)$")
 
+#: The only shape `allocate_designator` accepts for the *prefix*: the letters of a
+#: designator, with the number left to the allocator. "C1" is not a prefix — it is
+#: a whole designator that already has its number (570-D7).
+_DESIGNATOR_PREFIX_RE = re.compile(r"^[A-Za-z]+$")
+
 
 class LadderExhausted(Exception):
     """No position in the ladder is free.
@@ -112,6 +119,17 @@ class LadderExhausted(Exception):
                 else ""
             )
         )
+
+
+class LandingRefused(ValueError):
+    """The ladder cannot even be walked: a coordinate or step is not finite.
+
+    A landing spot is only meaningful on a finite canvas. ``nan``/``inf`` in an
+    origin, a grid or a computed rung used to leave :func:`landing_spot` with a
+    ``nan`` spot (or a bare ``OverflowError``), and the caller then planned a
+    part at a place that does not exist. Refusing here names the reason instead:
+    a value error, never a fallback and never a fabricated spot.
+    """
 
 
 class NoConnectionOption(Exception):
@@ -167,6 +185,14 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+def _designator_name(state: dict[str, Any]) -> str:
+    """The name a page part carries: ``Designator``, else ``OtherProperty.Designator``."""
+    other = state.get("OtherProperty")
+    return _text(state.get("Designator")) or _text(
+        other.get("Designator") if isinstance(other, dict) else ""
+    )
+
+
 def component_origins(geometry: Any) -> dict[str, tuple[float, float]]:
     """``designator -> (x, y)`` for every component the page reports.
 
@@ -179,11 +205,7 @@ def component_origins(geometry: Any) -> dict[str, tuple[float, float]]:
         return origins
     for entry in geometry.get("components") or []:
         state = _state_of(entry)
-        name = _text(state.get("Designator")) or _text(
-            (state.get("OtherProperty") or {}).get("Designator")
-            if isinstance(state.get("OtherProperty"), dict)
-            else ""
-        )
+        name = _designator_name(state)
         x, y = _number(state.get("X")), _number(state.get("Y"))
         if not name or name.endswith("?") or x is None or y is None:
             continue
@@ -197,16 +219,41 @@ def primitive_id_of(geometry: Any, designator: str) -> str:
     Needed for the branch where the placement's outcome went unknown but the
     read-back shows the part anyway: the write's own answer carried no id, and
     the part's pins can only be read by id (`sch.component_pins`).
+
+    *Which* part that is, is not decided here: `core.changeplan.resolve_on_page`
+    is the same reader the connector applies (`Designator`, else
+    `OtherProperty.Designator`, folded to case), and it counts the page parts
+    that carry the name. A page with two ``R1``s is a state it can really be in,
+    and the honest answer to "which id?" is none: the callers refuse on ``""``
+    instead of acting on a part picked by position (570-D6). Non-finite/no
+    match, two matches, and unreadable input all return ``""`` — this function
+    introduces no exception of its own.
+
+    `resolve_on_page` reads the *top-level* ``primitiveId``. A read-back can
+    report the id on ``state.PrimitiveId`` instead (the channel 029 relied on),
+    so after the ambiguity verdict the one matching entry is re-walked only for
+    that fallback — never to override the verdict.
     """
-    if not isinstance(geometry, dict):
+    if not isinstance(geometry, dict) or not isinstance(designator, str):
+        return ""
+    lookup = resolve_on_page(geometry, designator)
+    if lookup.component is None or lookup.ambiguous:
+        return ""
+    primitive = str(lookup.component.primitive_id or "")
+    if primitive:
+        return primitive
+    wanted = designator.strip().upper()
+    if not wanted:
         return ""
     for entry in geometry.get("components") or []:
         if not isinstance(entry, dict):
             continue
         state = _state_of(entry)
-        name = _text(state.get("Designator"))
-        if name == designator:
-            return str(entry.get("primitiveId") or state.get("PrimitiveId") or "")
+        if _designator_name(state).upper() != wanted:
+            continue
+        # `resolve_on_page` counted exactly one match; the id it could not read
+        # is this entry's state-side id, if it has one.
+        return str(state.get("PrimitiveId") or "")
     return ""
 
 
@@ -581,24 +628,154 @@ def wire_route(
     return route_orthogonal(anchor, target, avoid, grid=grid, bounds=bounds)
 
 
+#: The longest step between two occupancy samples on a wire, in canvas units.
+#: Half the clearance: a candidate closer to a segment than the clearance then
+#: always has a sample inside its own exclusion box, so "free" cannot mean "on
+#: copper in the middle of a long wire" (570-D2).
+_SAMPLE_STEP = LANDING_CLEARANCE / 2.0
+
+#: Safety bound on one segment's sampling: a corrupt (but finite) coordinate far
+#: outside any sheet must not turn into millions of points. Real wires are
+#: thousands of units at most, where the step stays `_SAMPLE_STEP`.
+_MAX_SAMPLES_PER_SEGMENT = 20_000
+
+
+def _is_finite(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _finite_pair(point: Any) -> bool:
+    return (
+        isinstance(point, (tuple, list))
+        and len(point) >= 2
+        and _is_finite(point[0])
+        and _is_finite(point[1])
+    )
+
+
+def _wire_segments(
+    geometry: Any, net: str = ""
+) -> list[tuple[str, tuple[float, float], tuple[float, float]]]:
+    """``(net, start, end)`` for every consecutive pair of a wire's points.
+
+    The host reports one wire as a **point list** (``state.Line``), and a wire
+    touching another is merged into a primitive that carries several runs — the
+    same shape :func:`boardwise.engines.patchpin.wire_segments` reads. Reading
+    pairs here (rather than only vertices, as 029 did) is what makes a
+    mid-segment T visible at all. Non-finite coordinates are dropped: a segment
+    the page cannot place is not evidence of copper anywhere.
+    """
+    from .patchpin import wire_segments as patchpin_wire_segments
+
+    found: list[tuple[str, tuple[float, float], tuple[float, float]]] = []
+    for wire in patchpin_wire_segments(geometry):
+        if net and wire.net != net:
+            continue
+        for start, end in zip(wire.points, wire.points[1:]):
+            if not (_finite_pair(start) and _finite_pair(end)):
+                continue
+            found.append((wire.net, (start[0], start[1]), (end[0], end[1])))
+    return found
+
+
+def _project_on_segment(
+    spot: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> tuple[float, float, float]:
+    """The point of the segment closest to ``spot``, and its distance.
+
+    t is clamped to ``[0, 1]`` (the projection of a spot beside the segment is
+    its nearer end, not a point on the infinite line), and a zero-length segment
+    degenerates to its own point — the two cases a vertex-only reading used to
+    get right by accident.
+    """
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    span = dx * dx + dy * dy
+    if span == 0.0:
+        x, y = start
+    elif not math.isfinite(span):
+        # Coordinates so large their square overflows: the ends are the only
+        # answers that stay finite, and one of them is the nearest of the two.
+        x, y = min((start, end), key=lambda p: math.hypot(p[0] - spot[0], p[1] - spot[1]))
+    else:
+        t = ((spot[0] - start[0]) * dx + (spot[1] - start[1]) * dy) / span
+        t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+        x, y = start[0] + t * dx, start[1] + t * dy
+    return x, y, math.hypot(x - spot[0], y - spot[1])
+
+
+def _segment_samples(
+    start: tuple[float, float], end: tuple[float, float]
+) -> list[tuple[float, float]]:
+    """Points along the segment at most :data:`_SAMPLE_STEP` apart, ends included."""
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    length = math.hypot(dx, dy)
+    if length == 0.0:
+        return [(start[0], start[1])]
+    step = max(_SAMPLE_STEP, length / _MAX_SAMPLES_PER_SEGMENT)
+    count = int(math.ceil(length / step))
+    return [
+        (start[0] + dx * index / count, start[1] + dy * index / count)
+        for index in range(count + 1)
+    ]
+
+
 def occupied_points(geometry: Any) -> list[tuple[float, float]]:
     """Every occupied page point a landing spot must not collide with.
 
-    Component origins *and* wire vertices: a spot sitting on a wire is not free
+    Component origins *and* copper: a spot sitting on a wire is not free
     either — the part would land on top of the routing and the wire would look
-    like it connected something it does not touch.
+    like it connected something it does not touch. A wire's **whole run** is
+    occupied, not just its reported vertices: a 200-unit wire's midpoint is
+    copper too, and reading only its ends let a decoupling capacitor land on it
+    (570-D2). Samples are deterministic and at most ``LANDING_CLEARANCE / 2``
+    apart; the returned shape is still the ``list[(x, y)]`` every caller walks.
+    A coordinate the page reports as ``nan``/``inf`` is dropped rather than
+    carried into the list: :func:`is_free` refuses such an occupant outright
+    (570-D3), and one corrupt point must not make every rung look taken.
     """
-    points = list(component_origins(geometry).values())
+    points: list[tuple[float, float]] = []
+    seen: set[tuple[float, float]] = set()
+
+    def add(x: float, y: float) -> None:
+        point = (x, y)
+        if point not in seen:
+            seen.add(point)
+            points.append(point)
+
+    for x, y in component_origins(geometry).values():
+        if _is_finite(x) and _is_finite(y):
+            add(x, y)
     for x, y, _net in wire_vertices(geometry):
-        points.append((x, y))
+        if _is_finite(x) and _is_finite(y):
+            add(x, y)
+    for _net, start, end in _wire_segments(geometry):
+        for x, y in _segment_samples(start, end):
+            add(x, y)
     return points
 
 
 def is_free(x: float, y: float, occupied: Iterable[tuple[float, float]]) -> bool:
-    return all(
-        abs(x - ox) >= LANDING_CLEARANCE or abs(y - oy) >= LANDING_CLEARANCE
-        for ox, oy in occupied
-    )
+    """Is ``(x, y)`` clear of every occupied point by :data:`LANDING_CLEARANCE`?
+
+    A non-finite candidate is never free — it is not a place on the page — and a
+    non-finite occupant refuses rather than answering "free" for everything or
+    pretending the whole ladder is full (570-D3): occupancy we cannot read is
+    not evidence that the spot is safe.
+    """
+    if not (_is_finite(x) and _is_finite(y)):
+        return False
+    for ox, oy in occupied:
+        if not (_is_finite(ox) and _is_finite(oy)):
+            return False
+        if abs(x - ox) < LANDING_CLEARANCE and abs(y - oy) < LANDING_CLEARANCE:
+            return False
+    return True
 
 
 def landing_spot(
@@ -613,10 +790,31 @@ def landing_spot(
     the page origin: a decoupling capacitor dropped at (0, 0) is not a repaired
     board, it is a part in the corner, and the far end of that mistake is a
     design that looks fixed and is not (xianyuyijinban M2 red line, §二.4).
+
+    Raises :class:`LandingRefused` (a ``ValueError``) when the ladder cannot be
+    walked at all: a non-finite origin or grid, a non-positive grid, or a rung
+    that overflows to infinity. Returning a ``nan`` spot or letting the bare
+    arithmetic error escape would both leave the caller planning a part at a
+    coordinate that does not exist (570-D3).
     """
+    if not (_is_finite(origin[0]) and _is_finite(origin[1])):
+        raise LandingRefused(
+            f"landing origin ({origin[0]!r}, {origin[1]!r}) is not finite — "
+            "a part cannot be placed at a coordinate the page does not hold"
+        )
+    if not _is_finite(grid) or grid <= 0:
+        raise LandingRefused(
+            f"landing grid {grid!r} must be a positive finite step — "
+            "the ladder would not advance"
+        )
     tried: list[tuple[float, float]] = []
     for index, (dx, dy) in enumerate(ladder):
         x, y = origin[0] + dx * grid, origin[1] + dy * grid
+        if not (_is_finite(x) and _is_finite(y)):
+            raise LandingRefused(
+                f"ladder rung {index} at offset ({dx}, {dy}) leaves the finite "
+                f"canvas: ({x!r}, {y!r}) — refusing instead of planning at infinity"
+            )
         tried.append((x, y))
         if is_free(x, y, occupied):
             return LandingSpot(x=x, y=y, offset=(dx, dy), index=index)
@@ -667,18 +865,35 @@ def allocate_designator(names: Iterable[str], prefix: str) -> str:
     The pool is what the page shows, so the number is reproducible from the
     page alone; apply re-checks it before writing, because a human may have
     placed a part in between.
+
+    ``prefix`` is the **letters** of a designator; the number is this function's
+    to choose. A prefix that already carries a number (``"C1"``) used to be
+    compared, digits and all, against the pool entry's letters (``"C"``), which
+    never matched — so ``allocate_designator(["C11"], "C1")`` returned ``C11``,
+    a name the page already had (570-D7). Such an input is refused by name
+    rather than reinterpreted as "C from 1". The returned name is additionally
+    checked against the whole (case-folded) pool, so a caller cannot be handed
+    a spelling the page already carries either way.
     """
+    if not isinstance(prefix, str) or not _DESIGNATOR_PREFIX_RE.match(prefix):
+        raise ValueError(
+            f"cannot allocate a designator for prefix {prefix!r}: the prefix of "
+            "<prefix><n> must be letters only (e.g. 'C', 'R', 'TP') — the number is "
+            "chosen by the allocator, so a prefix that already has one would produce "
+            "a name the page may already carry"
+        )
     wanted = prefix.upper()
+    folded = {name.strip().casefold() for name in names if isinstance(name, str)}
     used: set[int] = set()
-    for name in names:
-        match = _DESIGNATOR_RE.match((name or "").strip())
+    for name in folded:
+        match = _DESIGNATOR_RE.match(name)
         if not match:
             continue
         if match.group(1).upper() != wanted:
             continue
         used.add(int(match.group(2)))
     number = 1
-    while number in used:
+    while number in used or f"{prefix}{number}".casefold() in folded:
         number += 1
     return f"{prefix}{number}"
 
@@ -739,18 +954,26 @@ def wire_vertices(geometry: Any) -> list[tuple[float, float, str]]:
 def nearest_wire_point(
     spot: tuple[float, float], geometry: Any, net: str = ""
 ) -> tuple[float, float, float] | None:
-    """The closest vertex **of ``net``'s own wiring** to ``spot``, or ``None``.
+    """The closest point **of ``net``'s own wiring** to ``spot``, or ``None``.
 
     ``net`` is required by every real caller: a wire of another net is not a
     connection option, it is the mistake this function used to be able to make
     (029 §六 verdict 3). Passing an empty ``net`` keeps the old, unjudged
     behaviour for diagnostics, and no flow uses it.
+
+    The wire is measured as **segments**, not vertices (570-D1): a 200-unit wire
+    drawn through the spot is 0 units away, and answering with its far end (200
+    units) refused a connection the page can actually make. The answer is the
+    projection on the nearest run, clamped to its ends; a non-finite spot or a
+    segment the page cannot place yields ``None`` rather than a NaN distance.
     """
+    if not (_is_finite(spot[0]) and _is_finite(spot[1])):
+        return None
     best: tuple[float, float, float] | None = None
-    for x, y, vertex_net in wire_vertices(geometry):
-        if net and vertex_net != net:
+    for _segment_net, start, end in _wire_segments(geometry, net):
+        x, y, distance = _project_on_segment(spot, start, end)
+        if not math.isfinite(distance):
             continue
-        distance = ((x - spot[0]) ** 2 + (y - spot[1]) ** 2) ** 0.5
         if best is None or distance < best[2]:
             best = (x, y, distance)
     return best

@@ -28,9 +28,11 @@ and every list is built in that order (or explicitly sorted).
 from __future__ import annotations
 
 import copy
+import math
 from pathlib import Path
 from typing import Any
 
+from .. import __version__
 from ..core.circuitspec import CircuitSpec, DEFAULT_NET_CLASS
 from ..core.presentationspec import PresentationModule, PresentationSpec
 from ..core.symbolprofile import SymbolPose
@@ -41,6 +43,15 @@ from ..parsers.schematic import build_project_model, page_y
 #: Schema id of the fact document this module returns.
 SCHEMA = "boardwise.v4-facts/1"
 
+#: Who wrote a fact document: this module and the package that shipped it. A
+#: product without it predates the pose/metadata contract and cannot be read as
+#: "the project declares no pose" (see :func:`presentation_evidence`).
+GENERATOR = f"boardwise.v4facts {__version__}"
+
+#: One x/y unit of a page coordinate — 10 mil. Stated, not left to the reader to
+#: infer from an A4 page (1170x825 units = 297x210 mm).
+UNITS = "page-unit (10 mil)"
+
 #: The attribute key of a power/ground **flag** instance (project scope).
 FLAG_KEY = "Global Net Name"
 #: The attribute key of a page **net label** (page scope).
@@ -50,6 +61,17 @@ LABEL_KEY = "NET"
 def _text(value: Any) -> str:
     """The record field as the string it is; ``None`` becomes ``""``."""
     return "" if value is None else str(value)
+
+
+def _is_pose_number(value: Any) -> bool:
+    """A measured coordinate: a finite number, and not the bool ``True``/``False``.
+
+    JSON ``true`` parses to a Python ``int``, but it is a flag, not a page
+    position, so it must not be counted as a declared pose.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(float(value))
 
 
 def _class_from_symbol_title(title: str) -> str:
@@ -208,10 +230,16 @@ def read_v4_facts(path: str | Path, board: str = "") -> dict[str, Any]:
                     "isMirror": bool(body.get("isMirror", False)),
                 }
                 # The record's own page pose, copied only when the COMPONENT
-                # declares it: x stays as stated, while y goes through the shared
-                # schematic._page_y canvas conversion exactly once. An axis the
-                # record does not state stays absent so a consumer can refuse
-                # instead of reading a fabricated 0 as a measured pose.
+                # declares it. Two layers, one negation each, in this order:
+                #   * V4 `up` file -> V3 stored frame: eprj3.load_eprj3_text
+                #     flips the schematic y once and strips the marker (a file
+                #     with no marker is `down` and is left as stored);
+                #   * stored -> canvas: the shared schematic.page_y negates it
+                #     once, which is the whole conversion this reader adds.
+                # So x is copied verbatim and y is the stored value negated
+                # once. An axis the record does not state stays absent so a
+                # consumer can refuse instead of reading a fabricated 0 as a
+                # measured pose.
                 for axis in ("x", "y"):
                     if axis in body:
                         instance[axis] = body[axis] if axis == "x" else page_y(body[axis])
@@ -331,6 +359,18 @@ def read_v4_facts(path: str | Path, board: str = "") -> dict[str, Any]:
                 "evidence": evidence,
             }
         )
+
+    # The container's meta describes the project; the fact document adds the
+    # provenance a consumer needs to tell this product from an older one: who
+    # wrote it, how many instances actually carry a measured pose, and in which
+    # unit every x/y is expressed.
+    meta = dict(meta)
+    meta["generator"] = GENERATOR
+    meta["units"] = UNITS
+    meta["instancesWithPose"] = sum(
+        1 for instance in instance_rows
+        if _is_pose_number(instance.get("x")) and _is_pose_number(instance.get("y"))
+    )
 
     return {
         "schema": SCHEMA,
@@ -546,6 +586,28 @@ def enrich_circuit_spec(
     return enriched, report
 
 
+def _require_pose_metadata(facts: dict[str, Any]) -> dict[str, Any]:
+    """The meta of a current product, or a named refusal for a legacy one.
+
+    ``boardwise.v4-facts/1`` is the same schema id before and after poses and
+    provenance were recorded, so an old document cannot be told apart from a
+    project whose parts declare no pose. Only documents that *claim* this schema
+    are checked; anything else keeps whatever behaviour it had.
+    """
+    if _text(facts.get("schema")) != SCHEMA:
+        return {}
+    meta = facts.get("meta") or {}
+    if _text(meta.get("generator")) and "instancesWithPose" in meta:
+        return meta
+    raise ValueError(
+        "legacy boardwise.v4-facts/1 product: it has no meta.generator / "
+        "meta.instancesWithPose, so this reader cannot tell a project whose "
+        "parts declare no pose from an old file that never recorded poses. "
+        "Regenerate it with `draw v4-facts` from the current boardwise before "
+        "deriving presentation evidence."
+    )
+
+
 def presentation_evidence(facts: dict[str, Any]) -> dict[str, Any]:
     """Build a page-evidence sidecar, not a PresentationSpec or module guess.
 
@@ -553,7 +615,12 @@ def presentation_evidence(facts: dict[str, Any]) -> dict[str, Any]:
     the instances and net evidence physically declared on that page, so an AI or
     engineer can propose modules without mistaking same-named evidence on two
     pages for proven cross-page connectivity or a functional assignment.
+
+    A legacy fact document — same schema, no generator/pose count — is refused by
+    name: deriving from it would report "no instance has a pose" for a project
+    that merely predates the field.
     """
+    source_meta = _require_pose_metadata(facts)
     groups: list[dict[str, Any]] = []
     for page in facts.get("pages", []):
         page_uuid = _text(page.get("uuid"))
@@ -593,15 +660,25 @@ def presentation_evidence(facts: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema": "boardwise.v4-presentation-evidence/1",
         "source": _text(facts.get("source")),
+        "sourceMeta": {
+            key: source_meta[key]
+            for key in ("generator", "units", "instancesWithPose")
+            if key in source_meta
+        },
         "pageGroups": groups,
         "openQuestions": open_questions(facts),
         "notes": [
             "A page group is an attribution boundary, not a functional island "
             "or a module declaration. AI/engineer judgement is still required.",
             "Instances keep identity and pose: x/y are not inferred — x is copied "
-            "verbatim and y uses the shared _page_y canvas conversion exactly once; an undeclared "
-            "coordinate stays absent rather than becoming 0, and rotation/mirror "
-            "are copied verbatim.",
+            "verbatim and y uses the shared _page_y canvas conversion exactly once. "
+            "That conversion is the second of two layers: eprj3.load_eprj3_text has "
+            "already flipped a V4 `up` file's schematic y once into the V3 stored "
+            "frame (and stripped the marker; no marker means `down`), so page_y "
+            "negates the stored y once into canvas and this reader adds no further "
+            "flip. An undeclared coordinate stays absent rather than becoming 0, "
+            "and rotation/mirror are copied verbatim. " + UNITS + " is the unit of "
+            "every x/y, as sourceMeta.units repeats from the fact document.",
             "Same-named evidence on multiple pages does not prove cross-page "
             "connectivity; every page group's flag is explicitly unproven.",
         ],

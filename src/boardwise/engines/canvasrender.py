@@ -367,15 +367,22 @@ def unique_canvas_name(name: str, key: str, used: set[str]) -> str:
     ``key`` is the document's own uuid; its last six characters are the short
     suffix the editor already shows to people.  The extension is preserved, and
     the first document keeps the historical collision-free file name.
+
+    Names are compared with ``str.casefold()`` on both sides: on a
+    case-insensitive disk ``BoardA.svg`` and ``boarda.svg`` are **one file**, so
+    a case variant must move aside exactly like an exact collision or the second
+    board silently overwrites the first.  The rule is applied on every platform
+    on purpose — the same name would otherwise mean different files.
     """
-    if name not in used:
+    used_folded = {existing.casefold() for existing in used}
+    if name.casefold() not in used_folded:
         return name
     extension = Path(name).suffix
     stem = name[:-len(extension)] if extension else name
     suffix = key[-6:] if key else ""
     candidate = f"{stem}-{suffix}{extension}" if suffix else f"{stem}-2{extension}"
     ordinal = 2
-    while candidate in used:
+    while candidate.casefold() in used_folded:
         ordinal += 1
         candidate = (
             f"{stem}-{suffix}-{ordinal}{extension}"

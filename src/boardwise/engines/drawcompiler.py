@@ -613,6 +613,10 @@ class CompileBudget:
 
     page_box: Box | None = None
     keepouts: tuple[Box, ...] = ()
+    #: Regions the drawing may not enter.  The island page also derives the stated
+    #: sheet's own title block (``core.pageframe.title_block_keepouts``) and merges
+    #: it in, so a caller that states a sheet need not repeat the block; an entry
+    #: given here is kept, never dropped or replaced by the derivation (607).
     grid: float = GRID
     min_candidates: int = 3
     max_candidates: int = 8
@@ -3712,9 +3716,15 @@ def _signal_pair_body_direction(
       the drawn pose), so the shared pin is the near end and the run from the pad
       stays one straight leg.
 
+    * 617C: when the owner stands a **flag seat** on its pins and prints rows of
+      its own, the page has to state the owner's text side (``left``/``right``)
+      before that column may be taken — see :func:`_pair_owner_text_escape`.
+      Silence keeps the vertical pose (hole570 H2-01).
+
     A vertical pad, a pad the profile cannot orient, an owner whose accepted
-    poses disagree on the side, or a branch with no sibling says nothing and
-    keeps the ladder it always had.
+    poses disagree on the side, a branch with no sibling, or an owner whose
+    escape column the page has not cleared says nothing and keeps the ladder it
+    always had.
     """
     if not _pair_bands(ctx):
         return None
@@ -3746,7 +3756,57 @@ def _signal_pair_body_direction(
     direction = escapes.pop()
     if direction is None or direction[1] != 0.0:
         return None
+    if _pair_owner_text_escape(ctx, owner):
+        return None
     return direction
+
+
+def _pair_owner_text_escape(ctx: _Context, owner: _Slot) -> bool:
+    """Does this pair's owner print rows the space beside its pins has to hold (617C)?
+
+    hole570 H2-01 / 543d: the same horizontal pair that reads well on 543K's page
+    refilled the right pin column of a Type-C whose `partTexts` states **no** side,
+    and the `+5V` flag seat and the `D+`/`D-` carriers that column serves were left
+    with nowhere to go — the page came out with no candidate at all. 543K's own
+    page states ``USB1: left``, so its rows move off that column before the pair is
+    drawn and the horizontal pose is safe there.
+
+    Read as structure, twice, and answered as one fact:
+
+    * the owner stands a **flag seat** on its own pins (:func:`_flag_seats`) — the
+      room a rail's or a ground's flag needs is taken beside those pins, in the
+      same corridor a horizontal pair hangs its bodies in;
+    * the owner **prints rows of its own** — the anchors this symbol declares,
+      read through :func:`boardwise.core.textmetrics.symbol_rows`, the one home
+      for where the host paints a part's text. The declaration is read **without a
+      pose**: a table qualified in one pose only (the Type-C states its rows at
+      rotation 0, unmirrored; so do CH343G and H1) answers nothing for the poses
+      the owner is actually placed in, while `_part_texts` still prints those rows
+      through its own ladder. Naming one of the accepted poses here would read a
+      measurement the library never stated, and would let a symbol with no
+      declared row at all decide the pose. A symbol that declares no anchor is
+      not taken as an obstacle: no row it can be shown to print, no reserve.
+
+    A stated ``left``/``right`` is the page answering for itself — it moves the
+    owner's rows out of that column, which is exactly what 543K's page states —
+    so the horizontal pose stays available. Anything else (silence, ``above``,
+    ``below``) keeps the vertical return pose the branch had before 543K: silence
+    is the historical drawing, and the historical drawing is what the ladder
+    below already produces.
+    """
+    if not any(seat.part_id == owner.part_id for seat in _flag_seats(ctx)):
+        return False
+    profile = ctx.profile(owner.part_id)
+    part = ctx.circuit.part(owner.part_id)
+    rows = textmetrics.symbol_rows(
+        profile, (0.0, 0.0),
+        reference=owner.part_id,
+        value=part.value if part is not None else "",
+        pose=None,
+    )
+    if not rows:
+        return False
+    return _stated_part_text_side(ctx, owner.part_id) not in ("left", "right")
 
 
 def _foreign_row_body_direction(
@@ -19848,6 +19908,42 @@ def single_module_gate_violations(
     return refusing, tolerated
 
 
+def _island_keepouts(budget: CompileBudget) -> tuple[Box, ...]:
+    """The one keep-out set an island page is packed and gated against (570-B2-1).
+
+    A caller that states the sheet and nothing else is stating a page that has a
+    title block — the block is a property of the sheet (:func:`core.pageframe.
+    title_block_keepouts`), not a second field the caller has to remember.  So the
+    page's block is derived here, from the same ``page_box`` everything else on
+    this path already reads, and merged **after** the caller's own keep-outs: an
+    explicit region is never dropped or replaced by the derivation.
+
+    The merge is a set union with a 1e-9 tolerance, because the CLI derives this
+    very block itself and hands it on through ``budget.keepouts`` — the same box
+    must not become two entries, or the packer's floor and the gate's count would
+    both read a page as having two title blocks.
+
+    Deriving once, here, is what keeps the two consumers in step: the packer's
+    ``PageBudget`` and the readability gate below are handed this tuple, so there
+    is no second derivation that could disagree with the first.
+    """
+    from boardwise.core import pageframe
+
+    effective: list[Box] = []
+
+    def add(box: Box) -> None:
+        for seen in effective:
+            if all(abs(float(a) - float(b)) <= 1e-9 for a, b in zip(box, seen)):
+                return
+        effective.append(box)
+
+    for item in budget.keepouts:
+        add(item)
+    for item in pageframe.title_block_keepouts(budget.page_box):
+        add(item)
+    return tuple(effective)
+
+
 def _try_island_variants(
     ctx: _Context,
     result: CompileResult,
@@ -19884,6 +19980,7 @@ def _try_island_variants(
     """
     from . import islandlayout as island_layout
 
+    keepouts = _island_keepouts(budget)
     page = island_layout.island_page(
         circuit_spec, presentation_spec, book,
         # 530A: the two flag words come from the caller's own budget, so an island
@@ -19895,16 +19992,19 @@ def _try_island_variants(
         budget=island_layout.IslandBudget(
             gnd_flag=budget.gnd_flag, power_flag_prefix=budget.power_flag_prefix,
         ),
-        # 530G: the page's own two statements travel together.  `page_box` was
-        # already here; `keepouts` is the half S-01 needs — the sheet's title
-        # block, derived by the caller (`core.pageframe`) and handed to **both**
-        # consumers from this one field: the packer below packs up from it, and the
-        # readability gate a few lines down is handed `budget.keepouts` itself,
-        # which is the same tuple.  A second derivation here would be the way the
-        # two could come to disagree about where the title block is.
+        # 530G, 570-B2-1: the page's own two statements travel together.
+        # `page_box` was already here; `keepouts` is the half S-01 needs — the
+        # sheet's title block, derived by :func:`_island_keepouts` from the sheet
+        # box the caller stated (merged with, never replacing, the caller's own
+        # keep-outs) and handed to **both** consumers from this one tuple: the
+        # packer below packs up from it, and the readability gate a few lines
+        # down is handed the same tuple.  Deriving it here as well as in the CLI
+        # is not a second opinion — it is the same `core.pageframe` function on
+        # the same box, and the merge above is what keeps the two spellings one
+        # entry.
         page_budget=island_layout.PageBudget(
             grid=budget.grid, page_box=budget.page_box,
-            keepouts=tuple(budget.keepouts),
+            keepouts=keepouts,
         ),
     )
     # 536: the page's stamped partition has to be the declared one, and this is
@@ -19994,7 +20094,7 @@ def _try_island_variants(
     ):
         default_floor = island_layout.PageBudget().margin
         raised = (
-            f"; {len(budget.keepouts)} keep-out box(es) and the "
+            f"; {len(keepouts)} keep-out box(es) and the "
             f"{island_layout.BOTTOM_BLANK:.0%} bottom blank band set "
             f"the packing floor at y={page.floor:g}, so the sheet has that much "
             "less room than its own size suggests"
@@ -20043,7 +20143,7 @@ def _try_island_variants(
         grammar_checker=partial(
             check_grammar, intent=intent, net_members=ctx.net_members),
         page_box=budget.page_box,
-        keepouts=budget.keepouts,
+        keepouts=keepouts,
         grid=budget.grid,
     )
     # 530F: the page is measured against the delivery policy rather than against

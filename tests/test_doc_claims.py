@@ -13,10 +13,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -1843,3 +1845,146 @@ def test_pcb_connection_docs_name_the_dsh_adapter():
     assert "DSH 工具面本批同样不跟" not in sop
     assert "NOT_PROVEN" in readme and "不是开路" in readme
     assert index.count("registerPcbConnection") == 2
+
+
+# ---------------------------------------------------------------------------
+# 620 hole570 集成：覆盖账与全量读数都从机器源重算。
+#
+# 护的是这两句：COVERAGE 的 26 行就是 holes.json 里 26 条 reproduced，且没有一行
+# 还在「待修/在途/待父验」；最终第二轮是 9 failed / 12976 passed / 26 skipped /
+# 2 xfailed，failures 与 junit 逐名一致、newFailures 为空、resolved 恰是 590 与
+# 534z。改错任一计数、删/加一行覆盖，或把 suspect 的 G2-H3 塞回表里，这里当场红。
+# 证据文件不在当前检出时明确 skip，不把缺席当通过。
+# ---------------------------------------------------------------------------
+
+_HOLE570_DIR = REPO / "outputs" / "hole570"
+_COVERAGE_620 = REPO / "evidence" / "620" / "COVERAGE.md"
+_INTEGRATION_620 = REPO / "evidence" / "620" / "INTEGRATION.md"
+_SUMMARY_620 = REPO / "evidence" / "620" / "full-r2-summary.json"
+_BLOCK_620_RE = re.compile(r"```json\s*\n(\{.*?\n\})\s*\n```", re.DOTALL)
+
+
+def _canon_570(hole: str) -> str:
+    normalized = hole if hole.startswith("570") else f"570-{hole}"
+    return re.sub(r"^570-", "570", normalized)
+
+
+def _hole570_reproduced_ids() -> set[str]:
+    ids: set[str] = set()
+    for path in sorted(_HOLE570_DIR.glob("*/holes.json")):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        for hole in document.get("holes", []):
+            if hole.get("status") != "reproduced":
+                continue
+            ids.add(_canon_570(str(hole["id"])))
+    return ids
+
+
+def _coverage_620_rows() -> list[tuple[str, str, str]]:
+    text = _COVERAGE_620.read_text(encoding="utf-8")
+    table = text.split("## 不纳入 reproduced 修复的项", 1)[0]
+    rows: list[tuple[str, str, str]] = []
+    for line in table.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 3 or cells[0] == "洞" or set(cells[0]) <= set("-: "):
+            continue
+        rows.append((cells[0], cells[1], cells[2]))
+    return rows
+
+
+def test_the_620_coverage_ledger_matches_every_reproduced_hole():
+    if not _HOLE570_DIR.is_dir() or not _COVERAGE_620.exists():
+        pytest.skip("hole570 machine source or evidence/620/COVERAGE.md absent in this checkout")
+    machine = _hole570_reproduced_ids()
+    assert len(machine) == 26, sorted(machine)
+
+    rows = _coverage_620_rows()
+    listed = [hole for hole, _, _ in rows]
+    canonical = [_canon_570(hole) for hole in listed]
+    assert len(listed) == len(set(listed)) == 26, listed
+    assert set(canonical) == machine, (sorted(machine - set(canonical)), sorted(set(canonical) - machine))
+    for hole, batch, verdict in rows:
+        assert batch, hole
+        assert re.search(r"已修|既有修复|格式反证", verdict), (hole, verdict)
+        assert not re.search(r"待修|在途|待父验|待刷新", verdict), (hole, verdict)
+
+    text = _COVERAGE_620.read_text(encoding="utf-8")
+    assert "570-G2-H3" not in "|".join(listed), "suspect 不得算进 26 行覆盖账"
+    assert re.search(r"570-G2-H3.*suspect", text), "G2-H3 必须留在开放项里"
+
+
+def _junit_620_counts(junit: Path) -> tuple[int, int, int, int, int, list[str]]:
+    root = ET.parse(junit).getroot()
+    tests = failures = errors = skipped = xfailed = 0
+    names: list[str] = []
+    for case in root.iter("testcase"):
+        tests += 1
+        if case.find("failure") is not None:
+            failures += 1
+            names.append(f"{case.get('classname', '').replace('.', '/')}.py::{case.get('name')}")
+        elif case.find("error") is not None:
+            errors += 1
+            names.append(f"{case.get('classname', '').replace('.', '/')}.py::{case.get('name')}")
+        skip = case.find("skipped")
+        if skip is not None:
+            if skip.get("type") == "pytest.xfail":
+                xfailed += 1
+            else:
+                skipped += 1
+    return tests, failures, errors, skipped, xfailed, sorted(names)
+
+
+def _integration_620_block() -> dict:
+    match = _BLOCK_620_RE.search(_INTEGRATION_620.read_text(encoding="utf-8"))
+    assert match, "INTEGRATION.md 缺 ```json 机器块"
+    block = json.loads(match.group(1))
+    assert block.get("kind") == "620-hole570-integration/1", block.get("kind")
+    return block
+
+
+def test_the_620_final_round_is_recomputed_from_the_junit():
+    if not (_INTEGRATION_620.exists() and _SUMMARY_620.exists()):
+        pytest.skip("evidence/620 integration or full-r2 summary absent in this checkout")
+    block = _integration_620_block()
+    summary = json.loads(_SUMMARY_620.read_text(encoding="utf-8"))
+    junit = REPO / summary["junit"]
+    log = REPO / summary["log"]
+    if not junit.exists() or not log.exists():
+        pytest.skip("620 second-round junit/log absent in this checkout")
+
+    tests, failures, errors, skipped, xfailed, names = _junit_620_counts(junit)
+    assert errors == 0
+    round_two = block["r2"]
+    for document in (summary, round_two):
+        assert document.get("testcases", summary.get("testcases")) == tests
+        assert document.get("failed") == failures == 9
+        assert document.get("skipped") == skipped == 26
+        assert document.get("xfailed") == xfailed == 2
+        assert document.get("passed") == tests - failures - errors - skipped - xfailed == 12976
+    assert summary["failed"] == round_two["failed"]
+    assert summary["passed"] == round_two["passed"]
+    assert summary["skipped"] == round_two["skipped"]
+    assert summary["xfailed"] == round_two["xfailed"]
+    assert summary["testcases"] == round_two["testcases"] == 13013
+    assert summary["newFailures"] == round_two["newFailures"] == []
+    assert sorted(summary["failures"]) == names == sorted(round_two["failures"])
+    assert sorted(summary["resolvedFailures"]) == sorted(round_two["resolvedFailures"])
+    assert set(round_two["resolvedFailures"]) == {
+        "tests/test_590_plan_provenance.py::test_real_candidates_state_their_route_and_a_seal_of_their_own",
+        "tests/test_534z_label_carriers.py::test_a_candidate_seat_clears_a_foreign_conductor",
+    }
+    assert not set(names) & set(round_two["resolvedFailures"]), "resolved 不得同时出现在失败名单"
+
+    assert round_two["log"] == summary["log"] and round_two["junit"] == summary["junit"]
+    for key, path in (("logSha256", log), ("junitSha256", junit)):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert summary[key] == digest
+        assert round_two[key] == digest
+    assert block["reproducedTotal"] == 26 and block["reproducedClosed"] == 26
+    assert block["suspectClosed"] == 0
+    assert block["fullRounds"] == 2
+
+    text = _INTEGRATION_620.read_text(encoding="utf-8")
+    assert "最终验收" in text and "（在途）" not in text

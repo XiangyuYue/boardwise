@@ -105,14 +105,26 @@ def wire_segments(geometry: Any) -> list[WireSegment]:
     out: list[WireSegment] = []
     if not isinstance(geometry, dict):
         return out
-    for entry in geometry.get("wires") or []:
+    for wire_index, entry in enumerate(geometry.get("wires") or []):
         state = _state_of(entry)
+        primitive_id = str(entry.get("primitiveId") or state.get("PrimitiveId") or "")
         raw = state.get("Line") or state.get("Points") or state.get("points") or []
         points: list[tuple[float, float]] = []
         if isinstance(raw, (list, tuple)) and raw and not isinstance(raw[0], (list, tuple)):
             coords = list(raw)
-            for index in range(0, len(coords) - 1, 2):
-                x, y = _number(coords[index]), _number(coords[index + 1])
+            if len(coords) % 2:
+                # Measured 570-D: `[0, 0, 100, 0, 200]` used to become two points
+                # and the third coordinate vanished, so the canvas proof was built
+                # on a wire the page does not carry. Deciding whether the leftover
+                # 200 is an x or a y would be a guess; refuse by name instead.
+                raise ValueError(
+                    f"wire #{wire_index} ({primitive_id or 'no primitiveId'}): a flat "
+                    f"coordinate list carries x,y pairs, but it holds {len(coords)} "
+                    "numbers — the last coordinate has no partner, and dropping it "
+                    "would lose a drawn point"
+                )
+            for offset in range(0, len(coords), 2):
+                x, y = _number(coords[offset]), _number(coords[offset + 1])
                 if x is not None and y is not None:
                     points.append((x, y))
         elif isinstance(raw, (list, tuple)):
@@ -125,7 +137,7 @@ def wire_segments(geometry: Any) -> list[WireSegment]:
             continue
         out.append(
             WireSegment(
-                primitive_id=str(entry.get("primitiveId") or state.get("PrimitiveId") or ""),
+                primitive_id=primitive_id,
                 net=_text(state.get("Net")),
                 points=tuple(points),
             )
@@ -316,10 +328,19 @@ def wire_endpoints_on_pin(geometry: Any, pin_at: tuple[float, float], net: str =
     return out
 
 
-def wires_through_pin(geometry: Any, pin_at: tuple[float, float]) -> list[str]:
-    """Ids of the wires that pass **through** the pin (a mid-segment T)."""
+def wires_through_pin(geometry: Any, pin_at: tuple[float, float], net: str = "") -> list[str]:
+    """Ids of the wires that pass **through** the pin (a mid-segment T).
+
+    ``net`` narrows the answer to one net, exactly like its sibling
+    :func:`wire_endpoints_on_pin`: a wire of another net crossing the pin is not
+    evidence that *this* net touches it (570-D D9 — a VCC run was being counted
+    for a GND repair). An empty ``net`` keeps the old "any net" reading, which
+    the plan stage's refusal leans on.
+    """
     out: list[str] = []
     for segment in wire_segments(geometry):
+        if net and segment.net != net:
+            continue
         if any(same_point(point, pin_at) for point in segment.points):
             continue
         if any(

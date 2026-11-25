@@ -20,7 +20,11 @@ Two rules the reader keeps from 586/587, both measured there:
   with the working directory, and Windows silently strips a trailing dot or
   whitespace from a final component, so two spellings would mean one profile.
   ``\\\\?\\`` paths bypass that normalisation and are therefore accepted as
-  written.
+  written;
+* **``~`` is expanded, nothing else is** — the user's home is a spelling that
+  names one directory on its own terms, so ``~/bw`` is the user's ``bw`` and not
+  a relative path. Only the leading ``~`` is resolved (615); a plain relative
+  path stays refused, so this cannot re-open the drift 586 closed.
 
 One class rule the reader also keeps: 586/587's contract is that *every*
 consumer refuses an unusable home with the same named error, so the concrete
@@ -64,11 +68,24 @@ def boardwise_home() -> Path:
     directory, and a final component ending in a dot or whitespace is silently
     stripped by Windows, so two environment values would name one directory.
     Both are configuration errors, raised here rather than misread later.
+
+    ``~`` is the one spelling that is expanded (615): the user's home names one
+    directory without being absolute, so ``~/bw`` is ``Path.home()/"bw"``.  The
+    expansion happens before the absolute check and only for a leading ``~``;
+    a path that cannot be expanded — an unknown ``~user``, no home in the
+    environment — is the same named error, carrying the spelling as given,
+    rather than a working-directory path or a bare ``RuntimeError``.
     """
     override = os.environ.get("BOARDWISE_HOME")
     if not override:
         return Path.home() / ".boardwise"
-    home = Path(override)
+    try:
+        home = Path(override).expanduser()
+    except RuntimeError as exc:
+        raise ConfigError(
+            f"BOARDWISE_HOME={override!r}: '~' could not be expanded to a home "
+            f"directory on this system ({exc}); give a full path"
+        ) from exc
     if not home.is_absolute():
         raise ConfigError(
             f"BOARDWISE_HOME={override!r} is not an absolute path; a relative home "

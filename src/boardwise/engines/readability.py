@@ -555,6 +555,16 @@ class DerivedNetlist:
     #: the drawing does not name — which is fine, a net may be carried by wires
     #: alone — and absent for a node with no pin on it.
     node_names: dict[tuple[str, ...], tuple[str, ...]] = field(default_factory=dict)
+    #: segment index -> the sorted segment indices it is **one conductor** with
+    #: (606). The same union-find that makes `pin_group`, read from the segments'
+    #: side: a wire cut at a junction is still one wire, and the page checker
+    #: takes a conductor's outer ends rather than one segment's two vertices.
+    segment_conductors: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    #: conductor (its sorted segment indices) -> the pins on it, sorted.
+    conductor_pins: dict[tuple[int, ...], tuple[str, ...]] = field(default_factory=dict)
+    #: conductor -> the net ids its labels / power symbols state, sorted. Empty
+    #: for a conductor the drawing does not name, whatever it spans.
+    conductor_names: dict[tuple[int, ...], tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def groups(self) -> tuple[tuple[str, ...], ...]:
@@ -719,6 +729,27 @@ def _body_in_page(body: Box | None, part: Any) -> Box | None:
     )
 
 
+def _segment_links(
+    segments: Sequence[Sequence[tuple[float, float]]],
+) -> list[tuple[int, int]]:
+    """The segment index pairs the editor joins — one function, both readers.
+
+    A vertex of one wire on another wire's *span* is a tee: the editor joins it
+    (that is why a missing junction is a finding of its own). Two wires that
+    merely cross stay separate — measured editor behaviour. `_derive` unions
+    these pairs into pin groups and :func:`_cross_module_wires` groups the same
+    pairs into conductors, so the two can never answer "one wire?" differently.
+    """
+    links: list[tuple[int, int]] = []
+    for index, points in enumerate(segments):
+        for other, other_points in enumerate(segments):
+            if index == other:
+                continue
+            if any(_on_polyline(point, other_points) for point in points):
+                links.append((index, other))
+    return links
+
+
 def _derive(layout_plan: LayoutPlan, placed: list[_PlacedPart]) -> DerivedNetlist:
     """Union-find over every conductive element (see the module docstring)."""
     union = _UnionFind()
@@ -731,15 +762,11 @@ def _derive(layout_plan: LayoutPlan, placed: list[_PlacedPart]) -> DerivedNetlis
     for index in range(len(segments)):
         union.find(f"seg:{index}")
 
-    # A vertex of one wire on another wire's span is a tee: the editor joins it
-    # (that is why a missing junction is a finding of its own). Two wires that
-    # merely cross stay separate — measured editor behaviour.
-    for index, points in enumerate(segments):
-        for other, other_points in enumerate(segments):
-            if index == other:
-                continue
-            if any(_on_polyline(point, other_points) for point in points):
-                union.union(f"seg:{index}", f"seg:{other}")
+    # See `_segment_links`: a vertex on another wire's span is a tee, a mere
+    # crossing is not a connection.
+    links = _segment_links(segments)
+    for left, right in links:
+        union.union(f"seg:{left}", f"seg:{right}")
 
     anchors: list[tuple[str, tuple[float, float]]] = [
         (f"lbl:{index}", (label.x, label.y))
@@ -815,11 +842,47 @@ def _derive(layout_plan: LayoutPlan, placed: list[_PlacedPart]) -> DerivedNetlis
         group = group_of_root.get(union.find(ref))
         if group is not None:
             names.setdefault(group, set()).add(net_id)
+
+    # 606: the same partition read from the segments' side, but only where the
+    # drawing **joins metal**: a tee, a pin on a span, a label on a span. The
+    # node partition above also merges by *name* (two `VIN` labels anywhere are
+    # one node to the netlist); that is a statement about the net, not a
+    # conductor, and grouping a conductor by it would call two separate `GND`
+    # wires one wire with four outer ends. So this view uses the geometric links
+    # only, and reads names / pins by "sits on this conductor's spans" — the
+    # same `_on_polyline` the node derivation uses.
+    conductor = _UnionFind()
+    for index in range(len(segments)):
+        conductor.find(f"seg:{index}")
+    for left, right in links:
+        conductor.union(f"seg:{left}", f"seg:{right}")
+    segments_by_root: dict[str, list[int]] = {}
+    for index in range(len(segments)):
+        segments_by_root.setdefault(conductor.find(f"seg:{index}"), []).append(index)
+    segment_conductors: dict[int, tuple[int, ...]] = {}
+    conductor_pins: dict[tuple[int, ...], tuple[str, ...]] = {}
+    conductor_names: dict[tuple[int, ...], tuple[str, ...]] = {}
+    anchor_points = dict(anchors)
+    for members in segments_by_root.values():
+        group = tuple(sorted(members))
+        for index in group:
+            segment_conductors[index] = group
+        conductor_pins[group] = tuple(sorted(
+            pin for pin, point in pin_points.items()
+            if any(_on_polyline(point, segments[index]) for index in group)
+        ))
+        conductor_names[group] = tuple(sorted({
+            net_id for ref, net_id in named
+            if any(_on_polyline(anchor_points[ref], segments[index]) for index in group)
+        }))
     return DerivedNetlist(
         pin_points=pin_points,
         pin_group=pin_group,
         wired_pins=frozenset(wired),
         node_names={group: tuple(sorted(found)) for group, found in names.items()},
+        segment_conductors=segment_conductors,
+        conductor_pins=conductor_pins,
+        conductor_names=conductor_names,
     )
 
 
@@ -2802,7 +2865,17 @@ def _min_text_gap(
                 touching += 1
             if best is None or gap < best[0]:
                 best = (gap, name_a, name_b)
-    assert best is not None
+    if best is None:
+        # 570-A2-H1: nothing was left to measure because every pair was the one
+        # 147b excludes — a flag's glyph and its own name row are one statement,
+        # and a page carrying only that statement has no gap between two. Same
+        # constant as the `len(boxes) < 2` exit above; the boxes are not dropped,
+        # so a flag is still measured against every other row on the page.
+        return UNMEASURED, [
+            f"{len(boxes)} text box(es) on the page are one statement (a flag "
+            f"and its own name) — no pair is left to measure; "
+            f"{UNMEASURED:g} is the 'cannot measure' value, not a distance"
+        ]
     reasons = [
         f"closest pair {best[1]} and {best[2]}: {best[0]:g} units apart "
         "(canvas units, edge to edge)"
@@ -3273,8 +3346,9 @@ def check_page(
     frames = _checked_frames(page_layout, presentation_spec)
     plan = page_layout.plan
     placed = _placed_parts(plan, _profile_map(profiles))
+    derived = _derive(plan, placed)
     membership = _part_membership(plan, presentation_spec)
-    cross = _cross_module_wires(plan, frames)
+    cross = _cross_module_wires(plan, frames, derived, circuit_spec)
 
     violations: list[HardViolation] = []
     violations.extend(_check_frames_on_the_page(frames, page_layout.page_box))
@@ -3767,20 +3841,128 @@ def _check_wires_clear_of_frames(
 
 
 def _cross_module_wires(
-    plan: LayoutPlan, frames: Mapping[str, Box]
+    plan: LayoutPlan,
+    frames: Mapping[str, Box],
+    derived: DerivedNetlist | None = None,
+    circuit_spec: CircuitSpec | None = None,
 ) -> list[tuple[int, str, str, str]]:
-    """``(segment index, net, module A, module B)`` for every wire spanning frames."""
+    """``(representative segment index, net, module A, module B)`` per conductor.
+
+    The unit is the **conductor** `_derive` already unions (606): one wire cut
+    into segments at a junction in the island gap is one wire, and its outer
+    ends are the vertices no other segment of the same conductor lies on. Taking
+    one segment's ``points[0]`` / ``points[-1]`` — the 570-A2-H2 hole — read a
+    junction as an end and reported "no wire joins the two modules" for a wire
+    a reader sees from pin to pin.
+
+    ``segment.net`` is a decoration and never the identity (the module docstring
+    says so); the net is :func:`_conductor_name`'s evidence. The index is the
+    conductor's smallest segment so a caller may index ``plan.segments`` and two
+    runs compare equal; every pair of modules the outer ends land in is
+    reported, never only the first.
+
+    ``derived``/``circuit_spec`` are optional so a direct caller (a probe, a
+    test handing in two segments) still gets the geometric answer: without
+    them the conductor is grouped from the segments alone and named only by the
+    non-empty ``segment.net`` its members agree on — no label evidence and no
+    CircuitSpec fallback, because neither was handed in.
+    """
     out: list[tuple[int, str, str, str]] = []
-    for index, segment in enumerate(plan.segments):
-        start = _frames_of(segment.points[0], frames)
-        end = _frames_of(segment.points[-1], frames)
-        if not start or not end:
+    for conductor in _conductors_of(plan, derived):
+        modules: list[str] = []
+        for point in _outer_ends(plan, conductor):
+            for name in _frames_of(point, frames):
+                if name not in modules:
+                    modules.append(name)
+        if len(modules) < 2:
             continue
-        first = start[0]
-        last = end[0] if end[0] != first else (end[1] if len(end) > 1 else "")
-        if last and last != first:
-            out.append((index, segment.net, first, last))
+        net = _conductor_name(plan, conductor, derived, circuit_spec)
+        index = conductor[0]
+        for position, left in enumerate(modules):
+            for right in modules[position + 1:]:
+                out.append((index, net, left, right))
     return out
+
+
+def _conductors_of(
+    plan: LayoutPlan, derived: DerivedNetlist | None
+) -> list[tuple[int, ...]]:
+    """The distinct conductors, each as its sorted segment indices."""
+    if derived is not None:
+        return sorted({group for group in derived.segment_conductors.values()})
+    segments = [segment.points for segment in plan.segments]
+    union = _UnionFind()
+    for index in range(len(segments)):
+        union.find(f"seg:{index}")
+    for left, right in _segment_links(segments):
+        union.union(f"seg:{left}", f"seg:{right}")
+    groups: dict[str, list[int]] = {}
+    for index in range(len(segments)):
+        groups.setdefault(union.find(f"seg:{index}"), []).append(index)
+    return sorted(tuple(sorted(members)) for members in groups.values())
+
+
+def _outer_ends(
+    plan: LayoutPlan, conductor: Sequence[int]
+) -> list[tuple[float, float]]:
+    """The conductor's true outer ends, in segment order.
+
+    A vertex is inner when another segment of the same conductor lies on it —
+    that is exactly the junction that made the run look like two wires. A stub
+    in the gap is an outer end (it is measured; it just lands in no frame), and
+    duplicates are dropped so a closed run is not counted twice.
+    """
+    ends: list[tuple[float, float]] = []
+    for index in conductor:
+        points = plan.segments[index].points
+        for point in (points[0], points[-1]):
+            if any(
+                _on_polyline(point, plan.segments[other].points)
+                for other in conductor if other != index
+            ):
+                continue
+            if any(_same_point(point, seen) for seen in ends):
+                continue
+            ends.append(point)
+    return ends
+
+
+def _conductor_name(
+    plan: LayoutPlan,
+    conductor: Sequence[int],
+    derived: DerivedNetlist | None,
+    circuit_spec: CircuitSpec | None,
+) -> str:
+    """The net a conductor states, by evidence — never by where it runs.
+
+    Priority (606): the labels / power symbols on the conductor; then a single
+    non-empty ``segment.net`` its members agree on (a compatibility declaration,
+    not the conductor's identity); then, on a full page check, a CircuitSpec
+    net whose member set is **exactly** the conductor's pins. A conflict at any
+    level names nothing — the checker may not pick a winner between two claims —
+    and neither does "it crosses two frames": geometry is not a net name.
+    """
+    stated = derived.conductor_names.get(tuple(conductor), ()) if derived else ()
+    if len(stated) == 1:
+        return stated[0]
+    if len(stated) > 1:
+        return ""
+    declared = {
+        plan.segments[index].net for index in conductor if plan.segments[index].net
+    }
+    if len(declared) == 1:
+        return next(iter(declared))
+    if len(declared) > 1:
+        return ""
+    pins = derived.conductor_pins.get(tuple(conductor), ()) if derived else ()
+    if pins and circuit_spec is not None:
+        matches = [
+            net.id for net in circuit_spec.nets
+            if set(net.members) == set(pins)
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    return ""
 
 
 def _name_anchors(

@@ -107,13 +107,18 @@ part's value, package or prefix.
   the landed plan: with the inlet spanning the two rows, **both** rows satisfy it
   whichever one is sampled (the inlet's rail pin and its ground pin are each on a
   row with every branch's), so the sampled row does not decide the drawing.
-* `left-of` / `right-of`, **entry as subject, each shunt as object**: the entry
+* `left-of` / `right-of` (and `above` / `below` for the vertical
+  declarations), **entry as subject, each shunt as object**: the entry
   terminates the row at the input end and every branch is on the far side of
   it. The kind's own definition ("subject on the power side when that side is
   the left one") carries this without inventing a coordinate, and which of the
-  two it is comes from `sidePreferences.input` — so `input: right` is the same
-  binding as `input: left` with the drawing turned round. **This is why 088
-  §二's candidate new kind `at-end` was not needed**: the existing pair states
+  four it is comes from `sidePreferences.input` — so `input: right` is the same
+  binding as `input: left` with the drawing turned round, and `input: top`
+  puts the entry above the branches it terminates (`above`), exactly the table
+  `flyback._side_kind` and `ldo._side_kind` share (603; before it, the two
+  vertical values were silently folded into `left-of` while the reason below
+  still quoted the declaration). **This is why 088
+  §二's candidate new kind `at-end` was not needed**: the existing kinds state
   it, and adding a kind would have changed the vocabulary every other grammar
   is measured against.
 * `near` between each `shunt` and the `entry`: the branch is this rail's local
@@ -189,7 +194,9 @@ from ...core.designintent import DesignIntent, IntentSource
 from ...core.presentationspec import SIDES, PresentationSpec
 from ...core.symbolprofile import SymbolProfile
 from .base import (
+    ABOVE,
     ADJACENT,
+    BELOW,
     DIRECT_WIRE,
     FAILURE_CIRCUIT_INVALID,
     FAILURE_FACTS_MISSING,
@@ -339,7 +346,16 @@ class PowerEntryGrammar:
         in_side = presentation.side_for("input") or "left"
         if in_side not in SIDES:
             in_side = "left"
-        side_kind = RIGHT_OF if in_side == "right" else LEFT_OF
+        # The four-value table `flyback._side_kind` and `ldo._side_kind` share
+        # (143's drift audit): the entry terminates the input end of the row, so
+        # a declaration of `top` means the entry sits above the branch it
+        # terminates.  A value outside `SIDES` was already normalised above.
+        side_kind = {
+            "left": LEFT_OF,
+            "right": RIGHT_OF,
+            "top": ABOVE,
+            "bottom": BELOW,
+        }.get(in_side, LEFT_OF)
         rail_pin = _pin_on(circuit, entry, rail)
         gnd_pin = _pin_on(circuit, entry, gnd)
         prov = weakest_provenance(

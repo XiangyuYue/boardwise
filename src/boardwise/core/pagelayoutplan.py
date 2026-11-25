@@ -240,6 +240,16 @@ class PageLayoutPlan:
             self.route, self.page_geometry_sha256(), PAGE_PROVENANCE_DOMAIN
         )
 
+    def provenance_sha256(self) -> str:
+        """Compatibility alias for the same-shaped :class:`LayoutPlan` API (620B).
+
+        Consumers that hold a plan of either kind ask it for ``provenance_sha256()``;
+        a page answers with its *own* seal, never the nested plan's. The value is
+        exactly `page_provenance_sha256()` — page geometry plus route under
+        ``PAGE_PROVENANCE_DOMAIN``.
+        """
+        return self.page_provenance_sha256()
+
     def module(self, module_id: str) -> PageModule | None:
         """The placed module with this id, or ``None``."""
         for item in self.modules:

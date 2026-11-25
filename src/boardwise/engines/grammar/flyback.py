@@ -1189,21 +1189,33 @@ def _short_failure(circuit: CircuitSpec, state: _State) -> GrammarFailure | None
     auxiliary winding's cold end returns to the primary ground, the secondary
     winding's cold end to the secondary ground). That is the topology, not a
     short, and a check that refused it would refuse every correct flyback.
+
+    The check is over **every pair** of distinct ground-class nets, not over a
+    pair chosen from the net ids: 570-C2-N1 measured that taking
+    ``sorted(state.ground)[:2]`` let an innocuous third ground net (one resistor
+    to nowhere) push the real pair out of the window and bind a Y capacitor
+    straight across the barrier — and renaming that third net flipped the
+    answer back, which is an answer decided by spelling rather than by the
+    circuit. So the walk reads each two-terminal part and asks whether *both*
+    of its ends are ground-class nets; any such part is the short. A third
+    ground net by itself stays legal (a gnd-class net is a fact about the
+    circuit, not a defect), and the walk is still the deterministic one:
+    ``edges`` is id-sorted and the first offending part in that order is named.
     """
     if len(state.ground) < 2:
         return None
-    first, second = sorted(state.ground)[:2]
+    grounds = set(state.ground)
     wide = {
         part_id for part_id, nets in state.part_nets.items() if len(nets) >= 4
     }
     for part_id, (left, right) in sorted(state.edges.items()):
-        if {left, right} == {first, second} and part_id not in wide:
+        if left in grounds and right in grounds and part_id not in wide:
             return GrammarFailure(
                 category=FAILURE_CIRCUIT_INVALID,
                 subject=part_id,
                 detail=(
                     f"{part_id} is a two-terminal element with one end on "
-                    f"{first} and the other on {second} — that is a conductor "
+                    f"{left} and the other on {right} — that is a conductor "
                     "straight across the isolation barrier, and an isolated "
                     "flyback has no such part. (A Y capacitor is the one real "
                     "design that does this deliberately; note that the "

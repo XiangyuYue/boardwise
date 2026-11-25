@@ -27778,6 +27778,18 @@ def _cmd_edit_plan_add_component(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 5
+        except addcomponent.LandingRefused as exc:
+            # 609: a non-finite origin/grid is a *named* refusal, not a traceback.
+            # This is `landing_spot`'s own class, never a broad `ValueError`: the
+            # rest of the planning flow must still die loudly if it is wrong.
+            print(
+                f"boardwise edit plan: the landing spot next to {designator} cannot "
+                f"even be walked — {exc}. No plan is written: a part at a coordinate "
+                "the page does not hold is not a repaired board (570-D3). Move or "
+                "re-place the anchor so its origin is a finite coordinate",
+                file=sys.stderr,
+            )
+            return 5
         # The *new part's* pins, not the anchor's (029-b: using the anchor's pin
         # number made both connections claim pin 2 and the decoupled net became
         # GND), and **each one decides how it is made** (029-c §①): 029-b's case a
@@ -30463,12 +30475,14 @@ async def _edit_apply_patch_pin_flow(client, bridge_error, plan, args, started) 
     # The canvas leg asks "what touches this pin *now*?", so it is read on both
     # paths: with `after_net` empty the net filter is off, and then any wire end or
     # any flag on the pin counts — the disconnect form's "nothing is left on it".
+    # The through-wire list takes the same net (611): a foreign-net wire crossing
+    # the pin mid-segment is not evidence that *this* repair's net touches it.
     range_report["wireEndpointsOnPin"] = patchpin.wire_endpoints_on_pin(
         verify, pin_at, after_net
     )
     range_report["flagOnPin"] = patchpin.flag_on_pin(verify, pin_at, after_net)
     range_report["netLabelOnPin"] = patchpin.net_label_on_pin(verify, pin_at)
-    range_report["wiresThroughPin"] = patchpin.wires_through_pin(verify, pin_at)
+    range_report["wiresThroughPin"] = patchpin.wires_through_pin(verify, pin_at, after_net)
     # ---- the delete path's range check is a **canvas identity** difference ---
     #
     # Measured 035 round 3: the project export does not recompute for a deletion

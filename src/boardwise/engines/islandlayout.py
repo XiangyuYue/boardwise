@@ -2191,6 +2191,27 @@ class IslandBlock:
     role: str
     anchor: str
     parts: list[LayoutPart] = field(default_factory=list)
+    #: The box each entry of :attr:`parts` draws — its **body** through the pose it
+    #: was placed with (``symbolprofile.pose_box(profile.body, …)``), parallel to
+    #: :attr:`parts`, same order, one entry each.
+    #:
+    #: 608: :meth:`bbox` used to let a part contribute its **anchor point** only, so
+    #: a packer that took the block's box as the block's footprint laid the next
+    #: island across a body it could not see (measured: three of `power_entry`'s
+    #: four bodies sat outside their own block's box, 570-B2-2).  The box is stored
+    #: rather than recomputed because :meth:`bbox` runs **without the library** —
+    #: same reason :attr:`power_boxes` is stored — and it is the body, never
+    #: :func:`_part_box`'s pin-inclusive extent: pin tips are points on the wires,
+    #: and widening the footprint to them would move layouts for a reason that is
+    #: not "the block draws this far".
+    #:
+    #: A part whose profile declares **no body** keeps the old reading: its entry is
+    #: the degenerate box at its anchor, which :meth:`bbox` already counted through
+    #: the part itself, so the list stays one-for-one with :attr:`parts` and an
+    #: island drawn from profiles with no bodies keeps its numbers.  A block built
+    #: anywhere else (a test's hand-made block) carries none and is measured exactly
+    #: as before.
+    part_boxes: list[Box] = field(default_factory=list)
     segments: list[LayoutSegment] = field(default_factory=list)
     junctions: list[LayoutJunction] = field(default_factory=list)
     #: One per crossing segment: the net's name at the boundary of this island's
@@ -2326,6 +2347,12 @@ class IslandBlock:
                 (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
                 for box in self.power_boxes
             ],
+            # 608: the bodies travel with the parts they belong to — the same
+            # `(dx, dy)`, applied, never re-posed (the block is rigid).
+            part_boxes=[
+                (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
+                for box in self.part_boxes
+            ],
             notes=list(self.notes),
             ring_radius=self.ring_radius,
             order=list(self.order),
@@ -2345,10 +2372,18 @@ class IslandBlock:
         sticks out past everything else the block draws.  520m's `S-01` rule —
         nothing enters the title block — is decided from this box, so a flag
         missing here is a flag that can be packed into the title block.
+
+        Since 608 the **bodies** are in it, through :attr:`part_boxes`: until then
+        a part contributed its anchor point and nothing else, so a body could hang
+        outside the box that the packer treats as the block's footprint.  A block
+        that carries no :attr:`part_boxes` (one built by hand, or one drawn from
+        profiles with no bodies) still measures its parts by their anchors, exactly
+        as every block did before this field existed.
         """
         boxes: list[Box] = [text.bbox for text in self.texts]
         boxes.extend(label.bbox for label in self.labels)
         boxes.extend(tuple(box) for box in self.power_boxes)
+        boxes.extend(tuple(box) for box in self.part_boxes)
         for part in self.parts:
             boxes.append((part.x, part.y, part.x, part.y))
         for segment in self.segments:
@@ -2908,13 +2943,20 @@ def layout_island(
                            poses[part_id], origins[part_id])
         for part_id in ring
     }
-    obstacles = [
-        pose_box(book[circuit.part(part_id).symbol_ref].body,
-                 rotation=poses[part_id].rotation, mirror=poses[part_id].mirror,
-                 ox=origins[part_id][0], oy=origins[part_id][1])
+    #: The body each part draws, through the pose it was placed with — computed
+    #: once here and used twice: the text gate's `obstacles` (a body text may not
+    #: land on) and the block's own `part_boxes` (608: what :meth:`IslandBlock.bbox`
+    #: has to cover).  A part whose profile declares no body has no entry here and
+    #: keeps its anchor as its box, which is what the block's bbox already counted.
+    body_boxes: dict[str, Box | None] = {
+        part_id: pose_box(
+            book[circuit.part(part_id).symbol_ref].body,
+            rotation=poses[part_id].rotation, mirror=poses[part_id].mirror,
+            ox=origins[part_id][0], oy=origins[part_id][1],
+        )
         for part_id in ring
-    ]
-    obstacles = [box for box in obstacles if box is not None]
+    }
+    obstacles = [box for box in body_boxes.values() if box is not None]
     radius = _island_radius(origins, extents, anchor, budget)
 
     block = IslandBlock(
@@ -2941,6 +2983,15 @@ def layout_island(
             rotation=float(poses[part_id].rotation), mirror=poses[part_id].mirror,
             reference=part_id,
         ))
+        # 608: one box per part, in this list's order — the body it draws, or its
+        # anchor when the profile declares none (the degenerate box bbox already
+        # counted through the part, kept so the two lists never slip out of step).
+        body = body_boxes[part_id]
+        block.part_boxes.append(
+            body if body is not None
+            else (origins[part_id][0], origins[part_id][1],
+                  origins[part_id][0], origins[part_id][1])
+        )
 
     tips = _tips(book, circuit, poses, origins)
     # 531: the parts' own rows are read **before** the routing, not after it. The

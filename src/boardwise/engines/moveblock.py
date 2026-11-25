@@ -50,6 +50,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+import math
 from typing import Any
 
 from ..core.changeplan import MOVE_GRID, PlanIsland, PlanMove, PlanWireOp
@@ -110,7 +111,15 @@ def _number(value: Any) -> float | None:
 
 
 def on_grid(value: float, grid: float = GRID) -> bool:
-    """Is this coordinate a whole number of grid steps?"""
+    """Is this coordinate a whole number of grid steps?
+
+    A non-finite coordinate, a non-finite grid or a non-positive grid is not: the
+    plain division used to answer with ``ValueError`` (NaN), ``OverflowError``
+    (inf) or ``ZeroDivisionError`` (zero grid), and a maths exception is not the
+    named refusal this module promises (570-D4).
+    """
+    if not math.isfinite(value) or not math.isfinite(grid) or grid <= 0:
+        return False
     return abs(round(value / grid) * grid - value) <= 1e-6
 
 
