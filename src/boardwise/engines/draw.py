@@ -267,24 +267,25 @@ class DrawResult:
 
     @property
     def zero_diff(self) -> bool:
-        """The acceptance gate: per-pin plus presence, per the task.
+        """The acceptance gate — **derived from the report**, never a second opinion.
 
-        Component-level *attribute* gaps that are pure library enrichment
-        (golden empty, candidate filled) do not fail the run — they are
-        reported separately. A wrong footprint/value where the golden side
-        has one still fails, as it should.
+        This used to be its own predicate: it ignored every component-level row
+        whose detail did not start with ``"component "``, so a ``value differs``
+        (1kΩ → 2.2kΩ) or a ``footprint differs`` (0402 → 0603) — two
+        differences both sides know about, and the ones :func:`_split_enrichment`
+        deliberately keeps in the report — read as ``zero_diff=True`` while the
+        exit code (``report.is_empty``, `cli.py`) was 1. Two answers to one
+        question, and the one nothing called was the wrong one (572C-01).
+
+        The enrichment exemption lives where it belongs, in
+        :func:`_split_enrichment`, which removes those rows from the report
+        before anyone reads it. So there is exactly one verdict per report and
+        it is this one: ``zero_diff == report.is_empty``.
         """
         report = self.comparison
         if report is None:
             return False
-        return not (
-            report.net_differences
-            or report.pin_differences
-            or any(
-                d.detail.startswith("component ")
-                for d in report.component_differences
-            )
-        )
+        return report.is_empty
 
 
 class DrawAborted(Exception):
@@ -431,20 +432,41 @@ async def _read_back_after_unknown(
 async def _save_project(
     client: Any, result: "DrawResult", summary: str
 ) -> bool:
-    """``sch.doc.save``, with the answer **checked** rather than discarded.
+    """``sch.doc.save``, judged by the answer's own ``saved`` field.
 
-    Returns whether the editor accepted the save and records it on the result.
-    A refusal arrives as an exception from the connector
-    (`connector/src/actions.ts:2211-2220`) — the current build never returns
-    ``saved: false`` — so a save that failed used to be swallowed by ``_call``
-    and then thrown away by the caller, leaving the report silent about the one
-    fact this whole task exists to state (audit A1/D).
+    Returns whether the editor **stated** that it saved, and records the
+    answer on the result. Three outcomes, not two (572C-02):
+
+    * ``saved is True`` — the editor accepted the save → ``save_ok``;
+    * ``saved is False`` — the editor answered and refused it. The current
+      connector throws instead (`connector/src/actions.ts:2211-2220`), so this
+      is a shape the contract allows and the flow must not read as success;
+    * **an answer without a boolean ``saved``** — no ``saved`` key, or a
+      non-boolean value. That is neither a success nor a failure: it is
+      *unknown*, and it is recorded as unknown rather than upgraded to "the
+      save API answered ok".
+
+    A call that failed outright (no answer, or the connector's throwing
+    refusal) is a refusal too, and keeps its own row.
+
+    The answer used to be reduced to ``data is not None``, so ``{"saved":
+    false}`` and ``{}`` both produced ``save_ok=True`` and the report said
+    ``saved_unverified`` with zero rows of evidence — the exact claim this
+    flow exists to make honestly (audit A1/D).
     """
     data = await _call_write(
         client, "sch.doc.save", {}, result.records, summary
     )
-    result.save_ok = data is not None
+    saved = data.get("saved") if isinstance(data, dict) else None
+    if saved is True:
+        result.save_ok = True
+        return True
+    result.save_ok = False
     if data is None:
+        # The call itself failed — and the connector's own refusal shape is an
+        # exception ("sch_Document.save() returned false"), so "no answer" is a
+        # refusal here, not a missing field. `_call` already recorded the
+        # error; this row states what it means for persistence.
         result.records.append(
             StepRecord(
                 "persistence.save",
@@ -455,7 +477,38 @@ async def _save_project(
                 "say it is",
             )
         )
-    return result.save_ok
+        return False
+    if saved is False:
+        reason = data.get("reason") if isinstance(data, dict) else None
+        detail = (
+            "the editor answered saved: false, so the page in the editor is "
+            "all that exists — this is not persisted, and the report must not "
+            "say it is"
+        )
+        if isinstance(reason, str) and reason.strip():
+            detail += f" (reason given: {reason.strip()})"
+        result.records.append(
+            StepRecord(
+                "persistence.save",
+                f"{summary}: the editor REFUSED the save (saved: false)",
+                False,
+                detail,
+            )
+        )
+        return False
+    result.records.append(
+        StepRecord(
+            "persistence.save",
+            f"{summary}: the answer did not give `saved` — the save is UNKNOWN",
+            False,
+            "the save call answered, but not with a boolean `saved` field, so "
+            "whether the project was written cannot be stated. Nothing was "
+            "retried: a save that did land would be re-issued blind, and this "
+            "report must not borrow the word \"saved\" for a state it never "
+            "established",
+        )
+    )
+    return False
 
 
 def geometry_fingerprint(geometry: dict[str, Any] | None) -> dict[str, int]:
@@ -1349,25 +1402,9 @@ async def run_draw(
             # Snapping adds a stub, and a stub is a new run whose endpoint can
             # land inside another run — so the junction rule has to be applied
             # again *after* the geometry changed, not only when the plan was
-            # built.
-            from boardwise.engines.replay import split_at_junctions
-
-            plan.wires, resplit = split_at_junctions(plan.wires)
-            if resplit:
-                result.records.append(
-                    StepRecord(
-                        "plan.split_junctions",
-                        f"{resplit} run(s) split at T-junctions after snapping",
-                        True,
-                        "the editor merges polylines that share an endpoint and "
-                        "can then bury a pin tip mid-polyline; every touching "
-                        "run must end at the junction",
-                    )
-                )
-            # Snapping adds a stub, and a stub is a new run whose endpoint can
-            # land inside another run — so the junction rule has to be applied
-            # again *after* the geometry changed, not only when the plan was
-            # built.
+            # built. Once: `split_at_junctions` is idempotent on this input
+            # (measured 572-C: second pass 3→3 wires, resplit=0), so a second
+            # copy of this block was a pure no-op that rescanned every wire.
             from boardwise.engines.replay import split_at_junctions
 
             plan.wires, resplit = split_at_junctions(plan.wires)

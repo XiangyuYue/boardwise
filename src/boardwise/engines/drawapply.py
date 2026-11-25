@@ -795,6 +795,26 @@ class _Built:
         tuple[str, str, tuple[float, float, float, float]]
     ] = field(default_factory=list)
 
+    #: 572-G-1 — where one label's own rows sit in the two books above, when
+    #: :func:`_place_label_stub` wrote them in one breath:
+    #: ``id(label) -> (index in name_carriers, index in label_stub_rows)``.
+    #: Both books are keyed by **carrier**, never by label, so this is the one
+    #: link back to the label whose row a later pass re-seats; without it
+    #: :func:`_reseat_carrier_rows` would have to guess an entry (which is what
+    #: it must not do).
+    carrier_owner: dict[int, tuple[int, int]] = field(default_factory=dict)
+
+    #: 572-G-2 — the **posed** body box of every placed part, ``spec_id -> box``,
+    #: from the same ``pose_box(profile.body, rotation, mirror, ox, oy)`` fold the
+    #: stub chooser already uses. The duplicate-carrier floor re-reads 543L's
+    #: declared mirrored pin block from it (whose two pins of one net the drawing
+    #: states to print as a pair), so the facts come from the placed geometry and
+    #: no second ruler is invented. A part whose profile carries no body has no
+    #: entry, and the floor then declines to exempt anything about it.
+    posed_bodies: dict[
+        str, tuple[float, float, float, float]
+    ] = field(default_factory=dict)
+
     #: 543H-2 — where a visible ``native`` label's row is printed **after** its
     #: final stub was chosen, ``id(label) -> (the stub's own points, the row box)``.
     #: The layout's ``label.bbox`` is the reservation the compiler made, and a
@@ -1479,6 +1499,13 @@ def module_plan(
             rotation=int(part.rotation) % 360, mirror=part.mirror,
             ox=part.x, oy=part.y,
         )
+    # 572-G-2: the same posed body, keyed by the spec id the wires' `from_pin`
+    # uses, so the floor can ask the part whose body it must mirror a pin about.
+    built.posed_bodies = {
+        part.spec_id: stub_bodies[part.designator]
+        for part in built.parts
+        if part.designator in stub_bodies
+    }
     stub_pins: list[tuple[str, str, tuple[float, float]]] = [
         (part.designator, number, point)
         for part in built.parts
@@ -1899,7 +1926,11 @@ def module_plan(
 
     # 534 final-name-clearance: the floor the modules could only see one at a time,
     # stated once over the whole plan. A refusal here is the plan's own geometry,
-    # named row by row -- never a note, never a lower threshold.
+    # named row by row -- never a note, never a lower threshold. 572-G-2: the
+    # posed body of every part rides on `built` (the stub chooser computed it),
+    # so a carrier pair 543L declared -- mirrored pins of one part -- is read as
+    # the pair it is; a part with no body box stays unexempt, and so does every
+    # carrier that names no pin.
     duplicate_carriers = _duplicate_carrier_problems(built)
     if duplicate_carriers:
         raise DrawPlanError("; ".join(duplicate_carriers))
@@ -2329,6 +2360,67 @@ def _native_printed_row(
     return tuple(float(value) for value in label.bbox)
 
 
+def _reseat_carrier_rows(
+    built: "_Built", label: Any, row: tuple[float, float, float, float]
+) -> None:
+    """Move this label's row into the books the carrier floor reads (572-G-1).
+
+    ``_native_carrier_cover`` re-seats a visible name onto its own conductor, and
+    ``native_carrier_rows`` is only where ``attributeMoves`` reads it. The
+    duplicate-carrier floor (:func:`_duplicate_carrier_problems`) and the ride
+    test (:func:`_same_net_carrier_gap`) read ``name_carriers``, which the label
+    pass wrote with the layout's **reserved** box (053T: a ``native`` label's
+    ``carrier_row`` *is* ``LayoutLabel.bbox``). A re-seated row therefore left
+    that book stating a box nobody prints -- measured on 572-G, the seat was
+    ``[185, 0, 215, 7]`` while the reservation stood at ``[380, 0, 410, 7]``, so
+    the floor read ``gate_gap_AB = 134`` between two names whose real rows were
+    **1** apart and refused nothing (``FALSE_GREEN``). Two carriers of one net
+    under the ``L5_DUPLICATE_NET_GAP`` floor are one statement printed twice, so
+    the box the floor measures has to be the box the plan prints.
+
+    The entries moved are this label's **own**, located by the identities the
+    plan already has -- never by position in a list:
+
+    * ``carrier_owner`` when :func:`_place_label_stub` wrote the stub row and the
+      carrier entry together (the label whose stub row the cover re-seats: its
+      names were both written with the stub's host row, and both move);
+    * otherwise the entry the label pass recorded for a visible `native` label
+      riding a wire: ``(this net, "wire[i]", label.bbox)``. Exactly one entry is
+      expected; if two entries carry that same key the match is **ambiguous** and
+      neither is moved -- the floor then names that pair itself, which is the
+      statement owed, rather than this repair silently rewriting a carrier whose
+      row it did not measure.
+
+    A visible `native` label whose row is seated here did **not** take a stub in
+    the label pass (that path is 543H-2's and :func:`_native_carrier_cover` skips
+    it at its ``native_stub_rows`` guard), so it has no stub row of its own and
+    only the carrier entry moves.
+    """
+    name_position: int | None = None
+    stub_position: int | None = None
+    owned = built.carrier_owner.get(id(label))
+    if owned is not None:
+        name_position, stub_position = owned
+    else:
+        key = tuple(float(value) for value in label.bbox)
+        matches = [
+            index
+            for index, (net, identity, box) in enumerate(built.name_carriers)
+            if str(net) == str(label.net)
+            and str(identity).startswith("wire[")
+            and tuple(float(value) for value in box) == key
+        ]
+        if len(matches) == 1:
+            name_position = matches[0]
+    if name_position is not None and 0 <= name_position < len(built.name_carriers):
+        net, identity, _old = built.name_carriers[name_position]
+        built.name_carriers[name_position] = (net, identity, row)
+    if stub_position is not None and 0 <= stub_position < len(built.label_stub_rows):
+        what, _old = built.label_stub_rows[stub_position]
+        built.label_stub_rows[stub_position] = (what, row)
+
+
+
 def _native_wire_components(
     wires: Sequence[Any],
 ) -> dict[str, list[list[int]]]:
@@ -2505,6 +2597,12 @@ def _native_carrier_cover(
                 )
                 continue
             built.native_carrier_rows[id(label)] = seated
+            # 572-G-1: the row that prints is the row the duplicate-carrier floor
+            # has to measure. `native_carrier_rows` is only what `attributeMoves`
+            # reads; the floor reads `name_carriers`, which still held the
+            # layout's reservation -- 134 units of "clearance" between two names
+            # whose rows printed 1 unit apart.
+            _reseat_carrier_rows(built, label, seated)
             continue
         # The run is shorter than its own name: grow it along its own axis.
         target = (box_high + TEXT_GAP) if side > 0 else (box_low - TEXT_GAP)
@@ -3607,6 +3705,178 @@ def _row_clearance(
     )
 
 
+def _carrier_pin_fact(
+    built: "_Built", identity: str
+) -> tuple[
+    str, str, tuple[float, float], tuple[float, float]
+] | None:
+    """The part, pin and escape direction behind one riding carrier (572-G-2).
+
+    A riding carrier's identity is ``wire[i]`` -- the conductor the label pass
+    recorded the name on (053T/534) -- and ``built.wires[i].from_pin`` is the pin
+    that conductor leaves, by the same ``<specId>.<pin>`` contract every
+    ``PlanDrawWire`` states. The escape direction is the conductor's own first
+    segment, so the whole fact is read off the placed geometry: no net name, no
+    designator, no literal coordinate.
+
+    ``None`` is the honest answer whenever the fact is not there: a stub carrier
+    (``stub[k]``, which records no pin), a wire with no pin under it, a pin the
+    part's own table does not carry, or an identity that no longer names a wire
+    of this plan. No fact, no exemption.
+    """
+    if not (identity.startswith("wire[") and identity.endswith("]")):
+        return None
+    try:
+        index = int(identity[5:-1])
+    except ValueError:
+        return None
+    if not 0 <= index < len(built.wires):
+        return None
+    wire = built.wires[index]
+    spec_id, _sep, number = str(wire.from_pin).partition(".")
+    if not spec_id or not number:
+        return None
+    part = next((item for item in built.parts if item.spec_id == spec_id), None)
+    if part is None:
+        return None
+    tip = expected_pin_points(part).get(number)
+    if tip is None:
+        return None
+    points = [(float(point[0]), float(point[1])) for point in wire.points]
+    if len(points) < 2:
+        return None
+    delta_x = points[1][0] - points[0][0]
+    delta_y = points[1][1] - points[0][1]
+    reach = math.hypot(delta_x, delta_y)
+    if reach <= 1e-9:
+        return None
+    return (
+        str(part.spec_id), str(number), tip, (delta_x / reach, delta_y / reach),
+    )
+
+
+def _carrier_pin_facts(
+    built: "_Built",
+) -> dict[
+    str, tuple[str, str, str, tuple[float, float], tuple[float, float]]
+]:
+    """``carrier identity -> (net, part, pin, tip, escape)`` for the floor (572-G-2).
+
+    One read of the whole plan, so every pair the floor compares is judged on the
+    same facts. A carrier with no pin under it (a ``stub[k]`` row, a wire with no
+    ``from_pin``) is simply absent: absence is "no fact", never a guess.
+    """
+    facts: dict[
+        str, tuple[str, str, str, tuple[float, float], tuple[float, float]]
+    ] = {}
+    for net, identity, _row in built.name_carriers:
+        if identity in facts:
+            continue
+        fact = _carrier_pin_fact(built, identity)
+        if fact is not None:
+            facts[str(identity)] = (str(net), *fact)
+    return facts
+
+
+def _declared_pair_carriers(
+    first_id: str,
+    second_id: str,
+    bodies: Mapping[str, tuple[float, float, float, float]] | None,
+    facts: Mapping[
+        str, tuple[str, str, str, tuple[float, float], tuple[float, float]]
+    ],
+) -> bool:
+    """Do these two carriers sit on one **declared** paired pin block? (572-G-2)
+
+    543L declares that a two-net ``localLabelObligations`` entry on a part that
+    draws both nets on **one side, at mirrored offsets from the body centre**, is
+    one reading pair: ``drawcompiler._local_label_pin_pairs`` pairs the pins of
+    the *two nets* by that mirror (measured on the CH343 connector: `A6`↔`A7`,
+    `B6`↔`B7`), and ``_reserve_paired_carriers`` gives each pair one run length.
+    Two rows the drawing **states** to print as a pair are not one statement
+    printed twice, so the L5 floor may not read them as a duplicate; that is the
+    one exemption this gate allows, and it is deliberately not "two carriers of
+    one net".
+
+    The floor compares carriers of one **net**, so the pair it holds is never the
+    compiler's cross-net pair: on a 543L part the net prints on two rows of that
+    one pin column (`D+` on `A6` and on `B6`), each row being one half of a
+    declared mirrored pair. The exemption therefore asks for the declaration
+    itself, re-read from the placed geometry and nothing else:
+
+    * same part, same **horizontal** escape (the shape the compiler pairs);
+    * the two tips are two rows of **one pin column**, on opposite sides of the
+      body centre -- the wide "any two carriers of one net" rule is exactly what
+      this refuses to be;
+    * **each** tip's lateral mirror about that centre is itself printed by this
+      plan, and the two mirrors are on one and the same **other** net: that is
+      the two-net block 543L declared, present on the page, not inferred from a
+      name or a designator.
+
+    A pin whose mirror this plan does not print, two pins whose mirrors land on
+    different nets, a same-net tip-to-tip mirror (the compiler never pairs those),
+    a missing body box or a carrier with no pin under it are all *not* exempt:
+    the floor then names the pair, which is the safe answer. The 572-G
+    reproduction -- two carriers of one net, 1 unit apart, no pin under either --
+    is refused by name, as before.
+    """
+    if not bodies:
+        return False
+    one = facts.get(first_id)
+    other = facts.get(second_id)
+    if one is None or other is None:
+        return False
+    net_one, part_one, pin_one, tip_one, direction_one = one
+    net_two, part_two, pin_two, tip_two, direction_two = other
+    if net_one != net_two or part_one != part_two or pin_one == pin_two:
+        return False
+    if (
+        abs(direction_one[0] - direction_two[0]) > 1e-6
+        or abs(direction_one[1] - direction_two[1]) > 1e-6
+    ):
+        return False
+    if abs(direction_one[0]) <= 1e-6 or abs(direction_one[1]) > 1e-6:
+        return False
+    body = bodies.get(part_one)
+    if body is None:
+        return False
+    centre_y = (float(body[1]) + float(body[3])) / 2.0
+    if abs(tip_one[0] - tip_two[0]) > 1e-6:
+        return False
+    first_offset = tip_one[1] - centre_y
+    second_offset = tip_two[1] - centre_y
+    if first_offset == 0.0 or second_offset == 0.0:
+        return False
+    if first_offset * second_offset >= 0.0:
+        return False
+
+    def mirrored_net(pin: str, tip: tuple[float, float]) -> str | None:
+        """The one net whose carrier prints this pin's lateral mirror, if any."""
+        found: set[str] = set()
+        for _identity, (
+            net, spec_id, other_pin, other_tip, direction,
+        ) in facts.items():
+            if spec_id != part_one or other_pin == pin:
+                continue
+            if (
+                abs(direction[0] - direction_one[0]) > 1e-6
+                or abs(direction[1] - direction_one[1]) > 1e-6
+            ):
+                continue
+            if abs(other_tip[0] - tip[0]) > 1e-6:
+                continue
+            if abs(other_tip[1] + tip[1] - 2.0 * centre_y) > 1e-6:
+                continue
+            found.add(net)
+        return found.pop() if len(found) == 1 else None
+
+    first_partner = mirrored_net(pin_one, tip_one)
+    second_partner = mirrored_net(pin_two, tip_two)
+    if first_partner is None or second_partner is None:
+        return False
+    return first_partner == second_partner and first_partner != net_one
+
+
 def _duplicate_carrier_problems(built: "_Built") -> list[str]:
     """Every pair of one net's carriers printed closer than the L5 floor.
 
@@ -3623,9 +3893,19 @@ def _duplicate_carrier_problems(built: "_Built") -> list[str]:
     worst case of this rule -- while one wire carrying two labels of its net is one
     statement counted once. The threshold is drawlint's own constant: this
     pass states the same number the lint reports against, and never a second one.
+
+    **The one exemption (572-G-2): a pair the drawing declares.** 543L gives a
+    mirrored pin pair of one part one run length, so its two name rows are meant
+    to print as a pair and are not "one statement printed twice"
+    (:func:`_declared_pair_carriers` re-reads that pair from the placed
+    geometry). Only that shape is skipped; two carriers of one net with no
+    mirrored pin pair under them are exactly the duplicate this gate exists for,
+    and are refused by name as before.
     """
     from .drawlint import L5_DUPLICATE_NET_GAP
 
+    pair_facts = _carrier_pin_facts(built)
+    pair_bodies = built.posed_bodies or None
     by_net: dict[str, dict[str, tuple[float, float, float, float]]] = {}
     for net, identity, box in built.name_carriers:
         # **By carrier, not by box.** Two different wires of one net can print
@@ -3641,6 +3921,13 @@ def _duplicate_carrier_problems(built: "_Built") -> list[str]:
         rows = sorted(by_net[net].items())
         for index, (first_id, first) in enumerate(rows):
             for second_id, second in rows[index + 1:]:
+                if _declared_pair_carriers(
+                    first_id, second_id, pair_bodies, pair_facts,
+                ):
+                    # 572-G-2: a declared mirrored pin block prints as a pair on
+                    # purpose -- 543L gave both runs one length -- so the floor
+                    # does not read it as the same name printed twice.
+                    continue
                 gap = _row_gap(first, second)
                 if gap < L5_DUPLICATE_NET_GAP:
                     problems.append(
@@ -3969,6 +4256,12 @@ def _place_label_stub(
         if box is not None and not _label_is_hidden(label):
             direction = (
                 "horizontal" if _stub_row_is_horizontal(run) else "vertical"
+            )
+            # 572-G-1: the two books are written together, so their indices are
+            # recorded together -- a pass that re-seats this label's printed row
+            # later (:func:`_reseat_carrier_rows`) moves exactly these entries.
+            built.carrier_owner[id(label)] = (
+                len(built.name_carriers), len(built.label_stub_rows),
             )
             built.label_stub_rows.append(
                 (

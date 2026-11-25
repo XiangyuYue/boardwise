@@ -6364,15 +6364,125 @@ export const docRename: ActionHandler = async (params, eda) => {
  * side effect of a read — saving the user's project uninvited would be
  * exactly the kind of surprise this bridge avoids.
  */
+/** A host answer, printed short enough for an error message. */
+function answerText(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (Array.isArray(value)) return `array(${value.length})`;
+  if (typeof value === 'object') {
+    try {
+      return `object ${JSON.stringify(value).slice(0, 120)}`;
+    } catch {
+      return 'object';
+    }
+  }
+  if (typeof value === 'string') return `string ${JSON.stringify(value.slice(0, 120))}`;
+  return `${typeof value} ${String(value)}`;
+}
+
+/** A truthy/falsy flag read from a project-info box, or `null` when it is not one. */
+function flagOf(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (value === 0 || value === '0' || value === 'false') return false;
+  if (value === 1 || value === '1' || value === 'true') return true;
+  return null;
+}
+
+/** What the project itself says about being saved; `'unavailable'` when it says nothing. */
+type ProjectSaveState = 'unavailable' | {
+  available: true;
+  saved: boolean | null;
+  dirty: boolean | null;
+};
+
+/**
+ * The project's own saved/dirty bit, the only second opinion the host offers.
+ *
+ * `dmt_Project.getCurrentProjectInfo` is the documented box and its fields are
+ * plain properties, not `getState_*` (see `plainGet`). Every failure is
+ * `'unavailable'`, never an assumed `false`: a host that does not carry the
+ * field has not told us the project is dirty. This is exactly the 572B-3
+ * lesson in miniature — a read that did not happen is not a negative.
+ */
+async function projectSaveState(eda: Eda): Promise<ProjectSaveState> {
+  const nsRead = readMember(eda, 'dmt_Project');
+  const ns = nsRead.value;
+  if (nsRead.error !== undefined || !ns || typeof ns !== 'object') return 'unavailable';
+  const getRead = readMember(ns, 'getCurrentProjectInfo');
+  if (typeof getRead.value !== 'function') return 'unavailable';
+  let info: any;
+  try {
+    info = await settle(getRead.value.call(ns));
+  } catch {
+    return 'unavailable';
+  }
+  if (!info || typeof info !== 'object') return 'unavailable';
+  let saved: boolean | null = null;
+  let dirty: boolean | null = null;
+  try {
+    saved = flagOf(plainGet(info, 'saved', 'isSaved'));
+    dirty = flagOf(plainGet(info, 'dirty', 'isDirty', 'modified', 'hasUnsavedChanges'));
+  } catch {
+    return 'unavailable';
+  }
+  if (saved === null && dirty === null) return 'unavailable';
+  return { available: true, saved, dirty };
+}
+
 export const schDocSave: ActionHandler = async (_params, eda) => {
-  const ok = await settle(requireFn(eda, 'sch_Document.save')());
-  if (!ok) {
+  // 572B-3: this was the only write whose success was a bare truthiness test —
+  // `{}` and `'ok'` both read as "saved". A save is a claim about the *project*,
+  // so only a strict `true` counts as the host saying so, a strict `false` is a
+  // refusal, and anything else is `'unknown'` (never silently promoted to saved).
+  let answer: unknown;
+  let threw = '';
+  try {
+    answer = await settle(requireFn(eda, 'sch_Document.save')());
+  } catch (error) {
+    threw = String((error as Error)?.message ?? error);
+  }
+  const stateReadback = await projectSaveState(eda);
+
+  if (threw) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `sch_Document.save() threw (${threw}) — the project is not known to be saved`,
+      { saved: 'unknown', hostAnswer: null, stateReadback },
+    );
+  }
+  if (answer === false) {
     throw new ActionError(
       'CONNECTOR_ERROR',
       'sch_Document.save() returned false — the project may need a manual save',
+      { saved: false, hostAnswer: false, stateReadback },
     );
   }
-  return { saved: true };
+  if (answer === true) {
+    return {
+      saved: true,
+      // `saved` is still the host's own word, as it always was. `savedVerified`
+      // is the stronger claim and it needs the project box to agree.
+      savedVerified: stateReadback !== 'unavailable'
+        && (stateReadback.dirty === false || stateReadback.saved === true),
+      hostAnswer: true,
+      stateReadback,
+    };
+  }
+  if (answer) {
+    return {
+      saved: 'unknown',
+      savedVerified: false,
+      hostAnswer: answerText(answer),
+      stateReadback,
+      basis: 'sch_Document.save() did not answer a boolean, so it never said "saved" in a '
+        + 'wording this bridge can read; whether the project persisted is UNKNOWN',
+    };
+  }
+  throw new ActionError(
+    'CONNECTOR_ERROR',
+    `sch_Document.save() answered ${answerText(answer)} — a falsy non-boolean is not a save`,
+    { saved: 'unknown', hostAnswer: answerText(answer), stateReadback },
+  );
 };
 
 /**
@@ -7664,6 +7774,107 @@ async function withCreateRetry<T>(label: string, attempt: () => T | Promise<T>):
   }
 }
 
+// --------------------------------------------------------------------------
+// 572B: post-write readback — "the host returned an object" is not evidence
+// --------------------------------------------------------------------------
+
+/**
+ * Coordinate tolerance for a post-write readback, in canvas units.
+ *
+ * A host may snap a placement to its own lattice, so exact equality would cry
+ * wolf over a rounding step; anything past this is a genuine disagreement about
+ * *where* the primitive is.
+ */
+const READBACK_TOLERANCE = 0.01;
+
+/**
+ * A write's own claim, checked by a fresh read: `true`, `false`, or `null`.
+ *
+ * `null` is not a polite `false`. It means the read that would have decided it
+ * could not be taken at all (no `get`, a throwing namespace, an unreadable
+ * field) — and the repo's rule is that "could not read" is never "there are
+ * none" (`docs/bridge.md`, `pcb.net_class.list`). A caller that retries on
+ * `false` must not be handed `false` for a missing capability: a netlabel
+ * retry stacks a duplicate.
+ */
+type ReadbackVerdict = {
+  landed: boolean | null;
+  basis: string;
+  readError?: string;
+};
+
+/** Fresh read of one primitive by id: `{primitive, why}`, `why` non-empty on failure. */
+async function readPrimitive(
+  eda: Eda, namespace: string, primitiveId: string,
+): Promise<{ primitive: any | null; why: string }> {
+  const nsRead = readMember(eda, namespace);
+  if (nsRead.error !== undefined) {
+    return { primitive: null, why: `${namespace} could not be read (${nsRead.error})` };
+  }
+  const ns = nsRead.value;
+  if (!ns || typeof ns !== 'object') return { primitive: null, why: `${namespace} is not available` };
+  const getRead = readMember(ns, 'get');
+  if (typeof getRead.value !== 'function') {
+    return {
+      primitive: null,
+      why: `${namespace}.get is not available (${getRead.error ?? 'not a function'})`,
+    };
+  }
+  try {
+    const primitive = await settle(getRead.value.call(ns, primitiveId));
+    if (!primitive) {
+      return { primitive: null, why: `${namespace}.get(${primitiveId}) returned nothing` };
+    }
+    return { primitive, why: '' };
+  } catch (error) {
+    return {
+      primitive: null,
+      why: `${namespace}.get(${primitiveId}) threw ${String((error as Error)?.message ?? error)}`,
+    };
+  }
+}
+
+/** One numeric `getState_*` field, or `null` when the host does not carry it. */
+async function numberState(obj: any, name: string): Promise<number | null> {
+  const value = await getState(obj, name);
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Flatten `[x,y,…]` or `[[x,y],…]` into a flat list; `null` when it is neither. */
+function flattenPoints(value: unknown): number[] | null {
+  if (!Array.isArray(value) || value.length < 4) return null;
+  const out: number[] = [];
+  for (const item of value) {
+    if (Array.isArray(item)) {
+      if (item.length < 2) return null;
+      out.push(Number(item[0]), Number(item[1]));
+    } else {
+      out.push(Number(item));
+    }
+  }
+  return out.every((n) => Number.isFinite(n)) ? out : null;
+}
+
+/** The polyline a wire primitive reports, trying the field names hosts have used. */
+async function wirePointsOf(obj: any): Promise<number[] | null> {
+  for (const name of ['PointArr', 'Points', 'PointArray', 'Polyline']) {
+    const flat = flattenPoints(await getState(obj, name));
+    if (flat) return flat;
+  }
+  return null;
+}
+
+/** Largest coordinate disagreement between two flat lists; `null` on a length mismatch. */
+function maxCoordinateDelta(wanted: number[], read: number[]): number | null {
+  if (wanted.length !== read.length) return null;
+  let worst = 0;
+  for (let i = 0; i < wanted.length; i += 1) {
+    worst = Math.max(worst, Math.abs(wanted[i] - read[i]));
+  }
+  return worst;
+}
+
 /**
  * `sch.place_wire` — one wire polyline, optionally carrying a net name.
  *
@@ -7711,7 +7922,67 @@ export const schPlaceWire: ActionHandler = async (params, eda) => {
       `wire placement returned no uuid (points=${JSON.stringify(points)}, net=${net ?? ''})`,
     );
   }
-  return { uuid: String(uuid), net: net ?? null, points };
+  // 572B-1: an object coming back from the host says nothing about whether a wire
+  // exists, let alone where. Read the primitive back by id and compare geometry.
+  const read = await readPrimitive(eda, 'sch_PrimitiveWire', String(uuid));
+  let readback: ReadbackVerdict & { points?: number[] | null; maxDelta?: number | null };
+  if (!read.primitive) {
+    readback = {
+      landed: null,
+      basis: 'the wire was created but cannot be re-read by id, so whether it landed — and '
+        + 'where — is UNKNOWN',
+      readError: read.why,
+    };
+  } else {
+    const readPoints = await wirePointsOf(read.primitive);
+    if (!readPoints) {
+      readback = {
+        landed: null,
+        points: null,
+        maxDelta: null,
+        basis: 'the wire was re-read but carries no readable polyline, so its geometry is UNKNOWN',
+        readError: 'no readable PointArr/Points/PointArray on the primitive',
+      };
+    } else {
+      const delta = maxCoordinateDelta(flat, readPoints);
+      readback = {
+        landed: delta !== null && delta <= READBACK_TOLERANCE,
+        points: readPoints,
+        maxDelta: delta,
+        basis: delta === null
+          ? `the read-back polyline has ${readPoints.length / 2} point(s) but `
+            + `${points.length} were requested`
+          : delta <= READBACK_TOLERANCE
+            ? `read back by id; every coordinate is within ${delta} of the request`
+            : `read back by id; the coordinates disagree by up to ${delta}`,
+      };
+    }
+  }
+  if (readback.landed === false) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `the wire ${String(uuid)} was reported created but its read-back does not match the `
+        + `request (${readback.basis}); requested ${JSON.stringify(points)}, `
+        + `read ${JSON.stringify(readback.points ?? null)} — applied is decided by the fresh read`,
+      {
+        uuid: String(uuid),
+        net: net ?? null,
+        points,
+        landed: false,
+        readbackMismatch: true,
+        readback,
+      },
+    );
+  }
+  return {
+    uuid: String(uuid),
+    net: net ?? null,
+    points,
+    // `null` here is the honest answer on a host that cannot be re-read, and it is
+    // not `true`: the caller must not treat a missing capability as a placement.
+    landed: readback.landed,
+    readback,
+  };
 };
 
 /** How long `createNetLabel` gets before the action declares it hung. */
@@ -7734,18 +8005,58 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
-/** Did a ``NET`` attribute for ``net`` actually land near ``(x, y)``? */
+/**
+ * Did a ``NET`` attribute for ``net`` actually land near ``(x, y)``?
+ *
+ * Three answers, never two (572B-4): `true` = read and found, `false` = read and
+ * did not find, `null` = **could not read**. The last one used to be flattened
+ * into `false`, which the caller reads as "nothing appeared" — a confident
+ * negative built out of a missing capability. That is the one mistake this
+ * action must not make, because a retry of `createNetLabel` stacks a second
+ * label on top of a first one that may well have landed.
+ */
 async function netAttributeLanded(
   eda: Eda, net: string, x: number, y: number,
-): Promise<{ landed: boolean; matches: number }> {
-  const api = (eda as any)?.sch_PrimitiveAttribute;
-  const getAll = api?.getAll;
-  if (typeof getAll !== 'function') return { landed: false, matches: 0 };
+): Promise<ReadbackVerdict & { matches: number }> {
+  const apiRead = readMember(eda, 'sch_PrimitiveAttribute');
+  if (apiRead.error !== undefined) {
+    return {
+      landed: null,
+      matches: 0,
+      basis: 'sch_PrimitiveAttribute could not be read',
+      readError: apiRead.error,
+    };
+  }
+  const api = apiRead.value;
+  if (!api || typeof api !== 'object') {
+    return {
+      landed: null,
+      matches: 0,
+      basis: 'sch_PrimitiveAttribute is not available',
+      readError: 'namespace absent',
+    };
+  }
+  const getAllRead = readMember(api, 'getAll');
+  const getAll = getAllRead.value;
+  if (typeof getAll !== 'function') {
+    return {
+      landed: null,
+      matches: 0,
+      basis: 'sch_PrimitiveAttribute.getAll is not available, so whether the label landed is '
+        + 'UNKNOWN',
+      readError: getAllRead.error ?? 'getAll is not a function',
+    };
+  }
   let items: any[] = [];
   try {
     items = (await settle(getAll.call(api))) ?? [];
-  } catch {
-    return { landed: false, matches: 0 };
+  } catch (error) {
+    return {
+      landed: null,
+      matches: 0,
+      basis: 'sch_PrimitiveAttribute.getAll threw, so whether the label landed is UNKNOWN',
+      readError: String((error as Error)?.message ?? error),
+    };
   }
   let matches = 0;
   for (const item of items) {
@@ -7762,7 +8073,13 @@ async function netAttributeLanded(
       matches += 1;
     }
   }
-  return { landed: matches > 0, matches };
+  return {
+    landed: matches > 0,
+    matches,
+    basis: matches > 0
+      ? `read ${items.length} attribute(s); ${matches} NET attribute(s) for ${net} near (${x},${y})`
+      : `read ${items.length} attribute(s); no NET attribute for ${net} near (${x},${y})`,
+  };
 }
 
 /**
@@ -7794,13 +8111,20 @@ export const schPlaceNetlabel: ActionHandler = async (params, eda) => {
     : NETLABEL_TIMEOUT_MS;
   let created: any;
   let failure = '';
+  let timedOut = false;
   try {
-    created = await withTimeout(
+    created = await raceHostCall(
       settle(requireFn(eda, 'sch_PrimitiveAttribute.createNetLabel')(x, y, net)),
-      timeoutMs,
       'sch_PrimitiveAttribute.createNetLabel',
+      timeoutMs,
     );
   } catch (error) {
+    // 572B-5: `TIMEOUT` means one thing only — the connector did not answer within
+    // the deadline (`docs/bridge.md:934`, editors busy/half-dead sockets, i.e. a
+    // *retryable* hint). A synchronous throw — a permission refusal, a bad
+    // argument, a host-side rejection — is a definite answer and must stay
+    // `CONNECTOR_ERROR`, or the caller retries a call that can never succeed.
+    timedOut = isActionError(error) && error.code === 'TIMEOUT';
     failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   }
   const elapsedMs = Date.now() - started;
@@ -7816,14 +8140,36 @@ export const schPlaceNetlabel: ActionHandler = async (params, eda) => {
   }
 
   const readback = await netAttributeLanded(eda, net, x, y);
+  // 572B-4: the three readback values say three different things, and the message
+  // has to say the same thing the detail does. `null` is "the read could not be
+  // taken" — never "nothing appeared".
+  const readbackText = readback.landed === true
+    ? `a NET attribute for ${net} IS present near (${x},${y}) — it landed, do NOT retry`
+    : readback.landed === false
+      ? `nothing for ${net} appeared near (${x},${y}) — the call is unusable`
+      : `readback unavailable (${readback.readError ?? readback.basis}) — whether `
+        + `${net} landed is UNKNOWN; look at the page before retrying, do NOT retry blind`;
+  const summary = timedOut
+    ? `createNetLabel did not settle within ${timeoutMs} ms `
+      + `(elapsed ${elapsedMs} ms; ${failure || 'no value returned'})`
+    : failure
+      ? `createNetLabel threw instead of answering (${failure}; elapsed ${elapsedMs} ms)`
+      : `createNetLabel answered nothing (elapsed ${elapsedMs} ms)`;
   throw new ActionError(
-    'TIMEOUT',
-    `createNetLabel did not settle within ${timeoutMs} ms `
-      + `(elapsed ${elapsedMs} ms; ${failure || 'no value returned'}); readback: `
-      + (readback.landed
-        ? `a NET attribute for ${net} IS present near (${x},${y}) — it landed, do NOT retry`
-        : `nothing for ${net} appeared near (${x},${y}) — the call is unusable`),
-    { net, x, y, elapsedMs, timeoutMs, landedAnyway: readback.landed, matches: readback.matches },
+    timedOut ? 'TIMEOUT' : 'CONNECTOR_ERROR',
+    `${summary}; readback: ${readbackText}`,
+    {
+      net,
+      x,
+      y,
+      elapsedMs,
+      timeoutMs,
+      landedAnyway: readback.landed,
+      matches: readback.matches,
+      readbackBasis: readback.basis,
+      ...(readback.readError ? { readError: readback.readError } : {}),
+      ...(timedOut ? {} : { hostFailure: failure || 'the host answered nothing' }),
+    },
   );
 };
 
@@ -8444,12 +8790,61 @@ export const schPlaceText: ActionHandler = async (params, eda) => {
     );
   }
   const uuid = await getState(created, 'PrimitiveId');
+  // 572B-1: read the text back by id and compare coordinates against the request.
+  // A host that cannot be re-read answers `landed: null` (UNKNOWN), because
+  // "no read" is not "not there".
+  const requested = { x, y, rotation, content };
+  const read = uuid == null
+    ? { primitive: null, why: 'the host returned no PrimitiveId, so the text cannot be re-read' }
+    : await readPrimitive(eda, 'sch_PrimitiveText', String(uuid));
+  let readback: ReadbackVerdict & { placed?: { x: number | null; y: number | null } };
+  if (!read.primitive) {
+    readback = {
+      landed: null,
+      basis: 'the text was created but cannot be re-read by id, so whether it landed is UNKNOWN',
+      readError: read.why,
+    };
+  } else {
+    const px = await numberState(read.primitive, 'X');
+    const py = await numberState(read.primitive, 'Y');
+    const delta = px !== null && py !== null
+      ? Math.max(Math.abs(px - x), Math.abs(py - y))
+      : null;
+    if (delta === null) {
+      readback = {
+        landed: null,
+        placed: { x: px, y: py },
+        basis: 'the text was re-read but carries no readable coordinates, so where it landed '
+          + 'is UNKNOWN',
+        readError: 'no numeric X/Y on the primitive',
+      };
+    } else {
+      readback = {
+        landed: delta <= READBACK_TOLERANCE,
+        placed: { x: px, y: py },
+        basis: delta <= READBACK_TOLERANCE
+          ? `read back by id; the anchor is within ${delta} of the request`
+          : `read back by id; the anchor is ${delta} away from the request`,
+      };
+    }
+  }
+  if (readback.landed === false) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `the text ${JSON.stringify(content)} was reported created at (${x}, ${y}) but its `
+        + `read-back puts it at (${readback.placed?.x}, ${readback.placed?.y}) — `
+        + `${readback.basis}`,
+      { uuid: uuid == null ? null : String(uuid), content, requested, landed: false, readbackMismatch: true, readback },
+    );
+  }
   return {
     uuid: uuid == null ? null : String(uuid),
     content,
     // Stated on every response: this object carries no connectivity. A report
     // that renders signal names this way must say so.
     decorative: true,
+    landed: readback.landed,
+    readback,
   };
 };
 
@@ -8494,7 +8889,74 @@ export const schPlacePower: ActionHandler = async (params, eda) => {
     );
   }
   const uuid = await getState(created, 'PrimitiveId');
-  return { uuid: uuid == null ? null : String(uuid) };
+  const requested = { kind, net, x, y };
+  // 572B-2: without a `PrimitiveId` the flag cannot be re-read at all, so nothing
+  // here is a placement. The answer stays a success (old callers still get their
+  // `uuid: null`) but it is explicitly UNVERIFIED — never "landed".
+  if (uuid == null) {
+    return {
+      uuid: null,
+      landed: null,
+      unverified: true,
+      requested,
+      readback: { net, x, y, verified: false },
+      basis: 'createNetFlag returned no PrimitiveId, so the flag could not be re-read; '
+        + 'whether it landed is UNVERIFIED — do not count it as placed, and do not retry blind',
+    };
+  }
+  const read = await readPrimitive(eda, 'sch_PrimitiveComponent', String(uuid));
+  if (!read.primitive) {
+    return {
+      uuid: String(uuid),
+      landed: null,
+      unverified: true,
+      requested,
+      readback: { net, x, y, verified: false },
+      basis: 'the flag was created but cannot be re-read by id, so whether it, and its net, '
+        + 'landed is UNKNOWN — do not count it as placed, and do not retry blind',
+      readError: read.why,
+    };
+  }
+  const placedNetRaw = await getState(read.primitive, 'Net');
+  const placedNet = typeof placedNetRaw === 'string' && placedNetRaw ? placedNetRaw : null;
+  const px = await numberState(read.primitive, 'X');
+  const py = await numberState(read.primitive, 'Y');
+  const delta = px !== null && py !== null
+    ? Math.max(Math.abs(px - x), Math.abs(py - y))
+    : null;
+  const netMismatch = placedNet !== null && placedNet !== net;
+  const coordMismatch = delta !== null && delta > READBACK_TOLERANCE;
+  if (netMismatch || coordMismatch) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `the ${kind} flag ${String(uuid)} was reported created but its read-back disagrees: `
+        + `${netMismatch ? `net ${JSON.stringify(placedNet)} ≠ ${JSON.stringify(net)}` : ''}`
+        + `${netMismatch && coordMismatch ? '; ' : ''}`
+        + `${coordMismatch ? `placed (${px},${py}) vs requested (${x},${y})` : ''}`,
+      {
+        uuid: String(uuid),
+        requested,
+        landed: false,
+        readbackMismatch: true,
+        readback: { net: placedNet, x: px, y: py, verified: false, maxDelta: delta },
+      },
+    );
+  }
+  const verified = delta !== null && delta <= READBACK_TOLERANCE && !netMismatch;
+  return {
+    uuid: String(uuid),
+    // `true` only when a fresh read put the flag where it was asked; `null` when
+    // the read worked but neither net nor coordinates could be compared.
+    landed: verified ? true : null,
+    ...(verified ? {} : { unverified: true }),
+    requested,
+    readback: { net: placedNet, x: px, y: py, verified },
+    basis: verified
+      ? `read back by id; ${placedNet === null ? 'net unreadable' : `net ${placedNet}`}, `
+        + `coordinates within ${delta} of the request`
+      : 'the flag was re-read but neither its net nor its coordinates could be compared with '
+        + 'the request, so that it landed as asked is UNVERIFIED',
+  };
 };
 
 /** `createNetPort` accepts exactly these directions. */

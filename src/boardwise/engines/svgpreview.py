@@ -14,7 +14,9 @@ What the picture shows, and why each element is there:
   junctions, keep-outs and module frames together — because a keep-out that fell
   outside the picture would hide exactly the collision it exists to show. A plan
   with no geometry at all still gets a margin square: a zero-width document is a
-  blank one;
+  blank one — and, having nothing else to frame, it is widened to hold its own
+  caption, because a caption clipped at the viewport edge is the same blank
+  document one step later (572-F-1);
 * every **part** as its symbol's body box, with its pins and the reference/value
   text at the boxes the *compiler* computed — the font-metric boxes, drawn dashed,
   because a reviewer who sees only glyphs cannot tell whether a text was measured
@@ -66,6 +68,7 @@ from boardwise.core.textmetrics import (
     RENDER_TEXT_FAMILY,
     RENDER_TEXT_PX,
     WireNameRow,
+    advance,
     wire_name_row,
 )
 
@@ -103,6 +106,11 @@ NATIVE_TEXT_FONT_SIZE = 7.006
 #: box drawn around it are one fact, so they use one number — the host's
 #: ``wire_name_row`` lays the row out with that em (565d S6-H1).
 LABEL_ROW_FONT_SIZE = RENDER_TEXT_PX
+
+#: The caption's own left margin, in output pixels. The strip is painted in
+#: output pixels (not canvas units), so this and :data:`PREVIEW_FONT_SIZE` are
+#: what its width is made of at every ``scale``.
+CAPTION_LEFT = 8.0
 
 #: The caption strip's own metrics, in canvas units: the first line's baseline
 #: below the drawing, the line pitch, and the room a line needs under its own
@@ -306,9 +314,16 @@ def render_svg(
         if key in art_by_pose:
             raise ValueError(f"native art {art.symbol_ref!r}: duplicate captured pose {key[1:]}")
         art_by_pose[key] = art
-    box = _normalised_box(page_box) if page_box is not None else _content_box(
-        layout_plan, book, keepouts=keepouts, frames=frames
-    )
+    if page_box is not None:
+        box = _normalised_box(page_box)
+        bare = False
+    else:
+        #: With no page the drawing frames itself out of every box it draws. A
+        #: plan that draws nothing has nothing to frame: it keeps the margin
+        #: square and is widened to its own caption below (``bare``).
+        content = _content_boxes(layout_plan, book, keepouts=keepouts, frames=frames)
+        box = _frame(content)
+        bare = not content
     width = (box[2] - box[0]) * scale
     height = (box[3] - box[1]) * scale
     canvas_width = float(f"{width:.0f}")
@@ -367,12 +382,21 @@ def render_svg(
     caption.extend(note[:150] for note in unmodelled)
     strip = _caption_height(len(caption))
 
+    #: A drawing frames itself, so the document is the drawing's width. A plan
+    #: with no geometry has nothing to frame and is instead as wide as the caption
+    #: it does draw: the margin square alone clipped every line of it at the
+    #: viewport edge, which read as an empty preview (572-F-1).
+    document_width = width
+    if bare:
+        document_width = max(width, float(math.ceil(_caption_pixel_width(caption))))
+
     parts: list[str] = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" '
-        f'height="{height + strip:.0f}" viewBox="0 0 {width:.0f} {height + strip:.0f}" '
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{document_width:.0f}" '
+        f'height="{height + strip:.0f}" '
+        f'viewBox="0 0 {document_width:.0f} {height + strip:.0f}" '
         f'font-family="{RENDER_TEXT_FAMILY}" '
         f'font-size="{PREVIEW_FONT_SIZE:g}">',
-        f'<rect x="0" y="0" width="{width:.0f}" height="{height + strip:.0f}" '
+        f'<rect x="0" y="0" width="{document_width:.0f}" height="{height + strip:.0f}" '
         f'fill="{_COLOURS["background"]}"/>',
         rect(box, fill=_COLOURS["page"], stroke=_COLOURS["border"]),
     ]
@@ -689,10 +713,27 @@ def _caption(lines: list[str], height: float) -> list[str]:
     out: list[str] = []
     for index, line in enumerate(lines):
         out.append(
-            f'<text x="8" y="{height + CAPTION_TOP + index * CAPTION_LINE_HEIGHT:.3f}" '
+            f'<text x="{CAPTION_LEFT:g}" '
+            f'y="{height + CAPTION_TOP + index * CAPTION_LINE_HEIGHT:.3f}" '
             f'fill="{_COLOURS["caption"]}">{_text(line)}</text>'
         )
     return out
+
+
+def _caption_pixel_width(lines: Sequence[str]) -> float:
+    """The caption's widest line plus its margins, in output pixels.
+
+    Measured with :func:`boardwise.core.textmetrics.advance` at the size and the
+    family the document itself declares for the strip — the strip is output
+    pixels, so this width is the same at every ``scale``. A character-count guess
+    would put a canvas around text of a width the text does not have, which is
+    the one thing this preview must not do.
+    """
+    widest = max(
+        (advance(line, RENDER_TEXT_FAMILY, PREVIEW_FONT_SIZE) for line in lines),
+        default=0.0,
+    )
+    return CAPTION_LEFT + widest + CAPTION_LEFT
 
 
 # ------------------------------------------------------------------ geometry
@@ -750,17 +791,17 @@ def _normalised_box(item: Box) -> Box:
     return (left, bottom, right, top)
 
 
-def _content_box(
+def _content_boxes(
     plan: LayoutPlan,
     book: Mapping[str, SymbolProfile],
     keepouts: Sequence[Box] = (),
     frames: Sequence[tuple[str, Box]] = (),
-) -> Box:
-    """The drawing's own extent, used as the frame when no page is stated.
+) -> list[Box]:
+    """Every box the picture draws — the extent the frame is built from.
 
-    Everything the picture draws is in it — including the keep-outs and module
-    frames, which are exactly the boxes "does it fit" is answered with, and a
-    lone junction, which can be the only thing outside a symbol's own extent.
+    Includes the keep-outs and module frames, which are exactly the boxes "does
+    it fit" is answered with, and a lone junction, which can be the only thing
+    outside a symbol's own extent.
     """
     boxes: list[Box] = []
     for part in plan.parts:
@@ -792,6 +833,11 @@ def _content_box(
         boxes.append(_normalised_box(keep))
     for _, frame in frames:
         boxes.append(_normalised_box(frame))
+    return boxes
+
+
+def _frame(boxes: Sequence[Box]) -> Box:
+    """The margin-padded frame around ``boxes``; the margin square when empty."""
     if not boxes:
         return (-PREVIEW_MARGIN, -PREVIEW_MARGIN, PREVIEW_MARGIN, PREVIEW_MARGIN)
     return (
@@ -800,6 +846,16 @@ def _content_box(
         max(box[2] for box in boxes) + PREVIEW_MARGIN,
         max(box[3] for box in boxes) + PREVIEW_MARGIN,
     )
+
+
+def _content_box(
+    plan: LayoutPlan,
+    book: Mapping[str, SymbolProfile],
+    keepouts: Sequence[Box] = (),
+    frames: Sequence[tuple[str, Box]] = (),
+) -> Box:
+    """The drawing's own extent, used as the frame when no page is stated."""
+    return _frame(_content_boxes(plan, book, keepouts=keepouts, frames=frames))
 
 
 @dataclass(frozen=True)

@@ -1776,6 +1776,7 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     intent: IntentSource | DesignIntent | None = None,
     page_ground_domains: frozenset[str] | None = None,
     page_net_members: Mapping[str, int] | None = None,
+    spec_path: str | None = None,
 ) -> CompileResult:
     """Compile a drawing, or say why there is none.
 
@@ -1812,6 +1813,13 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     relations (548P143). The page compiler passes it so a cross-module net is not
     mistaken for a unique movable endpoint; module parts and poses still use the
     module-local circuit. ``None`` keeps the standalone/current-circuit reading.
+
+    ``spec_path`` is the **circuit spec file** this run read, when the caller
+    knows it (572A-H3). A `facts-missing` refusal names the spec's own sibling
+    library — `<name>.library.json` beside it, the pairing the measured
+    `blocklib/specs/` samples use — before it suggests rebuilding anything; with
+    ``None`` the same sentence names the rule instead. It never changes what is
+    compiled, and the page compiler does not pass it.
     """
     for value, expected in (
         (circuit_spec, CircuitSpec),
@@ -1939,7 +1947,7 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
         return result
 
     # 3. the library has to describe every part that must be placed.
-    missing = _library_failures(circuit_spec, book)
+    missing = _library_failures(circuit_spec, book, spec_path=spec_path)
     if missing:
         result.failures = missing
         return result
@@ -2578,8 +2586,49 @@ def _archipelago_failures(
     return []
 
 
+def _sibling_library_hint(spec_path: str | None) -> str:
+    """572A-H3: the book a spec ships with sits **beside** it, named after it.
+
+    Measured on the `blocklib/specs/` family: `ch340_serial.circuit.json` +
+    `ch340_serial.presentation.json` sit next to `ch340_serial.library.json`, and
+    passing that sibling turns seven of nine refusals into candidates at once
+    (`ch340_serial`, `flyback_uc3845`, `power_entry_xt30` measured 4/4 here).
+    The refusal said "build the profile … or a library export", which sends a
+    reader off to rebuild facts that are already in the repository.
+
+    ``spec_path`` is the spec file this run was handed, when the caller knows it;
+    the sibling name is derived from it (never hard-coded). A caller that cannot
+    say which file it read still gets the **rule** with the real pattern, so the
+    first thing the reader checks is the pairing rather than the library.
+    """
+    if spec_path is None:
+        return (
+            "first check whether --profiles is the spec's own library — the "
+            "`<spec>.library.json` in the same directory as the circuit/"
+            "presentation you passed, named after the spec — and pass that file "
+            "instead; a wrong pairing is not a missing profile. "
+        )
+    text = str(spec_path).replace("\\", "/")
+    directory, _, name = text.rpartition("/")
+    stem = name
+    for suffix in (".circuit.json", ".presentation.json"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    sibling = f"{directory}/{stem}.library.json" if directory else (
+        f"{stem}.library.json"
+    )
+    return (
+        f"first check whether --profiles is the spec's own library — {sibling} "
+        f"beside {text} (same directory, named after the spec) — and pass that "
+        "file instead; a wrong pairing is not a missing profile. "
+    )
+
+
 def _library_failures(
-    circuit_spec: CircuitSpec, book: Mapping[str, SymbolProfile]
+    circuit_spec: CircuitSpec,
+    book: Mapping[str, SymbolProfile],
+    spec_path: str | None = None,
 ) -> list[GrammarFailure]:
     """Parts whose symbol the library does not describe with any pin (053 sec.2).
 
@@ -2604,8 +2653,13 @@ def _library_failures(
             "their geometry — tip, pose, body — cannot be computed"
         ),
         action=(
-            "build the profile (symbolprofile.from_parsed_symbol over the symbol's "
-            "SYMBOL document, or a library export), or choose a compatible symbol "
+            # 572A-H3: the first sentence names the sibling book, because the
+            # refusal is measured to be an input pairing for 7 of 9 samples, and
+            # only then the two legitimate rebuilds (053 sec.2).
+            _sibling_library_hint(spec_path)
+            + "only if that book is also missing them: build the profile "
+            "(symbolprofile.from_parsed_symbol over the symbol's SYMBOL "
+            "document, or a library export), or choose a compatible symbol "
             "whose pin mapping has been verified — renumbering pins to fit the "
             "layout is forbidden (053 sec.2)"
         ),
@@ -19315,6 +19369,64 @@ def _flag_wire_fallback(
     return downgraded, note
 
 
+#: 572A-H1: the sentence that promises a **flag** for a ground net. It is only
+#: true when the finished plan actually carries one; :func:`_truthful_flag_notes`
+#: rewrites it otherwise, because a note that states a flag the drawing does not
+#: have is exactly the kind of false green a reader trusts.
+FLAG_DOWNGRADE_SENTENCE = (
+    "It is expressed by its **flag** at each of its pins instead (岳's "
+    "ground rule: a ground is named by a flag, never by a net label). "
+)
+
+
+def _truthful_flag_notes(
+    notes: Sequence[str],
+    fallbacks: Sequence[LabelFallback],
+    symbols: Sequence[Any],
+    labels: Sequence[Any],
+) -> list[str]:
+    """572A-H1: a downgrade note may only promise a flag the plan carries.
+
+    The gnd leg of :func:`_label_fallback` rewrites the expression to
+    ``style="flag"`` and says the net "is expressed by its **flag** at each of
+    its pins". That sentence was written unconditionally, but the flag-style
+    consumer itself degrades to net labels when the library carries no flag
+    symbol for the net (the same plan then says so in a second note) — measured
+    on `sy8089_buck_3v3`: ``power_symbols == []``, five `port.GND` labels, and a
+    note promising a flag at each pin. An auditor who trusts the note records a
+    ground as drawn the way 岳's rule demands when the page only has names.
+
+    So the sentence is reconciled against the **finished** flag set: a net the
+    plan placed no flag for gets the true expression — the labels that carry its
+    name, with the count — and the rule it fails, named as failed.
+    """
+    flagged = {getattr(item, "net", "") for item in symbols}
+    out = list(notes)
+    for fallback in fallbacks:
+        net_id = getattr(fallback, "net", "")
+        if not net_id or net_id in flagged:
+            continue
+        text = getattr(fallback, "note", "")
+        if FLAG_DOWNGRADE_SENTENCE not in text:
+            continue
+        for index, note in enumerate(out):
+            if note is not text and note != text:
+                continue
+            count = sum(
+                1 for item in labels if getattr(item, "net", "") == net_id
+            )
+            out[index] = note.replace(
+                FLAG_DOWNGRADE_SENTENCE,
+                "It is expressed by its **name** at each of its pins instead — "
+                f"{count} net label(s) carry {net_id} on this page and the plan "
+                "places **no flag** for it (the library carries no flag symbol "
+                "for this net), so 岳's ground rule — a ground is named by a "
+                "flag, never by a net label — is **not** met by this drawing. ",
+            )
+            break
+    return out
+
+
 def _label_fallback(
     ctx: _Context,
     net_id: str,
@@ -19377,9 +19489,8 @@ def _label_fallback(
             DOWNGRADE_NOTE_PREFIX
             + f"net {net_id}: its expression was promised as a **wire**, and the "
             f"router could not join its {len(members)} pin(s) — {unrouted.reason}. "
-            "It is expressed by its **flag** at each of its pins instead (岳's "
-            "ground rule: a ground is named by a flag, never by a net label). "
-            f"What this gives up: {gave_up}. "
+            + FLAG_DOWNGRADE_SENTENCE
+            + f"What this gives up: {gave_up}. "
             "Why the net was promised a wire in the first place, as the compiler "
             f"read it: {expression.reason}"
         )
@@ -24534,6 +24645,12 @@ def _build_one_variant(
         if riding is not None:
             return None, riding, []
 
+    # 572A-H1: the downgrade notes were written before the flags were placed, so
+    # a gnd net whose flag symbol the library does not carry keeps a sentence
+    # promising that flag. Reconcile it against the finished set — a note is
+    # evidence, and evidence that states the opposite of the plan is a false
+    # green (`_truthful_flag_notes`).
+    notes = _truthful_flag_notes(notes, fallbacks, symbols, labels)
     plan_notes = [
         f"compiled by {COMPILER_NAME}: {variant.label}; "
         f"axis {'column' if ctx.axis == 'v' else 'row'}, "
@@ -29926,9 +30043,39 @@ def _power_flag_findings(
     flagged = {symbol.net for symbol in layout_plan.power_symbols if symbol.net}
     out: list[GrammarFinding] = []
     for net in circuit_spec.nets:
-        if net.cls != "power" or net.id in flagged:
+        # 572A-H2: a **ground** is the net 岳's rule names first (530A: 「GND … 必须
+        # 是旗标」), and the class filter here read only `power` — so the one net
+        # with five `port.GND` labels and no flag at all was the only net that got
+        # no finding, while its two power siblings each got one. Both classes are
+        # flag obligations; the check is the same, the sentence names the rule.
+        if net.cls not in ("power", "gnd") or net.id in flagged:
             continue
         if not any(member.partition(".")[0] in placed for member in net.members):
+            continue
+        if net.cls == "gnd":
+            # Name the labels that stand where the flag should be: "no flag" is
+            # the obligation, and the count is what makes the finding answerable
+            # without opening the plan (`sy8089_buck_3v3`: 5).
+            carrying = sum(
+                1 for item in layout_plan.labels
+                if getattr(item, "net", "") == net.id
+            )
+            if not carrying:
+                # A ground with no expression at all is the stronger case
+                # `_uniform_gnd_finding` (571a1) already names, and two findings
+                # for one net would double-count it. This check answers the case
+                # that had none: labels standing where the flag belongs.
+                continue
+            out.append(GrammarFinding(
+                kind=KIND_OBLIGATION_MISSING,
+                objects=(f"circuitSpec.nets[{net.id}]",),
+                detail=(
+                    f"ground net {net.id!r} is drawn without a ground flag — 岳's "
+                    "ground rule names a ground by a flag at the pin it serves, "
+                    "never by a net label (530A), and this plan places no flag "
+                    f"for it: {carrying} net label(s) carry its name instead"
+                ),
+            ))
             continue
         out.append(GrammarFinding(
             kind=KIND_OBLIGATION_MISSING,

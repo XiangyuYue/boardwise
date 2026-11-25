@@ -433,6 +433,46 @@ def _version_text() -> str:
     return f"{first}\nconnector bundle {version} ({bundle}{size})"
 
 
+def _add_pintable_gate1_option(sub: argparse._SubParsersAction) -> None:
+    """Add the one selector gate 1 needs to ``pintable check`` (572D-3).
+
+    Gate 1 asks a symbol whether a pin number exists, so it needs the MCU's
+    block template **and** the designator of the part inside it. ``cli.py``
+    passed neither, so every run took the engine's "no MCU block was supplied"
+    branch: a ghost pin number (`PA99`) came back as exit 0 with ``ok: true``
+    while the report claimed 29 pins had been checked. ``--block`` already names
+    the MCU block (its help says so), so only the component is missing, spelled
+    as `validate` spells it.
+
+    The parser for this family is registered by `commands/draw.py`, which this
+    batch's file domain excludes, so the option is added here beside its
+    registration rather than in the other file.
+    """
+    pintable = sub.choices.get("pintable")
+    if pintable is None:
+        return
+    action = next(
+        (
+            item
+            for item in pintable._actions
+            if isinstance(item, argparse._SubParsersAction)
+        ),
+        None,
+    )
+    check = action.choices.get("check") if action is not None else None
+    if check is None:
+        return
+    if any("--mcu-component" in a.option_strings for a in check._actions):
+        return
+    check.add_argument(
+        "--mcu-component", default="",
+        help=(
+            "Designator of the MCU inside that block (gate 1: do the table's pin "
+            "numbers exist on its symbol?). Default: the block's only part."
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="boardwise",
@@ -490,6 +530,8 @@ def build_parser() -> argparse.ArgumentParser:
     review_commands.register_bom_parser(sub)
 
     register_pintable_parser(sub)
+
+    _add_pintable_gate1_option(sub)
 
     register_validate_parser(sub)
 
@@ -12010,7 +12052,8 @@ def _draw_compile(args: argparse.Namespace, *, page_box, notes: list[str]):
             notes.append(pageframe.keep_out_note(page_box, keepout))
     intent = _intent_source_for_apply(args, "", notes)
     return (
-        drawcompiler.compile(circuit, presentation, profiles, budget, intent=intent),
+        drawcompiler.compile(circuit, presentation, profiles, budget, intent=intent,
+                             spec_path=str(args.circuit)),
         circuit,
         presentation,
         profiles,
@@ -15717,18 +15760,23 @@ def _cmd_draw_apply(args: argparse.Namespace) -> int:
     from .core.changeplan import DRAW_MODULE_KIND, ChangePlan, ChangePlanError
     from .core.pagelayoutplan import PAGE_LAYOUT_PLAN_KIND
 
-    if _draw_document_kind(args.plan) == PAGE_LAYOUT_PLAN_KIND:
-        # 057 sec.1: the same command eats a page document and lands its `plan`
-        # field through the path below (see `_cmd_draw_apply_page`).
-        return _cmd_draw_apply_page(args)
     try:
-        # 533: `--page-box` is the fallback sheet for a landing whose page cannot
-        # be read back, so it is validated here — before the bridge opens and
-        # before anything can be written — rather than deep inside the flow.
+        # 533 / 572E-1: `--page-box` is the fallback sheet for a landing whose
+        # page cannot be read back, so it is validated **here** — before the
+        # document kind picks a branch, before the bridge opens and before
+        # anything can be written. The check used to sit *below* the dispatch, so
+        # the page-document route took the same invalid value straight into the
+        # digest guard (exit 4, not a word about page-box) while the module route
+        # named the flag (exit 5). One flag, one reading, whichever document the
+        # landing is.
         _draw_page_box(getattr(args, "page_box", None))
     except _DrawInputError as exc:
         print(f"boardwise draw apply: {exc}", file=sys.stderr)
         return 5
+    if _draw_document_kind(args.plan) == PAGE_LAYOUT_PLAN_KIND:
+        # 057 sec.1: the same command eats a page document and lands its `plan`
+        # field through the path below (see `_cmd_draw_apply_page`).
+        return _cmd_draw_apply_page(args)
     try:
         plan = ChangePlan.load(args.plan)
     except ChangePlanError as exc:
@@ -15742,6 +15790,41 @@ def _cmd_draw_apply(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 5
+    # 572E-2: a plan that binds a page lands on *that* page — `--page` names the
+    # landing, it does not overrule the plan. Letting `args.page` win left the
+    # chain with no comparison at all (the report's `guards.checked.pageUuid`
+    # only ever proved "some page was named"), while this command's own docstring
+    # counts "a page that is not the plan's" as a guard refusal (exit 4). The
+    # disagreement is refused here, before the bridge opens, and the report says
+    # which page the plan binds instead of claiming the named one was checked.
+    if args.page and plan.source.page_uuid and args.page != plan.source.page_uuid:
+        message = (
+            f"--page {args.page} is not the page this plan binds "
+            f"({plan.source.page_uuid}): the plan's census, its designators and "
+            "its postconditions are all about that page — re-plan against the "
+            "page you mean, or drop `--page`"
+        )
+        report = {
+            "command": "apply",
+            "ok": False,
+            "kind": plan.change.kind,
+            "module": plan.target.module,
+            "outcome": "refused",
+            "reason": "page_not_plans",
+            "exitCode": 4,
+            "planPath": str(args.plan),
+            "page": {"uuid": args.page, "created": False},
+            "guards": {
+                "checked": {"pageUuid": False},
+                "problems": [message],
+            },
+            "notes": [
+                "`--page` 与计划绑定的页不一致（572E-2）：没有连接编辑器、没有写；"
+                f"报告不再把「指定了一页」写成「计划绑定的页对上了」"
+            ],
+            "final": "",
+        }
+        return _render_draw_apply(report, args)
     # An unbound plan with neither flag is **not** refused here any more (054):
     # whether a page can be reused is a fact of the live listing (`doc.list` plus
     # one `sch.geometry` per candidate), so the rule runs in `_draw_apply_flow`
@@ -18851,6 +18934,11 @@ def _render_draw_result(
     report = result.comparison
     exit_code = 1
     if report is None:
+        # 572C-04: this command's exit table (docs/draw.md) gives 1 to "the two
+        # designs differ", and a comparison that never ran is not that claim —
+        # nothing was compared, so this is the "nothing was executed" word, 2.
+        # The unknown-write block below still lifts it to 3, which outranks both.
+        exit_code = 2
         print("\ndiff: NOT RUN (no candidate model)")
     else:
         print(f"\ndiff vs golden ({result.candidate_source}):")
@@ -19028,7 +19116,7 @@ def _cmd_pintable_check(args: argparse.Namespace) -> int:
         load_ioc,
         load_pin_table,
     )
-    from boardwise.engines.pintable_check import PinFinding, check_pin_table
+    from boardwise.engines.pintable_check import check_pin_table, ioc_findings
 
     try:
         pin_table = load_pin_table(args.table)
@@ -19059,7 +19147,29 @@ def _cmd_pintable_check(args: argparse.Namespace) -> int:
                 return 2
             block_id = named[0]
 
-    report = check_pin_table(pin_table, spec=spec, mcu_block_id=block_id)
+    # 572D-3: gate 1 is only reachable when the MCU's block template and the
+    # part inside it are both named. `--block` is the block (its help already
+    # calls it "the MCU's block id"); the component is `--mcu-component`, and a
+    # block with a single part cannot be ambiguous, so it is used directly
+    # rather than making the caller repeat what the block already says.
+    mcu_block = None
+    if spec is not None and block_id:
+        instance = spec.instance(block_id)
+        if instance is not None:
+            mcu_block = instance.template
+    component = getattr(args, "mcu_component", "") or ""
+    if mcu_block is not None and not component:
+        refs = [part.ref for part in mcu_block.components]
+        if len(refs) == 1:
+            component = refs[0]
+
+    report = check_pin_table(
+        pin_table,
+        mcu_block=mcu_block,
+        mcu_component=component,
+        spec=spec,
+        mcu_block_id=block_id,
+    )
 
     if args.ioc:
         try:
@@ -19067,18 +19177,12 @@ def _cmd_pintable_check(args: argparse.Namespace) -> int:
         except PinTableError as exc:
             print(f"boardwise pintable check: {args.ioc}: {exc}", file=sys.stderr)
             return 2
-        for conflict in cross_check(pin_table, project):
-            report.findings.append(
-                PinFinding(
-                    kind="open-question",
-                    rule="ioc-cross-check",
-                    message=conflict.detail,
-                    evidence=[
-                        f"{conflict.port_pin}: firmware={conflict.firmware!r} "
-                        f"ioc={conflict.ioc!r}"
-                    ],
-                )
-            )
+        # 572D-5: the classification is the engine's (`ioc_findings`): a
+        # contradiction with the .ioc (`function_mismatch`/`net_mismatch`) is a
+        # DEFECT that blocks, a pin one side simply does not mention stays an
+        # open question. Reporting every conflict as "open question" made a
+        # table that disagrees with its own baseline exit 0.
+        report.findings.extend(ioc_findings(pin_table, project))
 
     if args.json:
         print(_json.dumps(report.as_json(), indent=2, ensure_ascii=False))

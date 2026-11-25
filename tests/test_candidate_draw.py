@@ -144,6 +144,12 @@ class FakeClient:
             return {"data": "c2hvdA=="}
         if action == "sch.doc.new":
             return {"schematicUuid": "s", "pageUuid": "p"}
+        if action == "sch.doc.save":
+            # The real connector answers `{"saved": true}` when it accepts a
+            # save, and throws when it does not; `_save_project` reads that
+            # field (572C-02), so the fixture has to speak the same shape. A
+            # refusal is injected through ``FaultClient.fail``, not here.
+            return {"saved": True}
         return {"uuid": f"u{len(self.calls)}"}
 
 

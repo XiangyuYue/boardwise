@@ -47,7 +47,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..core.blocks import BlockPort, BlockTemplate, BoardSpec
-from ..core.pintable import PinTable, looks_like_port_pin
+from ..core.pintable import (
+    IocProject,
+    PinConflict,
+    PinTable,
+    cross_check,
+    looks_like_port_pin,
+    pin_key,
+)
 
 #: How a finding is classified. The split is the task book's, and it carries the
 #: *judgement*: a defect blocks, an open question does not but must be printed.
@@ -238,10 +245,14 @@ def check_pin_table(
         )
 
     # ---- gate 2: one pin number, one row
+    # Keyed by `pin_key`, the same normalization `cross_check` and gate 3 use:
+    # `PA5` and `pa5` are one ball of silicon, and the raw spelling made this
+    # gate miss the duplicate (572-D-2).
     seen: dict[str, int] = {}
     for order, pin in enumerate(table.pins):
-        if pin.number in seen:
-            first = table.pins[seen[pin.number]]
+        key = pin_key(pin.number)
+        if key in seen:
+            first = table.pins[seen[key]]
             report.findings.append(
                 PinFinding(
                     kind=DEFECT,
@@ -252,13 +263,13 @@ def check_pin_table(
                         "second row would silently win, so neither is believed"
                     ),
                     evidence=[
-                        f"row {seen[pin.number]}: {first.function}/{first.net}",
-                        f"row {order}: {pin.function}/{pin.net}",
+                        f"row {seen[key]}: {first.number} {first.function}/{first.net}",
+                        f"row {order}: {pin.number} {pin.function}/{pin.net}",
                     ],
                 )
             )
         else:
-            seen[pin.number] = order
+            seen[key] = order
 
     # ---- gate 3: the two-way difference against the spec
     if spec is None or not mcu_block_id:
@@ -363,7 +374,11 @@ def check_pin_table(
                     )
                     continue
                 wiring = spec_mcu_wiring.get(net, {})
-                balls = {ball for ball in wiring.values() if ball}
+                # Both sides go through `pin_key`: the spec's ball names come
+                # from a block author and the firmware's from the table, and
+                # `pa5` against a spec ball `PA5` is agreement, not a defect
+                # (572-D-2).
+                balls = {pin_key(ball) for ball in wiring.values() if ball}
                 if wiring and not balls:
                     # Every MCU port the spec puts on this net names no ball, so
                     # there is nothing the pin set can be differenced against.
@@ -375,7 +390,9 @@ def check_pin_table(
                         for role, ball in wiring.items()
                     )
                 )
-                unwired = sorted(set(pins) - balls)
+                unwired = sorted(
+                    {number for number in pins if pin_key(number) not in balls}
+                )
                 if unwired:
                     # The net is in the spec, so the name agrees — but the spec
                     # wires it to another ball, and "the firmware uses a pin the
@@ -402,16 +419,16 @@ def check_pin_table(
                 report.matched_nets += 1
             # Direction 2: the spec connects a signal port the firmware never named.
             firmware_nets = table.nets()
-            net_of_pin = {pin.number: pin.net for pin in table.pins}
+            net_by_pin_key = {pin_key(p.number): p.net for p in table.pins}
             for net in sorted(spec_signal_nets):
                 if net in firmware_nets:
                     continue
                 entries = spec_signal_nets[net]
                 elsewhere = sorted(
                     {
-                        f"{ball} on {net_of_pin[ball]!r}"
+                        f"{ball} on {net_by_pin_key[pin_key(ball)]!r}"
                         for role, ball in entries
-                        if ball and ball in net_of_pin
+                        if ball and pin_key(ball) in net_by_pin_key
                     }
                 )
                 if elsewhere:
@@ -456,6 +473,59 @@ def check_pin_table(
     return report
 
 
+#: The `.ioc` cross-check disagreements that are **contradictions**, not open
+#: questions. The two sides both name the pin and say different things about
+#: it: ``function_mismatch`` (``GPIO`` vs ``I2C1_SCL``) and ``net_mismatch``
+#: (``LED1`` vs ``LED_RED``). A contradiction is a finding somebody has to
+#: resolve, so it blocks. The other three kinds — a pin only one side lists,
+#: and a net only the firmware names — are *absence*, which may legitimately
+#: be a pin the firmware has not grown into yet; those stay open questions.
+#:
+#: Kept as a named set rather than an inline tuple so the rule is one fact a
+#: reader (and a test) can point at. 572-D-5: the CLI used to classify *every*
+#: conflict as ``open-question``, which made a table that flatly contradicts
+#: the CubeMX project exit 0.
+IOC_CONTRADICTION_KINDS = frozenset({"function_mismatch", "net_mismatch"})
+
+
+def ioc_conflict_findings(conflicts: list[PinConflict]) -> list[PinFinding]:
+    """Classify ``.ioc`` cross-check conflicts into findings.
+
+    ``net_mismatch`` / ``function_mismatch`` become :data:`DEFECT` (blocking);
+    ``missing_from_ioc`` / ``missing_from_firmware`` / ``firmware_only_net``
+    stay :data:`OPEN_QUESTION` (printed, never blocking — a schematic pin the
+    firmware has not used yet is not an error). A conflict kind this module does
+    not know is treated as an open question and keeps its kind in the evidence,
+    because guessing "defect" for an unexpected shape would block on a rule
+    nobody wrote.
+    """
+    findings: list[PinFinding] = []
+    for conflict in conflicts:
+        contradiction = conflict.kind in IOC_CONTRADICTION_KINDS
+        findings.append(
+            PinFinding(
+                kind=DEFECT if contradiction else OPEN_QUESTION,
+                rule="ioc-cross-check",
+                message=conflict.detail,
+                evidence=[
+                    f"{conflict.port_pin}: firmware={conflict.firmware!r} "
+                    f"ioc={conflict.ioc!r} ({conflict.kind})"
+                ],
+            )
+        )
+    return findings
+
+
+def ioc_findings(table: PinTable, project: IocProject) -> list[PinFinding]:
+    """The `.ioc` cross-check as findings, ready to extend a :class:`PinReport`.
+
+    ``report.findings.extend(ioc_findings(table, project))`` is the whole
+    contract: with the result in the report, ``report.ok`` and therefore the
+    caller's exit code follow the classification above.
+    """
+    return ioc_conflict_findings(cross_check(table, project))
+
+
 def _ball_of(port: BlockPort | None) -> str:
     """The ball a port sits on, or ``""`` when the block gives no evidence.
 
@@ -482,9 +552,12 @@ def _ports_on(template: BlockTemplate):
 
 __all__ = [
     "DEFECT",
+    "IOC_CONTRADICTION_KINDS",
     "NOTE",
     "OPEN_QUESTION",
     "PinFinding",
     "PinReport",
     "check_pin_table",
+    "ioc_conflict_findings",
+    "ioc_findings",
 ]

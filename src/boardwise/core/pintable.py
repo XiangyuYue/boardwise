@@ -154,6 +154,32 @@ def port_pin_of(text: str) -> str:
     return match["port_pin"] if match else ""
 
 
+def pin_key(number: str) -> str:
+    """The comparison key for a pin number — **one** spelling for every gate.
+
+    Pin numbers reach this module from two places that spell them differently:
+    a hand-written pin table (``pa5``, ``PA05``, ``01``) and a measured symbol
+    (``PA5``, ``1``). Comparing raw strings therefore made the same ball look
+    like two different pins — ``pa5`` against a spec ball ``PA5`` came out as a
+    false defect, and ``PA5`` + ``pa5`` in one table slipped past the
+    one-pin-one-row gate (:func:`boardwise.engines.pintable_check.check_pin_table`).
+
+    The key is the port-pin part, uppercased, with the pin number's leading
+    zeros dropped (``PA05`` → ``PA5``, ``01`` → ``1``); a name that is not a
+    port pin is keyed by its normalized text. This is the same normalization
+    :func:`cross_check` has always used, extracted so no caller can invent a
+    second one.
+    """
+    name = normalize_pin_name(number)
+    part = port_pin_of(name) or name
+    match = _PORT_PIN.match(part)
+    if match is not None:
+        return f"{match['port']}{int(match['pin'])}"
+    if part.isdigit():
+        return str(int(part))
+    return part
+
+
 @dataclass
 class PinEntry:
     """One row of the table: a pin, what it does, and the net it lands on."""
@@ -220,12 +246,25 @@ class PinTable:
 
 
 def load_pin_table(path: str | Path) -> PinTable:
-    """Read and validate a pin table file."""
+    """Read and validate a pin table file.
+
+    The file is read as bytes and decoded as strict UTF-8 **before** JSON
+    parsing, so a non-UTF-8 file is reported as what it is. Letting
+    ``read_text`` run inside the ``json.loads`` guard made the decode failure
+    surface as "not JSON" (``UnicodeDecodeError`` is a ``ValueError``), which
+    names the wrong cause — 572-D-4.
+    """
     file = Path(path)
     try:
-        raw = json.loads(file.read_text(encoding="utf-8"))
+        payload = file.read_bytes()
     except OSError as exc:
         raise PinTableError(f"{file}: cannot read: {exc}") from exc
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PinTableError(f"{file}: not UTF-8: {exc}") from exc
+    try:
+        raw = json.loads(text)
     except ValueError as exc:
         raise PinTableError(f"{file}: not JSON: {exc}") from exc
     table = pin_table_from_json(raw, where=str(file))
@@ -244,9 +283,15 @@ def pin_table_from_json(raw: Any, *, where: str = "<pintable>") -> PinTable:
     if kind != PINTABLE_KIND:
         raise PinTableError(f"{where}.kind: expected {PINTABLE_KIND!r}, got {kind!r}")
     _check_keys(raw, PINTABLE_KEYS, where)
-    if raw.get("version") != PINTABLE_VERSION:
+    # The version is a **typed** fact, not a value that happens to equal 1:
+    # `True == 1` and `1.0 == 1` in Python, so a value comparison accepted
+    # `version: true` and `version: 1.0` (572-D-6, the same family as 569-E-04).
+    # `type(...) is int` is deliberate — `isinstance(True, int)` is True.
+    version = raw.get("version")
+    if type(version) is not int or version != PINTABLE_VERSION:
         raise PinTableError(
-            f"{where}.version: expected {PINTABLE_VERSION}, got {raw.get('version')!r}"
+            f"{where}.version: expected the integer {PINTABLE_VERSION}, got "
+            f"{version!r} ({type(version).__name__})"
         )
 
     mcu = _as_str(_require(raw, "mcu", where), f"{where}.mcu", allow_empty=False)
@@ -284,11 +329,26 @@ def pin_table_from_json(raw: Any, *, where: str = "<pintable>") -> PinTable:
             f"{where}.pins: an empty pin table says nothing about the board, so it "
             "cannot be checked against anything"
         )
+    # ``notes`` is a list of strings and nothing else. Iterating whatever the
+    # key held turned ``5`` into a ``TypeError`` that escaped the CLI
+    # (``'int' object is not iterable``) and ``"abc"`` into three notes
+    # (``['a', 'b', 'c']``) — an input mistake that read as data (572-D-1).
+    # A key that is present must be a list, so ``"notes": null`` is refused
+    # instead of being taken for "no notes": the author wrote the key.
+    notes: list[str] = []
+    if "notes" in raw:
+        raw_notes = raw["notes"]
+        if not isinstance(raw_notes, list):
+            raise PinTableError(
+                f"{where}.notes: expected a list of strings, got "
+                f"{type(raw_notes).__name__}"
+            )
+        notes = [_as_str(note, f"{where}.notes[]") for note in raw_notes]
     return PinTable(
         mcu=mcu,
         pins=pins,
         source=_as_str(raw.get("source"), f"{where}.source"),
-        notes=[_as_str(n, f"{where}.notes[]") for n in (raw.get("notes") or [])],
+        notes=notes,
     )
 
 
@@ -584,11 +644,15 @@ def cross_check(table: PinTable, project: IocProject) -> list[PinConflict]:
     not slip through just because the baseline had nothing to say about it.
     """
     conflicts: list[PinConflict] = []
-    baseline = project.by_port_pin()
+    baseline = {
+        pin_key(pin.port_pin): pin for pin in project.physical if pin.port_pin
+    }
     firmware = {}
     for pin in table.pins:
-        key = port_pin_of(pin.number) or normalize_pin_name(pin.number)
-        firmware[key] = pin
+        # Same key as every gate in `engines/pintable_check.py`: one
+        # normalization, so `pa5` and `PA5` cannot be merged here and split
+        # there (572-D-2).
+        firmware[pin_key(pin.number)] = pin
 
     for key in sorted(set(firmware) | set(baseline)):
         fw = firmware.get(key)
@@ -693,6 +757,7 @@ __all__ = [
     "mcu_symbol_pins",
     "normalize_pin_name",
     "parse_ioc",
+    "pin_key",
     "pin_table_from_json",
     "port_pin_of",
 ]
