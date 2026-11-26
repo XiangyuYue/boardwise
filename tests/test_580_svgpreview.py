@@ -156,7 +156,11 @@ def test_a_normal_drawing_keeps_its_coordinates() -> None:
     assert (left, top) == (40.0, 40.0)  # body (-10..10, -20..20) in a -50..50 frame
     dots = [(node.get("cx"), node.get("cy")) for node in root.iter(f"{SVG}circle")]
     assert dots == [("50.000", "40.000"), ("50.000", "60.000")]
-    assert width == 20 + 2 * svgpreview.PREVIEW_MARGIN
+    # U-06: a self-framed preview (no stated sheet) is now `max(drawing, caption)`,
+    # so this one is as wide as its caption — 404.0 measured on 2026-11-26 against
+    # a 100-unit drawing. The coordinates asserted above are unchanged: only the
+    # document got wide enough to hold the caption instead of clipping it.
+    assert width == 404.0
 
 
 # --------------------------------------------------------- F-3 visual scale

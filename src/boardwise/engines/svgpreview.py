@@ -382,12 +382,19 @@ def render_svg(
     caption.extend(note[:150] for note in unmodelled)
     strip = _caption_height(len(caption))
 
-    #: A drawing frames itself, so the document is the drawing's width. A plan
-    #: with no geometry has nothing to frame and is instead as wide as the caption
-    #: it does draw: the margin square alone clipped every line of it at the
-    #: viewport edge, which read as an empty preview (572-F-1).
+    #: A drawing frames itself, so a **self-framed** document (no stated sheet) is
+    #: at least the drawing's width — but never less than the caption it draws.
+    #: 572-F-1 widened only the geometry-free case (`bare`), so a narrow plan with
+    #: real geometry still got a 100-unit document and every caption line past that
+    #: width was clipped at the viewport edge (U-06: R1 with no page box, 404 px of
+    #: caption in a 100-unit document).
+    #:
+    #: A **stated sheet** is the sheet: the caller gave the frame, so the document
+    #: stays exactly it (`test_a_stated_page_is_not_enlarged_by_far_keepouts_or_
+    #: frames`), which means a caption wider than a narrow sheet is still clipped
+    #: there. That limit is the frame's, not this function's to overrule.
     document_width = width
-    if bare:
+    if page_box is None:
         document_width = max(width, float(math.ceil(_caption_pixel_width(caption))))
 
     parts: list[str] = [

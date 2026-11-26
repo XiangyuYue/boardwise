@@ -108,17 +108,32 @@ def test_an_empty_plan_gets_a_canvas_wide_enough_for_its_own_caption() -> None:
         assert float(node.get("y")) + svgpreview.PREVIEW_FONT_SIZE <= height, "baseline below the strip"
 
 
-def test_a_plan_with_geometry_keeps_its_own_frame_as_the_width() -> None:
-    """The compatibility control: a drawing frames itself, caption or not.
+def test_a_self_framed_drawing_is_as_wide_as_its_caption() -> None:
+    """U-06: for a self-framed preview the caption decides the width when it is wider.
 
-    Widening a *drawing's* canvas to its caption would move every coordinate a
-    reader compares against the compiler (and ``test_580``'s
-    ``width == 20 + 2 * PREVIEW_MARGIN``); only the empty plan has nothing else to
-    frame.
+    572-F pinned a *drawing's* canvas at its own frame and the caption past that
+    edge was clipped; its docstring named ``test_580``'s
+    ``width == 20 + 2 * PREVIEW_MARGIN`` as the thing to keep. U-06 grows the
+    document to ``max(drawing, caption)`` when no sheet is stated, and the
+    coordinate compatibility 572-F was protecting is pinned where it belongs —
+    `test_580`'s box/pin-dot assertions, which are unchanged. Measured on this
+    tree (2026-11-26): a 100-unit drawing gets a 404.0-unit document, and every
+    caption line ends inside it.
     """
     plan = LayoutPlan(parts=[LayoutPart(part_id="R1", symbol_ref="R-1k", x=0.0, y=0.0)])
-    width, _ = _view(_root(svgpreview.render_svg(plan, _book())))
-    assert width == 20 + 2 * svgpreview.PREVIEW_MARGIN
+    root = _root(svgpreview.render_svg(plan, _book()))
+    width, height = _view(root)
+    assert width == 404.0
+    caption = _caption(root)
+    assert caption, "the strip carries the caption this width is for"
+    for node in caption:
+        text = node.text or ""
+        end = float(node.get("x")) + advance(
+            text, RENDER_TEXT_FAMILY, svgpreview.PREVIEW_FONT_SIZE
+        )
+        assert end <= width, f"caption {text!r} ends at {end:.1f}, canvas is {width:.0f}"
+        assert float(node.get("y")) + svgpreview.PREVIEW_FONT_SIZE <= height, (
+            "baseline below the strip")
 
 
 # ------------------------------- F-2: the frame holds every box, page or not
