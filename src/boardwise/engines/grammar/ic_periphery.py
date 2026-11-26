@@ -165,6 +165,7 @@ from .base import (
     GrammarResult,
     RelativeConstraint,
     RoleBinding,
+    arm_note,
     bound_result,
     evidence,
     net_clause,
@@ -335,7 +336,7 @@ class IcPeripheryGrammar:
             rail = _net_on_core(circuit, core, core_nets, power, "power") or ""
             gnd = _net_on_core(circuit, core, core_nets, ground, "gnd") or ""
 
-        bridges, shunts, strays = _periphery(
+        bridges, shunts, strays, unplaced = _periphery(
             circuit, core, core_nets, rail, gnd, scope_parts, free_parts
         )
         if strays and not self.allow_unowned_branches:
@@ -344,7 +345,7 @@ class IcPeripheryGrammar:
             ])
         return self._result(
             circuit, presentation, claims[core], core, core_nets, rail, gnd,
-            bridges, shunts, scope_id, scope_parts,
+            bridges, shunts, strays, unplaced, scope_id, scope_parts,
         )
 
     # ------------------------------------------------------------- internals
@@ -360,6 +361,8 @@ class IcPeripheryGrammar:
         gnd: str,
         bridges: tuple[str, ...],
         shunts: tuple[str, ...],
+        strays: tuple[str, ...],
+        unplaced: tuple[str, ...],
         scope_id: str,
         scope_parts: tuple[str, ...],
     ) -> GrammarResult:
@@ -398,6 +401,10 @@ class IcPeripheryGrammar:
                     _scope_note(scope_id, scope_parts),
                     _partition_note(circuit, core),
                     _signal_note(circuit, signals, presentation),
+                    _extra_supply_note(circuit, core_nets, rail, gnd),
+                    _unplaced_note(circuit, core_nets, unplaced),
+                    _stray_note(circuit, core, strays),
+                    arm_note(circuit, self.profiles, core_nets),
                     orientation.note,
                     f"provenance={_core_provenance(prov, claim)}",
                 ),
@@ -1062,8 +1069,8 @@ def _periphery(
     gnd: str,
     scope_parts: tuple[str, ...],
     free_parts: tuple[str, ...] = (),
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """``(bridges, shunts, strays)`` — every two-terminal part of this drawing.
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """``(bridges, shunts, strays, unplaced)`` — every two-terminal part here.
 
     Three shapes and nothing else (098 sec.1):
 
@@ -1089,6 +1096,7 @@ def _periphery(
     bridges: list[str] = []
     shunts: list[str] = []
     strays: list[str] = []
+    unplaced: list[str] = []
     for part_id in sorted(edges):
         if part_id == core or part_id in free_parts:
             continue
@@ -1101,7 +1109,13 @@ def _periphery(
             shunts.append(part_id)
         elif not (here & core_nets):
             strays.append(part_id)
-    return tuple(bridges), tuple(shunts), tuple(strays)
+        else:
+            # On one of the core's own pin nets and still no shape: the case an
+            # island with no rail or return produces when a branch returns to a
+            # net of that class the core does not sit on (626A-01). It used to
+            # fall through every branch above and disappear from the result.
+            unplaced.append(part_id)
+    return tuple(bridges), tuple(shunts), tuple(strays), tuple(unplaced)
 
 
 def _stray_failure(
@@ -1461,13 +1475,104 @@ def _signal_note(
         )
     stated = []
     for net_id in signals:
-        declared = _orientation(presentation, net_id)
-        stated.append(
-            f"{net_id} on the {declared[1]} ({declared[2]})" if declared
-            else f"{net_id} (no declared direction — portRoles states none, so "
-                 "this grammar states no side for it)"
-        )
+        stated.append(_signal_clause(presentation, net_id))
     return "cross-module signals of this drawing: " + "; ".join(stated)
+
+
+def _signal_clause(presentation: PresentationSpec, net_id: str) -> str:
+    """One signal's clause: what the document declared, and what was read from it.
+
+    Three different facts, three different sentences (626A-02):
+
+    * no ``portRoles`` entry — the direction was never declared;
+    * a direction whose ``sidePreferences`` is left/right — a horizontal side;
+    * a direction whose side is top/bottom — declared, but not a horizontal
+      side, so this grammar states no left/right kind for it. Reporting that as
+      "nothing declared" made a vertical sheet and a silent one identical.
+    """
+    direction = presentation.port_roles.get(net_id, "")
+    if not direction:
+        return (
+            f"{net_id} (no declared direction — portRoles states none, so this "
+            "grammar states no side for it)"
+        )
+    declared = _orientation(presentation, net_id)
+    if declared is not None:
+        return f"{net_id} on the {declared[1]} ({declared[2]})"
+    side = presentation.side_for(direction)
+    return (
+        f"{net_id} (portRoles[{net_id!r}]={direction!r} and "
+        f"sidePreferences[{direction!r}]={side!r} — a vertical side states no "
+        "left/right kind, so this grammar states no horizontal side for it)"
+    )
+
+
+def _extra_supply_note(
+    circuit: CircuitSpec, core_nets: set[str], rail: str, gnd: str
+) -> str:
+    """Name the further nets of a class the core sits on.
+
+    `_net_on_core` binds the id-sorted first one; a core on two power nets is a
+    real drawing (an analog and a digital rail), and the second rail used to be
+    absent from every binding, obligation and evidence (626A-06). One rail per
+    drawing is still what is bound — the point is to say which one was not.
+    """
+    clauses: list[str] = []
+    for cls, chosen in (("power", rail), ("gnd", gnd)):
+        for net_id in nets_of_class(circuit, cls):
+            if net_id not in core_nets or net_id == chosen:
+                continue
+            what = "rail" if cls == "power" else "return"
+            clauses.append(
+                f"the core also sits on {net_id} (class {cls}): one {what} per "
+                f"drawing is bound and {chosen} is the id-sorted first"
+            )
+    return "; ".join(clauses)
+
+
+def _unplaced_note(
+    circuit: CircuitSpec, core_nets: set[str], unplaced: tuple[str, ...]
+) -> str:
+    """Name the parts on a core pin net that this role table gives no shape.
+
+    They appear when the island binds no rail or return and a branch returns to a
+    net of that class the core is not on: `_periphery` left them out of all three
+    buckets, so they vanished while `ok` stayed true (626A-01). Naming the net and
+    its class is what tells a reader the branch exists and why no role was bound.
+    """
+    if not unplaced:
+        return ""
+    named: list[str] = []
+    for part_id in unplaced:
+        pins = pins_of_part(circuit, part_id)
+        outside = sorted({net for net in pins.values() if net not in core_nets})
+        classes = sorted({
+            circuit.net(net).cls for net in outside if circuit.net(net) is not None
+        })
+        named.append(
+            f"{part_id} (its other end is net {', '.join(outside) or 'none'} of "
+            f"class {'/'.join(classes) or 'unknown'} — a net this core does not "
+            "sit on, so this grammar binds no rail or return for it)"
+        )
+    return "parts on a core pin net with no role here: " + "; ".join(named)
+
+
+def _stray_note(circuit: CircuitSpec, core: str, strays: tuple[str, ...]) -> str:
+    """Name the parts the policy leaves unbound instead of swallowing them.
+
+    `allow_unowned_branches` is a statement about what may stay off this core,
+    not a licence to say nothing: with the policy on, `bind` skipped the strays
+    and the result did not mention them at all (626A-05).
+    """
+    if not strays:
+        return ""
+    return (
+        "unbound by allow_unowned_branches: "
+        + ", ".join(strays)
+        + f" — a two-terminal part that touches no pin of the core {core}; the "
+        "policy leaves it to the compiler's free shelf, and it is named here so "
+        "'left alone' does not read as 'absent'"
+    )
 
 
 def _cluster_note(
