@@ -4,6 +4,26 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-11-26] 621D7 VoltageSpacing 整规则垂切（rule 域）
+
+- 新增 `rule` 子命令与 `boardwise.review-rule/1` 域：Rust `rule.rs` 一批产出五出口判定
+  （exempt_one_node/unmeasurable/band_unknown/pass/shortfall + severity + 读数素材），几何
+  进程内复用 `geometry::best_pair`、判据复用 `review_math::required_spacing_mil`，无第二套；
+  Python 新 `core/rulejson.py` 建造文档（measuremath 公共建造段）并校验行，Finding 文案/
+  UNKNOWN/priced 电压/排序/报告全留 Python，off/require 汇入同一段渲染代码。
+- `_spacing_batch`/`_clearance_batch` 退役；required-spacing 通道与 geometry 域降为
+  differential/pour_connectivity 消费面。合同裁定一处：**沉默行不携带数字**（judgedVolts 仅
+  band_unknown/pass/shortfall，requiredMil 仅 pass/shortfall）。
+- ROBOT off=require=冻结 SHA `38256374…9069d`（真二进制端到端），整规则 **1 个 rule 进程**
+  （655,792 bytes），`rulesErrored=[]`；11 合成形状真二进制 11/11 逐字段一致。Python 聚焦
+  **661 passed**（18 文件），Rust **386 passed / 0 failed**（fmt/clippy 绿），旧差分 17/17
+  （SHA `66438406…833` 不变）。
+- 主代理变异两项先红后 cp+SHA-256 恢复：Rust 丢 pitch external-none→INFO 从句（红 1）、
+  Python `_judged_from_row` 硬编码 WARN（红 2）。性能：ROBOT 单规则交替四轮 median，
+  off 1.4299095s → require **0.8114915s**（首次显著低于 off）。默认仍 off；未跑全量/真机/
+  发布/打包；下一步评估 §4 剩余候选（livepath/unproven/triage/report）排产。
+  详见 `tasks/621d7_voltage_spacing_rule.md` §7。
+
 ## [2026-11-26] 未处理清单收尾（U-06 / U-10 / 572B 真机回读）
 
 - **清单**：`evidence/622/UNRESOLVED.md` 的 14 条只剩 **U-05（待原输入）与 U-14（真机）**，U-01…U-13 逐条有结论。
@@ -13,6 +33,38 @@ collects the current truth and the pointers.
 - **U-14 新缺口（未修）**：4.1.100 没有 `sch_PrimitiveNetLabel` 命名空间（网络标签是 `sch_PrimitiveAttribute` 的 `Key=='NET'`），`sch.geometry` 的 `netlabels` 段永久 `available:false` → `_draw_geometry_readable` 要求十段全可用，真机上**空页复用闸永远 False**。出路（connector 派生该段 / Python 受控例外）各需单独一批。
 - **未做**：572B 写路径（`place_*` 各一次 + `delete_primitives` 回收）待授权；566-D-1 缺第二个被点名的可动工程；全量/Rust/发布闸未跑；三个提交均未推送。证据 `evidence/u06/`、`evidence/u10/REPORT.md`、`evidence/u14/REPORT.md`、`evidence/622/UNRESOLVED.md`。
 - **交接文档**：`docs/handoff.md`、`tasks/draw-line.md` 顶部各留一块 2026-11-26 当前状态，旧块统一降为「历史」；`TASKMAP` 622 行改为已提交。
+
+## [2026-11-26] 629 绘制线挖洞第十三批（flyback 深水构造 / 岛链端到端）
+
+- **选面**：628-A 自己列的三个未构造面（RCD 钳位 / 启动电阻 / 第二路自带分压），以及从没人接通的岛链 `draw islands propose → apply → draw compile`。HEAD `1fc6466`。
+- **10 条洞（高 4 / 中 5 / 低 1）**。高：① 教科书 RCD（C 与 R 并联回母线）**整条丢掉放电电阻**，活下来的臂不管是什么都叫 `clamp-C`——**互换两只件的 symbolRef 读数逐字相同**（我亲跑 c1/c1b）；② 第二路自带分压时绑哪个输出由**抽头网名字典序**决定，且配出的结构不可能（抽头没接误差放大器）；③ 启动电阻被读成**辅助整流二极管**、aux 网被绑成母线 HVDC；④ 零判断提案也 `apply` exit 0 落出**无 `role` 的岛**，而 `compile` 拒「未知 role」不拒「缺 role」。
+- **岛链是通的（正面结论）**：propose → apply → compile 四步全 exit 0；未 apply 的同一份 partial spec（`islands[]` 只声明一部分）`compile` 会 **exit 5**（`$.islands: part(s) R2 are in no island`）；apply 后 1 候选 0 失败，产物里岛名出现 17 次（单岛则 3 候选、岛名 0 次）⇒ 写回的 `islands[]` 确实被消费，问题在闸的松紧。
+- **状态**：只挖不修，被审文件 sha256 开工=收工；洞表与第十四批候选见 `outputs/hole629/TRIAGE.md`。
+
+## [2026-11-26] 628 绘制线挖洞第十二批（flyback / power_entry / registry）
+
+- **选面**：文法收尾——`flyback.py`(122.7 KB) + `power_entry.py`(61.9 KB)，外加**首次**纳入审查的 `grammar/__init__.py`(9.6 KB)。HEAD `1fc6466`。
+- **14 条洞（高 6 / 中 8）**。高：① 隔离边界短路检查只对二端件成立，三脚/四脚件跨两族地既不拒也不点名（`ok=True`，Y3/Y9 零字）；② `bus` 取「变压器身上任一 power 网」而非「与开关节点成对的绕组」，辅助供电网抢走 bus、辅助链整条消失；③ 第二路输出（12V+5V）整条支路静默消失；④ 入口串联件把 rail 抢到串联件之前，其后的 TVS/电容整批消失且 `ok=true` 还打印 no branch；⑤ 地网按 id 排序取第一个——**第二个地网改名即可把误拒翻成静默丢支路**（我亲跑 G1/G2：`AGND` 时 `ok=false`、改 `ZGND` 后 `ok=true` 且 C7 消失）；⑥ 双入口 USB+DC 只绑排序在前的一路。
+- **七本文法 04-H 合计 28/49 仍在**：ic_periphery 5、rc_lowpass 5、flyback 5、power_entry 4、base 3、ldo 3、voltage_divider 3(+1 部分)。无一本干净。
+- **registry 面是干净的**：`GRAMMARS`/`NAMES`/`_CLASSES` 三处同为七本、各本 `NAME` 与注册键逐项一致、`grammar_for` 七类全可构造——无「注册不可达」也无「可达未注册」。但 **`ROLES_BY_GRAMMAR` 在 `src/**` 零消费者**，角色表不参与任何校验。
+- **状态**：只挖不修，三文件 sha256 开工=收工；洞表与第十三批候选见 `outputs/hole628/TRIAGE.md`。
+
+## [2026-11-26] 627 绘制线挖洞第十一批（文法五本：base/ldo/voltage_divider/rc_lowpass）
+
+- **选面**：延续 626 的方法，把 04-H1…H7 家族推到其余文法。本轮四本：`base.py`(45 KB，**共享框架**)、`ldo.py`(28 KB)、`voltage_divider.py`(39 KB)、`rc_lowpass.py`(21 KB)。HEAD `72fff89`。
+- **19 条洞（高 7 / 中 11 / 低 1）**。高：① 明确 NC 的脚正是失败句点名的那只，detail **否认输入里存在的 `nc[]` 条目**（`ldo.py:487-501`）；② 输入/输出声明**同一侧**仍 `ok=True`，而每条 reason 都断言「opposite sides」（`ldo.py:310-325`，`:289-293` 无检查）；③ 第二颗可读核心短路时被 `_core_from` 判 invalid、另一核心绑上后**无痕丢弃**（`ldo.py:208-217`）；④ 分路被模块过滤后拒因改口成「两端都没有到地支路」，而 C1 就挂在 `OUT→GND`（`rc_lowpass.py:328-337/452-458`）；⑤ 两端都有分路时 in/out 由**网 id 序**决定、`in` 证据陈述相反事实（`rc_lowpass.py:349/386-397`）；⑥ 三脚符号一脚未提及即被当二端件绑成 shunt（共因 `base.py:849-852`）；⑦ 不在任何 module 的第二条分压梯静默丢弃、`ok=True` 无 note（`voltage_divider.py:295-299`）。
+- **04-H 表 14/28 仍在**：base 3（H2/H5/H7，**被六本文法继承**）、ldo 3（H1/H2/H7）、voltage_divider 3+1 部分（H1/H4/H7）、rc_lowpass 5（H1/H2/H3/H4/H7）。`rc_lowpass` 的 H3 与分压器分道：声明 `input=top/output=bottom` 仍发 `same-row`。
+- **验证**：P3b（nc 谎言）、P4（模块过滤谎言）、P2b/P2（same-row 不消费 sidePreferences）、`ldo.py:310-325` reason 原文，四项亲跑/亲读。
+- **我的错（披露）**：626/627 两份派单书都把 04-H 原始判据写成 `outputs/hole570/c/REPRO.md`——**该目录不存在**，原件在 `c2`；两处已就地更正并标日期，626 的判据来源据此记为「重建 + 626 表」。
+- **状态**：只挖不修，四文件 sha256 开工=收工；洞表与第十二批候选见 `outputs/hole627/TRIAGE.md`。
+
+## [2026-11-26] 623 A 缝收口（值解析 9 条）
+
+- **范围**：`outputs/hole623/TRIAGE.md` 的 13 条洞里做 A 缝 9 条；B 缝 4 条（`engines/intentproposer.py`）另开一批（该模块零测试，其中两条是语义裁决）。
+- **修**：**A-01** 四位值码不再截三位（`RTT034702FTP` 47 kΩ 曾被 decap 当 7 nF）；**A-02** 值记法不再被当值码（`R010`/`4K7`；`472M` 这类「码+公差」保留，86 的 4.7 nF 读数建在它上面）；**A-03** `0R` 读 0 Ω（岳裁决），降额分档随之从 38 颗电阻 + 0 跳线变 35 + 3；**A-04** 小数＋裸单位（`0.1u`/`4.7u`/`2.2n`；整数长尾与希腊 μ 裸写仍拒，102/055 已钉）；**A-06** SI 前缀（`1KV`/`500mV`/`10mV`、`100nA`/`1kA`）；**A-09** 全零码不再答 `0.0`（含 `rules/params.py` 消费者守卫，改前语料抛 `TypeError`）。
+- **结单不改**：**A-05**（阅读器契约就是「调用方先知道它是电阻」；三条生产路径按声明判型，新增 2 条钉子记录门）；**A-07**（指数就是第三位单数字，上限天然 9，岳裁决不加值上限）；**A-08** 由 A-01 闭合。
+- **读数**：全邻域 **1012 passed in 57.46s**（26 文件）；六处变异逐项先红、`cp`+SHA-256 复原（`values.py 6F363A80…`）；`tests/test_153_derating_package.py` 三处按 A-03 裁决改钉（不是放宽）。
+- **状态**：本批已提交、未推送、未跑全量。证据 `evidence/623a/REPORT.md`（§一–§二十五）。
 
 ## [2026-11-26] 626 绘制线挖洞第十批（文法两本 / 岛提案入口）
 

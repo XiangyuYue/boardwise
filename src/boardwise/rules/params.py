@@ -646,6 +646,12 @@ class ValueMpnMatch(FactsRule):
                 anchor = code_anchor
                 label = f"code {code}"
                 unit = "F"
+            # 623A-09: a code that states no value (`000`) decodes to ``None``.
+            # There is nothing to compare with the board's declaration and no
+            # anchor to name, so the rule stays silent for that token -- the
+            # same reading as an MPN with no value code at all.
+            if decoded is None:
+                continue
             # An MPN whose notation has several legitimate readings says so: the
             # comparison below is made against the one nearest the board's own
             # value, and a reader has to be able to see the others.

@@ -267,7 +267,9 @@ def test_resistance_reader_needs_the_type_door_for_a_messy_value_field() -> None
     assert resistance_ohms_of("1R 1% 0603", "R0603", "电阻") == 1.0
     assert resistance_ohms_of("10k 0603", "R0603", "电阻") == 10000.0
     assert resistance_ohms_of("10K", "R0603", "") == 10000.0
-    assert resistance_ohms_of("0R", "R0603", "电阻") is None  # notation, not a decode
+    # 623A-03 (岳 2026-11-26 裁决：0R 该读): the value grammar now reads the
+    # plain zero-ohm jumper spelling, so this door answers 0.0 rather than None.
+    assert resistance_ohms_of("0R", "R0603", "电阻") == 0.0
     assert resistance_ohms_of("4N60 (600V 4A NMOS)", "TO251", "NMOS") is None
     # A token that is a package size is a size, not a value (core.values' own list).
     assert resistance_ohms_of("0603", "R0603", "电阻") is None
@@ -463,8 +465,9 @@ def test_a_grounded_resistor_pair_is_not_a_derating_question():
     rows = DeratingPackage().check(ctx)
     assert _by_severity(rows, "WARN") == []
     summary = _by_severity(rows, "INFO")[-1]
-    # 0R is the notation the decoder refuses → judged on voltage, no power row.
-    assert "阻值读不出" in "\n".join(summary.evidence)
+    # 623A-03 (岳 2026-11-26 裁决): `0R` reads as 0 Ω now, so the part is named
+    # as a 0 Ω jumper instead of carrying an unreadable-resistance row.
+    assert "0 Ω 跳线" in "\n".join(summary.evidence)
 
 
 def test_a_zero_ohm_jumper_is_named_and_not_judged():
@@ -647,9 +650,13 @@ def test_the_part_s_own_two_nets_win_over_the_split():
 @pytest.mark.parametrize(
     "path,expected",
     [
-        # (board, findings) — measured 2026-10-11, see outputs/153/recon.txt
-        (FOC_100, [("PCB1", 38, 2, 36), ("PCB2", 3, 0, 3)]),
-        (FOC_110, [("PCB3", 3, 0, 3), ("PCB1", 34, 2, 32), ("PCB2", 4, 0, 4)]),
+        # (board, findings) — measured 2026-10-11, see outputs/153/recon.txt;
+        # re-measured 2026-11-26 after 623A-03's ruling (岳: `0R` reads as 0 Ω):
+        # the plain zero-ohm jumpers R31/R48/R49 moved out of "recognised
+        # resistors" into the 0 Ω-jumper bucket, and the two priced ones were
+        # among them, so the resistor count drops by 3 and the priced by 2.
+        (FOC_100, [("PCB1", 35, 0, 35), ("PCB2", 3, 0, 3)]),
+        (FOC_110, [("PCB3", 3, 0, 3), ("PCB1", 31, 0, 31), ("PCB2", 4, 0, 4)]),
         (ROBOT, [("PCB1", 13, 0, 13)]),
     ],
 )

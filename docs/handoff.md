@@ -40,10 +40,14 @@
    `delete_primitives` 回收）需**受控写授权**；② `netlabels` 缺口（connector 从 `NET` 属性派生，或
    Python 闸对「宿主确无此命名空间」给受控例外）单独一批，需一张有 NET 属性的页验证；③ 566-D-1
    同窗口切工程缺第二个被点名的可动工程。
-3. **绘制线挖洞待认领**：623–626 四批共 **46 条**洞——626 的 04-H1…H7 七条家族项**五条仍在**；
-   625 的 `MOS管`/`TVS管` 词边界与带 `USB` 的 IC 误读直接改 `decap` 假阳/假阴；624 的零引脚整件出页
-   （x=1400 仍 `violations=[]`）与 `validate_full` 的 `if p.bbox`；623 的 4 位 E96 截断。逐条见
-   `outputs/hole62{3,4,5,6}/TRIAGE.md`。
+3. **绘制线挖洞待认领**：623–629 七批共 **89 条**洞——629 挖 `flyback` 深水（RCD 并联放电电阻整条丢、启动电阻被读成辅助二极管、第二路分压绑哪个输出由网名字典序决定）与**岛链端到端**（链是通的：propose→apply→compile 四步全 exit 0，未 apply 时 compile exit 5；但零判断提案也 exit 0 落出**无 role** 的岛，而 compile 拒未知 role 不拒缺 role）；
+   628 收尾 last 两本文法（`flyback` 5/7 仍在、`power_entry` 4/7），
+   至此**七本文法 04-H 合计 28/49 仍在**（无一本干净），且 `grammar/__init__.py` 的 `ROLES_BY_GRAMMAR` 零消费者；
+   627 的四本文法（base/ldo/voltage_divider/rc_lowpass）
+   交 19 条，04-H 家族 **14/28 仍在**（`base.py` 的 H2/H5/H7 被六本文法继承）；626 的 04-H1…H7 七条家族项
+   **五条仍在**；625 的 `MOS管`/`TVS管` 词边界与带 `USB` 的 IC 误读直接改 `decap` 假阳/假阴；624 的零引脚整件出页
+   （x=1400 仍 `violations=[]`）与 `validate_full` 的 `if p.bbox`；**623 的 A 缝已收口**（9 条：8 修 + A-05 复核否决，`evidence/623a/REPORT.md`）、B 缝四条（`intentproposer.py`）待做。逐条见
+   `outputs/hole62{3,4,5,6,7}/TRIAGE.md`。
 4. **审查线**：600R 的工作树改动未提交；621 默认 off、auto 未开放、exe/pip 未打包。
 5. **仓库级**：绘制线五批与审查线改动仍未推送；全量、Rust、发布闸未跑；§0 通告与 §3.2/§3 的
    2026-11-13 状态属历史，冲突时以本节与 `PROGRESS.md` 为准。

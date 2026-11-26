@@ -140,8 +140,23 @@ _CAP_UNITS = {
     "uf": 1e-6,
     "µf": 1e-6,
     "mf": 1e-3,
+    # 623A-04: the trade's bare unit letters. `0.1u` / `4.7u` / `2.2n` / `1000u`
+    # are everyday board spellings and used to read as nothing while `0.1uF` read
+    # fine -- the suffix grammar demanded the trailing `F`. The mid-letter
+    # notation does not cover them: it owns `4u7`/`2n2` (no decimal point) and its
+    # three-figure scan never reaches `1000u`.
+    "p": 1e-12,
+    "n": 1e-9,
+    "u": 1e-6,
 }
 _CAP_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(pF|nF|uF|µF|MF)$", re.IGNORECASE)
+#: 623A-04: a **decimal** mantissa with a bare unit letter (`0.1u`, `4.7u`,
+#: `2.2n`).  Only the decimal form: an integer run with a bare letter is the
+#: mid-letter notation's field (`100n`, `22u`) and its length is bounded there --
+#: `12345n` stays refused by that scan (102's pin), and `1000u` with it.  A
+#: decimal point cannot be a part number's figure, which is what makes the
+#: broader spelling safe to read.
+_CAP_BARE_UNIT_RE = re.compile(r"^(\d+\.\d+)\s*([pnu])$", re.IGNORECASE)
 
 #: Package sizes that legitimately end in three digits -- a trailing group
 #: completing one of these is the part's *size*, never its value.
@@ -640,6 +655,15 @@ def _farads_of_field(text: str) -> float | None:
     """
     m = _CAP_RE.match(text)
     if m is None:
+        # 623A-04: the decimal-with-a-bare-unit spelling (`0.1u`, `4.7u`, `2.2n`).
+        # Only the decimal form; see `_CAP_BARE_UNIT_RE` for why.
+        bare = _CAP_BARE_UNIT_RE.match(text)
+        if bare is not None:
+            factor = _CAP_UNITS.get(bare.group(2).lower().replace("\u03bc", "\u00b5"))
+            value = float(bare.group(1)) * factor if factor is not None else 0.0
+            if factor is None or value <= 0:
+                return None
+            return _finite(value)
         return _mid_letter_farads(text)
     # GREEK SMALL LETTER MU (U+03BC) and MICRO SIGN (U+00B5) are one unit to a
     # reader and two code points to Python: ``_CAP_RE``'s ``re.IGNORECASE``
@@ -653,7 +677,13 @@ def _farads_of_field(text: str) -> float | None:
     factor = _CAP_UNITS.get(m.group(2).lower().replace("\u03bc", "\u00b5"))
     if factor is None:
         return None
-    return _finite(float(m.group(1)) * factor)
+    value = float(m.group(1)) * factor
+    if value <= 0:
+        # 623A-04: a zero capacitance is no reading -- the same rule the EIA
+        # decoder keeps for `000` (623A-09).  `0n`/`0u` were refused before the
+        # bare unit letters existed; with them they would otherwise read 0.0.
+        return None
+    return _finite(value)
 
 
 def parse_capacitance_farads(value: str) -> float | None:
@@ -852,6 +882,13 @@ def decode_eia_3digit(code: str, base: float) -> float | None:
     mantissa = int(code[:2])
     exponent = int(code[2])
     if base <= 0:
+        return None
+    # 623A-09: ``000`` states no value.  Answering ``0.0`` turned a code that
+    # says nothing into "this decodes to zero farads" (or zero ohms) -- a
+    # reading no rule can use.  Zero-ohm jumpers are spelled ``0R``/``0R0`` and
+    # are read by the mid-letter value grammar, not by this decoder, so the
+    # honest answer here is "cannot decode".
+    if mantissa == 0:
         return None
     return mantissa * (10.0 ** exponent) * base
 
@@ -1111,7 +1148,9 @@ def _mid_letter_readings(
 #: spellings of the *board* grammar: ``R`` as the decimal point (``0R01``),
 #: ``R`` in front (``R010``), and a bare number with an optional ``k``/``m``/``M``.
 _OHM_SUFFIX_RE = re.compile(r"(?i)\s*(?:ohms?|\u03a9)\s*$")
-_R_DECIMAL_RE = re.compile(r"(\d+)[Rr](\d+)")
+#: 623A-03 (岳 2026-11-26 裁决：``0R`` 该读)：``R`` 后面的小数位可以为空——
+#: ``0R`` 是板上写零欧跳线的标准写法，而``0R0``/``R0``/``0Ω`` 都早读得出 0 Ω。
+_R_DECIMAL_RE = re.compile(r"(\d+)[Rr](\d*)")
 _LEADING_R_RE = re.compile(r"[Rr](\d+)")
 _PLAIN_OHMS_RE = re.compile(r"(\d+(?:\.\d+)?)([kKmM]?)")
 _PLAIN_OHMS_MULTIPLIERS = {"": 1.0, "k": 1e3, "K": 1e3, "m": 1e-3, "M": 1e6}
@@ -1586,8 +1625,30 @@ def mpn_value_code(mpn: str) -> str | None:
     if _VENDOR_POWER_CODE_RE.search(token):
         return None
     candidates: list[str] = []
+    # 623A-02: a token that *is* a value spelling is not a value code.  `R010`
+    # states 0.01 Ω to the value grammar and `4K7` states 4.7 kΩ; reading the
+    # three figures inside them answered `'010'`/`'470'` -- a capacitance code for
+    # a string that already says what it is.  Two shapes are exempt: a bare digit
+    # run (the code's own shape), and a three-figure code with only letters after
+    # it (`472M`, `225K`) -- that is the trade's code-with-tolerance spelling, and
+    # the ohms multiplier on it (`M` = mega) is what the value grammar reads, not
+    # what the token means (86's `472M` -> 4.7 nF reading depends on this).
+    code_shape = re.fullmatch(r"\d{3}[A-Za-z]*", token) is not None
+    if not code_shape and not re.fullmatch(r"\d+", token) and (
+        parse_resistance_ohms(token) is not None
+        or parse_capacitance_farads(token) is not None
+    ):
+        return None
     for m in _CODE_RE.finditer(token):
         code = m.group(1)
+        # 623A-01: a three-figure reading must be a **whole** digit run. On a
+        # four-digit code (`RTT034702FTP`, 47 kΩ) the tail `702` sits right
+        # before the letter tail, so the "after the code comes a letter" rule
+        # below accepted it, and `core/decap.py` read that as a capacitance
+        # code. The finder stays dumb -- three figures only -- so a longer run
+        # has no reading at all (`None`), never a truncated one.
+        if len(_digit_run(token, m.start())) != 3:
+            continue
         before = token[: m.start()]
         after = token[m.end():]
         # Package guard: the group completes a size code -> it is a size.
@@ -1743,6 +1804,20 @@ _VOLTAGE_RE = re.compile(
 )
 
 
+#: 623A-06: an SI prefix with an explicit ``V`` (``1KV``, ``500mV``, ``10mV``,
+#: ``1MV``). Its own branch, tried before :data:`_VOLTAGE_RE`, so every string
+#: that grammar already reads keeps its exact value: the prefix letter cannot be
+#: where the mid-letter notation's ``V`` is, and a bare unit-less prefix
+#: (``1M``) does not match at all.
+_VOLTAGE_PREFIXES: dict[str, float] = {
+    "k": 1e3, "K": 1e3, "M": 1e6, "m": 1e-3, "u": 1e-6, "\u00b5": 1e-6,
+}
+_PREFIXED_VOLTAGE_RE = re.compile(
+    r"(?P<sign>[+-]?)(?P<num>\d+(?:\.\d+)?)\s*(?P<prefix>[kKmMu\u00b5])\s*"
+    r"[Vv](?:[Dd][Cc])?"
+)
+
+
 def parse_voltage_volts(value: str) -> float | None:
     """A rail voltage -> volts, or None when it is not one this reads.
 
@@ -1782,6 +1857,15 @@ def parse_voltage_volts(value: str) -> float | None:
     off a mantissa, so it would read the ``1206`` in a 1206 V rail as a size
     and refuse the field).
 
+    **623A-06 (岳 2026-11-26): prefixes are read now.** ``1KV``, ``1MV``,
+    ``500mV`` and ``10mV`` are the spellings a datasheet prints for the same
+    rail, and refusing them cost a comparison the grammar could have made. The
+    prefixed shape is its own branch *before* :data:`_VOLTAGE_RE` (see
+    :data:`_PREFIXED_VOLTAGE_RE`): a number, an SI prefix, an explicit ``V``
+    and nothing else but an optional ``DC``. A prefix without the unit is not a
+    voltage (``1M`` stays refused), and the mid-letter notation cannot collide
+    with it because its prefix letter would have to sit where its ``V`` is.
+
     **What the four branches read, in one place** (task A, 310 V identity): a
     contract's ``rails[].voltage`` for a high-voltage net is written the way a
     person names that net, so ``V_310V``, ``V310``, ``DC310``, ``310VDC`` all
@@ -1799,6 +1883,14 @@ def parse_voltage_volts(value: str) -> float | None:
     text = value.strip()
     if not text:
         return None
+    prefixed = _PREFIXED_VOLTAGE_RE.fullmatch(text)
+    if prefixed is not None:
+        magnitude = float(prefixed.group("num")) * _VOLTAGE_PREFIXES[
+            prefixed.group("prefix")
+        ]
+        if prefixed.group("sign") == "-":
+            magnitude = -magnitude
+        return _finite(magnitude)
     match = _VOLTAGE_RE.fullmatch(text)
     if match is None:
         return None
@@ -1836,11 +1928,15 @@ def parse_voltage_volts(value: str) -> float | None:
 _CURRENT_RE = re.compile(
     r"(?P<sign>[+-]?)"
     r"(?P<num>\d+(?:\.\d+)?|\.\d+)"
-    r"\s*(?P<prefix>[mMuU\u00b5\u03bc])?"
+    r"\s*(?P<prefix>[mMuU\u00b5\u03bckKn])?"
     r"(?P<unit>[Aa])"
 )
 
-_CURRENT_PREFIXES: dict[str, float] = {"m": 1e-3, "u": 1e-6, "\u00b5": 1e-6, "\u03bc": 1e-6}
+#: 623A-06: `k`/`K` (1 kA) and `n` (100 nA) join the trade's `m`/`u`; the unit
+#: stays required and a bare number is still not a current.
+_CURRENT_PREFIXES: dict[str, float] = {
+    "m": 1e-3, "u": 1e-6, "\u00b5": 1e-6, "\u03bc": 1e-6, "k": 1e3, "n": 1e-9,
+}
 
 
 def parse_current_amps(value: str) -> float | None:
