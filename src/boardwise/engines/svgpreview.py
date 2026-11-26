@@ -380,7 +380,6 @@ def render_svg(
     if native_art:
         caption.append("Native symbol art only; wires, flags and planned text remain diagnostic.")
     caption.extend(note[:150] for note in unmodelled)
-    strip = _caption_height(len(caption))
 
     #: A drawing frames itself, so a **self-framed** document (no stated sheet) is
     #: at least the drawing's width — but never less than the caption it draws.
@@ -391,11 +390,18 @@ def render_svg(
     #:
     #: A **stated sheet** is the sheet: the caller gave the frame, so the document
     #: stays exactly it (`test_a_stated_page_is_not_enlarged_by_far_keepouts_or_
-    #: frames`), which means a caption wider than a narrow sheet is still clipped
-    #: there. That limit is the frame's, not this function's to overrule.
+    #: frames`). 625B-04 measured what that ruling left half-done: a caption wider
+    #: than a narrow sheet (439.52 px on a 200-unit page) was written straight past
+    #: the viewport and **nothing said so**. The sheet does not grow — the caption
+    #: is wrapped to it instead, so the two halves of the ruling hold at once: the
+    #: frame is the caller's, and no character is clipped off it.
     document_width = width
+    caption_width = _caption_pixel_width(caption)
     if page_box is None:
-        document_width = max(width, float(math.ceil(_caption_pixel_width(caption))))
+        document_width = max(width, float(math.ceil(caption_width)))
+    elif caption_width > document_width:
+        caption = _wrap_caption(caption, document_width - 2.0 * CAPTION_LEFT)
+    strip = _caption_height(len(caption))
 
     parts: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{document_width:.0f}" '
@@ -741,6 +747,51 @@ def _caption_pixel_width(lines: Sequence[str]) -> float:
         default=0.0,
     )
     return CAPTION_LEFT + widest + CAPTION_LEFT
+
+
+def _wrap_caption(lines: Sequence[str], max_width: float) -> list[str]:
+    """Split the caption lines that are wider than the text column (625B-04).
+
+    A stated sheet is not enlarged, so a caption wider than a narrow sheet has
+    nowhere to go; wrapping is the one answer that keeps both halves of the
+    ruling (the sheet is the caller's, nothing is clipped off it). Lines that fit
+    are returned untouched, which is why an unremarkable preview is byte-for-byte
+    what it was.
+
+    ``max_width`` is the room between the strip's two margins; a sheet too narrow
+    to hold even that is left as it is rather than wrapped to nothing.
+    """
+    if max_width <= 1.0:
+        return list(lines)
+    out: list[str] = []
+    for line in lines:
+        if advance(line, RENDER_TEXT_FAMILY, PREVIEW_FONT_SIZE) <= max_width:
+            out.append(line)
+            continue
+        out.extend(_wrap_line(line, max_width))
+    return out
+
+
+def _wrap_line(line: str, max_width: float) -> list[str]:
+    """Greedy character wrap, breaking at the last space when there is one."""
+    pieces: list[str] = []
+    current = ""
+    for char in line:
+        if not current:
+            current = char
+            continue
+        if advance(current + char, RENDER_TEXT_FAMILY, PREVIEW_FONT_SIZE) <= max_width:
+            current += char
+            continue
+        cut = current.rfind(" ")
+        if cut > 0:
+            pieces.append(current[:cut])
+            current = current[cut + 1:] + char
+        else:
+            pieces.append(current)
+            current = char
+    pieces.append(current)
+    return pieces
 
 
 # ------------------------------------------------------------------ geometry

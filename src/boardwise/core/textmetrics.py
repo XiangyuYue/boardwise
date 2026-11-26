@@ -106,9 +106,10 @@ RENDER_TEXT_SCALE = CANVAS_TEXT_UNITS / RENDER_TEXT_PX
 #: Character advances of the render's canvas font, in em units. The render
 #: declares ``font-family: Arial`` for every canvas text class, and these are the
 #: standard Helvetica/Arial advance widths; anything not tabled falls back to
-#: :data:`TEXT_ADVANCE_EM_FALLBACK` (or, for the seven ASCII marks the table
-#: lacks, to :data:`TEXT_ADVANCE_EM_FALLBACK_ASCII`) — over-estimating a box
-#: keeps room, under-estimating makes it overlap.
+#: :data:`TEXT_ADVANCE_EM_FALLBACK` — over-estimating a box keeps room,
+#: under-estimating makes it overlap. Since 625B-05 the table covers every
+#: printable ASCII character; :data:`TEXT_ADVANCE_EM_FALLBACK_ASCII` remains as a
+#: defensive default for the ASCII range (see its note).
 TEXT_ADVANCE_EM: dict[str, float] = {
     " ": 0.278, "!": 0.278, '"': 0.355, "#": 0.556, "$": 0.556, "%": 0.889,
     "&": 0.667, "'": 0.191, "(": 0.333, ")": 0.333, "*": 0.389, "+": 0.584,
@@ -117,6 +118,12 @@ TEXT_ADVANCE_EM: dict[str, float] = {
     "6": 0.556, "7": 0.556, "8": 0.556, "9": 0.556,
     ":": 0.278, ";": 0.278, "<": 0.584, "=": 0.584, ">": 0.584, "?": 0.556,
     "@": 1.015,
+    #: 625B-05: the seven printable marks the table lacked, at Arial's own
+    #: advances. The 0.9 em fallback charged them 1.92–3.24x their width, so a
+    #: bracketed value (``[50V]``) built a box 1.533x too wide — the false-positive
+    #: direction for ``text-on-wire`` / overlap, and a drawing that does not look
+    #: like the one that was measured.
+    "[": 0.278, "\\": 0.278, "]": 0.278, "^": 0.469, "`": 0.333,
     "A": 0.667, "B": 0.667, "C": 0.722, "D": 0.722, "E": 0.667, "F": 0.611,
     "G": 0.778, "H": 0.722, "I": 0.278, "J": 0.5, "K": 0.667, "L": 0.556,
     "M": 0.833, "N": 0.722, "O": 0.778, "P": 0.667, "Q": 0.778, "R": 0.722,
@@ -127,6 +134,7 @@ TEXT_ADVANCE_EM: dict[str, float] = {
     "m": 0.833, "n": 0.556, "o": 0.556, "p": 0.556, "q": 0.556, "r": 0.333,
     "s": 0.5, "t": 0.278, "u": 0.556, "v": 0.5, "w": 0.722, "x": 0.5,
     "y": 0.5, "z": 0.5, "_": 0.556, "|": 0.26, "~": 0.581,
+    "{": 0.334, "}": 0.334,
     "\u00b5": 0.556, "\u03bc": 0.556, "\u03a9": 0.833, "\u00b0": 0.4,
 }
 
@@ -139,10 +147,13 @@ TEXT_ADVANCE_EM: dict[str, float] = {
 #: cannot name.
 TEXT_ADVANCE_EM_FALLBACK = 1.1
 
-#: Charge for an *ASCII* code point the table lacks, in em: the seven printable
-#: marks ``[ \ ] ^ ` { }``. They keep the 0.9 em every ASCII render was measured
-#: under, so 575's fullwidth floor cannot move an ASCII-only box — a fix for
-#: the wide scripts must not change ASCII geometry.
+#: Charge for an *ASCII* code point the table lacks, in em. Since 625B-05 the
+#: table covers **every printable ASCII character** — it was missing the seven
+#: marks ``[ \ ] ^ ` { }``, which the 0.9 em default charged 1.92–3.24x their
+#: Arial advance (625B's bracket box read 1.533x wide) — so this is a defensive
+#: default, not a live reading. It keeps 0.9 em rather than 575's 1.1 because the
+#: two constants answer different scripts: 575's fullwidth floor must not move an
+#: ASCII-only box.
 TEXT_ADVANCE_EM_FALLBACK_ASCII = 0.9
 
 
@@ -196,9 +207,10 @@ def render_width(text: str) -> float:
     so a drawing and its box can no longer be measured with two different ones.
 
     A table miss is charged :data:`TEXT_ADVANCE_EM_FALLBACK` (1.1 em), except
-    for ASCII, which stays at :data:`TEXT_ADVANCE_EM_FALLBACK_ASCII` (0.9 em):
-    the fallback that only ever reaches a handful of ASCII punctuation marks
-    must not shift a box built from ASCII text.
+    for ASCII, which stays at :data:`TEXT_ADVANCE_EM_FALLBACK_ASCII` (0.9 em).
+    Since 625B-05 completed the printable-ASCII table neither constant is reached
+    by real text: they answer 「a code point nobody measured」, and 575's
+    fullwidth floor must not shift a box built from ASCII.
 
     **The builtin ``sum`` is part of the geometry (579).** 575 hand-rolled the
     accumulator (``em = 0.0`` then ``em += advance``); the builtin sums floats

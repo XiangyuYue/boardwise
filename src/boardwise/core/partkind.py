@@ -84,6 +84,7 @@ value is ``core.values``' question.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -169,6 +170,23 @@ CONNECTOR_WORDS: tuple[str, ...] = (
     # the token-boundary read is what keeps this one exact.
     "EST026",
 )
+
+#: The words in :data:`CONNECTOR_WORDS` that name an **interface**, not a
+#: connector body (625B-02). ``USB`` in a catalogue name says which bus the part
+#: speaks, and a part that speaks a bus is not thereby a socket: measured on
+#: 「USB 转串口 CH340C」, which is a bridge **chip** and was read as a connector —
+#: so the one rule that asks 「is this an IC?」 (``decap``) stopped asking for its
+#: bypass capacitor. The hole is the *false negative* direction, which is why the
+#: interface word is not simply deleted: 「USB 母座」 really is a connector, and
+#: the designator (``USB1`` / ``J1`` / ``CN1``) is what says whether this board
+#: put the part there.
+#:
+#: What the word may not do is decide **against a designator that names an IC
+#: family** (:func:`_designator_is_ic`): a ``U``-designated part with a catalogue
+#: name mentioning its bus is a chip whose description mentions a bus. Applied in
+#: :func:`_read_part_kind`, not in :func:`_kind_of_words` — the word reader has no
+#: designator to read, and 「the word `usb` names a connector」 stays true there.
+INTERFACE_WORDS: frozenset[str] = frozenset({"usb"})
 
 #: Words that name a **transistor** (MOSFET / BJT). A power MOSFET's drain sits
 #: on a supply rail and its gate on a driver output, so a pin-count IC test reads
@@ -442,15 +460,46 @@ def declarations_of(component: object) -> PartDeclarations:
     )
 
 
+def _identity(text: str) -> str:
+    """A designator's identity in the one spelling **both** prefix readers read.
+
+    625B-03: the two readers used to take different strings. ``_prefix_of`` read
+    the raw one — and a full-width ``Ｒ`` *is* alphabetic, so it came back as ``Ｒ``
+    — while :func:`boardwise.core.parts.designator_category` matched
+    ``^([A-Za-z]+)`` against the same raw string and found nothing. The part then
+    fell through to ``unknown`` with **no basis at all** (``basis=''``, "nobody
+    declared anything") and vanished from the derating and decoupling sets without
+    a word. NFKC folds full-width forms to their ASCII equivalents (``Ｕ３`` ->
+    ``U3``); an ASCII designator is unchanged, character for character.
+    """
+    return unicodedata.normalize("NFKC", str(text or ""))
+
+
 def _prefix_of(designator: str) -> str:
     """The whole leading alphabetic run of a designator, upper-cased (127b)."""
-    text = str(designator or "").strip()
+    text = _identity(designator).strip()
     run = ""
     for char in text:
         if not char.isalpha():
             break
         run += char
     return run.upper()
+
+
+def _designator_is_ic(read: PartDeclarations) -> bool:
+    """Does the designator itself name an IC family? (625B-02's one question.)
+
+    It is the designator table's own answer (:func:`kind_of_category` over
+    :func:`boardwise.core.parts.designator_category`), read through the same
+    normalisation the last fallback uses, so ``U`` / ``IC`` / ``DRV`` all count
+    and ``USB1`` / ``J1`` / ``CN1`` do not.
+    """
+    designator = read.designator
+    if not _prefix_of(designator):
+        return False
+    from .parts import designator_category
+
+    return kind_of_category(designator_category(_identity(designator))) == KIND_IC
 
 
 def kind_of_category(category: str) -> str:
@@ -496,6 +545,22 @@ SUBSTRING_WORDS: frozenset[str] = frozenset(
 #: match is refused — the STM32 case is a Chinese sentence listing an interface,
 #: not an English one, and an ASCII-only boundary class would have read it as a
 #: connector again.
+#:
+#: 625B-01: that class refuses too much, because it cannot tell a **compound** from
+#: a **sentence**. 「MOS管」 is one word — an ASCII acronym plus the noun it
+#: composes with — and the class read the ``管`` as "inside a longer word", dropped
+#: the only device fact the part had, and let the ``U`` designator fall back to IC
+#: (a power MOSFET asked for a bypass capacitor: 190f's false positive, back
+#: again). The second branch admits exactly the compound shape: no ASCII word
+#: character on the left, and one of these noun suffixes on the right. A
+#: conjunction is not on the list, so 「USB和CAN」 stays refused — the reason this
+#: is a second branch and not an ASCII-only boundary class.
+#:
+#: The list is short on purpose: a character joins it only with a measured part
+#: whose *kind* changes because of the join (``管``: 625B-01's ``MOS管`` /
+#: ``TVS管``).
+CJK_COMPOUND_SUFFIXES: str = "管"
+
 _TOKEN_BOUNDARY_RE: dict[str, re.Pattern] = {}
 
 
@@ -503,7 +568,10 @@ def _boundary_hit(word: str, text: str) -> bool:
     """Is ``word`` in ``text`` as a whole token (not inside a longer word)?"""
     pattern = _TOKEN_BOUNDARY_RE.get(word)
     if pattern is None:
-        pattern = re.compile(rf"(?<!\w){re.escape(word)}(?!\w)")
+        pattern = re.compile(
+            rf"(?<!\w){re.escape(word)}(?!\w)"
+            rf"|(?<![A-Za-z0-9_]){re.escape(word)}(?=[{CJK_COMPOUND_SUFFIXES}])"
+        )
         _TOKEN_BOUNDARY_RE[word] = pattern
     return pattern.search(text) is not None
 
@@ -517,6 +585,12 @@ def _hit(text: str, words: tuple[str, ...]) -> str:
     substring — it carries the separator that makes it specific already; a plain
     ASCII word is matched at :func:`_boundary_hit`'s token boundary unless it is
     named in :data:`SUBSTRING_WORDS`.
+
+    The signature stays ``(text, words)``: 192B ①'s fixture sweep monkeypatches
+    this function back to the old substring read to prove which parts would have
+    changed, and a word filter that moved in here would break that harness. The
+    filter for :data:`INTERFACE_WORDS` therefore lives in :func:`_kind_of_words`,
+    on the table rather than on the scan.
     """
     for word in words:
         lowered = word.lower()
@@ -533,19 +607,27 @@ def _hit(text: str, words: tuple[str, ...]) -> str:
     return ""
 
 
-def _kind_of_words(text: str) -> tuple[str, str, str]:
+def _kind_of_words(
+    text: str, *, ignore: frozenset[str] = frozenset()
+) -> tuple[str, str, str]:
     """``(kind, label, hit word)`` for a declaration text, or unknowns.
 
     The text is lower-cased here rather than by the caller (127b's
     ``device_facts`` did it at the door): the vocabulary is matched
     case-insensitively and these are the library's spellings, so a caller that
     forgets would silently stop matching ``Resistor`` and ``HEADER``.
+
+    ``ignore`` drops words from the **table** and lets the scan continue with the
+    rest of it — 625B-02's question is about one word of one family (an interface
+    word may not decide against an IC designator), so the caller filters a word,
+    not a family.
     """
     if not text:
         return KIND_UNKNOWN, "", ""
     lowered = text.lower()
     for kind, label, words in DECLARATION_WORDS:
-        hit = _hit(lowered, words)
+        scanned = tuple(word for word in words if word.lower() not in ignore)
+        hit = _hit(lowered, scanned)
         if hit:
             return kind, label, hit
     return KIND_UNKNOWN, "", ""
@@ -788,11 +870,12 @@ def _read_part_kind(
             ),
         )
 
+    ignore = INTERFACE_WORDS if _designator_is_ic(read) else frozenset()
     for source, text in (
         ("its 立创 metadata", read.metadata),
         ("the part's own name or footprint", read.text),
     ):
-        kind, label, hit = _kind_of_words(text)
+        kind, label, hit = _kind_of_words(text, ignore=ignore)
         if kind != KIND_UNKNOWN:
             return PartKind(
                 kind=kind,
@@ -847,7 +930,7 @@ def _from_designator(read: PartDeclarations) -> PartKind:
     if prefix:
         from .parts import designator_category
 
-        category = designator_category(designator)
+        category = designator_category(_identity(designator))
     kind = kind_of_category(category) if category else KIND_UNKNOWN
 
     if kind == KIND_IC:

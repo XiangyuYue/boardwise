@@ -81,24 +81,44 @@ def test_ascii_advances_are_the_pinned_old_table_values(text, em):
     assert textmetrics.render_width(text) == pytest.approx(em * RENDER_TEXT_PX)
 
 
-def test_every_tabled_ascii_character_keeps_its_advance():
-    """The seven punctuation marks the table lacks are the *only* ASCII the
-    fallback can reach; the 88 it covers must still read the table."""
+def test_every_printable_ascii_character_has_a_tabled_advance():
+    """625B-05: the table now covers every printable ASCII character.
+
+    It used to lack seven marks (``[ \\ ] ^ ` { }``) which the ASCII fallback
+    charged 0.9 em, so a bracketed value's box was 1.533x wider than its glyphs.
+    The list of characters reaching the fallback is now **empty**.
+    """
     tabled = [chr(code) for code in range(32, 127) if chr(code) in textmetrics.TEXT_ADVANCE_EM]
     untabled = [chr(code) for code in range(32, 127) if chr(code) not in textmetrics.TEXT_ADVANCE_EM]
-    assert untabled == ["[", "\\", "]", "^", "`", "{", "}"]
+    assert untabled == []
     for char in tabled:
         assert textmetrics.render_width(char) == pytest.approx(
             textmetrics.TEXT_ADVANCE_EM[char] * RENDER_TEXT_PX
         )
 
 
-def test_untabled_ascii_punctuation_keeps_the_old_charge():
-    """575 must not move an ASCII-only box: the marks outside the table keep
-    the 0.9 em every ASCII render was measured under."""
-    for char in "[\\]^`{}":
-        assert textmetrics.render_width(char) == pytest.approx(0.9 * RENDER_TEXT_PX), repr(char)
-    assert textmetrics.render_width("()[]{}^\\`") == pytest.approx(6.966 * RENDER_TEXT_PX)
+def test_the_seven_marks_read_their_measured_arial_advances():
+    """625B-05: ``[ \\ ] ^ ` { }`` are Arial's widths, not the 0.9 em default.
+
+    Measured against ``[50V]``: the box is now 16.69 units where the default
+    charged 25.58 — the wide-box direction that made clean pages look crowded.
+    """
+    marks = {"[": 0.278, "\\": 0.278, "]": 0.278, "^": 0.469, "`": 0.333, "{": 0.334, "}": 0.334}
+    for char, em in marks.items():
+        assert textmetrics.render_width(char) == pytest.approx(em * RENDER_TEXT_PX), repr(char)
+    assert textmetrics.render_width("[50V]") == pytest.approx(
+        sum(marks[char] if char in marks else textmetrics.TEXT_ADVANCE_EM[char] for char in "[50V]")
+        * RENDER_TEXT_PX
+    )
+
+
+def test_the_ascii_fallback_still_answers_a_code_point_no_table_covers():
+    """The ASCII default is a defensive reading now, not a live one (625B-05).
+
+    Nothing printable reaches it, so the behaviour is pinned on the one ASCII code
+    point no glyph table can cover: DEL still charges 0.9 em, never 575's 1.1.
+    """
+    assert textmetrics.render_width("\x7f") == pytest.approx(0.9 * RENDER_TEXT_PX)
 
 
 # -------------------------------------- 579: the builtin sum *is* the geometry

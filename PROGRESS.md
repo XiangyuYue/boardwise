@@ -51,6 +51,15 @@ collects the current truth and the pointers.
 - **未做**：572B 写路径（`place_*` 各一次 + `delete_primitives` 回收）待授权；566-D-1 缺第二个被点名的可动工程；全量/Rust/发布闸未跑；三个提交均未推送。证据 `evidence/u06/`、`evidence/u10/REPORT.md`、`evidence/u14/REPORT.md`、`evidence/622/UNRESOLVED.md`。
 - **交接文档**：`docs/handoff.md`、`tasks/draw-line.md` 顶部各留一块 2026-11-26 当前状态，旧块统一降为「历史」；`TASKMAP` 622 行改为已提交。
 
+## [2026-11-26] 630 绘制线挖洞第十四批（值是否参与判据 / benchmark 与证据消费）
+
+- **选面**：629 暴露的「值只被转录、不进判据」系统化，以及 625-A 指出的「真闸在 opt-in `--benchmark`」那条闸自身。HEAD `ebf6e51`。
+- **13 条洞（高 5 / 中 5 / 低 3）**。缝 A 的结论一句话：**三个文法里值只被印到图上，不参与任何判断**——「值 → 判据」矩阵 **25 行，24 对只改值的 A/B 对照全部 `DIGEST IDENTICAL`**（RCD 容量/耐压、放电电阻、启动电阻、分压比 7:5、TVS 钳位 28V→5V/600V、`banana` 不可解析值、`params` 公差），而删件/断抽头的对照组 `CHANGED` 证明比较器有效；连 `symbolRef` C→R 都是 `IDENTICAL`。高：24 V 母线挂 5 V TVS 仍 `ok=True`、分压器从不核比值、flyback 反馈分压比从不对账、`flyback.py` 全文件零值读取。
+- **缝 B**：`--benchmark` 覆盖表 20 行——12 格 fail-closed、**3 格 fail-open**（目录/spec 自身/任意绝对路径都算「可读 citation」，实测 `0 violation`；`--target` 不存在也通过；`root=None` 的 NOTE 被当 pass）、2 格假红（裸子串泄漏判定）。
+- **跨批修正**：625A-02 写「`declared-input-exists` 是 `--benchmark` 才跑」是**错的**——`ref_points_missing` 不带 benchmark 就 exit 1，`docs/validate_spec.md:39,113` 才对。
+- **同步复核 623 结单**：`mpn_value_code('RTT034702FTP')` → `None`、`0R` → `0.0`、propose 报告新增 `sharedParts`/`unresolvedParts`。
+- **状态**：只挖不修，五文件 sha256 开工=收工；洞表与第十五批候选见 `outputs/hole630/TRIAGE.md`。
+
 ## [2026-11-26] 629 绘制线挖洞第十三批（flyback 深水构造 / 岛链端到端）
 
 - **选面**：628-A 自己列的三个未构造面（RCD 钳位 / 启动电阻 / 第二路自带分压），以及从没人接通的岛链 `draw islands propose → apply → draw compile`。HEAD `1fc6466`。
@@ -96,9 +105,17 @@ collects the current truth and the pointers.
 - **12 条洞（高 4 / 中 6 / 低 2）**。高：① mixed-island 核心不坐 power/gnd 时，挂在**真实 GND** 上的二端件静默失去角色、义务归零（`ic_periphery.py:335` 把 rail/gnd 置空串 → `:1100 here & {rail,gnd}` + `:557/:570 if rail/if gnd`）；② 纵向 `sidePreferences` 被丢弃且证据反说「portRoles 啥都没写」；③ 模块内三脚以上器件从不进 `_periphery`（`Q1` 接 VCC/GND 与全悬空输出相同）；④ `islandproposal.py:337-361` 已声明的锚对未声明件**永不可见**（声明一部分反而把每个两脚件拆成单件岛，诊断写 `nearest: none` 而实际 5 units）。
 - **「已审」不成立**：A 缝按任务书先交 **04-H1…H7 现状表**——H1 仍在、H2 部分仍在、H3 已修、H4 横向已修/纵向仍在、H5 已修、H6 反向仍在、H7 仍在，**七条里五条没修**。结论：570-C 的「不碰 ic_periphery/mixed_island，已审」不能代替证据文件。
 - **验证**：P8 / P6 / anchor 三组读数我亲跑；两条高的因果由源码原文（`islandproposal.py:337-361` 集合关系、`ic_periphery.py:335-336→1100` 空串传递）钉住，**本批未做变异**（需跨两函数多行改动，风险大于收益），已如实标注证明强度。
-- **跨批更正**：625B-04 因 `70b8387` 降级——自帧预览已按 caption 加宽，声明 page 框时仍裁但**已在提交说明与代码注释明示**并有测试钉住，从「未披露缺陷（中）」改为「已披露的页框限制」。
+- **跨批更正**：625B-04 因 `70b8387` 降级——自帧预览已按 caption 加宽，声明 page 框时仍裁但**已在提交说明与代码注释明示**并有测试钉住，从「未披露缺陷（中）」改为「已披露的页框限制」。（**已被 625 修复批取代**：声明页框下 caption 现在按纸宽换行，纸仍不放大。）
 - **状态**：只挖不修，三文件 sha256 开工=收工；洞表见 `outputs/hole626/TRIAGE.md`。
 
+## [2026-11-26] 625 修复批（缝 A 装载器 / 缝 B 部件类与文本度量）
+
+- **来源**：`outputs/hole625/TRIAGE.md` 的 14 条洞；按 623 先例分两缝落地，每洞给结论（修 / 复核否决 / 文档补齐），证据 `evidence/625a/REPORT.md`、`evidence/625b/REPORT.md`。
+- **缝 A（`core/blocks.py`，8 条：5 修 + 1 文档 + 2 复核否决）**：证据台账必须在装载期解析到已声明 reference（`param_evidence` / `blocks[].evidence` / `connections[].evidence` 三处全查）；`references[].path` 拒绝绝对路径与目录，**存在性归校验器 `declared-input-exists`**（`engines/validate_spec.py` 的 sources 闸，产品闸，默认 `validate --spec` 就跑）；同一端口跨两条 connection 装载即拒（点名端口与网）；同部件重复脚号即拒；身份字段（block id / port role / reference id）逐字比较；新增 `blocklib/specs/README.md` 点名两份无库内 circuit 的 presentation（历史 circuit 是 `draft: true` + `ai_asserted`，不搬进库）。**复核否决两条**：空网导线（出货 `ch340g_usb_uart` 四模板有 **35** 段，加闸=拒掉真板）、绝对模板路径（`test_spec_cli` 的 variant 夹具原文「a copy that lives elsewhere must say where they are」）。
+- **缝 B（`partkind.py`/`textmetrics.py`/`svgpreview.py`，6 条：5 修 + 1 复核否决）**：`MOS管`/`TVS管` 走「CJK 构词后缀」第二支（**不是** ASCII 边界——那会推翻 192B ① 钉住的 `USB和CAN`）；新增 `INTERFACE_WORDS`，接口词不否掉 IC 位号（`USB 转串口 CH340C` 回 `ic`，`USB1`/`USB 母座` 仍 connector）；全角位号 NFKC 归一（两个前缀读取器读同一个串）；声明页框下 caption 按纸宽**换行**（纸不放大，580 的 stated-sheet 裁定不动）；七个 ASCII 标点补 Arial 真值（可打印 ASCII 全覆盖，`[50V]` 框 1.533x→1.0）。**复核否决**：`pins=None` 时不判 unknown（生产 `Component.pins` 是 list；没计数就判 unknown 会让「没数脚」的真 IC 免掉旁路电容）。
+- **读数**：缝 A 新文件 16 passed、装载器邻域（12 文件）**494 passed**；缝 B 新文件 22 passed、部件类/preview 邻域 **429 passed / 7 skipped**、宽邻域（含 `test_053b_drawcompiler`）**417 passed / 6 skipped / 2 failed**——那 2 条是 `test_543e`/`test_543f2` 的 page digest，两次进程内 A/B（pop 七字宽、再中和本批四机制）**照样红**，属他线未提交改动，按归属披露。出货数据另跑 `validate --spec` 两份 **exit 0**。
+- **变异**：A 六处、B 五处，全部先红后 `cp` + SHA-256 复原；红的位置逐条对上新断言（报告 §5）。
+- **状态**：未提交（等岳点头）、未推送、未跑全量/四线。改动 9 文件 +332/−40，另有 4 个新文件（3 测试 + `blocklib/specs/README.md`）。
 ## [2026-11-26] 625 绘制线挖洞第九批（规格库全量 + 加载器 / 部件类与文本度量）
 
 - **选面**：624 报告 §3 的头两块——`blocklib/specs` **23 份**出货规格 + `core/blocks.py` 加载器（67 KB）；`core/partkind.py`(45 KB) + `core/textmetrics.py`(33 KB)。HEAD `4253a9c`。
@@ -115,6 +132,8 @@ collects the current truth and the pointers.
 - **状态**：只挖不修，四文件 sha256 开工=收工；洞表与第九批候选见 `outputs/hole624/TRIAGE.md`。
 
 ## [2026-11-26] 623 绘制线挖洞第七批（上游两面，只读）
+
+- **2026-11-26 已修**：`1572f34 fix(values): read zero-ohm, decimal bare-unit and prefixed quantities, and refuse truncated codes (623)` + `ebf6e51 fix(propose): report the nets, the ground-only adjacency, shared parts and unresolved parts (623B)`。我抽验：`mpn_value_code('RTT034702FTP')` 由 `'702'` 变 **`None`**、`0R` 由 `None` 变 **`0.0`**；propose 报告新增 `sharedParts`/`unresolvedParts`，flow 边带 `nets` 与 `groundOnly`（`U1` 仍同时在两 module，但**被 `sharedParts` 点名**——按该洞「点名或拒绝」的标准算闭合）。
 
 - **选面依据**：扫 `outputs/hole565…572` + `outputs/fix-verify` 共 152 份报告按文件名聚合，对照 98 个模块——`core/values.py`(100 KB)、`engines/intentproposer.py`(42 KB)、`engines/islandproposal.py`(47 KB) 洞报告引用 **0**，且 propose 链**零测试**；对照 `cli.py` 397 次、`drawcompiler.py` 126 次。派单书 `tasks/623_draw_holes_wave7.md`。
 - **缝 A（值解析）9 条**：高 1 —— `mpn_value_code('RTT034702FTP')` → `'702'`（4 位 E96 被截末三位，按 pF 基解成 7 nF；消费者 `decap.py:83/90/144/178`、`metaparams.py:325`）；中 4（`R010` 双路不一致、`0R`→None、`0.1u`→None、电容 MPN 读成电阻）；低 4。

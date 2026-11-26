@@ -227,6 +227,11 @@ def test_no_fixture_loses_an_ic_to_the_token_boundary_reading(monkeypatch):
 
     monkeypatch.setattr(partkind, "_hit", substring_hit)
     monkeypatch.setattr(partkind, "DECLARATION_WORDS", old_words)
+    # 625B-02: the interface-word gate is a *second* reason the STM32 stops being
+    # read as a connector. Leaving it on would make the baseline (127b's read) and
+    # the new read agree by another route, and the flip this sweep exists to
+    # witness would vanish from the count — so the baseline is taken before it too.
+    monkeypatch.setattr(partkind, "INTERFACE_WORDS", frozenset())
     before = _scan_corpus(library)
 
     flips = {

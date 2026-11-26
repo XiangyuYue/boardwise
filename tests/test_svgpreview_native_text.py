@@ -103,8 +103,17 @@ def test_diagnostic_font_sizes_stay_what_they_were() -> None:
     # Caption lines start at x=8 and carry no font-size of their own: they
     # inherit the canvas's 11.
     caption = [node for node in _texts(svg) if node.get("x") == "8"]
-    assert len(caption) == 4
+    # 625B-04: this sheet is 200 units wide and its caption is ~440 px, so the
+    # caption is **wrapped** to the sheet rather than written past it (the stated
+    # sheet is not enlarged). Wrapping changes how many lines there are, not what
+    # they inherit; the four-line count is pinned just below on a sheet the
+    # caption fits.
+    assert len(caption) > 4
     assert all(node.get("font-size") is None for node in caption)
+    wide = svgpreview.render_svg(
+        _plan(), _profiles(), page_box=(0.0, 0.0, 1170.0, 825.0), title="native text"
+    )
+    assert len([node for node in _texts(wide) if node.get("x") == "8"]) == 4
     assert _by_text(svg, "mcu").get("font-size") == "12"
     assert _by_text(svg, "7").get("font-size") == "9"
 
