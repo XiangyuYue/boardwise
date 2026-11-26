@@ -30,7 +30,7 @@
    04-H 家族 **14/28 仍在**（**`base.py` 的 H2/H5/H7 被六本文法继承，修一条等于修六本**）；626 的
    `ic_periphery`/`mixed_island`/`islandproposal`（七条家族项五条仍在）、625 的 CJK 词边界（`MOS管`/`TVS管`）
    与带 `USB` 的 IC 误读（直接改 `decap`）、624 的零引脚整件出页与 `validate_full` 缺框不可见、
-   **623 的 A 缝已收口**（9 条：8 修 + A-05 复核否决，`evidence/623a/REPORT.md`）、B 缝四条（`intentproposer.py`）待做。逐条见 `outputs/hole62{3,4,5,6,7}/TRIAGE.md`。
+   **623 全批收口**（A 缝 9 条：8 修 + A-05 复核否决，`evidence/623a/REPORT.md`；B 缝 4 条 `evidence/623b/REPORT.md`）。逐条见 `outputs/hole62{3,4,5,6,7}/TRIAGE.md`。
 
 ## 近期完成（2026-11-26）
 

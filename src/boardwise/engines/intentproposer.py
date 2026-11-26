@@ -89,6 +89,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Sequence
 
 from ..core.circuitspec import CircuitSpec, SpecNet
+from ..core.model import is_ground_net
 from ..core.designintent import (
     KIND_CURRENT_SENSE,
     DesignIntent,
@@ -259,7 +260,16 @@ def propose(
     )
     _propose_cores(drafts, document, circuit, source_path)
     _propose_branch_order(drafts, spec, circuit, intent, circuit_path, notes)
-    spec.flow, undetermined, main_note = _propose_flow(drafts, circuit)
+    spec.flow, undetermined, main_note, edge_nets, ground_only_edges = _propose_flow(
+        drafts, circuit
+    )
+    # 623B: two readings the report used to leave out. A part declared by more
+    # than one block is written into both modules (the contract says so), but the
+    # reader has to be told the two modules share it; a block part the netlist
+    # does not carry was silently dropped, which reads as "it was fine".
+    shared_parts = _shared_parts(drafts)
+    unresolved_parts = _unresolved_parts(drafts, circuit)
+    notes.extend(_disclosure_notes(shared_parts, unresolved_parts))
     reads, unread = _readings(document, drafts, skipped)
     report: dict[str, Any] = {
         "command": "propose",
@@ -278,12 +288,25 @@ def propose(
                     "from": edge.from_module,
                     "to": edge.to_module,
                     "mainPath": edge.main_path,
+                    # 623B-03: the net(s) the adjacency was read from -- the same
+                    # evidence the `undetermined` rows always carried.
+                    "nets": list(edge_nets.get(
+                        (edge.from_module, edge.to_module), []
+                    )),
+                    # 623B-02: this adjacency is ground only — a neighbour, not a
+                    # direction the drawing may lean on.
+                    "groundOnly": bool(ground_only_edges.get(
+                        (edge.from_module, edge.to_module), False
+                    )),
                 }
                 for edge in spec.flow
             ],
             "undetermined": undetermined,
             "mainPath": main_note,
         },
+        # 623B: what the draft wrote but the report could not answer before.
+        "sharedParts": shared_parts,
+        "unresolvedParts": unresolved_parts,
         "reads": reads,
         "unread": unread,
         "notes": list(notes),
@@ -668,7 +691,13 @@ def _propose_branch_order(
 
 def _propose_flow(
     drafts: Sequence[ModuleDraft], circuit: CircuitSpec | None
-) -> tuple[list[FlowEdge], list[dict[str, Any]], str]:
+) -> tuple[
+    list[FlowEdge],
+    list[dict[str, Any]],
+    str,
+    dict[tuple[str, str], list[str]],
+    dict[tuple[str, str], bool],
+]:
     """Candidate edges from the nets the groups share, direction from the role table.
 
     Adjacency is a reading of the netlist and nothing else (056 §1's own rule for
@@ -685,9 +714,12 @@ def _propose_flow(
             [], [],
             "no flow proposed: which groups share a net is a reading of the "
             "netlist, and no circuit was given (`--circuit`) — nothing is guessed",
+            {}, {},
         )
     parts_of = {module.id: set(module.parts) for module in modules}
     edges: list[FlowEdge] = []
+    edge_nets: dict[tuple[str, str], list[str]] = {}
+    ground_only_edges: dict[tuple[str, str], bool] = {}
     undetermined: list[dict[str, Any]] = []
     for index, first in enumerate(modules):
         for second in modules[index + 1:]:
@@ -697,6 +729,12 @@ def _propose_flow(
             )
             if not shared:
                 continue
+            # 623B-02: a ground net is a reference, not a direction. Two groups
+            # that meet only on one are still neighbours -- the edge stays, because
+            # the adjacency is a reading -- but the report says the adjacency is
+            # ground only, so no reader mistakes it for flow, and `_main_path`
+            # keeps refusing to call a ground crossing the main path.
+            ground_only = all(is_ground_net(net) for net in shared)
             role_first = KIND_FLOW_ROLES.get(kind_of[first.id], "")
             role_second = KIND_FLOW_ROLES.get(kind_of[second.id], "")
             direction = _direction(role_first, role_second)
@@ -715,8 +753,81 @@ def _propose_flow(
                 (first.id, second.id) if direction > 0 else (second.id, first.id)
             )
             edges.append(FlowEdge(from_module=source, to_module=target))
+            edge_nets[(source, target)] = list(shared)
+            if ground_only:
+                ground_only_edges[(source, target)] = True
     marked, note = _main_path(edges, modules, kind_of, circuit)
-    return marked, undetermined, note
+    return marked, undetermined, note, edge_nets, ground_only_edges
+
+
+def _shared_parts(drafts: Sequence[ModuleDraft]) -> list[dict[str, Any]]:
+    """Parts more than one block declares, with the modules that wrote them (623B-01).
+
+    The contract may name one part in two blocks — the shipped robot contract does
+    exactly that with `U1`. The draft keeps both memberships because that is what
+    the contract says, but a reader who is not told sees two modules and no sign
+    that they share a part, and every `core` field pointing at it looks like two
+    independent readings.
+    """
+    claimed: dict[str, list[str]] = {}
+    for draft in drafts:
+        module = draft.module
+        if module is None:
+            continue
+        for part in module.parts:
+            claimed.setdefault(part, []).append(module.id)
+    return [
+        {"part": part, "modules": sorted(modules)}
+        for part, modules in sorted(claimed.items())
+        if len(modules) > 1
+    ]
+
+
+def _unresolved_parts(
+    drafts: Sequence[ModuleDraft], circuit: CircuitSpec | None
+) -> list[dict[str, Any]]:
+    """Block parts the netlist does not carry, with the modules that named them (623B-04).
+
+    Without this the draft kept a module whose parts half-exist, and neither the
+    report nor stdout said so: an unreadable netlist and a netlist that agrees
+    looked the same. ``None`` means "no circuit was given", which is already
+    disclosed by the flow's own note, so nothing is invented there.
+    """
+    if circuit is None:
+        return []
+    known = {part.id for part in circuit.parts}
+    missing: dict[str, list[str]] = {}
+    for draft in drafts:
+        module = draft.module
+        if module is None:
+            continue
+        for part in module.parts:
+            if part not in known:
+                missing.setdefault(part, []).append(module.id)
+    return [
+        {"part": part, "modules": sorted(modules)}
+        for part, modules in sorted(missing.items())
+    ]
+
+
+def _disclosure_notes(
+    shared_parts: Sequence[dict[str, Any]], unresolved_parts: Sequence[dict[str, Any]]
+) -> list[str]:
+    """One line per reading that the report lists but a reader must not miss."""
+    notes: list[str] = []
+    for item in shared_parts:
+        notes.append(
+            f"part {item['part']!r} is declared by more than one block "
+            f"({', '.join(item['modules'])}) — both modules list it, and any `core` "
+            "naming it is that contract's own statement, not this proposal's pick"
+        )
+    for item in unresolved_parts:
+        notes.append(
+            f"part {item['part']!r} is named by {', '.join(item['modules'])} but is "
+            "not in the netlist — the adjacency and pin counts this run reads cannot "
+            "see it"
+        )
+    return notes
 
 
 def _owners(net: SpecNet) -> set[str]:

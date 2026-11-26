@@ -46,7 +46,7 @@
    627 的四本文法（base/ldo/voltage_divider/rc_lowpass）
    交 19 条，04-H 家族 **14/28 仍在**（`base.py` 的 H2/H5/H7 被六本文法继承）；626 的 04-H1…H7 七条家族项
    **五条仍在**；625 的 `MOS管`/`TVS管` 词边界与带 `USB` 的 IC 误读直接改 `decap` 假阳/假阴；624 的零引脚整件出页
-   （x=1400 仍 `violations=[]`）与 `validate_full` 的 `if p.bbox`；**623 的 A 缝已收口**（9 条：8 修 + A-05 复核否决，`evidence/623a/REPORT.md`）、B 缝四条（`intentproposer.py`）待做。逐条见
+   （x=1400 仍 `violations=[]`）与 `validate_full` 的 `if p.bbox`；**623 全批收口**（A 缝 9 条：8 修 + A-05 复核否决，`evidence/623a/REPORT.md`；B 缝 4 条 `evidence/623b/REPORT.md`）。逐条见
    `outputs/hole62{3,4,5,6,7}/TRIAGE.md`。
 4. **审查线**：600R 的工作树改动未提交；621 默认 off、auto 未开放、exe/pip 未打包。
 5. **仓库级**：绘制线五批与审查线改动仍未推送；全量、Rust、发布闸未跑；§0 通告与 §3.2/§3 的

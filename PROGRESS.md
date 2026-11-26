@@ -4,6 +4,23 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-11-26] 621E1 分发+握手 / 621E2 auto 开放 / 621E4 退役方案
+
+- **621E1**：`boardwise-cli` 增 `version` 子命令（workspace version 0.6.3，三处版本钉）；
+  `binary_candidates` 四档（显式/frozen `_MEIPASS/resources/rust`/pip `boardwise/_rust`/源码
+  debug），`resolve_binary` 加版本握手（异版具名拒不购物、`(path,mtime,size)` 记忆化、
+  显式 BIN 也过握手）。exe（17.3 MiB 内嵌 release 二进制）与 pip 同件均 **off==require
+  逐字节一致**（ROBOT 实测）；Rust 392 passed、Python 聚焦 600+32；两项主代理变异恢复。
+- **621E2**：`auto` 开放（默认仍 off）。`rust_or_python` 原子整块回退，只吞
+  `ReviewMathBackendError`，诊断仅 `BOARDWISE_RUST_DEBUG=1` 一行 stderr，回退
+  `rules_errored==[]`；规则三切片 + 模型 D2–D6 全接通，D6 deferred 回退 = 丢弃半成品 +
+  `restore_stats()` + 从零完整 build。ROBOT `review --view pcb` **off==auto==autofb 逐字节
+  一致**，require 同失败 exit 2 具名拒。主代理两项有效变异恢复（另记录一次死分支无效
+  变异与「schematic 视图不触发 Rust 切片」的探针教训）。
+- **621E4**：`tasks/621e_retirement_plan.md` 成文——退役总前提（默认 Rust 发布验收后逐次
+  批准）、auto 回退连带退役、differential 改 golden 直读、R1–R4 顺序与消费者矩阵；
+  未执行任何删除。阻断③集成全量在途，结果另记。详见各任务书 §6/§7。
+
 ## [2026-11-26] 621D7 VoltageSpacing 整规则垂切（rule 域）
 
 - 新增 `rule` 子命令与 `boardwise.review-rule/1` 域：Rust `rule.rs` 一批产出五出口判定
@@ -57,6 +74,13 @@ collects the current truth and the pointers.
 - **验证**：P3b（nc 谎言）、P4（模块过滤谎言）、P2b/P2（same-row 不消费 sidePreferences）、`ldo.py:310-325` reason 原文，四项亲跑/亲读。
 - **我的错（披露）**：626/627 两份派单书都把 04-H 原始判据写成 `outputs/hole570/c/REPRO.md`——**该目录不存在**，原件在 `c2`；两处已就地更正并标日期，626 的判据来源据此记为「重建 + 626 表」。
 - **状态**：只挖不修，四文件 sha256 开工=收工；洞表与第十二批候选见 `outputs/hole627/TRIAGE.md`。
+
+## [2026-11-26] 623 B 缝收口（propose 报告四条）
+
+- **落点**：`engines/intentproposer.py` **+114/−3**——**B-03** 每条 flow 边带 `nets`（建边用的共享网，原本算完就丢）；**B-02** 仅共 GND 的边**保留**但带 `groundOnly: True`（邻接是读数；删边会同时推翻 `test_109:422` 的既有形状与 `_main_path` 的「跨界网不是地」判据）；**B-01** 新增 `report["sharedParts"]`（机器人合同的 `U1` 被 `senseU`/`senseW` 共用），**不擦除**合同自己声明的 `core`；**B-04** 新增 `report["unresolvedParts"]`（block part 不在网表时点名，如 `J9`）。
+- **边界**：未动 `cli.py`；未给 `FlowEdge` 加字段（证据在报告层，schema 往返与 `main_path_wire` 不变）；`blocklib/` 只读。
+- **读数**：新测试 5 条 + `test_109_intent_proposer` + `test_530e_islands_propose_apply` → **81 passed in 5.93s**；一次性关掉四条守卫 → **5 failed**（红的正是五条新用例，零误伤）；`cp`+SHA-256 复原 `45E03E35…`；加 `test_doc_claims` 复跑 **138 passed in 9.49s**。
+- **状态**：本批已提交、未推送、未跑全量。两次派子代理均在写文件前失败退出，父级自做自验。证据 `evidence/623b/REPORT.md`；623 全批（A 9 + B 4）至此 **13/13** 有结论。
 
 ## [2026-11-26] 623 A 缝收口（值解析 9 条）
 
