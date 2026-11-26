@@ -45,7 +45,7 @@ class FakePrimitive {
     this.fields = fields;
   }
 }
-for (const name of ['PrimitiveId', 'ComponentType', 'X', 'Y', 'Net', 'PointArr', 'Key', 'Value']) {
+for (const name of ['PrimitiveId', 'ComponentType', 'X', 'Y', 'Net', 'Line', 'PointArr', 'Key', 'Value']) {
   Object.defineProperty(FakePrimitive.prototype, `getState_${name}`, {
     value: function () {
       return this.fields[name];
@@ -367,6 +367,34 @@ test('572B-1: place_text without a get answers landed null, never true', async (
 // --------------------------------------------------------------------------
 // 572B-1b: sch.place_wire reads its polyline back
 // --------------------------------------------------------------------------
+
+test('572B-1: place_wire reads the polyline under the field the live host uses (Line)', async (t) => {
+  // Measured on EDA 4.1.100 (2026-11-26, evidence/u14/REPORT.md 2.2): a wire
+  // primitive exposes PrimitiveType/PrimitiveId/Line/Net and nothing called
+  // PointArr/Points/PointArray/Polyline, so this is the shape the readback meets
+  // in the editor. It used to answer `landed: null` here — a re-read wire whose
+  // geometry was readable, reported as UNKNOWN.
+  const h = host({
+    sch_PrimitiveWire: {
+      async create() {
+        return primitive('wire-1');
+      },
+      async get() {
+        return primitive({ PrimitiveId: 'wire-1', Line: [0, 0, 10, 0] });
+      },
+    },
+  });
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'sch.place_wire', {
+    points: [[0, 0], [10, 0]], net: 'GND', pageUuid: 'page-1',
+  });
+  assert.equal(frame.ok, true, JSON.stringify(frame));
+  assert.equal(frame.data.landed, true, 'the live field name must reach the comparison');
+  assert.deepEqual(frame.data.readback.points, [0, 0, 10, 0]);
+  assert.equal(frame.data.readback.maxDelta, 0);
+});
 
 test('572B-1: place_wire reports the polyline it read back', async (t) => {
   const h = host({

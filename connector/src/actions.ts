@@ -7856,9 +7856,20 @@ function flattenPoints(value: unknown): number[] | null {
   return out.every((n) => Number.isFinite(n)) ? out : null;
 }
 
-/** The polyline a wire primitive reports, trying the field names hosts have used. */
+/**
+ * The polyline a wire primitive reports, trying the field names hosts have used.
+ *
+ * `Line` comes first because it is the **measured** name on the editor this
+ * harness talks to: on EDA 4.1.100 a wire primitive exposes exactly
+ * `getState_PrimitiveType` / `getState_PrimitiveId` / `getState_Line` /
+ * `getState_Net`, and `Line` is the flat `[x1, y1, …]` list — `sch.geometry`'s
+ * deep dump and `sch.readback`'s 118 wire rows agree (evidence/u14/REPORT.md
+ * §2.2). Without it a re-read wire answered "no readable polyline", so
+ * `landed` could never be `true`: 572B-1's confirmation was unreachable on the
+ * real host. The other four stay as fallbacks for hosts that name it so.
+ */
 async function wirePointsOf(obj: any): Promise<number[] | null> {
-  for (const name of ['PointArr', 'Points', 'PointArray', 'Polyline']) {
+  for (const name of ['Line', 'PointArr', 'Points', 'PointArray', 'Polyline']) {
     const flat = flattenPoints(await getState(obj, name));
     if (flat) return flat;
   }
@@ -7941,7 +7952,7 @@ export const schPlaceWire: ActionHandler = async (params, eda) => {
         points: null,
         maxDelta: null,
         basis: 'the wire was re-read but carries no readable polyline, so its geometry is UNKNOWN',
-        readError: 'no readable PointArr/Points/PointArray on the primitive',
+        readError: 'no readable Line/PointArr/Points/PointArray/Polyline on the primitive',
       };
     } else {
       const delta = maxCoordinateDelta(flat, readPoints);
