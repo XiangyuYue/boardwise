@@ -138,6 +138,7 @@ __all__ = [
     "ROLE_PART",
     "SAME_COLUMN",
     "SAME_ROW",
+    "SIDE_KIND",
     "UNIFORM_GND",
     "VERTICAL_TAP",
     "VISIBLE_TAP",
@@ -307,6 +308,18 @@ MAX_CHAIN_ARMS = 6
 #: How many candidate chains a single search may return, for the pathological
 #: case of a densely connected ground-referenced network.
 MAX_CHAINS = 64
+
+
+#: The four sides a ``sidePreferences`` value may state, as the constraint kind
+#: that puts something on that side. One table: `power_entry`, `flyback` and `ldo`
+#: each carried a copy, and a copy that misses `top` is how 570-C2's N2 fell back
+#: to a horizontal word (628B-07).
+SIDE_KIND = {
+    "left": LEFT_OF,
+    "right": RIGHT_OF,
+    "top": ABOVE,
+    "bottom": BELOW,
+}
 
 
 def is_net_role(role: str) -> bool:

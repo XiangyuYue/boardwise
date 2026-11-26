@@ -79,6 +79,7 @@ from .base import (
     NEAR,
     OWNED_BRANCH,
     RIGHT_OF,
+    SIDE_KIND,
     UNIFORM_GND,
     GrammarFailure,
     GrammarObligation,
@@ -714,13 +715,7 @@ def _refused_note(not_bound: tuple[GrammarFailure, ...]) -> str:
 
 def _side_kind(side: str, default: str) -> str:
     """The constraint kind that puts something on this side of the core."""
-    return {
-        "left": LEFT_OF,
-        "right": RIGHT_OF,
-        "top": ABOVE,
-        "bottom": BELOW,
-        "": default,
-    }.get(side, default)
+    return SIDE_KIND.get(side, default)
 
 
 def _side_word(kind: str) -> str:

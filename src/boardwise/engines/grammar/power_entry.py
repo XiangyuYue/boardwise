@@ -194,6 +194,7 @@ from ...core.designintent import DesignIntent, IntentSource
 from ...core.presentationspec import SIDES, PresentationSpec
 from ...core.symbolprofile import SymbolProfile
 from .base import (
+    arm_note,
     ABOVE,
     ADJACENT,
     BELOW,
@@ -207,6 +208,7 @@ from .base import (
     OWNED_BRANCH,
     PROVENANCE_AI,
     RIGHT_OF,
+    SIDE_KIND,
     SAME_ROW,
     UNIFORM_GND,
     GrammarFailure,
@@ -297,9 +299,12 @@ class PowerEntryGrammar:
         if missing:
             return refused_result(missing)
 
+        entry_nets = _entry_nets(circuit, power)
+        if len(entry_nets) > 1:
+            return refused_result([_two_entries_failure(circuit, entry_nets)])
         rail = _rail_of(circuit, power)
-        gnd = _ground_of(circuit, rail, ground)
         named = _entry_claims(circuit, rail)
+        gnd = _ground_of(circuit, rail, ground, named[0].part if named else "")
         if not named:
             return refused_result([_no_entry_failure(circuit, rail)])
         problem = _entry_problem(circuit, rail, gnd, named)
@@ -309,13 +314,24 @@ class PowerEntryGrammar:
         entry = named[0].part
         scope = _scope(presentation, entry)
         shunts = _shunts(circuit, presentation, rail, gnd, entry, scope)
+        chain: tuple[str, str] = ("", "")
+        if not shunts:
+            # The inlet rail may sit behind a series element (a fuse, a reverse
+            # protection diode, a 0Ω): the branches then hang on the rail beyond
+            # it, and reading only the declared net lost them all without a word
+            # (628B-01).
+            chain = _entry_chain(circuit, presentation, rail, gnd, scope)
+            if chain[0]:
+                shunts = _shunts(
+                    circuit, presentation, chain[1], gnd, entry, scope
+                )
         reading = _order_reading(
             circuit, presentation, scope, shunts, entry, rail, gnd, intent
         )
         if reading.failure is not None:
             return refused_result([reading.failure])
         return self._result(
-            circuit, presentation, rail, gnd, entry, named, scope, reading
+            circuit, presentation, rail, gnd, entry, named, scope, reading, chain
         )
 
     # ------------------------------------------------------------- internals
@@ -330,6 +346,7 @@ class PowerEntryGrammar:
         named: list[SpecOpenInterface],
         scope: str,
         reading: _OrderReading,
+        chain: tuple[str, str] = ("", ""),
     ) -> GrammarResult:
         """Everything bound, in the order the drawing will use (095 §一).
 
@@ -350,12 +367,7 @@ class PowerEntryGrammar:
         # (143's drift audit): the entry terminates the input end of the row, so
         # a declaration of `top` means the entry sits above the branch it
         # terminates.  A value outside `SIDES` was already normalised above.
-        side_kind = {
-            "left": LEFT_OF,
-            "right": RIGHT_OF,
-            "top": ABOVE,
-            "bottom": BELOW,
-        }.get(in_side, LEFT_OF)
+        side_kind = SIDE_KIND.get(in_side, LEFT_OF)
         rail_pin = _pin_on(circuit, entry, rail)
         gnd_pin = _pin_on(circuit, entry, gnd)
         prov = weakest_provenance(
@@ -382,6 +394,9 @@ class PowerEntryGrammar:
                     f"pins on this module's two rails: {rail_pin or '?'}→{rail}, "
                     f"{gnd_pin or '?'}→{gnd}",
                     f"inlet chosen: {shape}",
+                    _chain_note(chain),
+                    _return_note(circuit, rail, gnd),
+                    arm_note(circuit, self.profiles, (rail, gnd)),
                     f"provenance={prov}",
                     rivals,
                 ),
@@ -576,6 +591,100 @@ def grammar(
 # ------------------------------------------------------------- the judgment
 
 
+def _entry_nets(circuit: CircuitSpec, power: tuple[str, ...]) -> list[str]:
+    """Every power net that declares an inlet (a net **and** a part, 628B-03)."""
+    return sorted(
+        net_id
+        for net_id in power
+        if any(
+            item.net == net_id and item.part for item in circuit.open_interfaces
+        )
+    )
+
+
+def _two_entries_failure(
+    circuit: CircuitSpec, nets: list[str]
+) -> GrammarFailure:
+    """Two entrances on one page: one module draws one input."""
+    claims = [
+        (net_id, item.part)
+        for net_id in nets
+        for item in circuit.open_interfaces
+        if item.net == net_id and item.part
+    ]
+    named = ", ".join(f"{net_id}←{part}" for net_id, part in claims)
+    return GrammarFailure(
+        category=FAILURE_CIRCUIT_INVALID,
+        subject=claims[0][1],
+        detail=(
+            f"{len(nets)} nets each declare an inlet ({named}) — one module draws "
+            "one input, and which rail this entry serves has to be stated once. "
+            "Picking the id-sorted first rail bound half the page and mentioned "
+            "the other half nowhere"
+        ),
+        action=(
+            "keep one openInterfaces[] entry that names a part and state the other "
+            "entrance in its own module (a USB and a DC jack are two islands)"
+        ),
+    )
+
+
+def _entry_chain(
+    circuit: CircuitSpec,
+    presentation: PresentationSpec,
+    rail: str,
+    gnd: str,
+    scope: str,
+) -> tuple[str, str]:
+    """``(series element, rail beyond it)`` for the inlet chain, or ``("", "")``.
+
+    The declared entrance rail often sits behind a fuse, a reverse-protection
+    diode or a 0Ω; the branches then hang on the rail beyond it. Reading only the
+    declared net dropped the series part **and** every branch behind it without a
+    word (628B-01). One series element, and only when it leads to a net that has
+    branches of its own — anything longer is a different drawing.
+    """
+    power = set(nets_of_class(circuit, "power"))
+    for part_id, (first, second) in sorted(two_terminal_parts(circuit).items()):
+        for here, there in ((first, second), (second, first)):
+            if here != rail or there not in power or there == rail:
+                continue
+            if _shunts(circuit, presentation, there, gnd, "", scope):
+                return part_id, there
+    return "", ""
+
+
+def _chain_note(chain: tuple[str, str]) -> str:
+    """Name the series element between the declared entrance and the branches."""
+    if not chain[0]:
+        return ""
+    return (
+        f"entry chain: the declared entrance is behind {chain[0]} in series, and "
+        f"this module's branches hang on {chain[1]} beyond it — one chain, not two "
+        "rails"
+    )
+
+
+def _return_note(circuit: CircuitSpec, rail: str, gnd: str) -> str:
+    """Name the branches that return to a **second** ground (628B-02)."""
+    grounds = set(nets_of_class(circuit, "gnd")) - {gnd}
+    found: list[str] = []
+    for part_id, (first, second) in sorted(two_terminal_parts(circuit).items()):
+        if rail not in (first, second):
+            continue
+        other = second if first == rail else first
+        if other in grounds:
+            found.append(f"{part_id} returns to {other}")
+    if not found:
+        return ""
+    return (
+        "also returns to another ground family: "
+        + "; ".join(found)
+        + " — the inlet's own ground is the one this module is drawn on, and a "
+        "second return is a fact to state rather than a tie-break to make"
+    )
+
+
 def _rail_of(circuit: CircuitSpec, power: tuple[str, ...]) -> str:
     """Which power-class net is this module's rail.
 
@@ -591,13 +700,16 @@ def _rail_of(circuit: CircuitSpec, power: tuple[str, ...]) -> str:
     return named[0] if named else power[0]
 
 
-def _ground_of(circuit: CircuitSpec, rail: str, ground: tuple[str, ...]) -> str:
-    """The ground **this rail's own members** reach.
+def _ground_of(
+    circuit: CircuitSpec, rail: str, ground: tuple[str, ...], entry_part: str = ""
+) -> str:
+    """The ground **this module's inlet** returns to.
 
-    A page can carry several ground nets; the one that matters here is the one
-    the parts sitting on the rail also sit on — the module's return path, read
-    from the partition rather than from a name. `id`-sorted first when several
-    qualify, which is a tie-break and not a claim.
+    The inlet part's own ground wins where it is stated, and only then the shared
+    grounds in id order: taking `[0]` from the id-sorted shared list meant a
+    second ground net called `AGND` produced a false refusal (`subject=J1`) while
+    renaming it `ZGND` produced a silent drop — an answer decided by spelling
+    (628B-02).
     """
     net = circuit.net(rail)
     owners = {member.partition(".")[0] for member in (net.members if net else ())}
@@ -609,6 +721,15 @@ def _ground_of(circuit: CircuitSpec, rail: str, ground: tuple[str, ...]) -> str:
             and owners & {member.partition(".")[0] for member in other.members}
         )
     ]
+    if entry_part:
+        own = [
+            net_id
+            for net_id in shared
+            if (member := circuit.net(net_id)) is not None
+            and entry_part in {item.partition(".")[0] for item in member.members}
+        ]
+        if own:
+            return own[0]
     return (shared or list(ground))[0]
 
 

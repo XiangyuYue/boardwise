@@ -96,7 +96,7 @@ from .base import (
     refused_result,
 )
 
-#: The six grammar names this build implements, spelled as `GRAMMARS` in
+#: The seven grammar names this build implements, spelled as `GRAMMARS` in
 #: `presentationspec` spells them: the spec's literal and the implementation's
 #: name are the same string, so a lookup cannot half-match.
 NAMES: tuple[str, ...] = (
@@ -126,10 +126,33 @@ ROLES_BY_GRAMMAR: dict[str, tuple[str, ...]] = {
     mixed_island.NAME: mixed_island.ROLES,
 }
 
+
+class GrammarRoleError(ValueError):
+    """A grammar bound a role its own published table does not list.
+
+    A programming error, not bad input: `ROLES_BY_GRAMMAR` is the promise each
+    module makes about the vocabulary it uses, and before this check nothing read
+    it (628B-05 — the table existed only as a string in `__all__`).
+    """
+
+
+def check_result_roles(name: str, result):
+    """Refuse a result whose roles are not the ones this grammar published."""
+    allowed = ROLES_BY_GRAMMAR[name]
+    for binding in result.bindings:
+        if binding.role not in allowed:
+            raise GrammarRoleError(
+                f"grammar {name!r} bound role {binding.role!r}, which its "
+                f"published table does not list ({', '.join(allowed)})"
+            )
+    return result
+
 __all__ = [
+    "GrammarRoleError",
     "NAMES",
     "ROLES_BY_GRAMMAR",
     "bind",
+    "check_result_roles",
     "flyback",
     "grammar_for",
     "ic_periphery",
@@ -249,4 +272,7 @@ def bind(
                 ),
             )
         ])
-    return _CLASSES[name](profiles).bind(circuit, presentation, intent=intent)
+    return check_result_roles(
+        name,
+        _CLASSES[name](profiles).bind(circuit, presentation, intent=intent),
+    )

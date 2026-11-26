@@ -72,7 +72,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from ..core.geometry import transform_point
 from ..core.symbolprofile import Box, SymbolPin, SymbolPose, SymbolProfile, pose_box
-from ..core import textmetrics
+from ..core import presentationspec, textmetrics
 from . import router as _router
 
 #: What a caller writes into a report that names the placement it used.
@@ -256,10 +256,10 @@ TEXT_ROW_HEIGHT = 10.0
 PIN_TEXT_EDGE = 0.5
 
 #: The sides a net class prefers, when the caller states nothing (053 sec.2's
-#: presentation defaults).
-DEFAULT_SIDE_PREFERENCES: Mapping[str, str] = {
-    "input": "left", "output": "right", "power": "top", "gnd": "bottom",
-}
+#: presentation defaults). **Re-exported, not copied**: `presentationspec` owns the
+#: table and the compiler reads the same object (628B-07 — a second literal is a
+#: second behaviour).
+DEFAULT_SIDE_PREFERENCES = presentationspec.DEFAULT_SIDE_PREFERENCES
 
 _SIDE_VECTORS: Mapping[str, tuple[float, float]] = {
     "top": (0.0, 1.0), "bottom": (0.0, -1.0),

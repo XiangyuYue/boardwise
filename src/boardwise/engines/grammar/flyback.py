@@ -135,6 +135,7 @@ from .base import (
     NEAR,
     OWNED_BRANCH,
     RIGHT_OF,
+    SIDE_KIND,
     SAME_COLUMN,
     UNIFORM_GND,
     GrammarFailure,
@@ -900,7 +901,7 @@ class FlybackGrammar:
         # itself: an earlier version looped over the chain including the anchor and
         # emitted `same-row(U4, U4)`, which is a relation with one endpoint and has
         # no meaning for the compiler to keep.
-        chain_side = RIGHT_OF if out_side == "left" else LEFT_OF
+        chain_side = _side_kind(_opposite(out_side), LEFT_OF)
         for part_id in found.divider:
             constraints.append(RelativeConstraint(
                 kind=chain_side,
@@ -938,14 +939,14 @@ class FlybackGrammar:
         # contradiction the compiler can only satisfy by refusing the page.
         # Which of the two words is "the input half" is the declaration's
         # (`sidePreferences.input` / `output`), not this file's.
-        band_side = LEFT_OF if out_side == "right" else RIGHT_OF
+        band_side = _side_kind(_opposite(out_side), LEFT_OF)
         constraints.append(RelativeConstraint(
             kind=band_side,
             subject=found.opto,
             object=found.error_amp,
             reason=(
-                f"岳 110 裁决 e: the optocoupler is drawn on the **input-side "
-                f"half** of the band, {_side_word(band_side)} "
+                f"岳 110 裁决 e: the optocoupler is drawn on the **input side** "
+                f"of the band, {_side_word(band_side)} "
                 f"{found.error_amp} — it is the **only** part this grammar "
                 "allows to cross the isolation band, and it crosses by being "
                 "stated on both sides of it (this relation, and the one below) "
@@ -954,7 +955,7 @@ class FlybackGrammar:
         ))
         for part_id in found.compensation:
             constraints.append(RelativeConstraint(
-                kind=RIGHT_OF if out_side == "right" else LEFT_OF,
+                kind=_side_kind(out_side, RIGHT_OF),
                 subject=part_id,
                 object=found.opto,
                 reason=(
@@ -1110,6 +1111,23 @@ def _declared_side(
     return side if side in SIDES else default
 
 
+_OPPOSITE_SIDE = {
+    "left": "right", "right": "left", "top": "bottom", "bottom": "top",
+}
+
+
+def _opposite(side: str) -> str:
+    """The other side of the pair, or ``left`` when nothing is stated.
+
+    A band relation and a chain relation stand on the half the *other* end of the
+    chain is on, and that half is one of four sides (`_side_kind` reads all of
+    them). Comparing the string to ``"left"``/``"right"`` treated a vertical
+    declaration as "not right" — i.e. as the mirror, while the reason went on
+    saying "the input-side half" (628A-04).
+    """
+    return _OPPOSITE_SIDE.get(side, "left")
+
+
 def _side_kind(side: str, default: str) -> str:
     """The constraint kind that puts something on this side of its anchor.
 
@@ -1120,13 +1138,7 @@ def _side_kind(side: str, default: str) -> str:
     drift was real and it was dead code, which is how the hardcoded sides
     survived here while every sibling read the declaration.)
     """
-    return {
-        "left": LEFT_OF,
-        "right": RIGHT_OF,
-        "top": ABOVE,
-        "bottom": BELOW,
-        "": default,
-    }.get(side, default)
+    return SIDE_KIND.get(side, default)
 
 
 def _side_word(kind: str) -> str:
@@ -1205,33 +1217,59 @@ def _short_failure(circuit: CircuitSpec, state: _State) -> GrammarFailure | None
     if len(state.ground) < 2:
         return None
     grounds = set(state.ground)
-    wide = {
-        part_id for part_id, nets in state.part_nets.items() if len(nets) >= 4
+    power = set(state.power)
+    # Only a **winding** may hold both families. A winding is the one shape that
+    # touches four or more nets including a power-class rail (the primary's hot
+    # end); exempting by pin count alone let any four-net part — a common-mode
+    # choke, a bridge — cross without a word (628A-01: Y9 has four nets, no power
+    # net, and was let through). The check itself now walks **every** part, not
+    # just the two-terminal ones: a three-terminal part with one pin on each
+    # family is the same short.
+    windings = {
+        part_id
+        for part_id, nets in state.part_nets.items()
+        if len(nets) >= 4 and set(nets) & power
     }
-    for part_id, (left, right) in sorted(state.edges.items()):
-        if left in grounds and right in grounds and part_id not in wide:
-            return GrammarFailure(
-                category=FAILURE_CIRCUIT_INVALID,
-                subject=part_id,
-                detail=(
-                    f"{part_id} is a two-terminal element with one end on "
-                    f"{left} and the other on {right} — that is a conductor "
-                    "straight across the isolation barrier, and an isolated "
-                    "flyback has no such part. (A Y capacitor is the one real "
-                    "design that does this deliberately; note that the "
-                    "CircuitSpec cannot mark one as deliberate, which is why "
-                    "the grammar refuses rather than binding a barrier it "
-                    "cannot see through.)"
-                ),
-                action=(
-                    f"remove {part_id} from one of the two grounds, or — if this "
-                    "is the deliberate Y capacitor — state the isolation intent "
-                    "somewhere the grammar can read it; the transformer is "
-                    "exempt from this check because its auxiliary and "
-                    "secondary cold ends legitimately return to different "
-                    "families"
-                ),
+    for part_id in sorted(state.part_nets):
+        if part_id in windings:
+            continue
+        crossing = sorted(set(state.part_nets[part_id]) & grounds)
+        if len(crossing) < 2:
+            continue
+        first, second = crossing[0], crossing[1]
+        if part_id in state.edges:
+            detail = (
+                f"{part_id} is a two-terminal element with one end on "
+                f"{first} and the other on {second} — that is a conductor "
+                "straight across the isolation barrier, and an isolated "
+                "flyback has no such part. (A Y capacitor is the one real "
+                "design that does this deliberately; note that the "
+                "CircuitSpec cannot mark one as deliberate, which is why "
+                "the grammar refuses rather than binding a barrier it "
+                "cannot see through.)"
             )
+        else:
+            detail = (
+                f"{part_id} has pins on {len(crossing)} ground-class nets "
+                f"({', '.join(crossing)}): it spans the isolation barrier on "
+                "more than two terminals, and no exempt shape covers it — only "
+                "the transformer may hold both families, because its auxiliary "
+                "and secondary cold ends legitimately return to different "
+                "families"
+            )
+        return GrammarFailure(
+            category=FAILURE_CIRCUIT_INVALID,
+            subject=part_id,
+            detail=detail,
+            action=(
+                f"remove {part_id} from one of the two grounds, or — if this "
+                "is the deliberate Y capacitor — state the isolation intent "
+                "somewhere the grammar can read it; the transformer is "
+                "exempt from this check because its auxiliary and "
+                "secondary cold ends legitimately return to different "
+                "families"
+            ),
+        )
     return None
 
 
@@ -1297,10 +1335,22 @@ def _switches_on(state: _State, switch_node: str) -> list[str]:
     it is the reason the walk never has to look at a pin name.
     """
     ground_set = set(state.ground)
+    power_set = set(state.power)
+    # A winding also touches the switch node and a power rail, so the pin count
+    # alone would make every transformer a switch candidate (628A-06 relaxed the
+    # three-net premise and immediately re-bound T1). A winding is exempt here for
+    # the same reason it is exempt from the barrier check.
+    windings = {
+        part_id
+        for part_id, nets in state.part_nets.items()
+        if len(nets) >= 4 and set(nets) & power_set
+    }
     out: list[str] = []
     for part_id in sorted(state.part_nets):
+        if part_id in windings:
+            continue
         nets = set(state.part_nets[part_id])
-        if len(nets) != 3 or switch_node not in nets:
+        if len(nets) < 3 or switch_node not in nets:
             continue
         others = nets - {switch_node}
         grounded = [
@@ -1308,7 +1358,7 @@ def _switches_on(state: _State, switch_node: str) -> list[str]:
             if any(other in ground_set for other in _nets_via(state, net_id, part_id))
         ]
         floating = [net_id for net_id in sorted(others) if net_id not in grounded]
-        if len(grounded) == 1 and len(floating) == 1:
+        if len(grounded) == 1 and len(floating) >= 1:
             out.append(part_id)
     return out
 
@@ -1378,8 +1428,9 @@ def _sense_on(
     is not it, because its other end is not the source.
     """
     switch_nets = set(state.part_nets.get(switch, ()))
+    del switch_nets
     for part_id, (first, second) in sorted(state.edges.items()):
-        if part_id in switch_nets:
+        if part_id == switch:
             continue
         if {first, second} == {source, pgnd}:
             return part_id
@@ -2321,14 +2372,17 @@ def _no_flyback_failure(circuit: CircuitSpec, state: _State) -> GrammarFailure:
     ]
     if windings and not barrier:
         return GrammarFailure(
-            category=FAILURE_CIRCUIT_INVALID,
+            category=FAILURE_FACTS_MISSING,
             subject="",
             detail=(
                 "no part closes the feedback loop across the two ground "
-                f"families ({', '.join(state.ground)}), so there is no isolation "
-                "barrier: a flyback's regulation crosses optically, and the "
-                "drawing's whole claim — two families, one crossing — needs a "
-                "part that does it. The barrier was looked for on every family "
+                f"families ({', '.join(state.ground)}), so this drawing has no "
+                "isolation barrier this grammar can read: this grammar's page — "
+                "110's TL431+PC817 — closes its loop through an optocoupler, and "
+                "that role is required here, so a primary-side (PSR) or "
+                "auxiliary-winding feedback design needs another grammar rather "
+                "than a repair to this circuit. The barrier was looked for on "
+                "every family "
                 "pairing this circuit states — the primary ground the sense "
                 "returns to, and each ground the transformer's other winding "
                 f"ends on ({', '.join(f'{p}→{s}' for _t, p, _b, s in windings)}) "

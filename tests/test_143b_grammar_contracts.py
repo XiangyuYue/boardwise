@@ -155,7 +155,9 @@ def test_h1_a_missing_optocoupler_is_refused_because_the_barrier_is_absent():
     """
     result = _bind(t113._without_part(t113.minimal_circuit(), "U5"))
     assert not result.ok
-    assert result.failures[0].category == FAILURE_CIRCUIT_INVALID
+    # 628A-07：类别改为 `facts-missing`（PSR 反激合法，本语法不读它）。下面每条
+    # 措辞断言都没动——这一条钉的是「报隔离带缺失、不许回头说某节没读出」。
+    assert result.failures[0].category == "facts-missing"
     detail = _detail(result)
     assert "no part closes the feedback loop across the two ground families" in detail
     assert "PGND" in detail and "SEC_GND" in detail

@@ -7,7 +7,7 @@ Two flows share this command family:
   should read it) — and `draw compile` turns it into ranked `LayoutPlan`s
   offline, behind an independent readability gate; `draw plan` / `draw apply`
   land one into the open editor, and `draw discard` takes it back off.
-  Grammars today: voltage divider, RC low-pass, LDO; several modules compose
+  Grammars today (seven, in `grammar.NAMES` order): voltage divider, RC low-pass, LDO, power entry, IC periphery, flyback, mixed island.; several modules compose
   onto one page. See **The compiled page** below and `docs/architecture.md`;
   the drawing rules it enforces are `docs/schematic-conventions.md` R6–R10.
 - **The golden replay (006/006b, this document's original flow).** Redraws a

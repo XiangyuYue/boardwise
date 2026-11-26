@@ -672,7 +672,7 @@ def test_a_part_shorting_the_two_ground_families_is_refused():
     assert "PGND" in result.failures[0].detail
 
 
-def test_a_missing_optocoupler_is_refused_as_circuit_invalid():
+def test_a_missing_optocoupler_is_refused_as_facts_missing():
     """**143b 加强**：光耦缺失要以"隔离带不存在"为理由被拒。
 
     旧的断言只查 detail 里有 "isolation barrier" 这个词。**143 挖出这句话
@@ -684,7 +684,10 @@ def test_a_missing_optocoupler_is_refused_as_circuit_invalid():
     """
     result = _bind(_without_part(minimal_circuit(), "U5"))
     assert not result.ok
-    assert any(item.category == FAILURE_CIRCUIT_INVALID for item in result.failures)
+    # 628A-07：类别从 `circuit-invalid` 改为 `facts-missing`。原边反馈（PSR/辅助
+    # 绕组）反激是**合法设计类**，本语法只是不读它——这是「本语法读不出这个」，
+    # 不是「这份电路是错的」。下面每条措辞断言都没动。
+    assert any(item.category == "facts-missing" for item in result.failures)
     detail = " ".join(item.detail for item in result.failures)
     assert "isolation barrier" in detail or "隔离" in detail
     assert "no part closes the feedback loop across the two ground families" in detail
