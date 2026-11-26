@@ -857,7 +857,38 @@ def _gate_levels(spec: BoardSpec) -> Gate:
     findings: list[Finding] = []
     for connection in spec.connections:
         entries = _ports_of(spec, connection)
-        if not entries or any(not port.is_signal for _, _, port in entries):
+        if not entries:
+            continue
+        not_signal = [(who, port) for _, who, port in entries if not port.is_signal]
+        if not_signal:
+            # 624B-02: one ground (or rail) port used to switch the whole net off
+            # — `continue` — on the reasoning that a net carrying a return is the
+            # power-tree gate's. The power-tree gate skips it too when it has no
+            # `power` port, so a signal port that *declared a level* next to a
+            # ground port was never compared by anyone. A ground pin can be the
+            # other end of a strap, so this is UNDECIDABLE rather than a
+            # violation: the honest statement is 「these two were never compared」,
+            # and this module reports what it cannot judge instead of passing it.
+            declared = [
+                (who, port) for _, who, port in entries if port.is_signal and port.level
+            ]
+            if declared:
+                named = [f"{who}.{port.role}" for who, port in declared]
+                bare = [f"{who}.{port.role}" for who, port in not_signal]
+                findings.append(
+                    Finding(
+                        kind=UNDECIDABLE,
+                        rule="level-domain",
+                        message=(
+                            f"net {connection.net!r} declares "
+                            f"{', '.join(sorted({port.level for _, port in declared}))!r} "
+                            f"on {', '.join(named)} next to non-signal port(s) "
+                            f"{', '.join(bare)}, so the domains were never compared — "
+                            "a return pin is not a matching port"
+                        ),
+                        evidence=[f"signal: {', '.join(named)}; not signal: {', '.join(bare)}"],
+                    )
+                )
             continue
         stated = [(who, port) for instance, who, port in entries if port.level]
         domains = {_io_domain(port.level) for _, port in stated}
@@ -968,7 +999,30 @@ def _gate_power_tree(spec: BoardSpec) -> Gate:
     findings: list[Finding] = []
     for connection in spec.connections:
         entries = _ports_of(spec, connection)
-        rails = [(who, port) for _, who, port in entries if port.net_class == "power"]
+        # 624B-01: a rail and its return on one net is a short, and this gate used
+        # to look only at `net_class == "power"` ports — the ground port on the
+        # same connection was filtered out before anything counted, so the five
+        # gates all passed a net that joins a 5 V source to GND. The mix is the
+        # finding; nothing below can say anything more useful about a net that is
+        # already two nets.
+        power_ports = [(who, port) for _, who, port in entries if port.net_class == "power"]
+        ground_ports = [f"{who}.{port.role}" for _, who, port in entries if port.net_class == "gnd"]
+        if power_ports and ground_ports:
+            mixed = [f"{who}.{port.role}" for who, port in power_ports] + ground_ports
+            findings.append(
+                Finding(
+                    kind=VIOLATION,
+                    rule="class-mix",
+                    message=(
+                        f"net {connection.net!r} joins a power port and a ground port "
+                        f"({', '.join(mixed)}) — a rail and its return are two nets, "
+                        "so this one is a short"
+                    ),
+                    evidence=[", ".join(mixed)],
+                )
+            )
+            continue
+        rails = power_ports
         if not rails:
             continue  # ground is the sink and nothing else; signals are gate 3's
 

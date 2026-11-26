@@ -209,16 +209,40 @@ def implicit_island(part_ids: Sequence[str]) -> LayoutIsland:
 
 
 def part_island_map(islands: Sequence[LayoutIsland]) -> dict[str, str]:
-    """``part id -> island id``. Last writer wins; the parser refuses overlaps."""
-    return {part: island.id for island in islands for part in island.parts}
+    """``part id -> island id``, with **one** island per part.
+
+    624B-04: this used to be 「last writer wins; the parser refuses overlaps」 while
+    :func:`island_of_part` answered the **first** owner — so one in-memory document
+    had two answers about the same part (the later island from this reader, the
+    earlier one from the other) and neither said so. The parser does refuse
+    overlaps on the way in, but ``LayoutIsland`` is public and both readers are
+    public, so the boundary is drawn here: two owners is an error, not a tie.
+
+    A part named twice *inside* one island is not this reader's question (the id is
+    the same, so there is one answer); the island parser refuses the repeat.
+    """
+    owner: dict[str, str] = {}
+    for island in islands:
+        for part in island.parts:
+            held = owner.get(part)
+            if held is not None and held != island.id:
+                raise IslandError(
+                    f"part {part!r} is in two islands ({held!r} and {island.id!r}) — "
+                    "every part sits in exactly one block, and two answers about "
+                    "where it goes is a question the layout cannot ask back"
+                )
+            owner[part] = island.id
+    return owner
 
 
 def island_of_part(islands: Sequence[LayoutIsland], part_id: str) -> str | None:
-    """The island that owns this part, or ``None`` when no island names it."""
-    for island in islands:
-        if part_id in island.parts:
-            return island.id
-    return None
+    """The island that owns this part, or ``None`` when no island names it.
+
+    624B-04: reads :func:`part_island_map`, so the two public answers cannot differ
+    (and a part claimed twice raises here too, instead of quietly answering the
+    first island).
+    """
+    return part_island_map(islands).get(part_id)
 
 
 def cross_island_nets(
@@ -342,6 +366,17 @@ def parse_islands(
             raise IslandError(
                 f"{spot}.parts is empty — an island with no parts is a caption, "
                 "not a block the layout can place"
+            )
+        repeated = _repeats(parts)
+        if repeated:
+            # 624B-03: the archipelago reader has refused this since :532, and this
+            # is the **default** reader (a spec with no archipelago keys takes it).
+            # Two rulers for one question is how one reader accepts what the other
+            # rejects; the repeat is refused here with the archipelago's own words.
+            raise IslandError(
+                f"{spot}.parts repeats part(s) {', '.join(repeated)} — one island "
+                "names a part once: a repeat inside one island is still two answers "
+                "about where it sits"
             )
         for part_index, part_id in enumerate(parts):
             if part_id not in known:

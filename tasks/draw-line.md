@@ -25,11 +25,10 @@
    两条出路（connector 派生该段 / Python 受控例外）各需单独一批。
 4. **U-14 ③（缺环境）**：566-D-1 同窗口切工程，缺第二个被点名的可动工程（现只有 `test V4` 与一个
    禁地窗口）。
-5. **挖洞待认领（623–630，89 条原计；623 已修 `1572f34`+`ebf6e51`、**625 已全批收口** `evidence/625a|625b/REPORT.md`）**：630 证到**值零消费**（25 行矩阵、24 对只改值全 `DIGEST IDENTICAL`）与 `--benchmark` 3 格 fail-open；629 挖 `flyback` 深水（RCD 并联 R 整条丢且臂标签不跟身份、启动电阻被读成辅助二极管、第二路分压按网名字典序绑输出）与**岛链端到端**（propose→apply→compile 全通，但零判断也落出无 `role` 岛、compile 只拒未知 role）；628 收尾 `flyback`（04-H 5/7 仍在）与 `power_entry`（4/7）+ registry，
+5. **挖洞待认领（623–631，104 条原计、余 83 条；623 已修 `1572f34`+`ebf6e51`、**625 已全批收口** `evidence/625a|625b/REPORT.md`、**624 已全批收口** `evidence/624a|624b/REPORT.md`）**：630 证到**值零消费**（25 行矩阵、24 对只改值全 `DIGEST IDENTICAL`）与 `--benchmark` 3 格 fail-open；629 挖 `flyback` 深水（RCD 并联 R 整条丢且臂标签不跟身份、启动电阻被读成辅助二极管、第二路分压按网名字典序绑输出）与**岛链端到端**（propose→apply→compile 全通，但零判断也落出无 `role` 岛、compile 只拒未知 role）；628 收尾 `flyback`（04-H 5/7 仍在）与 `power_entry`（4/7）+ registry，
    七本文法 04-H 合计 **28/49 仍在**、`ROLES_BY_GRAMMAR` 零消费者；627 的四本文法（`base`/`ldo`/`voltage_divider`/`rc_lowpass`）交 19 条、
    04-H 家族 **14/28 仍在**（**`base.py` 的 H2/H5/H7 被六本文法继承，修一条等于修六本**）；626 的
    `ic_periphery`/`mixed_island`/`islandproposal`（七条家族项五条仍在）、
-   624 的零引脚整件出页与 `validate_full` 缺框不可见、
    **623 全批收口**（A 缝 9 条：8 修 + A-05 复核否决，`evidence/623a/REPORT.md`；B 缝 4 条 `evidence/623b/REPORT.md`）。逐条见 `outputs/hole62{3,4,5,6,7}/TRIAGE.md`。
 
 ## 近期完成（2026-11-26）

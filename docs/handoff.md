@@ -40,13 +40,12 @@
    `delete_primitives` 回收）需**受控写授权**；② `netlabels` 缺口（connector 从 `NET` 属性派生，或
    Python 闸对「宿主确无此命名空间」给受控例外）单独一批，需一张有 NET 属性的页验证；③ 566-D-1
    同窗口切工程缺第二个被点名的可动工程。
-3. **绘制线挖洞待认领**：623–630 八批共 **89 条**待修（**623 已修**：`1572f34` values + `ebf6e51` propose、**625 已修**：`evidence/625a|625b/REPORT.md`，抽验 `RTT034702FTP` 不再产出 `'702'`、`0R`→0.0、报告新增 `sharedParts`/`unresolvedParts`）——630 证到**值在三个文法里零消费**（25 行矩阵、24 对只改值全 `DIGEST IDENTICAL`：24 V 母线挂 5 V TVS 仍 `ok=True`）且 `--benchmark` 覆盖表有 3 格 fail-open（目录/`--target` 不存在/`root=None` 的 NOTE 都算通过）；629 挖 `flyback` 深水（RCD 并联放电电阻整条丢、启动电阻被读成辅助二极管、第二路分压绑哪个输出由网名字典序决定）与**岛链端到端**（链是通的：propose→apply→compile 四步全 exit 0，未 apply 时 compile exit 5；但零判断提案也 exit 0 落出**无 role** 的岛，而 compile 拒未知 role 不拒缺 role）；
+3. **绘制线挖洞待认领**：623–631 九批共 **83 条**待修（**623 已修**：`1572f34` values + `ebf6e51` propose、**625 已修**：`evidence/625a|625b/REPORT.md`、**624 已全批收口**：`evidence/624a|624b/REPORT.md`，抽验 `RTT034702FTP` 不再产出 `'702'`、`0R`→0.0、报告新增 `sharedParts`/`unresolvedParts`）——630 证到**值在三个文法里零消费**（25 行矩阵、24 对只改值全 `DIGEST IDENTICAL`：24 V 母线挂 5 V TVS 仍 `ok=True`）且 `--benchmark` 覆盖表有 3 格 fail-open（目录/`--target` 不存在/`root=None` 的 NOTE 都算通过）；629 挖 `flyback` 深水（RCD 并联放电电阻整条丢、启动电阻被读成辅助二极管、第二路分压绑哪个输出由网名字典序决定）与**岛链端到端**（链是通的：propose→apply→compile 四步全 exit 0，未 apply 时 compile exit 5；但零判断提案也 exit 0 落出**无 role** 的岛，而 compile 拒未知 role 不拒缺 role）；
    628 收尾 last 两本文法（`flyback` 5/7 仍在、`power_entry` 4/7），
    至此**七本文法 04-H 合计 28/49 仍在**（无一本干净），且 `grammar/__init__.py` 的 `ROLES_BY_GRAMMAR` 零消费者；
    627 的四本文法（base/ldo/voltage_divider/rc_lowpass）
    交 19 条，04-H 家族 **14/28 仍在**（`base.py` 的 H2/H5/H7 被六本文法继承）；626 的 04-H1…H7 七条家族项
-   **五条仍在**；**625 已全批收口**（A 缝 8 条：5 修 + 1 文档 + 2 复核否决 `evidence/625a/REPORT.md`；B 缝 6 条：5 修 + 1 复核否决 `evidence/625b/REPORT.md`）；624 的零引脚整件出页
-   （x=1400 仍 `violations=[]`）与 `validate_full` 的 `if p.bbox`；**623 全批收口**（A 缝 9 条：8 修 + A-05 复核否决，`evidence/623a/REPORT.md`；B 缝 4 条 `evidence/623b/REPORT.md`）。逐条见
+   **五条仍在**；**625 已全批收口**（A 缝 8 条：5 修 + 1 文档 + 2 复核否决 `evidence/625a/REPORT.md`；B 缝 6 条：5 修 + 1 复核否决 `evidence/625b/REPORT.md`）；**624 已全批收口**（A 缝 3 洞 `evidence/624a/REPORT.md`：零引脚件折行、缺框件按原点入闸、`OFF_GRID_SYMBOL`；B 缝 4 洞 `evidence/624b/REPORT.md`：`class-mix`、`levels` 不再整条跳过、岛内重复 part、双归属抛错）；**623 全批收口**（A 缝 9 条：8 修 + A-05 复核否决，`evidence/623a/REPORT.md`；B 缝 4 条 `evidence/623b/REPORT.md`）。逐条见
    `outputs/hole62{3,4,5,6,7}/TRIAGE.md`。
 4. **审查线**：600R 的工作树改动未提交；621 默认 off、auto 未开放、exe/pip 未打包。
 5. **仓库级**：绘制线五批与审查线改动仍未推送；全量、Rust、发布闸未跑；§0 通告与 §3.2/§3 的

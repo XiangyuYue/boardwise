@@ -19,7 +19,13 @@ collects the current truth and the pointers.
   变异与「schematic 视图不触发 Rust 切片」的探针教训）。
 - **621E4**：`tasks/621e_retirement_plan.md` 成文——退役总前提（默认 Rust 发布验收后逐次
   批准）、auto 回退连带退役、differential 改 golden 直读、R1–R4 顺序与消费者矩阵；
-  未执行任何删除。阻断③集成全量在途，结果另记。详见各任务书 §6/§7。
+  未执行任何删除。
+- **621E3**：集成全量一次完成（40:08，附 JUnit `.tmp_perf_pytest/junit-621e.xml`）——
+  Python **13781 passed / 21 failed**，本线 4 条锚点失更重钉（126a 指纹
+  direct `da4b807b`/recursive `167a892f`、540_cli 模块计数 165→173，聚焦复验
+  **41 passed**），其余 17 条其他线红按 owner 披露不陪跑；connector **926 passed**、
+  DSH **218 passed / 1 skipped**（typecheck/build 过）、Rust **392 passed / 0 failed**。
+  四条阻断全部消除/成文，剩余议题只有默认切换本身的裁定。
 
 ## [2026-11-26] 621D7 VoltageSpacing 整规则垂切（rule 域）
 
@@ -50,6 +56,14 @@ collects the current truth and the pointers.
 - **U-14 新缺口（未修）**：4.1.100 没有 `sch_PrimitiveNetLabel` 命名空间（网络标签是 `sch_PrimitiveAttribute` 的 `Key=='NET'`），`sch.geometry` 的 `netlabels` 段永久 `available:false` → `_draw_geometry_readable` 要求十段全可用，真机上**空页复用闸永远 False**。出路（connector 派生该段 / Python 受控例外）各需单独一批。
 - **未做**：572B 写路径（`place_*` 各一次 + `delete_primitives` 回收）待授权；566-D-1 缺第二个被点名的可动工程；全量/Rust/发布闸未跑；三个提交均未推送。证据 `evidence/u06/`、`evidence/u10/REPORT.md`、`evidence/u14/REPORT.md`、`evidence/622/UNRESOLVED.md`。
 - **交接文档**：`docs/handoff.md`、`tasks/draw-line.md` 顶部各留一块 2026-11-26 当前状态，旧块统一降为「历史」；`TASKMAP` 622 行改为已提交。
+
+## [2026-11-26] 631 绘制线挖洞第十五批（值应判缺口 / pagecompiler 专缝）
+
+- **选面**：630-A 只证了「值零读取」，本批补「哪些值**应该**判」；外加六批里被引用 35 次却从无专缝的 `pagecompiler.py`（273 KB）。HEAD `aa2cc69`。
+- **15 条洞（高 6 / 中 4 / 低 5）**。缝 A 三个新事实：① **intent 通路是通的**（`cli.py:12062 → drawcompiler.py:1916 → grammar/__init__.py:252 → bind(intent=…)`），`power_entry` 读 22 处 branchOrder，而 `flyback:340`/`voltage_divider:216` **0 处读**——修起来比 630 报告估的便宜；② 文档依据比预想薄（S-01…S-21 只有 S-05/S-20/S-21 涉及值，且只要求「可见」不要求「合法」）；③ 「有解析器」≠「读得出」——四个核心量解析器对 **9 条真实 blocklib 值里 7 条 `None`**，公差连解析器都没有。高：反馈分压比从不与声明 VOUT 比对、1:1 与 1:1000 分压仍 `ok=True`（我亲跑：`7k/5k → 7k/7k` 抽头落 6.00 V 读数逐字节相同）、全程无电容耐压判据、不可解析值被当通过。
+- **缝 B**：判据表 37 行。高：`_check_budget` 接受 `grid/module_gap/frame_padding/gap_ladder` 的 `NaN`，随后 `compile_page` **抛未捕获 `ValueError`**（我亲跑：`[D1] grid=nan ACCEPT -> CRASHED`），与 `PageCompileError`「输入问题永不抛」的文档承诺相反。另：`_measure` 不是过滤器（带 hard violation 的页仍可排第一）、**标题栏在页路径从不派生**（`PageCompileBudget(page_box).keepouts = ()` 而 `_page_keepouts` 给出 `((490,10,1190,190),)`——622 教训的页侧副本）。
+- **更正 630 的表述**：630 报告说的「缺目标电压字段」不成立，intent 字段早在手上。
+- **状态**：只挖不修，被审文件 sha256 开工=收工；洞表与第十六批候选见 `outputs/hole631/TRIAGE.md`。
 
 ## [2026-11-26] 630 绘制线挖洞第十四批（值是否参与判据 / benchmark 与证据消费）
 
@@ -108,6 +122,15 @@ collects the current truth and the pointers.
 - **跨批更正**：625B-04 因 `70b8387` 降级——自帧预览已按 caption 加宽，声明 page 框时仍裁但**已在提交说明与代码注释明示**并有测试钉住，从「未披露缺陷（中）」改为「已披露的页框限制」。（**已被 625 修复批取代**：声明页框下 caption 现在按纸宽换行，纸仍不放大。）
 - **状态**：只挖不修，三文件 sha256 开工=收工；洞表见 `outputs/hole626/TRIAGE.md`。
 
+## [2026-11-26] 624 修复批（legacy 直出链 / 规格闸与岛模型）
+
+- **来源**：`outputs/hole624/TRIAGE.md` 的 7 条洞（高 3 / 中 3 / 低 1）；分两缝落地，证据 `evidence/624a/REPORT.md`、`evidence/624b/REPORT.md`。
+- **缝 A（`layout.py` + `generate.py`，3 条全修）**：零引脚整件拿名义占地（一列宽 + 一个 `BOX_GAP` 高）参与 `row_height`/`wraps()`，16 件不再把光标推到 x=1400（4 件出页）；`validate_full` 的 `if p.bbox` 改为对缺框件按**原点**判 `OUT_OF_SHEET`/`PLACEMENT_ON_TITLE_BLOCK`（detail 写明用的是原点尺，仍不参与 `BOX_OVERLAP`）；新增阻塞码 `OFF_GRID_SYMBOL`：网表连上的引脚偏移不在 5 单位栅格上就点名。**顺带回答了挖洞批 §0.3-2 的存疑**：`generate_plan` 的 `attempt()` 喂给闸的就是 `_pack` 的 geometry，补 bbox 不动读数是因为闸在 `if p.bbox` 处把它们整条丢掉了。
+- **缝 B（`validate_spec.py` + `islands.py`，4 条全修）**：`power-tree` 取 `rails` 前先判类别混合（power + gnd 同网 = 短路，`VIOLATION class-mix`）；`levels` 对「signal 口写了 level + 同网有非 signal 口」由整条 `continue` 改为 `UNDECIDABLE level-domain`（strap 可能合法，但没比较过不许读成 pass）；legacy `parse_islands` 复用 `_repeats()` 与 archipelago 措辞拒绝岛内重复 part；`part_island_map` 第二归属即抛 `IslandError`，`island_of_part` 改读它（两个公开函数不再一个答末个、一个答首个）。
+- **读数**：缝 A 新文件 8 passed、layout/generate 邻域 22 文件 **629 passed / 4 skipped**；缝 B 新文件 8 passed、岛/规格闸邻域 10 文件 **420 passed**；出货两份 `validate --spec` **exit 0**；加闸前量过出货库 220 个引脚尖端全在 5 单位栅格上。
+- **变异**：A 三处、B 四处，全部先红后 `cp` + SHA-256 复原，红的位置逐条对上新断言。
+- **状态**：未提交（等岳点头）、未推送、未跑全量/四线。改动 4 文件 +195/−18，另有 1 个新测试文件。
+
 ## [2026-11-26] 625 修复批（缝 A 装载器 / 缝 B 部件类与文本度量）
 
 - **来源**：`outputs/hole625/TRIAGE.md` 的 14 条洞；按 623 先例分两缝落地，每洞给结论（修 / 复核否决 / 文档补齐），证据 `evidence/625a/REPORT.md`、`evidence/625b/REPORT.md`。
@@ -117,6 +140,8 @@ collects the current truth and the pointers.
 - **变异**：A 六处、B 五处，全部先红后 `cp` + SHA-256 复原；红的位置逐条对上新断言（报告 §5）。
 - **状态**：未提交（等岳点头）、未推送、未跑全量/四线。改动 9 文件 +332/−40，另有 4 个新文件（3 测试 + `blocklib/specs/README.md`）。
 ## [2026-11-26] 625 绘制线挖洞第九批（规格库全量 + 加载器 / 部件类与文本度量）
+
+- **2026-11-26 已修**：`7c8e6c8 fix(blocks): resolve evidence citations and refuse port/pin identity faults at load (625A)` + `aa2cc69 fix(partkind): read CJK compounds and interface words without losing ICs (625B)`。我抽验：`MOS管`→**`transistor`**（原 `ic`）、`TVS管`→**`diode`**、`USB 转串口 CH340C`→**`ic`**（原 `connector`）、全角 `Ｒ１`→**`resistor`**（原 `unknown`/`basis=''`）；装载侧 `param_evidence: NOPE-REF` **REFUSED**（`'NOPE-REF' is not a declared reference; declared: ds`）、`references[].path` 指向目录 **REFUSED**（`'../../' is a directory, not a file`）、绝对路径逃逸 **REFUSED**。
 
 - **选面**：624 报告 §3 的头两块——`blocklib/specs` **23 份**出货规格 + `core/blocks.py` 加载器（67 KB）；`core/partkind.py`(45 KB) + `core/textmetrics.py`(33 KB)。HEAD `4253a9c`。
 - **证伪一个假设（正面）**：23 份规格结构**全部合法**；8 条 `draw compile`（7 组配对 + 历史 circuit 补齐）**全部 exit 0 / ok=True / failures=0**；两次重跑 `cand1.svg`/`layout.json` sha256 相同。配对口径：`--profiles` 必须用 `<spec>.library.json`，用全局 `symbols/profiles.json` 会 exit 5 `facts-missing`（正确拒因，附「用 spec 自己的 library」提示）。
