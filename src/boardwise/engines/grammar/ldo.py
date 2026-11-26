@@ -74,6 +74,7 @@ from .base import (
     DIRECT_WIRE,
     FAILURE_CIRCUIT_INVALID,
     FAILURE_FACTS_MISSING,
+    FAILURE_PRESENTATION_POOR,
     LEFT_OF,
     NEAR,
     OWNED_BRANCH,
@@ -85,6 +86,7 @@ from .base import (
     RelativeConstraint,
     RoleBinding,
     RoleConnection,
+    arm_exclusions,
     bound_result,
     connected_net_sets,
     evidence,
@@ -94,6 +96,7 @@ from .base import (
     net_provenance,
     part_clause,
     part_provenance,
+    pins_of_part,
     profile_for,
     refused_result,
     role_pins,
@@ -177,7 +180,10 @@ class LdoGrammar:
         # accepted for the uniform signature the dispatcher calls with.
         cores, failures = self._cores(circuit, presentation)
         if cores:
-            return self._result(circuit, presentation, cores)
+            # `failures` is not empty here when a *readable* core was refused
+            # while another one bound (627A-03); dropping it was how a shorted
+            # second regulator became invisible in every output.
+            return self._result(circuit, presentation, cores, tuple(failures))
         return refused_result(failures)
 
     # ------------------------------------------------------------- internals
@@ -214,7 +220,7 @@ class LdoGrammar:
                     core.out_net,
                 )
             )
-            return candidates, []
+            return candidates, problems
 
         # Nothing bound: report what is missing from the library (a part with no
         # profile cannot even be judged) and, when something *was* readable, that
@@ -232,18 +238,65 @@ class LdoGrammar:
         circuit: CircuitSpec,
         presentation: PresentationSpec,
         cores: list[_Core],
+        not_bound: tuple[GrammarFailure, ...] = (),
     ) -> GrammarResult:
         core = cores[0]
+        # A core listed in two modules cannot be the core of one island: every
+        # module guard below reads `core.module`, and "" — the answer for a
+        # contradiction — switched the whole guard off (627A-05).
+        core_modules = modules_of_part(presentation, core.part_id)
+        if len(core_modules) > 1:
+            return refused_result([
+                GrammarFailure(
+                    category=FAILURE_PRESENTATION_POOR,
+                    subject=core.part_id,
+                    detail=(
+                        f"{core.part_id} ({core.symbol_ref}) is listed in "
+                        f"{len(core_modules)} modules ({', '.join(core_modules)}): "
+                        "one part cannot be the core of two islands, and which "
+                        "module scopes its branches would have to be guessed"
+                    ),
+                    action=(
+                        "name the core in exactly one modules[] entry; a part "
+                        "claimed by two islands is a partition question, not a "
+                        "grammar binding"
+                    ),
+                )
+            ])
         runners = _runner_up_note(cores)
-        in_side = presentation.side_for("input") or "left"
-        out_side = presentation.side_for("output") or "right"
+        stated_in = presentation.side_for("input")
+        stated_out = presentation.side_for("output")
+        in_side = stated_in or "left"
+        out_side = stated_out or "right"
         if in_side not in SIDES:
             in_side = "left"
         if out_side not in SIDES:
             out_side = "right"
-        in_caps = _caps_on(circuit, presentation, core, core.in_net)
-        out_caps = _caps_on(circuit, presentation, core, core.out_net)
-        aux = _aux_caps(circuit, presentation, core)
+        # 053 sec.3 says an LDO's input and output are on opposite sides, and
+        # every constraint below says so in its reason. A sheet that declared
+        # both on one side was bound anyway, so the reason asserted the opposite
+        # of the document (627A-02).
+        if stated_in and stated_out and in_side == out_side:
+            return refused_result([
+                GrammarFailure(
+                    category=FAILURE_PRESENTATION_POOR,
+                    subject=core.part_id,
+                    detail=(
+                        "sidePreferences puts this LDO's input and output on the "
+                        f"same side ({in_side}): 053 sec.3 asks for opposite "
+                        "sides, and both branches would be placed on that one "
+                        f"side of {core.part_id}"
+                    ),
+                    action=(
+                        "declare sidePreferences.input and sidePreferences.output "
+                        f"on different sides (each one of {', '.join(SIDES)}), or "
+                        "drop one of the two declarations so its default is used"
+                    ),
+                )
+            ])
+        in_caps = _caps_on(circuit, presentation, core, core.in_net, self.profiles)
+        out_caps = _caps_on(circuit, presentation, core, core.out_net, self.profiles)
+        aux = _aux_caps(circuit, presentation, core, self.profiles)
         prov = weakest_provenance(
             net_provenance(circuit, core.in_net),
             net_provenance(circuit, core.out_net),
@@ -261,6 +314,8 @@ class LdoGrammar:
                     part_clause(circuit, core.part_id),
                     _profile_clause(core),
                     f"core chosen: {core.describe()}",
+                    _refused_note(not_bound),
+                    _arm_note(circuit, self.profiles, core),
                     f"provenance={prov}",
                     runners,
                 ),
@@ -484,20 +539,22 @@ def _core_from(
                     "two symbols if they really are different outputs"
                 ),
             )
-        pin = roles[role]
+        # The role's own roll call: `RoleConnection.note()` says which pins are
+        # in nc[] (handled, not missing) and which are simply unmentioned. The
+        # old sentence named the id-sorted first pin and claimed *neither* was
+        # NC, which was a lie whenever the spec listed one there (627A-01).
         return None, GrammarFailure(
             category=FAILURE_FACTS_MISSING,
             subject=part.id,
             detail=(
-                f"{part.id} ({part.symbol_ref}) has a {role} pin "
-                f"(number={pin.number!r}, name={pin.name!r}) but the CircuitSpec "
-                "states no connection for it — neither a net member nor an "
-                "explicit nc"
+                f"{part.id} ({part.symbol_ref}) has no net on any {role} pin, so "
+                f"the core has no {role} node and cannot form in→core→out — "
+                + connection.note()
             ),
             action=(
-                f"add <{part.id}.{pin.number or pin.name}> to a net in "
-                "CircuitSpec.nets[].members, or list it in nc[] if it really "
-                "is unconnected"
+                f"connect one of {_tokens(part.id, connection.tokens)} to a net in "
+                "CircuitSpec.nets[].members, or list the unmentioned one(s) in "
+                "nc[] if they really are unconnected"
             ),
         )
 
@@ -548,10 +605,19 @@ def _tokens(part_id: str, tokens: tuple[str, ...]) -> str:
 
 
 def _caps_on(
-    circuit: CircuitSpec, presentation: PresentationSpec, core: _Core, node: str
+    circuit: CircuitSpec,
+    presentation: PresentationSpec,
+    core: _Core,
+    node: str,
+    profiles: Mapping[str, SymbolProfile] | None = None,
 ) -> tuple[str, ...]:
-    """Two-terminal parts from this node to the core's ground, module-scoped."""
-    edges = two_terminal_parts(circuit)
+    """Two-terminal parts from this node to the core's ground, module-scoped.
+
+    The arm set is read with the symbol library (`base.two_terminal_parts`), so a
+    three-pin symbol whose third leg the spec never mentions is not an arm
+    (04-H2 / 627A-08).
+    """
+    edges = two_terminal_parts(circuit, profiles)
     out: list[str] = []
     for part_id in sorted(edges):
         if part_id == core.part_id or node not in edges[part_id]:
@@ -565,7 +631,10 @@ def _caps_on(
 
 
 def _aux_caps(
-    circuit: CircuitSpec, presentation: PresentationSpec, core: _Core
+    circuit: CircuitSpec,
+    presentation: PresentationSpec,
+    core: _Core,
+    profiles: Mapping[str, SymbolProfile] | None = None,
 ) -> tuple[tuple[str, str, str], ...]:
     """``(part id, pin clause, its net)`` for branches on the core's other pins.
 
@@ -578,7 +647,7 @@ def _aux_caps(
     if core.profile is None:
         return ()
     roles = role_pins(core.profile)
-    edges = two_terminal_parts(circuit)
+    edges = two_terminal_parts(circuit, profiles)
     chain_nets = {core.in_net, core.out_net, core.gnd_net}
     out: list[tuple[str, str, str]] = []
     for role in sorted(roles):
@@ -594,6 +663,11 @@ def _aux_caps(
             if net not in edges[part_id] or core.gnd_net not in edges[part_id]:
                 continue
             if core.module and core.module not in modules_of_part(presentation, part_id):
+                continue
+            if any(item[0] == part_id and item[2] == net for item in out):
+                # One net, one branch: two non-core roles resolving onto the same
+                # net named the same capacitor twice (627A-07 — `aux_branch`
+                # listed it twice, `near` and `owned-branch` followed).
                 continue
             out.append((part_id, f"{role} pin (spec token {connection.token})", net))
     return tuple(out)
@@ -615,6 +689,47 @@ def _profile_clause(core: _Core) -> str:
     if core.role_notes:
         clause += "; " + "; ".join(core.role_notes)
     return clause
+
+
+def _refused_note(not_bound: tuple[GrammarFailure, ...]) -> str:
+    """One clause for every readable core that was refused while this one bound.
+
+    `_cores` collects them; returning an empty report threw them away, so a
+    shorted second regulator left no trace in any output (627A-03).
+    """
+    if not not_bound:
+        return ""
+    return "readable but not bound: " + "; ".join(
+        f"{item.subject} — {item.detail}" for item in not_bound
+    )
+
+
+def _arm_note(
+    circuit: CircuitSpec,
+    profiles: Mapping[str, SymbolProfile] | None,
+    core: _Core,
+) -> str:
+    """Name the parts that sit on the core's nets and are not series arms.
+
+    `base.two_terminal_parts` drops a part on purpose (a short, a three-pin symbol
+    with a leg left out, a part with one pin on a net); without this clause the
+    drop is indistinguishable from the part not existing (04-H2 / 627A-08). Only
+    parts with two mentioned pins are listed — one pin on a net is a part the
+    sheet did not finish wiring, which is a different fact.
+    """
+    excluded = arm_exclusions(circuit, profiles)
+    nets = {core.in_net, core.out_net, core.gnd_net}
+    named: list[str] = []
+    for part_id in sorted(excluded):
+        if part_id == core.part_id:
+            continue
+        pins = pins_of_part(circuit, part_id)
+        if len(pins) < 2 or not (set(pins.values()) & nets):
+            continue
+        named.append(f"{part_id} ({excluded[part_id]})")
+    if not named:
+        return ""
+    return "not usable as a branch: " + "; ".join(named)
 
 
 def _side_kind(side: str, default: str) -> str:

@@ -141,6 +141,7 @@ __all__ = [
     "UNIFORM_GND",
     "VERTICAL_TAP",
     "VISIBLE_TAP",
+    "ChainSearch",
     "DrawingGrammar",
     "GrammarError",
     "GrammarFailure",
@@ -149,6 +150,7 @@ __all__ = [
     "RelativeConstraint",
     "RoleBinding",
     "RoleConnection",
+    "arm_exclusions",
     "bound_result",
     "connected_net_sets",
     "declares_modules",
@@ -169,6 +171,7 @@ __all__ = [
     "role_pins_connected",
     "role_pins_of",
     "series_paths",
+    "series_paths_with_status",
     "shared_module",
     "two_terminal_parts",
     "weakest_provenance",
@@ -599,9 +602,15 @@ def weakest_provenance(*values: str) -> str:
         return PROVENANCE_UNSTATED
     worst = PROVENANCE_VERIFIED
     for value in values:
-        rank = _PROVENANCE_RANK.get(value or PROVENANCE_UNSTATED, -1)
-        if rank < _PROVENANCE_RANK[worst]:
-            worst = value or PROVENANCE_UNSTATED
+        # A token this table does not define is not a rank: nobody stated a tier
+        # this build knows, which is weaker than "unstated" (052 sec.4). It is
+        # mapped *in* rather than echoed back, for two reasons: an evidence string
+        # carrying a tier no reader recognises reads as a choice somebody made,
+        # and `_PROVENANCE_RANK[worst]` then raised `KeyError` on the next
+        # comparison (627A-09 / 04-H5 — the same class of gap 095 A4 hit).
+        token = value if value in _PROVENANCE_RANK else PROVENANCE_UNSTATED
+        if _PROVENANCE_RANK[token] < _PROVENANCE_RANK[worst]:
+            worst = token
     return worst
 
 
@@ -836,26 +845,173 @@ def connected_net_sets(circuit: CircuitSpec) -> dict[str, tuple[str, ...]]:
     return out
 
 
-def two_terminal_parts(circuit: CircuitSpec) -> dict[str, tuple[str, str]]:
+def _arm_shape(
+    circuit: CircuitSpec,
+    part: SpecPart,
+    profiles: Mapping[str, SymbolProfile] | None,
+) -> tuple[tuple[str, str] | None, str]:
+    """``((net, net), "")`` for a series arm, or ``(None, why it is not one)``.
+
+    One place decides what a two-terminal element is, so that the *set* of arms
+    and the *reason* a part is not one cannot disagree (627A-08 / 04-H2). Two
+    rulers, the symbol first where the library has one:
+
+    * the symbol — the part must **be** a two-pin symbol. Counting only the pins
+      a circuit happens to mention turns a three-pin SOT-23 with one leg left out
+      into a two-terminal part (`BIND shunt=Q1`, 627B-03), and a symbol is the
+      only thing that knows how many legs a part has;
+    * the spec — two mentioned pins on two different nets. A part whose two pins
+      sit on one net is a short, not a series arm (053 sec.5 scenario 11).
+    """
+    pins = pins_of_part(circuit, part.id)
+    nets = tuple(sorted(set(pins.values())))
+    profile = profile_for(part, profiles)
+    if profile is not None and len(profile.pins) != 2:
+        return None, (
+            f"its symbol {profile.symbol_ref} has {len(profile.pins)} pins, "
+            f"{len(pins)} of them on a net"
+        )
+    if len(pins) != 2:
+        return None, (
+            f"{len(pins)} of its pins are on a net — a series arm has two"
+            if len(pins) < 2
+            else f"{len(pins)} of its pins are on a net — a two-terminal part has two"
+        )
+    if len(nets) != 2:
+        return None, f"both pins are on one net {nets[0]} — a short, not a series arm"
+    return (nets[0], nets[1]), ""
+
+
+def two_terminal_parts(
+    circuit: CircuitSpec,
+    profiles: Mapping[str, SymbolProfile] | None = None,
+) -> dict[str, tuple[str, str]]:
     """``part id → (net, net)`` for the parts that are two-terminal elements.
 
-    Two-terminal is read from the spec: exactly two mentioned pins, on two
-    **different** nets. A part whose two pins sit on one net is a short, not a
-    series arm (053 sec.5 scenario 11), and it is excluded here on purpose so
-    that a short cannot be bound as an arm of anything.
+    Two-terminal is read from the spec — exactly two mentioned pins, on two
+    **different** nets — and, where the library has the symbol, from the symbol
+    as well (see :func:`_arm_shape`). A part whose two pins sit on one net is a
+    short, not a series arm (053 sec.5 scenario 11), and it is excluded here on
+    purpose so that a short cannot be bound as an arm of anything.
+
+    A part this function leaves out is not "not there": :func:`arm_exclusions`
+    answers *why* it was left out, and a caller that binds arms should print
+    that, because a silently dropped part reads exactly like an absent one.
     """
     out: dict[str, tuple[str, str]] = {}
     for part in circuit.parts:
-        pins = pins_of_part(circuit, part.id)
-        nets = sorted(set(pins.values()))
-        if len(pins) == 2 and len(nets) == 2:
-            out[part.id] = (nets[0], nets[1])
+        shape, _why = _arm_shape(circuit, part, profiles)
+        if shape is not None:
+            out[part.id] = shape
+    return out
+
+
+def arm_exclusions(
+    circuit: CircuitSpec,
+    profiles: Mapping[str, SymbolProfile] | None = None,
+) -> dict[str, str]:
+    """``part id → why it is not a series arm``, for every part on a net.
+
+    The companion of :func:`two_terminal_parts`: 04-H2's failure mode was a
+    grammar that could not say whether a part was dropped or never existed, and
+    the answer is a sentence, not a silence. Parts with no connection at all are
+    not listed — that is a part nobody placed, a different fact.
+    """
+    out: dict[str, str] = {}
+    for part in circuit.parts:
+        shape, why = _arm_shape(circuit, part, profiles)
+        if shape is None and why:
+            out[part.id] = why
     return out
 
 
 def nets_of_class(circuit: CircuitSpec, cls: str) -> tuple[str, ...]:
     """Every net of this class, id-sorted (the stable tie-break order)."""
     return tuple(sorted(net.id for net in circuit.nets if net.cls == cls))
+
+
+@dataclass(frozen=True)
+class ChainSearch:
+    """One bounded ``start → goal`` search: the chains, and what stopped it.
+
+    ``outcome`` is the half a caller cannot rebuild from ``paths``: an empty
+    tuple is "no chain inside the budget" **or** "the budget is why there is
+    none", and a full one may be a truncated one. 053 sec.5 asks a bounded
+    search to say "not found inside the budget", never "no solution" — so the
+    budget is a value here, not an absence.
+    """
+
+    paths: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = ()
+    #: ``found`` / ``none`` / ``budget-arms`` / ``budget-paths`` / ``start-is-goal``
+    outcome: str = "none"
+
+
+def series_paths_with_status(
+    edges: Mapping[str, tuple[str, str]],
+    start: str,
+    goal: str,
+    *,
+    max_arms: int = MAX_CHAIN_ARMS,
+    max_paths: int = MAX_CHAINS,
+) -> ChainSearch:
+    """Every ``start → goal`` chain through two-terminal parts, with the verdict.
+
+    The search is the multigraph walk of :func:`series_paths` — two parts between
+    the same pair of nets are two edges, adjacency sorted by ``(net, part)`` so
+    the answer is deterministic — and both budgets are now enforced **where the
+    appends happen** (627A-06 / 04-H7). The entry check alone let 70 parallel arms
+    return 70 chains past `MAX_CHAINS`, and it left a real seven-arm chain
+    answering the same ``[]`` as "there is no chain at all".
+    """
+    if start == goal:
+        return ChainSearch((), "start-is-goal")
+    graph: dict[str, list[tuple[str, str]]] = {}
+    for part_id in sorted(edges):
+        first, second = edges[part_id]
+        graph.setdefault(first, []).append((second, part_id))
+        graph.setdefault(second, []).append((first, part_id))
+    for key in graph:
+        graph[key].sort()
+
+    found: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+    cut = ""
+
+    def walk(
+        net: str,
+        parts: tuple[str, ...],
+        nets: tuple[str, ...],
+        visited: frozenset[str],
+    ) -> None:
+        nonlocal cut
+        if len(parts) >= max_arms:
+            cut = cut or "budget-arms"
+            return
+        for neighbour, part_id in graph.get(net, ()):
+            if len(found) >= max_paths:
+                cut = "budget-paths"
+                return
+            if part_id in parts:
+                continue
+            if neighbour == goal:
+                found.append((parts + (part_id,), nets + (neighbour,)))
+                continue
+            if neighbour in visited or neighbour not in graph:
+                continue
+            walk(
+                neighbour,
+                parts + (part_id,),
+                nets + (neighbour,),
+                visited | {neighbour},
+            )
+
+    if start in graph:
+        walk(start, (), (start,), frozenset({start}))
+    found.sort(key=lambda item: (len(item[0]), item[0], item[1]))
+    if found:
+        return ChainSearch(
+            tuple(found), "budget-paths" if cut == "budget-paths" else "found"
+        )
+    return ChainSearch((), cut or "none")
 
 
 def series_paths(
@@ -878,44 +1034,17 @@ def series_paths(
     `max_paths`) and deterministic (adjacency sorted by ``(net, part)``), which
     is what lets a caller say "not found inside the budget" rather than "there
     is no chain".
+
+    The budget's verdict is :func:`series_paths_with_status`'s answer; this form
+    is kept for the callers that only want the chains. A caller about to explain
+    a failure reads the status one, because an empty list here cannot say whether
+    the budget or the circuit is why.
     """
-    graph: dict[str, list[tuple[str, str]]] = {}
-    for part_id in sorted(edges):
-        first, second = edges[part_id]
-        graph.setdefault(first, []).append((second, part_id))
-        graph.setdefault(second, []).append((first, part_id))
-    for key in graph:
-        graph[key].sort()
-
-    found: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
-
-    def walk(
-        net: str,
-        parts: tuple[str, ...],
-        nets: tuple[str, ...],
-        visited: frozenset[str],
-    ) -> None:
-        if len(found) >= max_paths or len(parts) >= max_arms:
-            return
-        for neighbour, part_id in graph.get(net, ()):
-            if part_id in parts:
-                continue
-            if neighbour == goal:
-                found.append((parts + (part_id,), nets + (neighbour,)))
-                continue
-            if neighbour in visited or neighbour not in graph:
-                continue
-            walk(
-                neighbour,
-                parts + (part_id,),
-                nets + (neighbour,),
-                visited | {neighbour},
-            )
-
-    if start in graph and start != goal:
-        walk(start, (), (start,), frozenset({start}))
-    found.sort(key=lambda item: (len(item[0]), item[0], item[1]))
-    return found
+    return list(
+        series_paths_with_status(
+            edges, start, goal, max_arms=max_arms, max_paths=max_paths
+        ).paths
+    )
 
 
 # ------------------------------------------------------------ module scoping
@@ -964,7 +1093,11 @@ def shared_module(presentation: PresentationSpec, part_ids: Sequence[str]) -> st
     for part_id in part_ids:
         here = set(modules_of_part(presentation, part_id))
         shared = here if shared is None else (shared & here)
-    if not shared:
+    # More than one answer is not an answer (627A-04). `module_of_part` says the
+    # same thing about a part listed twice, and taking the id-sorted first here
+    # while answering "" there was two rulers for one question — the grammar
+    # scoping guard reads this one, so the contradiction went unremarked.
+    if not shared or len(shared) > 1:
         return ""
     return sorted(shared)[0]
 
