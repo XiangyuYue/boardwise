@@ -4,7 +4,7 @@
 > （[`.agents/skills/boardwise-draw/SKILL.md`](../.agents/skills/boardwise-draw/SKILL.md)，与 `.kimi-code/` 副本逐字节相同）；
 > 通用 SOP、真机纪律 R1–R3 与交付三关仍以 [`boardwise` skill](../.agents/skills/boardwise/SKILL.md) 为唯一权威。
 
-## 当前落点（2026-11-26，HEAD `72fff89`）
+## 当前落点（2026-11-26，代码基线 `72fff89`）
 
 - **已入库**（均**未推送、未部署**）：565/571 `961b3b7`、570 `a539358`、572 `edb5d67`、622 `4134b8b`、
   未处理清单 U 系列 `4253a9c`、U-06 `70b8387`、U-10 `3dfe1fa`、572B connector 回读 `72fff89`。
