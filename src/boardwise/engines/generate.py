@@ -623,6 +623,16 @@ def _choose_geometry(model: DesignModel, offsets, order, attempt):
     return geometry, pins, routes, routing_violations, violations
 
 
+def _on_grid(value: float) -> bool:
+    """Is ``value`` on the router's grid (:data:`boardwise.engines.layout.GRID`)?
+
+    624A-03: the router works on grid cells, so a symbol pin whose offset is off
+    the grid can only be reached at the nearest cell. The tolerance is the float
+    one — offsets are measured from exports and divided by a 5-unit grid.
+    """
+    return abs(value / layout.GRID - round(value / layout.GRID)) <= 1e-9
+
+
 def generate_plan(
     model: DesignModel,
     offsets: dict[str, dict[str, tuple[float, float]]],
@@ -756,6 +766,32 @@ def generate_plan(
                 "connectivity than the netlist it reproduces",
             )
         )
+    #: 624A-03: **a pin tip off the routing grid.** The router works on GRID cells,
+    #: so a symbol whose pin offset is not a multiple of GRID can only be reached
+    #: at the nearest grid point: ``pin_positions`` carries the true tip (142,160)
+    #: while the drawn wire stops at (140,160). The row the gate then shows is
+    #: ``ENDPOINT_NOT_TERMINAL`` — 「the wire does not end on a pin」 — which names
+    #: the symptom and hides the cause, because the cause is the *symbol*. Only
+    #: pins the netlist connects are judged: an unconnected off-grid pin reaches no
+    #: wire and costs nothing (the same boundary ``PINS_UNPLACED`` draws).
+    netlist_pins = {
+        (designator, pin) for net in model.nets.values() for designator, pin in net.pins
+    }
+    for designator, pin_numbers in sorted(offsets.items()):
+        for number, (dx, dy) in sorted(pin_numbers.items()):
+            if (designator, number) not in netlist_pins:
+                continue
+            if _on_grid(dx) and _on_grid(dy):
+                continue
+            violations.append(
+                Violation(
+                    "OFF_GRID_SYMBOL",
+                    f"pin {designator}.{number}",
+                    f"its symbol offset ({dx:g},{dy:g}) is not a multiple of the "
+                    f"{layout.GRID:g}-unit routing grid, so the router can only reach "
+                    "the nearest grid point and the wire stops short of the true pin tip",
+                )
+            )
     routed_nets = {route.net for route in routes}
     for net_name, net in sorted(model.nets.items()):
         if net_name in routed_nets or len(net.pins) < 2:
@@ -767,7 +803,8 @@ def generate_plan(
         if place.bbox is None:
             plan.notes.append(
                 f"component {place.designator} has no known pins, so it has no "
-                "bounding box: the self-check cannot see where it landed"
+                "bounding box: constraint 1 judges its origin, and a part with no "
+                "box contributes no overlap row"
             )
 
     for designator, pin in sorted(

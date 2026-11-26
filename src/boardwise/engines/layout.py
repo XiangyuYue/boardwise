@@ -508,15 +508,30 @@ def _pack(
     for designator in order:
         rel = _relative_box(offsets.get(designator, {}))
         if rel is None:
-            # pin-less: cannot be bounded, so there is no box for the validator to
-            # speak about — it is *structurally invisible* to constraint 1 (143e,
-            # D3). Park it on the cursor and report it in the plan's notes
-            # instead; where it lands is the packing's answer and nothing else's.
-            placements.append(Placement(designator, cursor_x, row_y, None))
-            cursor_x += COL_AISLE * 2
-            if not rows:
+            # pin-less: cannot be *bounded*, so there is no box for the validator
+            # to speak about — that boundary stays where 143e put it (D3), and
+            # 624A-02 makes the origin visible to constraint 1 instead.
+            #
+            # 624A-01: being unbounded does not mean occupying nothing. This branch
+            # used to park the part on the cursor and then just move the cursor on:
+            # `row_height` stayed 0 and `wraps()` was never asked, so sixteen
+            # pin-less parts walked the cursor to x=1400 on a 1159-unit sheet (four
+            # of them off the page), and the *next* bounded part could not fold
+            # either because the row still looked empty. It now takes a nominal
+            # footprint in the packing bookkeeping — one aisle wide, one gap tall —
+            # and folds like every other part.
+            nominal_w, nominal_h = COL_AISLE, BOX_GAP
+            if row_height and wraps(nominal_w, row_y + row_height):
+                row_y = snap(row_y + row_height + ROW_CHANNEL)
+                row_height = 0.0
+                cursor_x = snap(FRAME + BOX_GAP)
                 rows.append([])
+            elif not rows:
+                rows.append([])
+            placements.append(Placement(designator, cursor_x, row_y, None))
             rows[-1].append(designator)
+            row_height = max(row_height, nominal_h)
+            cursor_x += COL_AISLE * 2
             continue
         bx0, by0, bx1, by1 = rel
         w, h = bx1 - bx0, by1 - by0
@@ -1660,8 +1675,44 @@ def validate_full(
         if frame is not None
         else Rect(FRAME, FRAME, SHEET_WIDTH - FRAME, SHEET_HEIGHT - FRAME)
     )
-    boxes = [(p.designator, p.bbox) for p in placements if p.bbox]
+    boxes = [(p.designator, p.bbox) for p in placements if p.bbox is not None]
+    boxless = [p for p in placements if p.bbox is None]
     title = title_block if title_block is not None else Rect(*TITLE_BLOCK)
+
+    # 624A-02: a placement with no symbol box is invisible to constraint 1 — it
+    # has no box to measure, so `OUT_OF_SHEET`, `PLACEMENT_ON_TITLE_BLOCK` and
+    # `BOX_OVERLAP` all skipped it, and a page could carry a part at x=1400 with
+    # `violations = []` (143e's note said the self-check could not see it; a note
+    # is not a gate). What the gate *can* measure without a box is the origin, and
+    # origin-based judgement is exactly what a pin-less part needs: it is placed
+    # somewhere by the packer, and "somewhere outside the sheet" is a fact. The
+    # box-free part still contributes no overlap row — there is nothing to compare
+    # — and the detail says which ruler was used, so the row cannot be mistaken
+    # for a box measurement.
+    for place in boxless:
+        outside = not (
+            sheet.x0 <= place.x <= sheet.x1 and sheet.y0 <= place.y <= sheet.y1
+        )
+        if outside:
+            violations.append(
+                Violation(
+                    "OUT_OF_SHEET",
+                    f"component {place.designator}",
+                    f"no symbol box to measure; its origin ({place.x:.0f},{place.y:.0f}) "
+                    "leaves the sheet frame",
+                )
+            )
+        on_title = (
+            title.x0 <= place.x <= title.x1 and title.y0 <= place.y <= title.y1
+        )
+        if on_title:
+            violations.append(
+                Violation(
+                    "PLACEMENT_ON_TITLE_BLOCK",
+                    f"component {place.designator}",
+                    "no symbol box to measure; its origin lands inside the title block",
+                )
+            )
 
     # --- constraint 1: placement
     for des, box in boxes:
