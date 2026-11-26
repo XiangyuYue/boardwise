@@ -4,6 +4,113 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-11-26] 未处理清单收尾（U-06 / U-10 / 572B 真机回读）
+
+- **清单**：`evidence/622/UNRESOLVED.md` 的 14 条只剩 **U-05（待原输入）与 U-14（真机）**，U-01…U-13 逐条有结论。
+- **U-06 自框预览（`70b8387`）**：没有声明纸张时文档宽 = `max(画布, caption)`（实测 100 → 404 px，原先 caption 每行被裁）；**声明了 page box 就保持纸张**——无条件加宽会撞 `test_a_stated_page_is_not_enlarged_by_far_keepouts_or_frames` 的 `assert 404.0 == 100.0`。两条守卫测试按新规则重钉（不是放宽），变异 `if page_box is None` → `if False` 后两红；预览邻域 128 passed，**零 golden 重录**。
+- **U-10 自证式断言（`3dfe1fa`）**：`:784` 的盒宽改钉实测字面值（`R123456` 50.0 / `1.00Meg` 49.5）；`:767` 的「两场景 `(rotation,x,y)` 不等」经探针量出**两场景其实同格点**（R1 都在 `(0,0)`、R2 都在 `(0,−140)`，差别只有 R1 姿态 0° vs 270°），按该文件第 6 行「不钉坐标」的规矩收成只钉姿态，场景 1 补钉两臂 0°。**变异如实记录**：姿态钉被上游（`layoutplan` 合法姿态集 {0,90,180,270} + 连通闸）先拦，红不到新行 → 它是记录性钉；整文件 98 passed / 2 skipped。
+- **572B 真机回读（`72fff89`）**：EDA 4.1.100 / connector 0.6.3 上一条 wire 的状态读取器只有 `PrimitiveType`/`PrimitiveId`/`Line`/`Net`（`sch.geometry` deep dump 与 `sch.readback` 118 条 wire 行两路互证），而 `wirePointsOf` 只试 `PointArr/Points/PointArray/Polyline` → `place_wire` 的 `landed` 恒 `null`。修为候选表首位加 `Line`；变异删 `Line` 只红新用例（26 中 1），connector **926 passed** + typecheck 0；`docs/bridge.md` 的 `sch.place_wire` 行同步（`test_doc_claims` 57 passed）。bundle 已 `update-connector` 热更新到 `test V4` 窗（`bootstrapAt` 2026-11-26T05:35:28Z，身份重证；另一窗口未读写）。
+- **U-14 新缺口（未修）**：4.1.100 没有 `sch_PrimitiveNetLabel` 命名空间（网络标签是 `sch_PrimitiveAttribute` 的 `Key=='NET'`），`sch.geometry` 的 `netlabels` 段永久 `available:false` → `_draw_geometry_readable` 要求十段全可用，真机上**空页复用闸永远 False**。出路（connector 派生该段 / Python 受控例外）各需单独一批。
+- **未做**：572B 写路径（`place_*` 各一次 + `delete_primitives` 回收）待授权；566-D-1 缺第二个被点名的可动工程；全量/Rust/发布闸未跑；三个提交均未推送。证据 `evidence/u06/`、`evidence/u10/REPORT.md`、`evidence/u14/REPORT.md`、`evidence/622/UNRESOLVED.md`。
+- **交接文档**：`docs/handoff.md`、`tasks/draw-line.md` 顶部各留一块 2026-11-26 当前状态，旧块统一降为「历史」；`TASKMAP` 622 行改为已提交。
+
+## [2026-11-26] 626 绘制线挖洞第十批（文法两本 / 岛提案入口）
+
+- **选面**：570-C 标注「已审」却无证据文件的 `grammar/ic_periphery.py`(96 KB) + `mixed_island.py`(4.4 KB)；以及 623/624 都只摸到入口的 `engines/islandproposal.py`(48 KB, `draw islands propose|apply`)。HEAD `70b8387`。
+- **12 条洞（高 4 / 中 6 / 低 2）**。高：① mixed-island 核心不坐 power/gnd 时，挂在**真实 GND** 上的二端件静默失去角色、义务归零（`ic_periphery.py:335` 把 rail/gnd 置空串 → `:1100 here & {rail,gnd}` + `:557/:570 if rail/if gnd`）；② 纵向 `sidePreferences` 被丢弃且证据反说「portRoles 啥都没写」；③ 模块内三脚以上器件从不进 `_periphery`（`Q1` 接 VCC/GND 与全悬空输出相同）；④ `islandproposal.py:337-361` 已声明的锚对未声明件**永不可见**（声明一部分反而把每个两脚件拆成单件岛，诊断写 `nearest: none` 而实际 5 units）。
+- **「已审」不成立**：A 缝按任务书先交 **04-H1…H7 现状表**——H1 仍在、H2 部分仍在、H3 已修、H4 横向已修/纵向仍在、H5 已修、H6 反向仍在、H7 仍在，**七条里五条没修**。结论：570-C 的「不碰 ic_periphery/mixed_island，已审」不能代替证据文件。
+- **验证**：P8 / P6 / anchor 三组读数我亲跑；两条高的因果由源码原文（`islandproposal.py:337-361` 集合关系、`ic_periphery.py:335-336→1100` 空串传递）钉住，**本批未做变异**（需跨两函数多行改动，风险大于收益），已如实标注证明强度。
+- **跨批更正**：625B-04 因 `70b8387` 降级——自帧预览已按 caption 加宽，声明 page 框时仍裁但**已在提交说明与代码注释明示**并有测试钉住，从「未披露缺陷（中）」改为「已披露的页框限制」。
+- **状态**：只挖不修，三文件 sha256 开工=收工；洞表见 `outputs/hole626/TRIAGE.md`。
+
+## [2026-11-26] 625 绘制线挖洞第九批（规格库全量 + 加载器 / 部件类与文本度量）
+
+- **选面**：624 报告 §3 的头两块——`blocklib/specs` **23 份**出货规格 + `core/blocks.py` 加载器（67 KB）；`core/partkind.py`(45 KB) + `core/textmetrics.py`(33 KB)。HEAD `4253a9c`。
+- **证伪一个假设（正面）**：23 份规格结构**全部合法**；8 条 `draw compile`（7 组配对 + 历史 circuit 补齐）**全部 exit 0 / ok=True / failures=0**；两次重跑 `cand1.svg`/`layout.json` sha256 相同。配对口径：`--profiles` 必须用 `<spec>.library.json`，用全局 `symbols/profiles.json` 会 exit 5 `facts-missing`（正确拒因，附「用 spec 自己的 library」提示）。
+- **14 条洞（高 2 / 中 6 / 低 6）**。高：① `MOS管`/`TVS管` 因 CJK 后缀在 `\w` 词边界下整词失配，`U` 前缀兜成 **IC**（`decap` 会给 MOSFET 要旁路电容）；② 立创名带接口词的真 IC（`USB 转串口 CH340C`）读成 **connector**，`decap` 假阴。中：全角 `Ｒ１` 静默 unknown、声明 page 框时 caption 仍裁无提示、加载器证据台账只校验形式不校验指向（`param_evidence`/`references[].path` 引用不存在的东西照样 LOADED，真闸只在 opt-in `validate --benchmark`）。
+- **验证**：`partkind.py:506` 词边界改 ASCII 后 `MOS管→transistor`、`TVS管→diode`（basis 由 prefix 变 metadata），`cp` 复原回 `05A2AAE9…`；另自己跑 `power_entry_xt30` 两种配对，确认全绿读数与拒因都成立。
+- **状态**：只挖不修，三文件 sha256 开工=收工；洞表与第十批候选见 `outputs/hole625/TRIAGE.md`。
+
+## [2026-11-26] 624 绘制线挖洞第八批（legacy 直出链 / 语义分岛与规格闸）
+
+- **选面**：623 引用矩阵里的下两块——`engines/layout.py`(109 KB) + `engines/generate.py`(47 KB) 的 legacy 直出链、`core/islands.py`(38 KB) + `engines/validate_spec.py`(44 KB) 的语义分岛与规格闸；四文件洞报告引用全 0。HEAD `4134b8b`（622 已提交）。
+- **7 条洞（高 3 / 中 3 / 低 1）**：A-01 零引脚整件不换行（16 件线性右移，4 件出页，最远 x=1400、页右界 1159，`generate_plan` 仍 `violations=[]`，notes 16 条不进闸）；A-02 `validate_full` 的 `if p.bbox` 让缺框件对约束 1 不可见；B-01 轨与地共网短路时 `power-tree` 把地口滤掉、五闸全 pass（`may proceed`）；中 3：栅格外引脚静默吸附 2 单位、信号网接地口两闸互推全 pass、legacy 岛内重复 part 放行（与 536 读法两把尺）；低 1：一件两岛两函数给相反答案。
+- **验证**：B-01 变异 `:971`（`== "power"` → `in ("power","gnd")`）→ `may proceed` 变 `STOPPED` 证成，并**证伪子代理「读数不变」的说法**；A-02 改路径——直接调 `layout.validate_full`：有框出页报 `OUT_OF_SHEET`、无框件整条跳过，根因在该层成立。A-01 两处零引脚分支补合成 bbox 的变异**都没打中** `generate_plan` 的读数 → 「谁把 placements 喂给闸」列存疑，不硬说成确认。
+- **状态**：只挖不修，四文件 sha256 开工=收工；洞表与第九批候选见 `outputs/hole624/TRIAGE.md`。
+
+## [2026-11-26] 623 绘制线挖洞第七批（上游两面，只读）
+
+- **选面依据**：扫 `outputs/hole565…572` + `outputs/fix-verify` 共 152 份报告按文件名聚合，对照 98 个模块——`core/values.py`(100 KB)、`engines/intentproposer.py`(42 KB)、`engines/islandproposal.py`(47 KB) 洞报告引用 **0**，且 propose 链**零测试**；对照 `cli.py` 397 次、`drawcompiler.py` 126 次。派单书 `tasks/623_draw_holes_wave7.md`。
+- **缝 A（值解析）9 条**：高 1 —— `mpn_value_code('RTT034702FTP')` → `'702'`（4 位 E96 被截末三位，按 pF 基解成 7 nF；消费者 `decap.py:83/90/144/178`、`metaparams.py:325`）；中 4（`R010` 双路不一致、`0R`→None、`0.1u`→None、电容 MPN 读成电阻）；低 4。
+- **缝 B（意图→草稿）4 条**：高 1 —— 真实合同 `blocklib/intents/robot-ctrl-foc.intent.json` 自身把 `U1` 放进 `senseU`/`senseW`，`draw propose` 照抄、两 module 都写 `core=U1`、exit 0、报告无归属字段（`modules_of_part('U1')` 返回两组）；中 3（仅共 GND 也产出 `flow` 边、边无网证据、`--circuit` 缺失件不点破）。
+- **变异先红**：M1 `values.py:1589` → `(?<!\d)(\d{3})(?!\d)`，`'702'` → `None`；M2 `intentproposer.py:696` 加 `and net.cls != "gnd"`，仅共 GND 的最小电路 2 条边 → `[]`。两条 `cp` 复原，sha256 回到 `2CD2F3F2…ECD92F` / `37800AF4…F5927A`。
+- **独立发现 4 条**：`islandcompile.py`(40 KB) 文档称「538 已落」但 `src/` 零 importer、九个 `draw` 子命令无入口（只被 3 个测试养着）；572 报告写 `blocklib/specs` 26 个、实测 **23**；`engines/layout.py`(109 KB)+`generate.py` 在 legacy 直出链上、零覆盖；`core/islands.py`(38 KB) 语义分岛模型层零覆盖。
+- **状态**：只挖不修，`src/**` 零改动（两处变异已按 cp + sha256 精确复原）；洞表与第八批候选面见 `outputs/hole623/TRIAGE.md`。
+
+## [2026-11-25] 622 绘制线收尾批
+
+- **2026-11-26 更新**：本节列的 U-01（普通路径打包地板）**已结单，原口径不成立、不改代码**——`:4873` 在 `_topology_request`（只服务 topology 轮），普通单岛页走 `_place_chain_and_shelf → _chain_and_shelf_layout`，`placement` 的 keepout 硬项不在那条路上；页锚贴页顶左、标题栏 700×180 贴右下，800 宽高度扫描 h=240…340 全 `ok=False` 且把块挪出页外立刻 `ok=True` 4 候选 ⇒ 拒绝全由块引起、该图需 ~350 纸高。五条复核见 `evidence/622/UNRESOLVED.md` U-01 段（现存 U-05、U-14 两条）。
+
+- **622-A placement 修复趟改字典序**：`place` 的 pin-tip 修复趟不再按标量能量比，新增 `_repair_beats` 走 `_key_better(_selection_key(...))`，与 `_best_of` 同一把尺；`healed` 带 hard 项时不再顶掉干净解。先红 **4 failed** → 绿 **4 passed** → 变异（改回标量）**2 failed / 2 passed**；`placement.py` 改后 sha256 `E126E71A…96BBAF7D`。
+- **622-B 非岛页标题栏可达（结论：可达）**：单岛页带 `--page-box` 时 `:23498/:24727/:32989` 三处 gate 拿到空 keepouts；`power_entry_xt30` 在 `(0,0,800,240)` 旧版 `ok=True` 且 **18 个对象**落进 `(90,10,790,190)`。新增 `_page_keepouts` 委托 `_island_keepouts`（本体未动）并三处改用；`patchpin` docstring `twelve→eleven`（实测 11 处，全在 `cli.py`）；`cli._draw_same_box` 加长度守卫。先红 **3 failed / 2 passed** → 绿 **5 passed** → M1/M2 各 **1 failed / 4 passed**。
+- **残留（未闭合）**：普通路径**打包地板** `drawcompiler.py:4873` 仍是 `keepouts=tuple(ctx.budget.keepouts)`，单岛页真要画进标题栏现在是**拒绝**而非重打包；对齐需动 placement keepout 地板、影响上百条 `page_box` 用例几何，本批未做。另有 9 条既有未闭合项（570-G2-H1、570-F2-06、570-H2-03/04、571-C-3、571-B、572-F、572-H、569H-01/02、`test_571d_pin_identity.py:13` 文案）逐条列在报告里。
+- **状态**：HEAD `edb5d67`，622 的四个源文件 + 两个新测试**仍在工作树未提交**；零 git 写、未跑全量、未碰真机/bridge。邻域：`201b+201f` 98 passed、`608+569_title_block` 17 passed、`053b` 98 passed/2 skipped、`088+098+143a` 96 passed/2 skipped。
+- 证据：[`evidence/622/REPORT.md`](evidence/622/REPORT.md)、[`evidence/622/A.md`](evidence/622/A.md)、[`evidence/622/B.md`](evidence/622/B.md)。环境坑：CPython 3.14 受限令牌下 pytest `tmp_path`/basetemp 会 `WinError 5`，需 `PYTHONPATH=.tmp_565b/pytest_env` + 独立 `--basetemp`。
+
+## [2026-11-25] 621D6 declarations + pcb-design 单板合批
+
+- 新增 `pcb-board` 与 `core/boardjson.py`、Rust `pcb_board.rs`：D2 declarations + D4 designInput 一批返回 declarations+library+DesignModel，D2/D4 normalized 与 decoders 复用。`defer_declarations` 只缓三表，其他几何照走；回答回填同一 PcbContext，pads 铜层只补读一次、stats 不重复，off 禁止 deferred。公共库 API 同样走 D6，owner=172。
+- ROBOT/LLC/第二公开板 declarations+library+model+BoardGeometry+run_review/generate_architecture/identify_diff_pairs/read_stackup 全部 off==require；新鲜 build **1 个 pcb-board 进程**，后续 geometry 零新增进程，合成 eprj3 双板各自一批。最终 Python 联合 **1702 passed / 4 failed in 50.54s**，4 红仍为其他线 CLI 漂移；Rust **355 passed / 4 ignored / 0 failed**，旧差分 17/17。
+- 主代理变异：deferred 误起 D2、铜层回填失效各 1 组红，均 cp+SHA 恢复并复绿。另修复 require 失败后 off 误起 Rust 的恢复缺口，off 现具名拒绝且不读半成品；合同 JSON 换行闸已恢复。ROBOT **2187 work items / 667213 bytes**，median off 0.0303347s → require **0.1493572s**（D5 为 0.1668495s），默认仍 off。未跑全量/真机/发布/打包；下一批 VoltageSpacing 整规则垂切。详见 `tasks/621d6_pcb_board.md` §8。
+
+## [2026-11-25] 621D5 原文流评估与 canonical 性能修正
+
+- 新增 `pcb-design-stream` 试验域和 Epro2Source raw chunks/origins：surviving record 原行切片，不重序列化 body；多 chunk 各自按 record.line_no 寻址，不做二次 ticket/client 裁决。复审修正跨块库集合缩窄、DOCHEAD 接受与错误「补行不改变答案」承诺，D4/D5 输出全等。
+- 实测原文流未达优化目标：未过滤 0.6025s、语义过滤后仍 0.5274s；canonical 原 D4 为 0.2669s，过滤后生产实测 **0.1668495s**（off 0.0320180s）。故生产固定 canonical，stream 仅保留 `libraryjson.build_stream` 显式差分 API，不新增 env、不默认采用。共享谓词仅传 DEVICE/FOOTPRINT META、SYMBOL PIN/ATTR，ROBOT 从 5997 降至 **2066 work items**，canonical request 643016 bytes。
+- 最终 Python 联合 **1664 passed / 4 failed in 85.31s**，4 红仍为其他线 CLI 漂移；D5+D4+D3 **154 passed/0 skipped**。Rust **337 passed / 4 ignored / 0 failed**，旧差分 17/17。主代理变异：语义记录过滤失效、DOCHEAD 被接受各 1 红，均 cp+SHA 恢复并复绿。未跑全量/真机/发布/打包；下一批合并 declarations+design 为单板一批。详见 `tasks/621d5_stream_design.md` §9。
+
+## [2026-11-25] 621D4 原始 PCB 库投影与 connectivity 合批
+
+- 新增 domain=`pcb-design`、`core/libraryjson.py` 与 Rust `pcb_design.rs`：原始 DEVICE/FOOTPRINT/SYMBOL 文档+PcbContext 一批产出 library+DesignModel。PCB 侧 last-META/last-document、title 不 trim、SYMBOL 双 pin 键、parentId 命中不回退、空 table 不清旧值均与旧读法分开，038 first-wins 不动。公共库 API 与 build_design_model 在 require 下共用同批，owner=171；D3 domain 保留。
+- ROBOT/LLC/第二公开板 library/model/run_review/generate_architecture 全部 off==require；library SHA 分别 `021d34fe…`、`ab1f3c28…`、`733ef55d…`。D4+D3 聚焦 **111 passed/0 skipped**。联合 Python 首轮 **1525 passed/12 failed**，随后同步 621A 陈旧计数钉（四文件 78 passed）并修复 Rust 临时目录竞态，最终同范围复跑 **1533 passed/4 failed**，仅剩 4 条其他线 CLI 红。Rust 默认并行 **315 passed/4 ignored/0 failed**，旧差分 17/17。
+- 主代理变异：空 table 清旧值、design 使用空 DEVICE 表各 1 红，均 cp+SHA 恢复并复绿；一次 Python 侧变异未形成反例，未计入。ROBOT pcb-design **5997 work items/1,573,478 bytes**，median off **0.0261516s** → require **0.2669219s**，合批减少进程数但大 JSON 传输显著退化，默认不切换。未跑全量/真机/发布/打包；容器/ProjectModel/CBB/在线未覆盖。详见 `tasks/621d4_pcb_design_library.md` §9。
+
+## [2026-11-25] 621D3 canonical PCB DesignModel connectivity 垂切
+
+- 新增 domain=`pcb-connectivity` 与 `core/designjson.py`、Rust `connectivity.rs`。Python 仍读 PcbContext 与 DEVICE/FOOTPRINT/SYMBOL 库表；Rust 完成 props/value/footprint 回退、Pin 分组与自然排序、位号折叠和反向构网，输出完整 DesignModel 及空 provenance。off 原路径零进程，require 每 document 一个 connectivity 批，owner=170。
+- ROBOT/LLC/第二公开板完整 model、run_review、generate_architecture 全部 off==require；model SHA 分别 `be8e59fd…`、`915d6a16…`、`ba1f81d4…`，Finding 9/0/55 与 architecture 152/0/268 slots 不变。合成 eprj3 单/双板按 uuid 隔离。主代理联合 Python **1257 passed / 4 failed in 76.20s**，4 红仍为其他线 CLI 漂移；Rust **292 passed / 4 ignored / 0 failed**，旧差分 17/17 SHA 不变。
+- 主代理变异：放行非空 duplicateDesignators 得 1 红、负数脚序反转得 1 红，均 cp+SHA 恢复并复绿。ROBOT connectivity 992 work items/98045 bytes，build_design_model 交替去首对 median off **0.0283360s** → require **0.0904269s**（含 declarations+connectivity 两批），默认不切换。未跑全量/真机/发布/打包；原始库 parser、ProjectModel、CBB、在线未覆盖。详见 `tasks/621d3_design_connectivity.md` §8。
+
+## [2026-11-25] 621D2 canonical PCB declarations 模型垂切
+
+- 新增版本化 `boardwise.canonical-model-input/1` → `boardwise.canonical-model/1`（domain=`pcb-declarations`）与 `boardwise-cli model`。Python 保留容器、行框、一致性视图和 `parse_id_tuple`；Rust 投影 LayerInfo/StackupEntry/NetMeta，重复声明首位置最后值、叠层稳定排序、非正 Er/Df=null。off 原 Python 零进程，require 每 `collect_pcb_context` 一批，owner=169，未开放 auto。
+- 两个真实消费者 `identify_diff_pairs` / `read_stackup` 与完整 BoardGeometry 在 ROBOT、第二公开板上 off==require；声明 SHA 分别 `1a6b4a18…`、`a5a77828…`。合成 eprj3 单/双板身份不串，038P1 旧拒绝不动。主代理 Python 联合 **1188 passed / 4 failed in 40.79s**，4 红仍是其他线 CLI help/argparse 漂移；聚焦 214 passed/0 skipped。Rust **271 passed / 4 ignored / 0 failed**，fmt/Clippy 通过；旧差分 **17/17**，SHA 仍 `66438406…833`。
+- 主代理变异：响应漏拒非 null netClass 得 1 红、叠层同 zIndex 反向 tie-break 得 1 红，均 cp+SHA 恢复并复绿；一次同向 tie-break 是无效变异，未计入。ROBOT 121 声明行交替去首对 median：off **0.0198834s** → require **0.0445920s**，小域受进程成本支配，默认不切换。未跑全量/真机/发布/打包；完整 DesignModel/parser、在线、KiCad/CBB 未覆盖。详见 `tasks/621d2_canonical_model.md` §8。
+
+## [2026-11-25] 621D1 shared 几何首个垂切
+
+- D0 新增 shared `core/reviewmath.py` 统一进程底座；D1 新增 `core/measuremath.py` 与 Rust `geometry`。rings 驱动 bbox/witness/sorted edges/solid containment，保持 capsule、best_pair、touching、同距身份和 CPython `python_hypot` 读数；主代理查出 sweep `.min` 已修 max。owner=168，无 shared→review。off 保留 Python，require 每 VoltageSpacing.check 一个 geometry 进程、每 pour_connectivity 调用一个进程，auto 未开放。
+- 主代理联合 Python **913 passed / 4 failed in 31.22s**（4 红全为其他线 `test_540c_contracts` 的 CLI help/argparse 漂移，未改 CLI、不称全绿）；新 621D **52 passed**、88F **19 passed**、指纹 **134 passed**。Cargo fmt/clippy 通过，默认并行 workspace **241 passed / 4 ignored / 0 failed**；621A 旧差分 17/17。
+- ROBOT 六变体与基线 SHA `509fdc4f…` 全等，pour 1 island/295 members、area/layers 不变，VoltageSpacing 完整 Finding SHA `38256374…` 不变；每 check 12 输出查询/172476 内部候选对，pitch 外查同批。交替去首对 median：pour off 3.72966s → require 1.42892s，VoltageSpacing off 1.39595s → require 1.07519s，仅本样本，默认仍 off。off 误走 Rust、axis-gap max→min、distance 类型放宽三项变异各 1 红后 cp+SHA 恢复。未跑全量/真机/发布/打包；621D2 未开工。验收 `tasks/621d_geometry_rust.md` §10。
+
+## [2026-11-25] 621C VoltageSpacing 单规则 Rust 批量垂切
+
+- `rules/reviewmath.py` 新增 SpacingQuery 与 operation 感知响应校验：数值须有限 JSON float + 一位 display，超 1000 V 允许 value/display 同 null。`_spacing_batch` 从 priced 唯一电压构造 `abs(v)` 与无序 `abs(a-b)` 的去重超集；off 保留原逐对 `required_spacing_mil`，require 每 check 至多一批，空批零进程，超过 4096 不拆分绕限。Python/shared 继续拥有几何、same-potential、pitch 与 Finding，未宣称几何 Rust 化。
+- 主代理 Python 联合聚焦 **696 passed in 24.49s**（新 621C 44，真实二进制非 skip）；Cargo fmt/clippy 通过、workspace **206 passed / 4 ignored / 0 failed**。ROBOT off/require Finding+section+voltages+conflicts 完全一致，SHA-256 `3825637434044742e6e28a812e18f76b63ab1af8742b744f1d9d9695a339069d`，require 为 **1 进程、4 查询** `[0.0, 3.3, 8.7, 12.0]`；11 个合成 WARN/pass/swing/豁免/pitch/UNKNOWN 形状亦全等。
+- 交替四对测量去掉首对后的 median：off **2.70767 s**、require **2.66452 s**，直接四查询 Rust batch **0.02734 s**；只说明小样本无稳定回退，不宣称加速。off 误走 Rust、漏 swing 查询、null/display 闸三项主代理变异各 1 红后 cp+SHA 恢复。子代理漏做开工备份，主代理用 621B 留档作基线并另备现版；外部绘制线提交使 HEAD 变为 `961b3b7`，未撤销。默认 off，无 auto/全量/打包；621D 未开工。验收 `tasks/621c_voltage_spacing_rust.md` §7。
+
+## [2026-11-25] 621B TrackAmpacity 单规则 Rust 批量垂切
+
+- 新增不依赖仓库 schema 的 `review-math` stdin/stdout 子命令和 review-owned Python 适配器。`off` 保留原逐层 Python 调用；`require` 每个 `TrackAmpacity.check` 至多一批，按唯一 `(amps, inner)` 去重，空批零进程；4096 queries/4 MiB/30 s 均具名拒绝，重复 queryId 在进程前拒绝，auto 与其他模式不开放，后端失败只记 rulesErrored，不静默 fallback。
+- 主代理 Python 聚焦 **588 passed in 41.49s**（新 621B 41，真实二进制非 skip）；Cargo fmt/clippy 通过、workspace **206 passed / 4 ignored / 0 failed**，CLI review-math 8 例含 4096/4097 与 4 MiB 边界。公开 ROBOT 的 off/require Finding+section+currents 完全相等，SHA-256 `e50f535cc3e7fc9cf8a1b2511988fb23b3bf50c703d4383579ae1d225480d74f`，require 实测 **1 进程、2 查询**。
+- 三轮 median：off **0.33194 s**、require **0.34385 s**（小样本约 +3.6%，不写成加速比），默认仍 off。查询上限、off 误走 Rust、重复 id 闸三项主代理变异各 1 红后 cp+SHA 恢复。Python 子代理超 40 步停止，主代理补请求闸并终验。未跑全量、未做真机/发布/exe/pip 打包，621C 未开工。验收 `tasks/621b_track_ampacity_rust.md` §9。
+
+## [2026-11-25] 621A 审查线 IPC 纯计算 Rust 差分
+
+- 新增第 11 个 differential kind `review-math-sample` 与两个匿名合成 case；Python 直接消费既有 IPC 函数，Rust `review_math.rs` 实现同一纯计算。宽度容差仅限两侧 JSON float 的 raw value、绝对 `1e-9`，display/spacing/id/顺序/schema 保持精确；旧 15 case 输入与 expected 不变，仅新报告行携带 kind。生产规则、CLI、Finding、verdict 均未接管。
+- 主代理聚焦 **547 passed in 37.97s**；Cargo fmt/clippy 通过、workspace **193 passed / 4 ignored / 0 failed**。双侧 17/17 `ok=true`，normalized SHA-256 同为 `6643840603f19db157813802b18ecf8af359e7d5bf202cf70bfc87bba9e27833`；Python actual==golden 与 Rust==Python raw actual 均 **17/17**，当前语料不靠容差。Python/Rust 进程入口 wall 0.265/0.098 s，仅作微基准。
+- 三项主代理 Rust 变异分别 4/2/1 红后 cp+SHA 恢复。未跑 Python 全量、未做真机/发布/生产适配；621B 未开工。任务书与完整验收 `tasks/621a_ipc_math_differential.md` §9，路线 `tasks/621_review_rust_migration.md`。
+
 ## [2026-11-22] 0.6.3 正式发布集成与三闸验收
 
 - 发布基线包含审查线 `bd5e8a7` 与绘制线 `1344464`…`28b9345`。发布前只读挖洞实锤两处阻断：`recompile-with-locks` 将页面坐标误作 module lock，改为既有 page lock，非零模块 offset 不再二次平移；`pcb.path_probe` 的 daemon 预算由 30 s 改为 150 s，避免先于 Connector 的 120 s 走查挂断。聚焦 **365 passed**，两项主代理独立变异均先红并 cp+SHA 恢复，官方 CLI 合同一致。
@@ -1957,3 +2064,67 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 最终全量（第二轮完整复跑，`.tmp_596_full_pytest_final.utf8-clean.log`）：`12 failed / 12743 passed / 26 skipped / 2 xfailed in 3100.49s`。其中 3 条 540 owner 计数（`home.py` 使模块 164→165）已由 600 单独修复、聚焦 `50 passed`；**剩 9 条已登记基线（564/579 线），未跑第三轮全量，12746 不是实测数**。首次全量在约 91% 因 587 动态 HOME 后旧测试仍 setattr 存在写真实目录风险而主动停止（该轮无完整汇总），597/597B 把 9 处隔离改 `monkeypatch.setenv`，真实审计 SHA/mtime 不变。
 - 各线独立读数：Connector **900 passed + typecheck**；DSH **218 passed / 1 skipped** + typecheck/build；Rust fmt/clippy/test **177 passed / 4 ignored**；`tools.cli_contract` 一致、`check_repo_hygiene` 与 `git diff --check` 通过。**未提交、未推送、未部署、未发布**；真机/bridge/EDA 未碰，V3/V4、容器、多板/CBB 未覆盖。
 - 本批（601）只做文档与证据同步：新建 `evidence/596/INTEGRATION.md`，更新 `docs/handoff.md`、`docs/roadmap.md`、`tasks/TASKMAP.md`、`tasks/SCHEDULE.md`、`tasks/draw-line.md` 与本节；零生产改动、零 git 写、零删除、零全量、零 bridge/EDA。任务书 `tasks/596_integration.md`、`tasks/601_integration_docs.md`。
+
+
+## 2026-11-25 · 路由不可达快速拒绝 600R
+
+- 全量性能调查：0.6.3 为 2013.69s，596 第二轮 2718.19s、final 3100.49s。共同慢测试中位耗时比约 1.35；同机 0.6.3 快照与当前树墙钟波动很大，不能把回归简单归因于新代码。函数级探针确认 48 次 Router.route 占主要成本，六条不可达调用约 402s；布局、文字和 readability 均不是热点。
+- 实现：完整 `_cost_field` 不含 start 时，只有 start/全部 goal 在 bounds 且 start 非 wall 才提前返回 None。前两轮各抓出一种误拒：界外 start 可以从场外进入，blocked/reserved 墙 start 也可以由 A* 直接离开；均已加入逐点回归。六条不可达调用现约 0.0013–0.0022s/条，同一 panel 探针从 501.31s 降至 85.61s，48 个 route 的 path/None 结果多重集完全一致，候选 `error=None`。
+- 最终聚焦 **119 passed**。主代理变异：去 guard 1 红（2196 step probes）、误写 `field is None` 18 红、去 wall-start 条件 1 红；子代理 bounds 变异另有 2 红，均 cp+SHA-256 恢复并复绿。证据 `.tmp_perf_pytest/route-profile-before-600-preserved.json` 与 `route-profile.json`，任务书 `tasks/600_router_unreachable_fast_refusal.md`。
+- 编号 600R 用于区别并行线的 600 owner 计数修复。未跑全量、未提交、未推送、未做真机；85.61s 是单个 panel 探针，不写成全量耗时或全量收益承诺。
+
+
+## 2026-11-25 · hole565 修复集成（565b/d/e/f/g）
+
+- 探测：重放 `outputs/hole565` 原探针（当前树 HEAD `76e0806` + 混合工作树），表内 **23 条**洞中 **6 条已被 11-24 之后其它批修掉**（565a 的 S6-H3/S2-H7/S2-H1、565c 的 S3-1/S3-2、S6-H3），**17 条仍复现**。清单声明 24 条但表内实列 23 条，已在证据里注明。
+- 五批修复（均先红后绿 + 父级独立变异）：
+  - **565b**（`core/circuitsemantics.py`、`core/netlist.py`，6 洞）：零脚件进 parts/文本、类型严格比较、`to_c` 整数校验、reader 拒绝无位号行、`nets_of` 同拒绝律、脚名构造时快照。聚焦 **54 passed**，消费方 **377 passed**；父级变异 3/1/5 red。
+  - **565e**（`core/presentationspec.py`，2 洞）：`core`×`freeParts` 互斥、非 `ic-periphery`/`mixed-island` 文法拒绝 `freeParts`。五文件 **60 passed**；父级变异 3/2 red。
+  - **565g**（`engines/drawlint.py`，4 洞）：两脚门按网（A/K、`1.1/1.2`）、全数字多脚钝件成对同网、L12 网名 `strip().upper()`、词表补 `HVDC`/`SEC_\d+V\d*`、旗标旁只豁免同名文字。**126 passed**；父级变异 1/1/2 red。
+  - **565f**（`commands/draw.py`、`cli.py`，2 洞）：父级参数在子命令路由被吞 → 点名 + exit 2（`--render` 由 `apply`/`lint` 自持，让出）；`plan --layout` 对单模块 LayoutPlan 给专用消息点名 `candN.page.json`。**128 passed**；父级变异 12/1 red。
+  - **565d**（`engines/svgpreview.py`、`core/textmetrics.py`，3 洞）：族统一 Arial、两个宿主文字类各自保留实测字号（原生 7.006 / 打印行 `RENDER_TEXT_PX`）、C0 剔除 + 写盘前 XML 自检、每条载体一行 + 竖排披露。六文件 **87 passed**；父级变异 1/5 red；548p44 golden 重录 font-family 一行。
+- 集成交叉（五批新测 + 24 份相邻聚焦）**455 passed in 27.57s**。**未跑全量、未提交、未推送、未部署**；未碰真机/bridge/EDA；565d **未做视觉验收**。
+- 环境坑：本机 CPython 3.14 在 DSH 受限令牌下 `os.mkdir(mode=0o700)` 写出创建者自己读不了的目录，pytest `tmp_path` 假红且汇总行被吞；本批用 `.tmp_565b/pytest_env/sitecustomize.py`（只经 `PYTHONPATH` 加载、只归一 mode）绕过，生产代码与全局环境未改。属宿主级问题，需另报 DSH/Python 侧。
+- 既有测试的最小改写（均记录）：`test_mixed_island_free_parts.py`（S4-1 冲突夹具）、`test_lock_p1_delivery_gates.py`（L12 计数 1→2）、`test_svgpreview_label_carrier.py`（行字号 → `RENDER_TEXT_PX`）、`test_548p44_native_art_preview.py`（golden font-family）。
+- **两条 PARTIAL 复核（岳 2026-11-25）**：①S1-4 的 pin 行仍静默 `continue`（3 行读成 2 脚）→ 非对象 pin 行点名拒绝、pin map 非 `null` 错类型拒绝、JSON `null` 按「未声明」放行；三文件 **60 passed**、消费方 **377 passed**，父级变异 1 failed / 2 failed 后复原。②S5-H2 的 `--render` 写在子命令前被 argparse 吞（exit 0 且丢 render）→ 父级 11 个 option 用专用 `argparse.Action` 记录「给过」，守卫双向判断；`draw --render <svg> lint …` 现在 **EXIT=2** 并提示写到子命令后，五文件 **132 passed**；父级变异 16 failed 后复原。
+- 两条补完后集成交叉复跑 **465 passed in 26.90s**；`netlist.py` 收卷 `3ffdf76a…`、`draw.py` `378edf60…`、`cli.py` 未再动。
+
+## 2026-11-25 · hole571 修复集成（C/D/H/F/A/B 七批 + E 证据重钉）
+
+- 探测复核：派单书基于 `f508328`，实际起点 HEAD `a539358`（`76e0806`/`a539358` 两提交；`drawapply` +542、`readability` +224、`pagecompiler` +231、`drawcompiler` +138、`commands/draw` +35），16 条 reproduced 逐条在当前树复核：**3 条已被他人修掉**（571-G-1/G-2 由 593/565-S6-H3、571-G-3 由 570-B2-1/`test_607`），**13 条仍复现**。
+- 七批修复（均先红后绿 + 父级独立变异 + `cp`/SHA-256 复原）：
+  - **571c**（`engines/placement.py`）：`_selection_key`/`_key_better` 字典序 `(any_hard, hard_total, energy)`，`_energy` 保留为 Metropolis/stall 尺子；干净图上与旧规则逐字等价，8 个 pinned 回归 **150 passed** 未位移；父级变异 3 红。
+  - **571f**（`engines/readability.py`）：引脚豁免从整条 segment 下放到子边（`_first_box_crossing(exempt_ends=…)`，同一把裁剪）；父级变异 1 红。
+  - **571d**（`engines/patchpin.py`/`moveblock.py`/`subcircuit.py`）：两实例同号脚异网改**具名拒绝**（`LivePinConflict`，12 个 CLI 调用点零改动），新增 `live_pin_refs` 四元键，`split_pin_ref` 按最后一个点 + `normalize_pin_number`；父级变异 2 红。
+  - **571a1**（`engines/drawcompiler.py`）：0 标记地网成为 `KIND_OBLIGATION_MISSING`；判据保持 net 级（不发明逐脚第二把尺）；父级清理一行死赋值后变异 2 红。
+  - **571a2**（`engines/grammar/voltage_divider.py`、`rc_lowpass.py`）：非臂器件标注真实脚数 + `not an arm`、`if parallel and len(parallel) >= 2`、单臂点名 `MIN_ARMS`；11 例 `ok`/`failures` 判定逐例不变；父级变异 1 红。
+  - **571b1**（`engines/pagecompiler.py`）：`min_candidates` 真正被消费（`<1`/`>max` 具名拒绝，不足下限只注记不伪造）；父级变异 1 红。
+  - **571h**（`engines/drawapply.py` + `cli.py` 属性段，+75/-? 行）：`sch.list_attributes` before/after 进 census/digest 与 `attributeMoves.census` 台账；无 moves 的旧计划零新字段零新调用；`test_565f_cli_contract` 仍绿；父级变异 3 红。
+- 集成交叉（七批新测 + 20 份相邻聚焦）**589 passed, 3 skipped in 165.04s**。**未跑全量、未提交、未推送、未部署**；未碰真机/bridge/EDA；探针与变异中间物在 `.tmp_571*`（零删除）。
+- 未修：**A-H4**（RC 低通被绑成分压器，缺 053 §3「臂类型是否必须电阻」裁决句）、**B 的 `grid=2.5`**（归因错层，缺 module 侧残差读数）；**四元脚身份进 `DesignModel.Pin`** 属 shared-platform 集成锁，本轮未越界。
+- 既有红披露：`tests/test_038l_symbol_differential.py` 当前 `2 failed`，原因是别线未提交的 `contracts/differential/cases.json` 已 17 类而该测试钉 15（`assert 17 == 15`）；与绘制线无关，未改其断言、不陪跑。
+- 编号坑：TASKMAP 的 `571` 行是 **W-B 页面锁**（`evidence/571/`），本批证据落 `evidence/hole571/`，未占用该编号行；`outputs/hole571/TRIAGE.md` 仍是洞表权威。
+
+- **571e**（证据重钉，零生产改动）：548C 实测 **11/11**（`b1 ok=True/1/868cc95b`、`b2 /1/eb9ba90d`、`b3 /2/38219611`，hard=0、textMissing 空），推翻点钉到 `47713c2`（`1965d84` 仍是 `ok=False/0 候选`）；547S 岛 `ok=True/1 候选/5 拒`（首拒因不再是 SWCLK），`retry.sha256` 实值 placement `b6b8aac7`、drawcompiler `c475f1b4`；`evidence/547/c1/probe1.py` 的 `parents[2]`→`parents[3]` 修好并 4 次同指纹 `2952a4b3…`。旧结论逐字保留、用「571-E 更正」节标注，不静默删除。未做：548C 只重放 b1、B 组候选未渲染（无视觉结论）、`evidence/` 被 gitignore 故改用行数记账 +103/−0。
+
+- **提交与打包（2026-11-25）**：绘制线差量已提交 **`961b3b7`**（45 文件：18 源 + 19 测试 + 8 文档；含 563 残留、565 五批、571 八批与 053 §3 的 A-H4 裁决句；+5837/−237）。提交前门 `123 passed`；两门手工等价检查 `tools/check_repo_hygiene.py --staged` 与 `--message` 均 exit 0；`git commit` 只能用 `--no-verify`——`.githooks/pre-commit` 走 `sh.exe`，宿主沙箱报 `couldn't create signal pipe, Win32 error 5`，绕的是 shell 执行而不是门禁。**未入库**（刻意）：`PROGRESS.md`/`docs/handoff.md`/`tasks/TASKMAP.md`/`tasks/draw-line.md`（同一 diff 里含别线 600R 条目）与 review/Rust/router/差分/rules 的未提交改动。
+- **候选构建**（不是发布件）落 `outputs/builds/961b3b7/`：`boardwise-connector-0.6.3.eext`（connector typecheck + **900 passed**，sha `d16e78fb…`）、`boardwise-dsh-0.6.3.tgz`（typecheck + **218 passed / 1 skipped** + build，sha `7c5c94cf…`）、`boardwise.exe`（16.0 MiB，bundle 0.6.3 sha `20bcf05b…`，`--assets` 闸 1/1 文件 531 压缩流，sha `2c8f6690…`），附 `manifest.json`（明写候选身份与未满足的发布闸③）与 `SHA256SUMS.txt`。
+- 构建需要 `danger-full-access`：`esbuild` spawn、`npm pack` 写 npm 缓存、PyInstaller 解包 `VCRUNTIME140.dll` 三处都被 workspace-write 的 `EPERM` 拒。**exe 启动冒烟未通过**（PyInstaller onefile 需解包到宿主临时目录，`Could not create temporary directory` / `fopen: Permission denied`），因此只证明「构建成功 + 发布件闸通过」，不证明「隔离端口冒烟通过」；发布闸③ 仍被 9 条别线基线红挡住（`evidence/620/INTEGRATION.md`）。
+- `boardwise.exe` 旧产物（2026-11-17）已挪到 `.tmp_pack_961b3b7/stale/`，没有留在产物目录里。
+
+## 2026-11-25 · hole572 修复集成（A/B/C/D/E/F 六批 + G-1 挂起）
+
+- 起点 HEAD `961b3b7`；洞表 `outputs/hole572/TRIAGE.md` 的 **26 条 reproduced**：**21 条本轮修掉**、**4 条已被 565d 修掉**（F-2/F-3/F-4/F-5，闭单确认）、**1 条（G-1）修复已证但不并入**。
+- 六批（均先红后绿 + 父级独立变异）：
+  - **572A**（`drawcompiler.py` `a951ebdc`）：无 power symbol 时不再说「expressed by its flag」（改点名 N 个标签且声明该主张不成立）；`cls` 过滤改 `not in ("power","gnd")`（`port.GND` 从 0 条变 1 条）；缺 profile 的拒因先问「`--profiles` 是不是 `<spec>.library.json`」。`220 passed`。
+  - **572B**（`connector/src/actions.ts` `4fd9b32b`）：`place_text`/`place_wire` 写后回读（0.01 容差）、`place_power` 读不到 PrimitiveId → `landed:null`+UNVERIFIED、`doc.save` 只认严格 `true`（其余 `"unknown"` + 工程状态回读）、`place_netlabel.landedAnyway` 三态、同步抛错改 `CONNECTOR_ERROR`。connector **typecheck 0 / 925 passed / build 0**。`docs/bridge.md` 同步五行 + 一节三态说明。
+  - **572C**（`draw.py` `6ffeef8b`）：`_save_project` 按 `saved` 三态；`zero_diff` 由 `report.is_empty` 派生（「0 调用点」经查不成立）；`split_at_junctions` 重复实现删一份；C-04 的退出码修在 CLI 批。4 条既有红经裁决「改夹具不改期望」后 `68 passed`。
+  - **572D**（`core/pintable.py` `f8addb5c`、`engines/pintable_check.py` `34236a91`）：`notes` 类型、`version` 严格 int、`pin_key` 一把尺子、表文件严格 UTF-8、ioc 矛盾成 `DEFECT`。`31 passed`。
+  - **572E**（`cli.py` `475f8e89`）：`--page-box` 提到分派前、`--page` 不一致 exit 4 `page_not_plans`、`report is None`→2、pintable `--mcu-component`（gate1 可达）、D-5 接线。`9 passed` + 回归 `244 passed`。
+  - **572F**（`svgpreview.py` `686c47be`）：空 plan 文档宽按 caption 实测加宽（`advance()`，不按字符数猜）；其余 4 条已被 565d 修掉。`125 passed`。
+- **572-G-1 挂起**：回写 `name_carriers` 的修复已证（`dup_problems` 从 `[]` 变点名两条，间距 1），但让 543I/543L 的**有意成对载体**（真实水平间隙 19 < 20 地板、盒不重叠）直接 `DrawPlanError`，5 条既有用例红。裁决：不并入绿树，补丁与测试存 `.tmp_572g/held/`；等「成对载体豁免地板 / 各挪 1 单位 / 重定 20」三选一。`drawapply.py` 已复原 `d36c46a8`，543I/543L 复跑 `13 passed`。
+- 集成交叉（27 文件）**625 passed / 2 skipped / 1 failed**；唯一红是别线未提交 `contracts/module-owners.json` 的 `assert 166 == 165`，与本批无关。**未跑全量、未跑 Rust、未上真机**；零 git 写、零删除。
+- 新缺口（不在洞表，只登记）：窄图 + 宽 caption 仍裁（要动 `test_580:159` 的宽度钉，可能改多张 golden）。
+
+- **572-G-1 并入（岳裁决选 1）**：`drawapply.py` `6ae6481f` —— G-1 的载体回写 + 「声明成对的载体豁免 20 单位地板」（同件/同向/水平逃逸/同一引脚列/体心两侧，且每脚的横向镜像也是本计划打印的载体、两镜像同属另一网）。负控钉住：非镜像复现（间距 1）仍被拒。543L+543I **13 passed**、`572g` 5 passed、提交前门 **281 passed**；我的变异（调用点放宽成任意同网对）**2 failed** 后复原。
+- **提交 `edb5d67`**：17 文件（+3597/−135）——`draw.py`/`svgpreview.py`/`drawcompiler.py`/`drawapply.py`/`pintable.py`/`pintable_check.py`/`cli.py`、`connector/src/actions.ts`+新测试、`docs/bridge.md`、6 个 572 测试 + `test_candidate_draw.py` 夹具。connector **925 passed**+typecheck+build。未入库：别线未提交改动（Rust/差分/router/review math/module-owners）与带别线条目的 `PROGRESS.md`/`handoff.md`/`TASKMAP.md`。
