@@ -11807,7 +11807,14 @@ def _draw_plan_is_island_page(plan) -> bool:
 
 
 def _draw_same_box(left, right, *, tolerance: float = 1e-6) -> bool:
-    """Are two boxes the same sheet, to a float's worth of noise?"""
+    """Are two boxes the same sheet, to a float's worth of noise?
+
+    Two boxes are the same box, so a length mismatch is **not** the same sheet:
+    `zip` stops at the shorter sequence, and `(0, 0)` against a 1169x826 sheet
+    prefix-matched as "the same page" (622-B).
+    """
+    if len(left) != len(right):
+        return False
     return all(abs(a - b) <= tolerance for a, b in zip(left, right))
 
 

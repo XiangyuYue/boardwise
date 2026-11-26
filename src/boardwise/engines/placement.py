@@ -2930,6 +2930,26 @@ def _key_better(
     return candidate[2] < incumbent[2] - 1e-9
 
 
+def _repair_beats(
+    healed_terms: Iterable[CostTerm], current_terms: Iterable[CostTerm]
+) -> bool:
+    """Does the pin-tip repair pass's answer beat the answer it started from?
+
+    The same ruler :func:`_best_of` uses (622-A): lexicographic on
+    :func:`_selection_key`. The repair pass used to compare :func:`_energy`
+    alone — hole 571-C-1's exact bug, one call site further down — so a healed
+    drawing that carried a hard violation could replace a clean first answer
+    just by being cheaper on the soft terms.
+
+    When both answers are clean, the two surviving components are the hard
+    total (zero on both) and the scalar, so this answers exactly what
+    ``healed_energy < energy - 1e-9`` answered: only the veto is new. The caller
+    keeps measuring the incumbent under the same request :func:`_best_of`
+    ranked it with, which is what makes that sentence true.
+    """
+    return _key_better(_selection_key(healed_terms), _selection_key(current_terms))
+
+
 # ------------------------------------------------------- the constructive seed
 
 
@@ -8608,12 +8628,24 @@ def place(request: PlacementInput) -> PlacementResult:
             # plans are handed over: a repair pass is not a second seat search.
             healed, more, taken = _anneal_with_seed(
                 request, state, attempt, plans, panel_plans, service_plans)
-            healed_energy = _energy(
+            # 622-A: the second pass is ranked by `_best_of`'s ruler, not by the
+            # scalar. The incumbent is re-measured under `plain` — the request
+            # `_best_of` ranked it with — so on two clean answers the verdict is
+            # the old scalar comparison byte for byte, and only the hard veto is
+            # new: a cheap healed drawing that leaves the page or sits on a
+            # keep-out no longer replaces a clean one (571-C-1's bug, this site).
+            healed_terms = (
                 evaluate(request, healed, plans, panel_plans)
                 if not service_plans else
-                evaluate(request, healed, plans, panel_plans, service_plans))
-            if healed_energy < energy - 1e-9:
-                state, energy = healed, healed_energy
+                evaluate(request, healed, plans, panel_plans, service_plans)
+            )
+            current_terms = (
+                evaluate(plain, state, plans, panel_plans)
+                if not service_plans else
+                evaluate(plain, state, plans, panel_plans, service_plans)
+            )
+            if _repair_beats(healed_terms, current_terms):
+                state, energy = healed, _energy(healed_terms)
                 iterations += more
                 accepted += taken
             seed_note = (

@@ -20055,6 +20055,26 @@ def _island_keepouts(budget: CompileBudget) -> tuple[Box, ...]:
     return tuple(effective)
 
 
+def _page_keepouts(budget: CompileBudget) -> tuple[Box, ...]:
+    """The keep-outs an **ordinary** (non-island) build is gated against (622-B).
+
+    :func:`_island_keepouts` states the rule for a page that is packed as islands;
+    the three ordinary builders (:func:`_build_one_variant`,
+    :func:`_build_path_first_variant`, :func:`_build_service_group_variant`) were
+    handed ``budget.keepouts`` alone.  A caller that states a sheet and derives
+    nothing from it — the CLI derives this block only for a **multi-island** page
+    (``cli._draw_compile``) — therefore gated that drawing against no block at
+    all, and a box could be shipped inside the title block S-01 calls 禁地
+    (measured 2026-11-25: `power_entry_xt30` on a `(0, 0, 800, 240)` sheet got 4
+    candidates with 18 objects inside the block `(-10, 10)-(790, 190)`).
+
+    The derivation and the union are the island path's, box for box: a stated
+    page is a sheet with a block on **both** paths, and there stays exactly one
+    rule for what a stated sheet reserves.
+    """
+    return _island_keepouts(budget)
+
+
 def _try_island_variants(
     ctx: _Context,
     result: CompileResult,
@@ -23495,7 +23515,7 @@ def _build_path_first_variant(
         grammar_checker=partial(
             check_grammar, intent=ctx.intent, net_members=ctx.net_members),
         page_box=ctx.budget.page_box,
-        keepouts=ctx.budget.keepouts,
+        keepouts=_page_keepouts(ctx.budget),
         grid=ctx.budget.grid,
     )
     if checked.hard_violations:
@@ -24724,7 +24744,7 @@ def _build_one_variant(
             grammar_checker=partial(
             check_grammar, intent=ctx.intent, net_members=ctx.net_members),
             page_box=ctx.budget.page_box,
-            keepouts=ctx.budget.keepouts,
+            keepouts=_page_keepouts(ctx.budget),
             grid=ctx.budget.grid,
         )
 
@@ -32986,7 +33006,7 @@ def _build_service_group_variant(
         grammar_checker=partial(
             check_grammar, intent=ctx.intent, net_members=ctx.net_members),
         page_box=ctx.budget.page_box,
-        keepouts=ctx.budget.keepouts,
+        keepouts=_page_keepouts(ctx.budget),
         grid=ctx.budget.grid,
     )
     if checked.hard_violations:

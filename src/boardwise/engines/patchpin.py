@@ -474,7 +474,7 @@ def live_pin_refs(payload: Any) -> dict[PinRef, str]:
     ``components`` key as ``source_id``, the ``pinInfoMap`` key as ``pin_key``),
     so two units of one part carrying the same designator stay **two** entries
     and neither can overwrite the other. This is the entry point the drawing
-    line consumes; ``live_pin_nets`` keeps its pair shape for the twelve call
+    line consumes; ``live_pin_nets`` keeps its pair shape for the eleven call
     sites already written against it and refuses conflicts instead of folding
     them (see its docstring).
     """
