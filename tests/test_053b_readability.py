@@ -1431,11 +1431,18 @@ def test_a_part_whose_symbol_has_no_profile_is_refused():
 
 def test_profiles_may_be_an_iterable_of_profiles():
     case = _case()
+    # U-09: the claim is that an **iterable** is read like a mapping, and `.ok`
+    # alone did not say it — a generator proves the profiles are walked, not
+    # indexed. The measured answer is a clean check: no hard violation and no
+    # grammar finding (2026-11-26).
     result = check(
-        case.plan, case.circuit, case.presentation, [_resistor_profile()],
+        case.plan, case.circuit, case.presentation,
+        (profile for profile in [_resistor_profile()]),
         page_box=PAGE,
     )
     assert result.ok
+    assert len(result.hard_violations) == 0, result.hard_violations
+    assert len(result.grammar_findings) == 0, result.grammar_findings
 
 
 def test_a_profile_mapping_under_the_wrong_key_is_refused():

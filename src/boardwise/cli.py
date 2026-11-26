@@ -16017,6 +16017,22 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
         circuit, presentation, profiles,
         _draw_page_budget(page_box, title_keepouts, relocate=bool(title_keepouts)),
     )
+    # U-13 / 567-F: the reservation has to be **said**, in the one note list both
+    # outputs read — the printed `note:` lines below and `--json`'s `notes` both
+    # come from `result.notes`. The island leg writes the same pair
+    # (`:12046-12059`); the page leg derived the block but disclosed nothing, so a
+    # reader of the JSON could not tell this page from one packed without a sheet.
+    # The parseable spelling travels too: a later landing reads it, exactly as it
+    # reads the island leg's.
+    if title_keepouts:
+        result.notes.append(
+            "S-01: reserving the sheet's title block "
+            f"{tuple(round(float(value), 1) for value in title_keepouts[0])} as a "
+            "keep-out for the page (derived from the stated sheet box by "
+            "core.pageframe; the block is the sheet symbol's own table, anchored "
+            "to the sheet corner)"
+        )
+        result.notes.append(pageframe.keep_out_note(page_box, title_keepouts))
     print(
         f"boardwise draw compile: page of {len(presentation.modules)} module(s) — "
         f"{len(result.pages)} page candidate(s), {len(result.failures)} failure(s), "

@@ -95,8 +95,14 @@ def test_topology_carries_the_same_templates_and_the_binder_seats_them():
     request = dc._topology_request(ctx)
     assert request.service_templates == templates
     result = placement.place(request)
+    # 569H-01: this line used to compare the same derivation with itself, so a
+    # stub that answered `GARBAGE` for every group id passed it. The measured
+    # answer is pinned instead — one plan per served shunt, in the order the
+    # templates were stated (probed on this tree: `['service:C1', 'service:D1',
+    # 'service:D2', 'service:R1']`).
     assert [plan.group_id for plan in result.service_plans] == [
-        plan.group_id for plan in result.service_plans]
+        "service:C1", "service:D1", "service:D2", "service:R1",
+    ], [plan.group_id for plan in result.service_plans]
     assert len(result.service_plans) == 4
     assert all(plan.seated for plan in result.service_plans), [
         plan.refusal.render() for plan in result.service_plans if plan.refusal]

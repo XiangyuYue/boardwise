@@ -779,9 +779,18 @@ def test_scene_03_long_text_is_measured_by_font_metrics_and_never_overlaps():
     long_ref = text_for(plan, "R123456")
     long_value = text_for(plan, "1.00Meg")
     assert long_ref and long_value, "both long texts are on the page"
+    # U-10: this loop used to assert `width == dc.text_width(text.text)` — the box
+    # the plan carries against the production function that produced it, so a
+    # wrong width was green by construction. The expectation is now the measured
+    # number (probed on this tree, 2026-11-26): 50.0 for `R123456`, 49.5 for
+    # `1.00Meg`. The old layout's 6-units-per-character estimate would be 42.0 for
+    # both, so these literals carry the difference the assertion used to miss.
+    measured_width = {"R123456": 50.0, "1.00Meg": 49.5}
     for text in (*long_ref, *long_value):
         width = text.bbox[2] - text.bbox[0]
-        assert width == pytest.approx(dc.text_width(text.text), abs=1e-6), text.text
+        assert width == pytest.approx(measured_width[text.text], abs=0.5), (
+            f"{text.text!r} box width {width} is not the measured "
+            f"{measured_width[text.text]}")
         # The gap engines/layout.py documented at LABEL_CHAR_WIDTH: a box from a
         # character *count* would be 6 units per character, and these strings do
         # not have that width.

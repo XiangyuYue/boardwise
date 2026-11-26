@@ -217,8 +217,15 @@ def test_gate2_flags_pa5_and_PA5_as_one_pin_under_two_names():
 
 
 def test_gate2_still_passes_a_table_with_distinct_pins():
-    parsed = table(("PA5", "GPIO", "LED1"), ("PA6", "GPIO", "LED2"))
-    assert check_pin_table(parsed).ok
+    report = check_pin_table(table(("PA5", "GPIO", "LED1"), ("PA6", "GPIO", "LED2")))
+    assert report.ok
+    # U-09: `.ok` alone; the report says what it read and what it did **not**
+    # check. Measured 2026-11-26: 2 pins checked, 0 defects, and the two
+    # "this is not a pass" notes (no MCU block / no spec) travel with it.
+    assert report.checked_pins == 2
+    assert report.defects == []
+    assert [note.rule for note in report.notes] == [
+        "pin-numbers-exist", "spec-difference"]
 
 
 def test_gate3_accepts_pa5_against_a_spec_ball_spelled_PA5():

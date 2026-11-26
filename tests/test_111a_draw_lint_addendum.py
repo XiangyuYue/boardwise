@@ -188,6 +188,16 @@ def test_l10_spares_an_object_touching_the_edge():
 def test_l10_skips_silently_without_a_sheet_box():
     """No sheet frame in the snapshot → the predicate says nothing (L9's
     honest-degradation shape)."""
+    # 572-H: "says nothing without a frame" is only half of the predicate. On
+    # its own it was passed by a `check_out_of_bounds` that had been made to
+    # answer `[]` always, so the same object is measured **with** the frame
+    # first: it must be an ERROR there (probed on this tree: 4175 units beyond
+    # the frame).
+    framed = _snapshot(_flag("+12V", 5000, 5000))
+    hits = _by_predicate(_lint(framed)).get("L10-out-of-bounds")
+    assert hits, "an object 4175 units outside the frame must be an ERROR"
+    assert "+12V" in hits[0].message, hits[0].message
+
     snapshot = _snapshot(_flag("+12V", 5000, 5000))
     snapshot["bboxes"] = {}
     assert _by_predicate(_lint(snapshot)).get("L10-out-of-bounds") is None

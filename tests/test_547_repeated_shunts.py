@@ -314,6 +314,17 @@ def test_two_branches_keep_the_pair_drawing():
     result = _compile(_circuit(with_panel=False, with_page=False),
                       _presentation(with_panel=False, with_page=False))
     assert result.ok, result.render_failures()
+    # 569H-02: `ok` alone was passed by a stub that drew no geometry at all, so
+    # the answer's own content is pinned here: the panel is gone and the three
+    # parts that carry the unpressed circuit — MCU, key, pull-up — are drawn,
+    # with their own wires and texts (probed on this tree: 3 candidates, the
+    # first with 7 segments and 6 texts; the counts are the measured drawing,
+    # not a round number).
+    assert result.candidates, "the control produced no candidate"
+    plan = result.candidates[0]
+    assert sorted(part.part_id for part in plan.parts) == ["C1", "R1", "U1"]
+    assert len(plan.segments) == 7, len(plan.segments)
+    assert len(plan.texts) == 6, len(plan.texts)
 
 
 def test_lamps_and_buzzer_are_two_terminal_branches_of_a_fully_declared_island():

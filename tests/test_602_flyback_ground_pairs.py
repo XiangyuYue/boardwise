@@ -22,6 +22,31 @@ from boardwise.engines.grammar.base import FAILURE_CIRCUIT_INVALID
 
 PROV = "engineer_confirmed"
 
+#: The binding table a complete flyback binds, measured on this tree (2026-11-26).
+#: 17 roles; the same table comes back for the minimal circuit and for one carrying
+#: an extra inert ground — which is exactly this file's claim (the fix is about the
+#: pair enumeration, not about forbidding a third ground), so the three negative
+#: controls below pin the table instead of only asserting `.ok` (U-09).
+BOUND_ROLES: tuple[tuple[str, str], ...] = (
+    ("bus", "HVDC"),
+    ("error-amp", "U4"),
+    ("fb-sense", "FB_SENSE"),
+    ("feedback-divider", "R7"),
+    ("feedback-divider", "R8"),
+    ("opto", "U5"),
+    ("output-caps", "C11"),
+    ("pgnd", "PGND"),
+    ("sec-D", "D3"),
+    ("sec-gnd", "SEC_GND"),
+    ("secondary-node", "SEC_SW"),
+    ("sense", "R5"),
+    ("src", "SRC"),
+    ("switch", "Q1"),
+    ("switch-node", "SW"),
+    ("transformer", "T1"),
+    ("vout", "VOUT"),
+)
+
 PGND_MEMBERS = ["R5.2", "U5.3"]
 SEC_GND_MEMBERS = ["T1.S2", "C11.2", "R8.2", "U4.A"]
 
@@ -142,12 +167,24 @@ def test_a_third_ground_that_only_carries_an_inert_part_still_binds():
 
     这条钉住"修的是对枚举、不是'第三地网非法'"：修后仍然 `ok=True`。
     """
-    assert _bind(_with_third_ground()).ok
+    result = _bind(_with_third_ground())
+    assert result.ok, [item.render() for item in result.failures]
+    # U-09: `.ok` alone was passed by a grammar that also accepted anything else.
+    assert sorted((item.role, item.part_id) for item in result.bindings) == list(
+        BOUND_ROLES), [item.render() for item in result.failures]
+    assert result.failures == ()
+    assert "AUXGND" not in {item.part_id for item in result.bindings}, (
+        "the inert third ground is a circuit fact, not a role: nothing binds it")
 
 
 def test_the_minimal_circuit_still_binds():
     """正常 flyback 的绑定不受影响。"""
-    assert _bind(t113.minimal_circuit()).ok
+    result = _bind(t113.minimal_circuit())
+    assert result.ok, [item.render() for item in result.failures]
+    # U-09: the same table, role for role — a dropped or renamed role reds this.
+    assert sorted((item.role, item.part_id) for item in result.bindings) == list(
+        BOUND_ROLES)
+    assert result.failures == ()
 
 
 def test_the_two_family_y_capacitor_refusal_is_unchanged():
@@ -172,7 +209,13 @@ def test_a_two_pin_part_with_both_pins_on_one_ground_net_is_not_reported():
     for net in payload["nets"]:
         if net["id"] == "PGND":
             net["members"] += ["R97.1", "R97.2"]
-    assert _bind(CircuitSpec.from_dict(payload)).ok
+    result = _bind(CircuitSpec.from_dict(payload))
+    assert result.ok, [item.render() for item in result.failures]
+    # U-09: "not reported" has to mean the binding table is the *unchanged* one —
+    # with `.ok` alone a grammar that quietly dropped PGND would still pass.
+    assert result.failures == ()
+    assert sorted((item.role, item.part_id) for item in result.bindings) == list(
+        BOUND_ROLES)
 
 
 def test_a_wide_part_across_the_two_ground_families_is_exempt():

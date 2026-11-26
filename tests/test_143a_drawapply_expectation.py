@@ -159,11 +159,15 @@ def test_143a_f3_the_postconditions_name_the_designator_not_the_spec_id():
     assert placed["R1"] != "R1", placed  # the witness needs the two to differ
 
     # The document keeps the spec id (changeplan's contract, and the read-back
-    # resolves that end through the placed part).
+    # resolves that end through the placed part). 572-H: the old assertion ended
+    # with `or all(from_pin.startswith(("R1.", "R2.", "")))` — the empty prefix
+    # matches every string, so a wire with its `from_pin` cleared passed. The
+    # measured list is pinned instead (probed on this tree:
+    # `['R1.1', '', 'R2.1', 'R2.2']`); the empty entry is the wire whose start
+    # the document deliberately leaves unpinned — the read-back resolves it.
     assert [wire.from_pin for wire in change.change.draw_wires] == [
         "R1.1", "", "R2.1", "R2.2",
-    ] or all(wire.from_pin.startswith(("R1.", "R2.", ""))
-             for wire in change.change.draw_wires)
+    ], [wire.from_pin for wire in change.change.draw_wires]
 
     # …and the sentences are in the page's own namespace.
     sentences = "\n".join(change.expected_postcondition)

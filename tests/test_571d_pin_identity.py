@@ -10,7 +10,7 @@ a fabricated answer, not a missing one.
 
 Three claims, one ruler:
 
-* ``live_pin_nets`` keeps its ``(designator, number)`` shape (twelve CLI call
+* ``live_pin_nets`` keeps its ``(designator, number)`` shape (eleven CLI call
   sites read it) but **refuses** a collision of two different pins on different
   nets instead of overwriting. Two pins of one number on the *same* net still
   answer once — that pair is a faithful reading;

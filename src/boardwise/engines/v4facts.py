@@ -240,6 +240,11 @@ def read_v4_facts(path: str | Path, board: str = "") -> dict[str, Any]:
                 # once. An axis the record does not state stays absent so a
                 # consumer can refuse instead of reading a fabricated 0 as a
                 # measured pose.
+                #
+                # The join itself is **page**-scoped, never marker-scoped (604,
+                # U-03): a COMPONENT with no `SCH_PAGE` head in front of it has
+                # no page to belong to and is skipped below, and a markerless
+                # record still becomes an instance — its file is simply `down`.
                 for axis in ("x", "y"):
                     if axis in body:
                         instance[axis] = body[axis] if axis == "x" else page_y(body[axis])

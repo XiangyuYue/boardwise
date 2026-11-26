@@ -1,6 +1,6 @@
 """604: V4 facts evidence metadata — page unit, generator, pose coverage.
 
-Three things are pinned here and nothing else:
+Four things are pinned here and nothing else:
 
 * **the pair of file frames**. A V4 `up` file stores cartesian y and carries the
   marker; the loader flips it once into the V3 stored frame, and ``page_y``
@@ -8,6 +8,9 @@ Three things are pinned here and nothing else:
   does not produce the same circuit (the record becomes a `down` one), so the
   proof has to be a **pair**: the same part written as stored ``-500`` without a
   marker and as raw ``+500`` with one must land on the same canvas pose;
+* **an instance belongs to a page head** (U-03). Joining is page-scoped — the
+  reader needs ``SCH_PAGE`` in front of the record — and the y marker has no say
+  in it; a markerless COMPONENT still becomes an instance, read as `down`;
 * **the facts meta says what it means**: generator (module + package version),
   the instance pose count, and the page unit (10 mil);
 * **a legacy product is refused by name**. A ``boardwise.v4-facts/1`` document
@@ -96,6 +99,11 @@ def _page(*, y_up: bool, components: list[dict]) -> list[str]:
 
 
 def _write(root: Path, *, y_up: bool, components: list[dict]) -> Path:
+    return _write_records(root, _page(y_up=y_up, components=components))
+
+
+def _write_records(root: Path, lines: list[str]) -> Path:
+    """The same folder project, with the page document stated line by line."""
     page_dir = root / "sch" / "Schematic1"
     page_dir.mkdir(parents=True, exist_ok=True)
     (root / f"{root.name}.eprj3").write_text(json.dumps({
@@ -104,10 +112,7 @@ def _write(root: Path, *, y_up: bool, components: list[dict]) -> Path:
         "format": "folder",
         "profile": {"schematics": {}, "sheets": {}, "pcbs": {}},
     }, ensure_ascii=False), encoding="utf-8")
-    (page_dir / "P1.esch2").write_text(
-        "\n".join(_page(y_up=y_up, components=components)) + "\n",
-        encoding="utf-8",
-    )
+    (page_dir / "P1.esch2").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return root
 
 
@@ -177,6 +182,45 @@ def test_a_markerless_file_is_a_down_file_for_the_pose_too(tmp_path):
     plain = _write(tmp_path / "plain", y_up=False, components=POSE)
     facts = read_v4_facts(plain)
     assert (facts["instances"][0]["x"], facts["instances"][0]["y"]) == (300.0, 500.0)
+
+
+def test_an_instance_belongs_to_the_page_head_that_precedes_it(tmp_path):
+    """U-03: joining is a **page** rule, never a marker rule.
+
+    The reader's own condition is ``partId`` plus "a page head was seen"
+    (``v4facts.read_v4_facts``) and ``load_eprj3_text`` only ever hands it
+    ``sch/**/*.esch2``, so a COMPONENT with no ``SCH_PAGE`` head in front of it
+    has no page to belong to and is dropped — the y marker has no say in that.
+    Measured here: the orphan before the first head is absent, each page keeps
+    its own part, and the marker still decides only the sign — the markerless
+    page's stored ``-500`` becomes canvas ``+500``, the ``up`` page's ``+900``
+    stays ``+900``.
+    """
+    lines = [
+        # no page head yet: this record cannot join a page
+        _record({"type": "COMPONENT", "id": "c-orphan"},
+                {"partId": "ORPHAN", "x": 100.0, "y": 200.0}),
+        _record({"type": "DOCHEAD"}, {"docType": "SCH_PAGE", "uuid": "page-1"}),
+        *_symbol(),
+        _record({"type": "COMPONENT", "id": "c-U1"},
+                {"partId": "U1", "x": 300.0, "y": -500.0}),
+        _record({"type": "DOCHEAD", "yAxisDirection": "up"},
+                {"docType": "SCH_PAGE", "uuid": "page-2"}),
+        _record({"type": "COMPONENT", "id": "c-U2", "yAxisDirection": "up"},
+                {"partId": "U2", "x": 700.0, "y": 900.0}),
+    ]
+    facts = read_v4_facts(_write_records(tmp_path / "scoped", lines))
+
+    poses = {tuple(instance[key] for key in ("partId", "pageUuid", "x", "y"))
+             for instance in facts["instances"]}
+    assert poses == {
+        ("U1", "page-1", 300.0, 500.0),
+        ("U2", "page-2", 700.0, 900.0),
+    }, poses
+    assert not any(instance["partId"] == "ORPHAN" for instance in facts["instances"]), (
+        "a COMPONENT with no preceding SCH_PAGE head has no page to belong to"
+    )
+    assert [page["uuid"] for page in facts["pages"]] == ["page-1", "page-2"]
 
 
 # --------------------------------------------------------------------------

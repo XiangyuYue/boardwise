@@ -5062,6 +5062,13 @@ def _topology_placement(ctx: _Context) -> _Placement | GrammarFailure:
     if series_failure is not None:
         ctx.topology = series_failure
         return series_failure
+    # U-02: the one hard term no later gate reads (a part body sharing canvas
+    # with another). It is refused here, before anything is drawn from the
+    # answer; `out-of-page` / `keepout` stay readability's, which names the object.
+    hard_failure = _placement_hard_failure(result)
+    if hard_failure is not None:
+        ctx.topology = hard_failure
+        return hard_failure
     # 548D3X3C (33C2): the panel seats the search carried must hold in the answer
     # it returned — a refused plan or a cell off its seat is a named refusal.
     if result.panel_plans:
@@ -6349,6 +6356,47 @@ def _series_seat_refusal(spot: str, detail: str, action: str) -> GrammarFailure:
     """
     return GrammarFailure(
         category=FAILURE_LAYOUT_UNSAT, subject=spot, detail=detail, action=action,
+    )
+
+
+#: The placement hard terms **this** compiler has to refuse itself (U-02).
+#:
+#: :func:`~boardwise.engines.placement.place` answers a hard-violating drawing by
+#: **returning** it, never by raising: its epilogue writes a `HARD VIOLATIONS
+#: PRESENT` note and names the three terms it can carry (`placement.py:8738-8753`).
+#: The compiler reads that answer's ``hard`` list in three places only — `series-`
+#: (:func:`_series_result_failure`), `panel-` and `service-` (both inside
+#: :func:`_topology_placement`) — so the other three names had no reader at all.
+#:
+#: Two of them do not need one: `readability` constraint 6 reports a box that
+#: leaves the page **and** one that enters a keep-out (`KIND_OUT_OF_PAGE`,
+#: `readability.py:2256-2330`), so an answer priced by `out-of-page` or `keepout`
+#: cannot ship either — it is refused later, with the offending object's own name,
+#: which is the better sentence. `overlap` is the one left over: constraint 4
+#: (:func:`readability._check_bodies`) is "a **wire** may not cross a part", and the
+#: gate has no body-vs-body kind at all, so two parts sharing canvas would be
+#: drawn, priced only by the term nobody read.
+_PLACEMENT_HARD_WITHOUT_A_GATE: tuple[str, ...] = ("overlap",)
+
+
+def _placement_hard_failure(
+    result: placement.PlacementResult,
+) -> GrammarFailure | None:
+    """A placement hard term the gate does not also refuse, or ``None`` (U-02)."""
+    problems = [
+        term.render() for term in result.hard
+        if term.name in _PLACEMENT_HARD_WITHOUT_A_GATE
+    ]
+    if not problems:
+        return None
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject="$.placement",
+        detail="the placement search returned an answer whose part bodies share "
+        "canvas, and no later gate reads that term — two parts would ship on one "
+        "area: " + "; ".join(problems),
+        action="state a page or a spacing that holds every part, or unlock the "
+        "part the search could not move",
     )
 
 

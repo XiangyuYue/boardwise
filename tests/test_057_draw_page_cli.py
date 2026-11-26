@@ -526,6 +526,43 @@ def test_a_page_presentation_compiles_to_page_documents_on_the_same_command(tmp_
     assert not (out / "cand1.layout.json").exists(), "a page writes page documents"
 
 
+def test_a_page_compile_discloses_the_reserved_title_block_in_its_notes(
+    tmp_path, capsys
+):
+    """U-13: the page leg reserved S-01's block and said so in neither output.
+
+    `cli._cmd_draw_compile_page` derives the block from the stated sheet and hands
+    it to the one keep-out entrance the page compiler has
+    (`PageCompileBudget.keepouts`, rigid-body move on), but the run's notes — the
+    one list both the printed `note:` lines and `--json`'s `notes` read — carried
+    nothing about it. Only the island leg wrote the pair (`cli.py:12046-12059`), so
+    a reader of the JSON could not tell a page packed around the sheet's table from
+    one packed with no sheet at all.
+    """
+    from boardwise.core import pageframe
+
+    circuit, presentation = write_specs(tmp_path)
+    out = tmp_path / "previews"
+    report = tmp_path / "compile.json"
+    code = cli.main([
+        "draw", "compile", "--circuit", str(circuit), "--presentation", str(presentation),
+        "--profiles", str(LIBRARY), "--page-box", PAGE_BOX, "--out", str(out),
+        "--json", str(report),
+    ])
+    printed = capsys.readouterr().out
+    assert code == 0, printed
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    notes = payload["notes"]
+    sheet = tuple(float(part) for part in PAGE_BOX.split(","))
+    block = pageframe.title_block_keepouts(sheet)
+    assert block, "the stated sheet must derive a block, or the case proves nothing"
+    assert any("S-01" in note and "title block" in note for note in notes), notes
+    assert pageframe.keep_out_note(sheet, block) in notes, (
+        "the parseable spelling a later landing reads must travel in the same list")
+    assert "S-01" in printed, "the human output reads the same note list"
+
+
 def test_a_page_compile_without_a_sheet_is_refused_by_name(tmp_path, capsys):
     circuit, presentation = write_specs(tmp_path)
     code = cli.main([

@@ -447,6 +447,11 @@ def test_the_dispatcher_binds_through_the_presentation():
     result = grammar.bind(minimal_circuit(), minimal_presentation(), library())
     assert result.ok
     assert result.parts_of("transformer") == ("T1",)
+    # U-09: the dispatch path binds the **whole** table, not just the transformer —
+    # 17 roles measured on this tree (2026-11-26), the same count the grammar's own
+    # entry point binds for this circuit.
+    assert len(result.bindings) == 17, [item.role for item in result.bindings]
+    assert result.parts_of("opto") == ("U5",)
 
 
 def test_the_role_table_is_published_and_every_role_is_documented():
@@ -865,9 +870,16 @@ def test_the_two_ground_families_are_never_related_to_each_other():
     assert result.ok
     primary_side = {"Q1", "R5", "R3", "C5", "D1", "D2", "C7", "C10"}
     secondary_side = {"D3", "C11", "C13", "R7", "R8", "U4", "R9"}
-    for item in result.constraints:
-        if item.kind not in (NEAR, ADJACENT):
-            continue
+    # U-09: this loop **is** the claim, so it may not be vacuous — a bind that
+    # returned no constraints would pass it. The measured table carries 20
+    # near/adjacent relations (2026-11-26), and the opto↔TL431 pair is one of
+    # them: the isolator is in neither side set, so it is not a crossing.
+    near_adjacent = [item for item in result.constraints
+                     if item.kind in (NEAR, ADJACENT)]
+    assert len(near_adjacent) == 20, [str(item) for item in near_adjacent]
+    assert ("near", "U5", "U4") in {
+        (item.kind, item.subject, item.object) for item in near_adjacent}
+    for item in near_adjacent:
         pair = {item.subject, item.object}
         crosses = bool(pair & primary_side) and bool(pair & secondary_side)
         assert not crosses, f"{item.kind} crosses the isolation band: {item}"

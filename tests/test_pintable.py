@@ -253,7 +253,15 @@ def test_one_pin_under_two_names_is_a_defect():
 def test_the_same_number_is_still_one_row_when_its_name_differs():
     # The count is by number, not by name — a pin renamed is one pin.
     pintable = table(("PA3", "GPIO", "LED1"), ("PB6", "UART_TX", "USART1_TX"))
-    assert check_pin_table(pintable).ok
+    report = check_pin_table(pintable)
+    assert report.ok
+    # U-09: `.ok` alone did not pin the count this test is about. Measured
+    # 2026-11-26: two pins checked, no defects, and the same two "not a pass"
+    # notes a table without an MCU block or a spec always carries.
+    assert report.checked_pins == 2
+    assert report.defects == []
+    assert [note.rule for note in report.notes] == [
+        "pin-numbers-exist", "spec-difference"]
 
 
 # --------------------------------------------------------------------------

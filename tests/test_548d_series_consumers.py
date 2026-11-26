@@ -324,6 +324,47 @@ def test_the_search_consumer_seats_the_arm_with_no_mismatch():
     ], [term.render() for term in result.hard]
 
 
+def test_a_body_overlap_in_the_search_answer_is_refused_not_shipped():
+    """U-02: `overlap` is the one placement hard term no later gate reads.
+
+    `placement.place` **returns** a hard-violating drawing rather than raising
+    (`placement.py:8738-8753` writes the `HARD VIOLATIONS PRESENT` note and names
+    the three terms it can carry), and the compiler read that answer's `hard`
+    list for the three reservation prefixes only. Two of the three leftovers are
+    also readability constraint 6's (`KIND_OUT_OF_PAGE`, `readability.py:2256-2330`
+    reports a box leaving the page and one entering a keep-out), so those are
+    refused later with the offending object's name. `overlap` — two part bodies
+    sharing canvas — has no such reader: constraint 4
+    (`readability._check_bodies`) is "a wire may not cross a part", and the gate
+    has no body-vs-body kind at all.
+
+    The answer here is a stub because the consumer reads `hard` and nothing else.
+    """
+    import inspect
+    from types import SimpleNamespace
+
+    from boardwise.engines import drawcompiler as dc
+    from boardwise.engines import placement as pl
+
+    overlap = pl.CostTerm(name="overlap", value=12.0,
+                          detail="R1/U1 by 12 units²", hard=True)
+    failure = dc._placement_hard_failure(SimpleNamespace(hard=[overlap]))
+    assert failure is not None, "two part bodies sharing canvas were accepted"
+    assert failure.category == dc.FAILURE_LAYOUT_UNSAT, failure.category
+    assert "overlap" in failure.detail, failure.detail
+    assert "12 units²" in failure.detail, failure.detail
+
+    assert dc._placement_hard_failure(SimpleNamespace(hard=[])) is None
+    for name in ("out-of-page", "keepout"):
+        term = pl.CostTerm(name=name, value=12.0, detail="elsewhere", hard=True)
+        assert dc._placement_hard_failure(SimpleNamespace(hard=[term])) is None, (
+            f"{name} is readability constraint 6's to name, not this consumer's")
+
+    source = inspect.getsource(dc._topology_placement)
+    assert "_placement_hard_failure(" in source, (
+        "the consumer is defined but not wired into the topology round")
+
+
 # ------------------------- 通道与真实导线的连通性（draw 侧，逐段几何）
 
 

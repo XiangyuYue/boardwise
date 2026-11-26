@@ -1616,3 +1616,11 @@ def test_the_centred_block_alone_hands_the_siblings_back_past_near():
         "with no line side the centred block still compiles, so the fixture no "
         "longer measures the joint half: "
         f"{[(f.category, f.subject) for f in compiled.failures]}")
+    # U-09: "refused" has to be *this* refusal — one `presentation-poor` failure on
+    # C16 naming the `near` relation the joint seat exists to keep (measured
+    # 2026-11-26). Any other refusal is a different answer, not this half.
+    assert len(compiled.failures) == 1, [f.category for f in compiled.failures]
+    failure = compiled.failures[0]
+    assert failure.category == "presentation-poor"
+    assert failure.subject == "C16"
+    assert "near(C16, U1)" in failure.detail, failure.detail
