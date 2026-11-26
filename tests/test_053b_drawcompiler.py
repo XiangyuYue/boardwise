@@ -729,6 +729,11 @@ def test_scene_01_divider_standard_is_drawn_as_a_column_with_a_visible_tap():
     assert upper is not None and lower is not None
     assert upper.x == lower.x, "the two arms share one column (053 sec.3 同轴)"
     assert upper.y > lower.y, "the upper arm is nearer the power end"
+    # The standard symbol draws a vertical arm as it is, so neither part is
+    # turned.  Scene 2 turns its arms because *its* symbol is the axial one; that
+    # comparison needs this fact stated here, where scene 1 owns it, instead of
+    # being inferred from the absence of a rotation change.
+    assert (upper.rotation, lower.rotation) == (0.0, 0.0)
 
     # The tap is visible: a labelled stub, not just a junction (053 sec.3 直接可见).
     taps = [label for label in plan.labels if label.net == "TAP"]
@@ -764,9 +769,18 @@ def test_scene_02_divider_with_the_axial_symbol_keeps_the_relations_not_the_coor
         f"{upper.rotation}"
     )
     assert lower.rotation == 0.0
+    # 053 sec.5's "coordinates differ" for this scene is the turn, not a move: on
+    # this tree the two plans put R1 and R2 on the same lattice points and differ
+    # in R1's rotation alone (measured 2026-11-26, probe in .tmp_u10), so the
+    # (rotation, x, y) triple this used to compare passed on the turn while telling
+    # us the coordinates had moved.  Scenes 1 and 2 are independent compiles — the
+    # comparison is between them, not against this compiler's own output — and the
+    # half worth pinning is the one the table names: the axial arm is turned where
+    # the standard one is not (test_scene_01 pins the other side to 0 degrees).
+    # The coordinates themselves stay unpinned, as this file's rule (line 6) asks.
     reference = best_of(scenes()[1])[1]
-    assert (upper.rotation, upper.x, upper.y) != (
-        reference.part("R1").rotation, reference.part("R1").x, reference.part("R1").y
+    assert upper.rotation != reference.part("R1").rotation, (
+        "the axial symbol had to be turned where the vertical one did not"
     )
 
 
