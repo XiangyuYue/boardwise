@@ -740,10 +740,16 @@ def test_a_missing_block_and_value_citation_are_each_reported(tmp_path):
 
 
 def test_a_citation_to_something_never_declared_is_refused(tmp_path):
-    spec = fully_cited(
-        tmp_path,
-        blocks=[{"id": "a", "template": "ta", "at": [0.0, 0.0], "evidence": ["nowhere"]}],
-    )
+    """625A-01: the **loader** refuses an undeclared citation, so this rule's
+    remaining job is the spec that reached validation another way.
+
+    The evidence is appended after load on purpose: a loader can no longer
+    produce a spec whose citation resolves to nothing, and the benchmark rule is
+    kept as defence in depth — 「a citation names something declared」 is one
+    question, and it must not become a checked-once-in-a-while one.
+    """
+    spec = fully_cited(tmp_path)
+    spec.blocks[0].evidence.append("nowhere")
     report = validate_spec(spec, target="some_board.epro2", benchmark=True)
     gate = report.gate("closed-book")
     assert any("never declares" in f.message for f in gate.violations)

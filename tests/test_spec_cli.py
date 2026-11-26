@@ -249,7 +249,17 @@ def test_draw_spec_validates_assembles_and_double_checks_before_the_bridge(stub_
 
 
 def _with_bogus_level_clash(raw: dict) -> dict:
-    """Join a 3V3 UART pin to a USB pin: two IO domains, no shifter on the net."""
+    """Join a 3V3 UART pin to a USB pin: two IO domains, no shifter on the net.
+
+    625A-03: a port is one electrical node, and the loader now refuses a port on
+    two nets (it used to reach `assemble`, whose message pointed at the wrong
+    repair). The two clashing ports are therefore released from their own nets
+    first — the level clash is this fixture's subject, and it should not also be
+    a short.
+    """
+    raw["connections"] = [
+        conn for conn in raw["connections"] if conn["net"] not in ("TX", "D+")
+    ]
     raw["connections"].append({"net": "BOGUS", "ports": [["uart", "TX"], ["usb", "D+"]]})
     return raw
 

@@ -233,6 +233,23 @@ def _as_str(value: Any, where: str, *, allow_empty: bool = True) -> str:
     return text
 
 
+def _as_identity(value: Any, where: str) -> str:
+    """An **identity** field: a non-empty string with no surrounding whitespace.
+
+    625A-07: ``_as_str`` strips, so ``id: "  pwr  "`` loaded as ``pwr`` — the
+    string in the file and the identity in memory disagreed. Two specs that spelled
+    the same id differently were then called 「duplicate block id」, and a
+    ``connections`` entry spelling ``pwr`` connected to a block the file spelled
+    differently; the error text always quoted the stripped value, so the reader
+    could not see what the file said. An identity is compared verbatim, so
+    whitespace around it is a typo to refuse rather than a form to normalise.
+    """
+    text = _as_str(value, where, allow_empty=False)
+    if text != value:
+        raise BlockError(f"{where}: leading/trailing whitespace in identity {value!r}")
+    return text
+
+
 def _as_ball(value: Any, where: str) -> str | None:
     """Read an optional ``ball`` field, and refuse anything that is not a ball.
 
@@ -769,12 +786,19 @@ def template_from_json(raw: Any, *, where: str = "<block>") -> BlockTemplate:
             binds[str(prop)] = text
 
         pins: list[dict[str, str]] = []
+        seen_pin_numbers: set[str] = set()
         for pin_index, pin in enumerate(_as_list(body.get("pins"), f"{spot}.pins")):
             pin_spot = f"{spot}.pins[{pin_index}]"
             if not isinstance(pin, dict):
                 raise BlockError(f"{pin_spot}: expected an object")
             _check_keys(pin, ("number", "name", "net"), pin_spot)
             number = _as_str(_require(pin, "number", pin_spot), f"{pin_spot}.number", allow_empty=False)
+            if number in seen_pin_numbers:
+                # 625A-05: one pin cannot carry two names/nets. Two rows for the
+                # same number used to produce two pin records, and which one a
+                # downstream reader kept depended on its iteration order.
+                raise BlockError(f"{pin_spot}: pin {number!r} is already declared on this part")
+            seen_pin_numbers.add(number)
             if number not in symbols[symbol].offsets:
                 raise BlockError(
                     f"{pin_spot}: pin {number!r} of symbol {symbol!r} has no offset"
@@ -900,6 +924,12 @@ def template_from_json(raw: Any, *, where: str = "<block>") -> BlockTemplate:
         ]
         if len(points) < 2:
             raise BlockError(f"{spot}: a wire run needs at least two points")
+        # 625A-04 **rejected, not fixed**: the net may be empty because a template's
+        # wire is a **drawing run**, not an electrical claim. The shipped library
+        # proves it — `ch340g_usb_uart`'s four templates carry 35 wires with no
+        # net at all (10 / 13 / 11 / 1), and they assemble into a reviewed board.
+        # A wire's copper is attributed by the pins and flags it touches; refusing
+        # the empty net here would refuse the library this loader exists to serve.
         wires.append(TemplateWire(net=_as_str(body.get("net"), f"{spot}.net"), points=points))
 
     flags: list[TemplateFlag] = []
@@ -1417,11 +1447,18 @@ def load_board_spec(
         if not isinstance(body, dict):
             raise BlockError(f"{spot}: expected an object")
         _check_keys(body, ("id", "template", "at", "note", "evidence"), spot)
-        block_id = _as_str(_require(body, "id", spot), f"{spot}.id", allow_empty=False)
+        block_id = _as_identity(_require(body, "id", spot), f"{spot}.id")
         if block_id in seen_ids:
             raise BlockError(f"{spot}: duplicate block id {block_id!r}")
         seen_ids.add(block_id)
         template_rel = _as_str(_require(body, "template", spot), f"{spot}.template", allow_empty=False)
+        # 625A-06 **rejected, not fixed**: an absolute template path is how a spec
+        # kept *outside* the library points back at the library's blocks, and the
+        # repo's own CLI harness does exactly that (`tests/test_spec_cli.py`, the
+        # `variant` fixture: 「a copy that lives elsewhere must say where they
+        # are」). The docstring's portability promise is about a spec that travels
+        # **with** its blocks; a spec that travels without them has to name them,
+        # and the loader still opens the file it names.
         template_path = (file.parent / template_rel).resolve()
         template = load_block_template(template_path, port_meta=port_meta)
         # `at` defaults to where the block was cut from, so a spec that only
@@ -1445,6 +1482,7 @@ def load_board_spec(
         raise BlockError(f"{file}.blocks: a board with no blocks draws nothing")
 
     connections: list[BlockConnection] = []
+    port_nets: dict[tuple[str, str], str] = {}
     for index, body in enumerate(_as_list(raw.get("connections"), f"{file}.connections")):
         spot = f"{file}.connections[{index}]"
         if not isinstance(body, dict):
@@ -1456,8 +1494,19 @@ def load_board_spec(
             port_spot = f"{spot}.ports[{port_index}]"
             if not (isinstance(entry, list) and len(entry) == 2):
                 raise BlockError(f"{port_spot}: expected [block id, port role]")
-            block_id = _as_str(entry[0], f"{port_spot}[0]", allow_empty=False)
-            role = _as_str(entry[1], f"{port_spot}[1]", allow_empty=False)
+            block_id = _as_identity(entry[0], f"{port_spot}[0]")
+            role = _as_identity(entry[1], f"{port_spot}[1]")
+            owner = port_nets.get((block_id, role))
+            if owner is not None:
+                # 625A-03: a port is one electrical node. Naming it on two nets is a
+                # short, and the only gate used to be `assemble`'s — whose message
+                # said 「names a block twice」, pointing the reader at the wrong repair
+                # (and the same port twice in one connection counted as two ports).
+                raise BlockError(
+                    f"{port_spot}: port {block_id}.{role} is already on net {owner!r}; "
+                    "a port is one electrical node and cannot be on two nets"
+                )
+            port_nets[(block_id, role)] = net
             instance = next((b for b in blocks if b.id == block_id), None)
             if instance is None:
                 raise BlockError(f"{port_spot}: no block {block_id!r} in this spec")
@@ -1487,7 +1536,7 @@ def load_board_spec(
         if not isinstance(item, dict):
             raise BlockError(f"{spot}: expected an object")
         _check_keys(item, ("id", "kind", "path", "ref", "note"), spot)
-        ref_id = _as_str(_require(item, "id", spot), f"{spot}.id", allow_empty=False)
+        ref_id = _as_identity(_require(item, "id", spot), f"{spot}.id")
         if ref_id in seen_refs:
             raise BlockError(f"{spot}: duplicate reference id {ref_id!r}")
         seen_refs.add(ref_id)
@@ -1499,6 +1548,28 @@ def load_board_spec(
         path = _as_str(item.get("path"), f"{spot}.path")
         ref = _as_str(item.get("ref"), f"{spot}.ref")
         note = _as_str(item.get("note"), f"{spot}.note")
+        if path:
+            # 625A-02: a citation written as an absolute path cannot travel with
+            # the spec (which is the property this field exists for), and a
+            # directory is not something a page can be read out of.
+            #
+            # **Existence is deliberately not asked here.** Whether
+            # `../../inputs/smart_pillbox/datasheets/…pdf` is present is the
+            # question `declared-input-exists` answers — a *product* gate in
+            # `engines/validate_spec.py` (the sources gate), so it runs on the
+            # default `validate --spec` path, against the corpus the run actually
+            # has; a loader that demanded the file would refuse a spec that
+            # travelled without its datasheets, and `references[].path` is
+            # checked before the template copy the tests build in a temp
+            # directory. The shape is this loader's job, the corpus is the
+            # validator's.
+            if Path(path).is_absolute():
+                raise BlockError(
+                    f"{spot}.path: {path!r} is an absolute path; a citation is written "
+                    "relative to the spec file so the pair can move together"
+                )
+            if (file.parent / path).resolve().is_dir():
+                raise BlockError(f"{spot}.path: {path!r} is a directory, not a file")
         # Each kind names exactly where its identity lives, so a citation can
         # always be resolved to something checkable rather than to a phrase.
         if ref_kind in ("intent", "pintable", "datasheet") and not path:
@@ -1521,6 +1592,33 @@ def load_board_spec(
         key: _as_evidence(value, f"{file}.param_evidence[{key}]")
         for key, value in raw_param_evidence.items()
     }
+
+    # 625A-01: an evidence id is a **citation**, so it has to resolve to a
+    # declared reference. `_as_evidence` only enforced the shape (non-empty,
+    # unique), and the promise the docstring makes — 「Nothing outside this list
+    # can justify a field」 — used to be checked by `validate --benchmark` alone,
+    # which the product's default `validate --spec` path leaves out on purpose.
+    # A spec whose parameter cited `NOPE-REF` therefore loaded clean, and 「where
+    # did that come from?」 had no answer at all.
+    declared_refs = {ref.id for ref in references}
+    for where, cited in (
+        *(
+            (f"{file}.blocks[{index}].evidence", block.evidence)
+            for index, block in enumerate(blocks)
+        ),
+        *(
+            (f"{file}.connections[{index}].evidence", conn.evidence)
+            for index, conn in enumerate(connections)
+        ),
+        *((f"{file}.param_evidence[{key}]", ids) for key, ids in param_evidence.items()),
+    ):
+        unknown = [ref_id for ref_id in cited if ref_id not in declared_refs]
+        if unknown:
+            declared = ", ".join(sorted(declared_refs)) or "(none)"
+            raise BlockError(
+                f"{where}: {unknown[0]!r} is not a declared reference; "
+                f"declared: {declared}"
+            )
 
     raw_params = raw.get("params") or {}
     if not isinstance(raw_params, dict):
