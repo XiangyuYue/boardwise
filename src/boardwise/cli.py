@@ -18044,14 +18044,10 @@ def _cmd_draw_islands_propose(args: argparse.Namespace) -> int:
         )
     if getattr(args, "print_document", False):
         print(islandproposal.render_proposal(proposal.document), end="")
-    if not proposal.declared.parts:
-        print(
-            "draw islands propose: this document names no parts at all, so there is "
-            "no partition to propose",
-            file=sys.stderr,
-        )
-        return 5
-    return 0
+    code, message = islandproposal.propose_outcome(proposal)
+    if message:
+        print(f"draw islands propose: {message}", file=sys.stderr)
+    return code
 
 
 def _cmd_draw_islands_apply(args: argparse.Namespace) -> int:

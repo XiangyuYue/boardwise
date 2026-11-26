@@ -68,6 +68,7 @@ from . import islandlayout as il
 __all__ = [
     "ANCHOR_MIN_PINS",
     "APPLY_GATE_CONSERVATION",
+    "APPLY_GATE_INPUT",
     "ATTACH_MAX_GAP",
     "ATTACH_MAX_GAP_NET",
     "TIGHT_GAP",
@@ -77,12 +78,14 @@ __all__ = [
     "IslandsProposalError",
     "IslandsProposal",
     "NAME_MAX_CHARS",
+    "PROPOSAL_KEYS",
     "PROPOSAL_VERSION",
     "VERDICTS",
     "apply_judgement",
     "build_proposal",
     "cluster_unplaced",
     "read_declared",
+    "propose_outcome",
     "render_proposal",
     "write_proposal",
 ]
@@ -113,6 +116,25 @@ NAME_MAX_CHARS = 12
 #: Gate 3's number, so a report can name the one rejection that is the whole
 #: document's rather than one entry's (§5.5).
 APPLY_GATE_CONSERVATION = 3
+
+#: Not one of §5.5's six gates: the **input contract** of §5.4, checked before any
+#: judge gate runs. 0 says "before gate 1" — the proposal itself disagrees with the
+#: document it is being applied to (626B-04).
+APPLY_GATE_INPUT = 0
+
+#: The keys a proposal of this version may carry. §5.4's contract is closed, so a
+#: misspelt `judgement` is not another way to say it — it is a document this build
+#: cannot read (626B-06).
+PROPOSAL_KEYS = frozenset({
+    "proposalVersion",
+    "declared",
+    "declaredBlocks",
+    "unresolved",
+    "unresolvedReasons",
+    "clusters",
+    "judgement",
+    "notes",
+})
 
 #: What `declaredBy` says on a cluster this module proposed.  Spelled out rather
 #: than implied, because §5.4 asks for it on every work order: 「这一簇的来源，永远写出来」.
@@ -411,14 +433,33 @@ def cluster_unplaced(
                 ),
             }
         else:
+            # §5.3 draws anchors from the **undeclared** parts only, so a page
+            # whose every part with three or more pins is already declared makes
+            # each remaining part an island of its own. "nearest: none" was that
+            # case's diagnostic, and it read exactly like a page with no anchor at
+            # all — while the anchor was five units away and merely declared
+            # (626B-01). The rule stays; the sentence now names the part.
+            declared_anchors = sorted(
+                part_id
+                for part_id in owner
+                if _pin_count(circuit, part_id, book) >= ANCHOR_MIN_PINS
+            )
             evidence[part_id] = {
                 "anchor": part_id,
                 "why": (
-                    "no anchor within ATTACH_MAX_GAP "
-                    f"{ATTACH_MAX_GAP:g} units (nearest: "
+                    "no undeclared anchor within ATTACH_MAX_GAP "
+                    f"{ATTACH_MAX_GAP:g} units (nearest undeclared anchor: "
                     + (f"{nearest[1]} at {nearest[0]:g}" if nearest else "none")
                     + ") and no anchor sharing a net within ATTACH_MAX_GAP_NET "
                     f"{ATTACH_MAX_GAP_NET:g}, so it is an island of its own"
+                    + (
+                        "; the part(s) with "
+                        f"{ANCHOR_MIN_PINS}+ pins are already declared "
+                        f"({', '.join(declared_anchors)}) and a declared island is "
+                        "never re-clustered, so they cannot anchor this part"
+                        if declared_anchors
+                        else ""
+                    )
                 ),
             }
 
@@ -508,6 +549,19 @@ class IslandsProposal:
         return not self.clusters
 
 
+def _unknown_reason(
+    circuit: CircuitSpec, part_id: str, book: Mapping[str, SymbolProfile]
+) -> str:
+    """Why this part cannot be measured, in the wording of its own repair."""
+    part = circuit.part(part_id)
+    if part is None:
+        return f"circuit: {part_id} is not a part of this circuit"
+    return (
+        f"library: no symbol {part.symbol_ref!r} in the library book, so its pins "
+        "cannot be counted"
+    )
+
+
 def build_proposal(
     circuit: CircuitSpec,
     payload: Any,
@@ -593,6 +647,9 @@ def build_proposal(
         })
 
     notes: list[str] = []
+    unknown_reasons = {
+        part_id: _unknown_reason(circuit, part_id, book) for part_id in unknown
+    }
     if declared.complete:
         notes.append(
             "islands[] already names every part of this spec, so there is nothing "
@@ -600,11 +657,46 @@ def build_proposal(
             "document verbatim and no cluster is invented"
         )
     if unknown:
+        # Two different facts, two different repairs: a part the circuit does not
+        # have cannot be fixed in the library, and a part whose symbol is missing
+        # cannot be fixed in the circuit. The one sentence they used to share
+        # ("the circuit or the library does not have them") left the reader to
+        # guess which (626B-03).
+        by_circuit = [
+            part_id for part_id in sorted(unknown)
+            if unknown_reasons[part_id].startswith("circuit:")
+        ]
+        by_library = [
+            part_id for part_id in sorted(unknown)
+            if unknown_reasons[part_id].startswith("library:")
+        ]
+        said: list[str] = []
+        if by_circuit:
+            said.append("not in the circuit: " + ", ".join(by_circuit))
+        if by_library:
+            said.append(
+                "in the circuit but with no symbol in the library: "
+                + ", ".join(by_library)
+            )
         notes.append(
-            "no island is proposed for "
-            + ", ".join(sorted(unknown))
-            + ": the circuit or the library does not have them, and a part that "
-            "cannot be measured is reported rather than guessed at (R3)"
+            "no island is proposed for " + "; ".join(said) + " — a part that "
+            "cannot be measured is reported rather than guessed at (R3), and the "
+            "two reasons have two different repairs"
+        )
+    declared_anchors = sorted(
+        part_id for part_id in declared.owner()
+        if _pin_count(circuit, part_id, book) >= ANCHOR_MIN_PINS
+    )
+    if declared_anchors and clusters and all(
+        len(cluster.parts) == 1 for cluster in clusters
+    ):
+        notes.append(
+            "every part with "
+            f"{ANCHOR_MIN_PINS}+ pins is already declared "
+            f"({', '.join(declared_anchors)}), and §5.3 draws anchors from the "
+            "undeclared parts only — so each undeclared part came out as an island "
+            "of its own (a declared island is never re-clustered): declare those "
+            "parts together with their anchor, or leave the anchor undeclared"
         )
     if tickets:
         notes.append(
@@ -621,6 +713,7 @@ def build_proposal(
         ],
         "declaredBlocks": sorted(str(item) for item in declared_blocks),
         "unresolved": sorted(unknown),
+        "unresolvedReasons": dict(sorted(unknown_reasons.items())),
         "clusters": tickets,
         "judgement": [],
         "notes": notes,
@@ -629,6 +722,31 @@ def build_proposal(
         document=document, clusters=tuple(clusters),
         unresolved=tuple(sorted(unknown)), declared=declared,
     )
+
+
+def propose_outcome(proposal: IslandsProposal) -> tuple[int, str]:
+    """The exit code `draw islands propose` answers with, and the line it prints.
+
+    Two states are not success (626B-02), and each needs its own sentence:
+
+    * the document names no parts at all — there is no partition to propose;
+    * the document names parts, the proposal is empty, and the declaration does
+      **not** already cover them: every part was unmeasurable. A page nobody
+      measured is not a page that needs nothing, and `exit 0` said it was.
+    """
+    if not proposal.declared.parts:
+        return 5, (
+            "this document names no parts at all, so there is no partition to "
+            "propose"
+        )
+    if proposal.empty and not proposal.declared.complete:
+        return 5, (
+            "no part of this document could be measured (unresolved: "
+            + (", ".join(proposal.unresolved) or "none named")
+            + "), so there is nothing to judge — a page nobody measured is not a "
+            "complete declaration"
+        )
+    return 0, ""
 
 
 def render_proposal(proposal: Mapping[str, Any]) -> str:
@@ -1059,6 +1177,47 @@ def apply_judgement(
     )
 
 
+def _declaration_mismatch(stated: Any, declared: DeclaredIslands) -> str:
+    """The proposal's own `declared[]` copy against the document it is applied to.
+
+    A proposal records the declaration it was made against (§5.4). Applying it to a
+    document that has moved since then used to be silent — `apply_proposal` re-read
+    the payload and never compared — so the islands written were not the islands the
+    judgement had been made about (626B-04).
+    """
+    if stated is None:
+        return ""
+    if not isinstance(stated, list):
+        raise IslandsProposalError(
+            "the proposal's `declared` must be a list of islands"
+        )
+    theirs = [
+        (
+            str(item.get("id", "")),
+            tuple(str(part) for part in item.get("parts") or ()),
+        )
+        for item in stated
+        if isinstance(item, Mapping)
+    ]
+    ours = [(island.id, tuple(island.parts)) for island in declared.islands]
+    if theirs == ours:
+        return ""
+    return (
+        "the proposal was made against a different declaration: it says "
+        + _islands_text(theirs)
+        + ", while the presentation declares "
+        + _islands_text(ours)
+        + " — re-run `draw islands propose` on the current document"
+    )
+
+
+def _islands_text(islands: list[tuple[str, tuple[str, ...]]]) -> str:
+    return (
+        ", ".join(f"{island_id}={list(parts)}" for island_id, parts in islands)
+        or "no island"
+    )
+
+
 def apply_proposal(
     proposal: Mapping[str, Any],
     payload: Any,
@@ -1075,6 +1234,40 @@ def apply_proposal(
     this build cannot read is a bug here, not a refusal the user has to debug.
     """
     declared = read_declared(payload, where)
+    # §5.4's contract is closed and §5.2's two stages are two documents: the
+    # proposal records the declaration it was made against, so a proposal whose
+    # `declared[]` no longer matches the presentation is refused instead of being
+    # silently applied to the newer document (626B-04), and a key this version does
+    # not define is an input error rather than something to ignore (626B-06).
+    unknown_keys = sorted(str(key) for key in proposal if key not in PROPOSAL_KEYS)
+    if unknown_keys:
+        raise IslandsProposalError(
+            f"{where}: the proposal carries key(s) this version does not define: "
+            + ", ".join(unknown_keys)
+            + " — §5.4's contract is closed, so a key nobody reads is not another "
+            "way to say something"
+        )
+    mismatch = _declaration_mismatch(proposal.get("declared"), declared)
+    if mismatch:
+        return JudgedApplication(
+            result=ApplyResult(
+                written=False,
+                islands=declared.islands,
+                report={
+                    "proposalVersion": proposal.get(
+                        "proposalVersion", PROPOSAL_VERSION
+                    ),
+                    "applied": False,
+                    "gate": APPLY_GATE_INPUT,
+                    "why": mismatch,
+                    "entries": [],
+                    "islands": [],
+                    "derived": [],
+                },
+            ),
+            spec=None,
+            intent=intent,
+        )
     judgement = proposal.get("judgement") or []
     if isinstance(judgement, Mapping):
         judgement = [judgement]
@@ -1084,6 +1277,20 @@ def apply_proposal(
         )
     result = apply_judgement(
         proposal, declared, [item for item in judgement if isinstance(item, Mapping)],
+    )
+    # §5.6's level zero is a documented fallback, not a failure (530E pins it), but
+    # "nobody judged" and "three judgements were made" must not read the same in the
+    # report: with no judgement every island is the geometric cluster, unnamed
+    # (626B-05).
+    judged = [item for item in judgement if isinstance(item, Mapping)]
+    result.report["judged"] = len(judged)
+    result.report["fallback"] = (
+        ""
+        if judged
+        else (
+            "L0 (no judgement was given: every island is the geometric cluster "
+            "as clustering left it, unnamed — §5.6 level zero)"
+        )
     )
     if not result.written:
         return JudgedApplication(result=result, spec=None, intent=intent)
