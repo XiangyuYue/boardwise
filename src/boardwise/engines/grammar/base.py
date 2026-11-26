@@ -98,7 +98,7 @@ the readability checker):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Protocol, Sequence, runtime_checkable
+from typing import Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
 from ...core.circuitspec import (
     PROVENANCE_AI,
@@ -151,6 +151,7 @@ __all__ = [
     "RoleBinding",
     "RoleConnection",
     "arm_exclusions",
+    "arm_note",
     "bound_result",
     "connected_net_sets",
     "declares_modules",
@@ -923,6 +924,34 @@ def arm_exclusions(
         if shape is None and why:
             out[part.id] = why
     return out
+
+
+def arm_note(
+    circuit: CircuitSpec,
+    profiles: Mapping[str, SymbolProfile] | None,
+    nets: Iterable[str],
+) -> str:
+    """One clause naming the parts on these nets that are **not** series arms.
+
+    `two_terminal_parts` drops a part on purpose (a short, a three-pin symbol with
+    a leg left out, a part with one pin on a net); without this clause the drop is
+    indistinguishable from the part not existing — 04-H2's whole failure mode, and
+    the reason 627A-08 and 627B-10 are the same hole in two books.
+
+    Only parts with two mentioned pins are listed: one pin on a net is a part the
+    sheet did not finish wiring, which is a different fact from a part that was
+    read and rejected.
+    """
+    wanted = set(nets)
+    named: list[str] = []
+    for part_id, why in sorted(arm_exclusions(circuit, profiles).items()):
+        pins = pins_of_part(circuit, part_id)
+        if len(pins) < 2 or not (set(pins.values()) & wanted):
+            continue
+        named.append(f"{part_id} ({why})")
+    if not named:
+        return ""
+    return "not usable as a branch: " + "; ".join(named)
 
 
 def nets_of_class(circuit: CircuitSpec, cls: str) -> tuple[str, ...]:

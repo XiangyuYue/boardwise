@@ -56,20 +56,23 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from ...core.circuitspec import CircuitSpec
-from ...core.presentationspec import PresentationSpec
+from ...core.presentationspec import DEFAULT_SIDE_PREFERENCES, PresentationSpec
 from ...core.symbolprofile import SymbolProfile
 from .base import (
     DIRECT_WIRE,
     FAILURE_CIRCUIT_INVALID,
     FAILURE_FACTS_MISSING,
+    FAILURE_PRESENTATION_POOR,
     NEAR,
     OWNED_BRANCH,
+    SAME_COLUMN,
     SAME_ROW,
     GrammarFailure,
     GrammarObligation,
     GrammarResult,
     RelativeConstraint,
     RoleBinding,
+    arm_note,
     bound_result,
     connected_net_sets,
     declares_modules,
@@ -148,11 +151,24 @@ class RcLowpassGrammar:
         if missing:
             return refused_result(missing)
 
-        edges = two_terminal_parts(circuit)
+        edges = two_terminal_parts(circuit, self.profiles)
         candidates = _candidates(circuit, presentation, edges, power, ground)
         if not candidates:
-            return refused_result([_no_lowpass_failure(circuit, edges, power, ground)])
-        return self._result(circuit, presentation, candidates)
+            return refused_result([
+                _no_lowpass_failure(circuit, presentation, edges, power, ground)
+            ])
+        bound = candidates[0]
+        if declares_modules(presentation):
+            loose = sorted(
+                part_id
+                for part_id in (bound.series, *bound.shunts)
+                if not modules_of_part(presentation, part_id)
+            )
+            if loose:
+                return refused_result([
+                    _outside_module_failure(presentation, loose)
+                ])
+        return self._result(circuit, presentation, edges, candidates)
 
     # ------------------------------------------------------------- internals
 
@@ -160,9 +176,26 @@ class RcLowpassGrammar:
         self,
         circuit: CircuitSpec,
         presentation: PresentationSpec,
+        edges: dict[str, tuple[str, str]],
         candidates: list[_Lowpass],
     ) -> GrammarResult:
         lowpass = candidates[0]
+        # Two filters that share no part are two islands, not one reading with a
+        # runner-up: binding one put the other in prose only — no binding, no
+        # constraint, no island — which is not the same drawing as "there is only
+        # one filter on this page" (627B-05).
+        independent = [
+            other
+            for other in candidates[1:]
+            if not (
+                {other.series, *other.shunts}
+                & {lowpass.series, *lowpass.shunts}
+            )
+        ]
+        if independent:
+            return refused_result([
+                _independent_filter_failure(lowpass, independent)
+            ])
         runners = _runner_up_note(candidates)
         prov = weakest_provenance(
             net_provenance(circuit, lowpass.in_net),
@@ -171,8 +204,32 @@ class RcLowpassGrammar:
             part_provenance(circuit.part(lowpass.series)),
             *(part_provenance(circuit.part(part_id)) for part_id in lowpass.shunts),
         )
+        in_stated = _declared_side(presentation, "input")
+        out_stated = _declared_side(presentation, "output")
         in_side = presentation.side_for("input") or "left"
         out_side = presentation.side_for("output") or "right"
+        # A trunk whose declared ends are both vertical asks for one **column**:
+        # the shunt hangs off the out node toward ground, so the same reading is a
+        # column, not a row (627B-08). With the book's defaults (input left,
+        # output right) the horizontal reading stands.
+        vertical = in_side in ("top", "bottom") and out_side in ("top", "bottom")
+        # The bound shunt is on the out node; the other end may carry a branch of
+        # its own (an input-side capacitor is a real filter). Saying "the side with
+        # no branch to ground" was that case's opposite (627B-02).
+        in_branches = _shunts(
+            edges, lowpass.series, lowpass.in_net, lowpass.gnd_net
+        )
+        in_where = (
+            "the end of the series element away from the bound shunt"
+            if not in_branches
+            else (
+                "the end of the series element away from the bound shunt — and it "
+                f"carries a branch to ground of its own ({', '.join(in_branches)}), "
+                "so this end reads as 'in' because the candidate order put it there "
+                "(rail first, then module, then the author's port role, then the net "
+                "id): the direction is decided by that order, not by an absent branch"
+            )
+        )
 
         bindings: list[RoleBinding] = [
             RoleBinding(
@@ -185,14 +242,18 @@ class RcLowpassGrammar:
                     "not a series element)",
                     part_clause(circuit, lowpass.series),
                     f"low-pass chosen: {lowpass.describe()}",
+                    arm_note(
+                        circuit,
+                        self.profiles,
+                        (lowpass.in_net, lowpass.out_net, lowpass.gnd_net),
+                    ),
                     f"provenance={prov}",
                     runners,
                 ),
             )
         ]
         for role, net_id, where in (
-            ("in", lowpass.in_net, "the far end of the series element from the "
-                                   "shunt (the side with no branch to ground)"),
+            ("in", lowpass.in_net, in_where),
             ("out", lowpass.out_net, "the end that carries the shunt to ground — "
                                      "that branch is what makes this node the output"),
             ("gnd", lowpass.gnd_net, "the net the shunt returns to"),
@@ -216,9 +277,13 @@ class RcLowpassGrammar:
                 kind=DIRECT_WIRE,
                 nets=(lowpass.in_net, lowpass.out_net),
                 reason=(
-                    "053 sec.3: the trunk in→series→out is wired on one row, "
-                    f"input {in_side} / output {out_side} per sidePreferences — "
-                    "the input is never read by chasing labels"
+                    "053 sec.3: the trunk in→series→out is wired on one "
+                    f"{'column' if vertical else 'row'}, "
+                    f"input {in_side} / output {out_side} — "
+                    + _side_phrase("input", in_stated, in_side)
+                    + ", "
+                    + _side_phrase("output", out_stated, out_side)
+                    + " — the input is never read by chasing labels"
                 ),
             ),
             GrammarObligation(
@@ -254,15 +319,21 @@ class RcLowpassGrammar:
             )
             constraints.append(
                 RelativeConstraint(
-                    kind=SAME_ROW,
+                    kind=SAME_COLUMN if vertical else SAME_ROW,
                     subject=lowpass.series,
                     object=shuttle,
                     reason=(
                         f"053 sec.3: the trunk {lowpass.in_net}→{lowpass.series}→"
-                        f"{lowpass.out_net} is one row, and {shuttle}'s "
+                        f"{lowpass.out_net} is one "
+                        f"{'column' if vertical else 'row'}, and {shuttle}'s "
                         f"{lowpass.out_net}-side pin lands on it (the shunt body "
-                        "hangs below the row) — so the branch is read as leaving "
-                        "the out node, not as a second trunk"
+                        + (
+                            "sits off that column"
+                            if vertical
+                            else "hangs below the row"
+                        )
+                        + ") — so the branch is read as leaving the out node, not "
+                        "as a second trunk"
                     ),
                 )
             )
@@ -437,11 +508,12 @@ def _missing_class_failures(
 
 def _no_lowpass_failure(
     circuit: CircuitSpec,
+    presentation: PresentationSpec,
     edges: dict[str, tuple[str, str]],
     power: tuple[str, ...],
     ground: tuple[str, ...],
 ) -> GrammarFailure:
-    """Why no low-pass was found, naming the two shapes that matter."""
+    """Why no low-pass was found, naming the shapes that matter."""
     ground_set = set(ground)
     series_only = sorted(
         part_id
@@ -449,6 +521,42 @@ def _no_lowpass_failure(
         if nets[0] not in ground_set and nets[1] not in ground_set
     )
     listing = _connection_listing(circuit, edges)
+    # A branch the module split removed is not an absent branch. Saying "neither
+    # of its ends carries a branch to ground" while C1 hangs on OUT→GND is the
+    # opposite of the circuit; the split is the real reason (627B-01).
+    filtered: list[str] = []
+    for series in series_only:
+        scope = module_of_part(presentation, series)
+        if not scope:
+            continue
+        for net in edges[series]:
+            for gnd_net in ground:
+                for shunt in _shunts(edges, series, net, gnd_net):
+                    shunt_modules = modules_of_part(presentation, shunt)
+                    if scope in shunt_modules:
+                        continue
+                    filtered.append(
+                        f"{shunt} is on {net}→{gnd_net} but declared in "
+                        f"{'/'.join(shunt_modules) or 'no module'}, while {series} "
+                        f"is in {scope}"
+                    )
+    if filtered:
+        return GrammarFailure(
+            category=FAILURE_CIRCUIT_INVALID,
+            subject=series_only[0],
+            detail=(
+                "the parts between two non-ground nets do have a branch to ground, "
+                "but the declared modules put it in another island: "
+                + "; ".join(sorted(set(filtered)))
+                + " — a branch outside its series element's module is not that "
+                "element's shunt (052 sec.5)"
+            ),
+            action=(
+                "put the branch and its series element in one "
+                "PresentationSpec.modules[] entry, or drop the split if this is "
+                "one island"
+            ),
+        )
     if series_only:
         detail = (
             "a two-terminal part sits between two non-ground nets "
@@ -520,4 +628,79 @@ def _runner_up_note(candidates: list[_Lowpass]) -> str:
     return (
         "other low-pass readings found but not bound (this grammar instance bound "
         f"one): {shown}{more}"
+    )
+
+
+def _declared_side(presentation: PresentationSpec, role: str) -> str:
+    """The side this document states for `role`, or "" when it left the default.
+
+    `PresentationSpec` fills `DEFAULT_SIDE_PREFERENCES` in at construction, so a
+    "declared" side is read here as **one that differs from the documented
+    default**. A sheet that writes the default out explicitly is therefore
+    described as having taken it — the side printed is the same either way — and
+    no reason ever claims the author chose a side the book defaults to (627B-07).
+    """
+    value = presentation.side_for(role)
+    if value and value != DEFAULT_SIDE_PREFERENCES.get(role):
+        return value
+    return ""
+
+
+def _side_phrase(role: str, stated: str, effective: str) -> str:
+    """``sidePreferences.input=right`` or ``… unset — the default right``.
+
+    A default is not a declaration: printing ``sidePreferences.power=top`` when
+    the sheet never said it turns the book's fallback into the author's choice
+    (627B-06 / 627B-07).
+    """
+    if stated:
+        return f"sidePreferences.{role}={effective}"
+    return f"sidePreferences.{role} unset — the default {effective}"
+
+
+def _outside_module_failure(
+    presentation: PresentationSpec, loose: list[str]
+) -> GrammarFailure:
+    """The low-pass has parts the declared module split does not place."""
+    where = ", ".join(
+        f"{part_id} in "
+        f"{'/'.join(modules_of_part(presentation, part_id)) or 'no module'}"
+        for part_id in loose
+    )
+    return GrammarFailure(
+        category=FAILURE_CIRCUIT_INVALID,
+        subject=loose[0],
+        detail=(
+            f"the low-pass is not all inside one declared module: {where} — its "
+            "branch would land in an island the series element is not in "
+            "(052 sec.5), which is the shape `voltage_divider` already refuses"
+        ),
+        action=(
+            "name every part of this low-pass in one PresentationSpec.modules[] "
+            "entry, or drop the split if this is one island"
+        ),
+    )
+
+
+def _independent_filter_failure(
+    bound: _Lowpass, others: list[_Lowpass]
+) -> GrammarFailure:
+    """Two filters with no part in common cannot be one grammar's reading."""
+    named = "; ".join(other.describe() for other in others[:5])
+    more = "" if len(others) <= 5 else f"; +{len(others) - 5} more"
+    return GrammarFailure(
+        category=FAILURE_PRESENTATION_POOR,
+        subject=bound.series,
+        detail=(
+            f"this page holds {len(others) + 1} low-passes that share no part "
+            f"({bound.describe()}; {named}{more}) — one grammar instance binds one "
+            "filter, and binding the first leaves the others with no binding, no "
+            "constraint and no island, which does not read as 'there is only one "
+            "filter here'"
+        ),
+        action=(
+            "declare PresentationSpec.modules[] so each low-pass is its own island "
+            "(one grammar instance per island), or remove the filters that are not "
+            "part of this island"
+        ),
     )

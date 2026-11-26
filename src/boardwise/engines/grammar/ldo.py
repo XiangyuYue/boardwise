@@ -87,6 +87,7 @@ from .base import (
     RoleBinding,
     RoleConnection,
     arm_exclusions,
+    arm_note,
     bound_result,
     connected_net_sets,
     evidence,
@@ -273,9 +274,12 @@ class LdoGrammar:
         if out_side not in SIDES:
             out_side = "right"
         # 053 sec.3 says an LDO's input and output are on opposite sides, and
-        # every constraint below says so in its reason. A sheet that declared
-        # both on one side was bound anyway, so the reason asserted the opposite
-        # of the document (627A-02).
+        # every constraint below says so in its reason. A sheet whose effective
+        # sides are the same was bound anyway, so the reason asserted the opposite
+        # of the document (627A-02). `PresentationSpec` fills the documented
+        # defaults in (input left / output right), so these are the **effective**
+        # sides: with both left at their defaults this cannot fire, and it fires
+        # exactly when the sheet moved one of them onto the other's side.
         if stated_in and stated_out and in_side == out_side:
             return refused_result([
                 GrammarFailure(
@@ -315,7 +319,11 @@ class LdoGrammar:
                     _profile_clause(core),
                     f"core chosen: {core.describe()}",
                     _refused_note(not_bound),
-                    _arm_note(circuit, self.profiles, core),
+                    arm_note(
+                        circuit,
+                        self.profiles,
+                        (core.in_net, core.out_net, core.gnd_net),
+                    ),
                     f"provenance={prov}",
                     runners,
                 ),
@@ -702,34 +710,6 @@ def _refused_note(not_bound: tuple[GrammarFailure, ...]) -> str:
     return "readable but not bound: " + "; ".join(
         f"{item.subject} — {item.detail}" for item in not_bound
     )
-
-
-def _arm_note(
-    circuit: CircuitSpec,
-    profiles: Mapping[str, SymbolProfile] | None,
-    core: _Core,
-) -> str:
-    """Name the parts that sit on the core's nets and are not series arms.
-
-    `base.two_terminal_parts` drops a part on purpose (a short, a three-pin symbol
-    with a leg left out, a part with one pin on a net); without this clause the
-    drop is indistinguishable from the part not existing (04-H2 / 627A-08). Only
-    parts with two mentioned pins are listed — one pin on a net is a part the
-    sheet did not finish wiring, which is a different fact.
-    """
-    excluded = arm_exclusions(circuit, profiles)
-    nets = {core.in_net, core.out_net, core.gnd_net}
-    named: list[str] = []
-    for part_id in sorted(excluded):
-        if part_id == core.part_id:
-            continue
-        pins = pins_of_part(circuit, part_id)
-        if len(pins) < 2 or not (set(pins.values()) & nets):
-            continue
-        named.append(f"{part_id} ({excluded[part_id]})")
-    if not named:
-        return ""
-    return "not usable as a branch: " + "; ".join(named)
 
 
 def _side_kind(side: str, default: str) -> str:

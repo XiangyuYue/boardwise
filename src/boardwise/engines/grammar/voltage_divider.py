@@ -95,7 +95,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from ...core.circuitspec import CircuitSpec
-from ...core.presentationspec import PresentationSpec
+from ...core.presentationspec import DEFAULT_SIDE_PREFERENCES, PresentationSpec
 from ...core.symbolprofile import SymbolProfile
 from .base import (
     ABOVE,
@@ -118,6 +118,7 @@ from .base import (
     GrammarResult,
     RelativeConstraint,
     RoleBinding,
+    arm_note,
     bound_result,
     connected_net_sets,
     declares_modules,
@@ -228,12 +229,12 @@ class VoltageDividerGrammar:
         if missing:
             return refused_result(missing)
 
-        edges = two_terminal_parts(circuit)
-        chains, failures = self._chains(presentation, edges, power, ground)
+        edges = two_terminal_parts(circuit, self.profiles)
+        chains, failures, dropped = self._chains(presentation, edges, power, ground)
         if failures:
             return refused_result(failures)
         if not chains and signal_tops:
-            chains, failures = self._chains(
+            chains, failures, dropped = self._chains(
                 presentation, edges, signal_tops, ground, top=TOP_SIGNAL
             )
             if failures:
@@ -245,8 +246,11 @@ class VoltageDividerGrammar:
         if not chains:
             return refused_result([_no_chain_failure(circuit, edges, power, ground)])
         family = _family(presentation, chains)
-        others = [chain for chain in chains if not any(chain is taken for taken in family)]
-        return self._result(circuit, presentation, edges, family, others)
+        others = [
+            chain for chain in chains
+            if not any(chain is taken for taken in family)
+        ]
+        return self._result(circuit, presentation, edges, family, others, dropped)
 
     # ------------------------------------------------------------- internals
 
@@ -258,13 +262,17 @@ class VoltageDividerGrammar:
         ground: tuple[str, ...],
         *,
         top: str = TOP_POWER,
-    ) -> tuple[list[_Chain], list[GrammarFailure]]:
+    ) -> tuple[list[_Chain], list[GrammarFailure], list[_Chain]]:
         """Every candidate ladder, canonically ordered, plus any refusal.
 
         Order: longer ladders first (a multi-tap ladder is the more specific
         reading of one rail), then by net and part id. It is a stable tie-break,
         not a claim that the first candidate is the only reading — the runners-up
         are named in every binding's evidence.
+
+        The third answer is the ladders the module scoping left out: they come
+        back so the caller can name them, because a dropped ladder and an absent
+        one must not read the same (627B-04).
 
         ``power`` is the set of nets a chain may start from: the power rails, or
         (``top=TOP_SIGNAL``) the declared signal input ports.
@@ -295,9 +303,12 @@ class VoltageDividerGrammar:
         if declares_modules(presentation):
             scoped = [chain for chain in found if chain.module]
             if not scoped and found:
-                return [], [_cross_module_failure(presentation, found[0])]
-            found = scoped
-        return found, []
+                return [], [_cross_module_failure(presentation, found[0])], []
+            # A ladder no module claims is not "not there": naming it is the
+            # difference between a split page and a page holding one ladder
+            # (627B-04 — `found = scoped` used to drop it without a word).
+            return scoped, [], [chain for chain in found if not chain.module]
+        return found, [], []
 
     def _result(
         self,
@@ -306,12 +317,24 @@ class VoltageDividerGrammar:
         edges: dict[str, tuple[str, str]],
         family: list[_Chain],
         others: list[_Chain],
+        dropped: list[_Chain],
     ) -> GrammarResult:
-        runners = _runner_up_note(len(family), others)
+        runners = evidence(
+            _runner_up_note(len(family), others),
+            _outside_module_note(dropped),
+        )
         input_side = _input_pair_side(circuit, presentation, family)
         power_side = input_side or presentation.side_for("power") or "top"
         gnd_side = presentation.side_for("gnd") or "bottom"
         axis, order_kind, tap_kind = _orientation(power_side, gnd_side)
+        # `_orientation` falls back to the book's default when the declared pair
+        # mixes axes. Every reason that names the sides has to say so, or the
+        # constraint ("above") reads as if it came from a declared "left"
+        # (627B-06).
+        mixed = not (
+            (power_side in ("top", "bottom") and gnd_side in ("top", "bottom"))
+            or (power_side in ("left", "right") and gnd_side in ("left", "right"))
+        )
         # Every arm of the family: a part that is one chain's arm is never
         # another chain's tap branch (548D3D-F1).
         family_arms = frozenset(arm for chain in family for arm in chain.arms)
@@ -345,6 +368,7 @@ class VoltageDividerGrammar:
                             f"role={role}: {_arm_clause(index, chain)}",
                             part_clause(circuit, arm),
                             f"chain chosen: {chain.describe()}",
+                            arm_note(circuit, self.profiles, chain_nets),
                             f"provenance={prov}",
                             runners,
                         ),
@@ -416,9 +440,30 @@ class VoltageDividerGrammar:
                         object=lower,
                         reason=(
                             f"053 sec.3: upper_arm {_order_words(order_kind)} lower_arm "
-                            f"— {upper} is the end nearer {chain.in_net} "
-                            f"(sidePreferences.{'input' if input_side else 'power'}={power_side}, "
-                            f"sidePreferences.gnd={gnd_side})"
+                            f"— {upper} is the end nearer {chain.in_net} ("
+                            + (
+                                f"sidePreferences.input={power_side}"
+                                if input_side
+                                else _side_phrase(
+                                    "power",
+                                    _declared_side(presentation, "power"),
+                                    power_side,
+                                )
+                            )
+                            + ", "
+                            + _side_phrase(
+                                "gnd",
+                                _declared_side(presentation, "gnd"),
+                                gnd_side,
+                            )
+                            + ")"
+                            + (
+                                f"; the declared pair {power_side} / {gnd_side} is "
+                                "not a chain direction, so the book's default "
+                                "(power top, ground bottom) is used"
+                                if mixed
+                                else ""
+                            )
                         ),
                     )
                 )
@@ -792,6 +837,44 @@ def _runner_up_note(bound: int, others: list[_Chain]) -> str:
     return (
         "other in→gnd chains found but not bound (this grammar instance bound "
         f"{count}): {shown}{more}"
+    )
+
+
+def _declared_side(presentation: PresentationSpec, role: str) -> str:
+    """The side this document states for `role`, or "" when it left the default.
+
+    `PresentationSpec` fills `DEFAULT_SIDE_PREFERENCES` in at construction, so
+    "declared" is read as **differs from the documented default**; a sheet that
+    writes the default out is described as having taken it, which is the same side
+    either way, and no reason claims the author chose a default (627B-06).
+    """
+    value = presentation.side_for(role)
+    if value and value != DEFAULT_SIDE_PREFERENCES.get(role):
+        return value
+    return ""
+
+
+def _side_phrase(role: str, stated: str, effective: str) -> str:
+    """``sidePreferences.gnd=bottom`` or ``… unset — the default bottom``.
+
+    Printing a default as a declared preference turns the book's fallback into
+    the author's choice (627B-06): the reader then believes the sheet asked for a
+    side it never mentioned.
+    """
+    if stated:
+        return f"sidePreferences.{role}={effective}"
+    return f"sidePreferences.{role} unset — the default {effective}"
+
+
+def _outside_module_note(dropped: list[_Chain]) -> str:
+    """Name the ladders no declared module claims — dropping them was silent."""
+    if not dropped:
+        return ""
+    shown = "; ".join(chain.describe() for chain in dropped[:5])
+    more = "" if len(dropped) <= 5 else f"; +{len(dropped) - 5} more"
+    return (
+        "ladder(s) found outside every declared module, not bound: "
+        f"{shown}{more}"
     )
 
 
