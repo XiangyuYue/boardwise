@@ -132,6 +132,7 @@ from boardwise.core.pagelayoutplan import (
     PagePort,
 )
 from boardwise.core.presentationspec import (
+    DEFAULT_SIDE_PREFERENCES,
     DirectWiringObligation,
     FlagShareGroups,
     FlowEdge,
@@ -714,6 +715,24 @@ def compile_page(
             "derive the sheet's own title block from budget.page_box — S-01's block "
             "is NOT protected on this page; pass it in budget.keepouts if the drawing "
             "has to clear it"
+        )
+    # 633B-01, 岳 2026-11-28 (b): the vocabulary a `sidePreferences` key has to come
+    # from is the net classes this drawing actually has — `placement` reads that map
+    # with `_net_class(...)`, so a key no net carries is stored and never asked for.
+    # The four the engine always asks are not reported: a page with no ground net is
+    # a page with no ground net, not a typo.
+    net_classes = {net.cls for net in circuit_spec.nets if net.cls}
+    unused_roles = sorted(
+        role
+        for role in presentation_spec.side_preferences
+        if role not in DEFAULT_SIDE_PREFERENCES and role not in net_classes
+    )
+    if unused_roles:
+        result.notes.append(
+            f"{PAGE_COMPILER_NAME}: sidePreferences names "
+            + ", ".join(repr(role) for role in unused_roles)
+            + " and no net in this circuit has that class — placement reads the map "
+            "by net class, so that preference is stored and never asked for"
         )
 
     # 0. 548B2: the declared series arms are checked on the **whole** documents,
