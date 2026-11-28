@@ -499,8 +499,24 @@ def _check_budget(budget: PageCompileBudget) -> None:
             )
     if isinstance(budget.grid, bool) or not isinstance(budget.grid, (int, float)):
         raise PageCompileError(f"grid must be a number, got {budget.grid!r}")
+    if not math.isfinite(float(budget.grid)):
+        # 631B-01: NaN compares False to everything, so `<= 0` let it through and
+        # `_snap` raised a bare ValueError — the one thing this compiler's
+        # contract says never happens on an input problem.
+        raise PageCompileError(f"grid must be a finite number, got {budget.grid!r}")
     if budget.grid <= 0:
         raise PageCompileError(f"grid must be positive, got {budget.grid!r}")
+    # 631B-04: a count of pages is a whole number. `3.5` passed the `< 1` test and
+    # then indexed a slice; `True` was only caught by accident, through the floor.
+    for value, where in (
+        (budget.max_candidates, "max_candidates"),
+        (budget.max_variants, "max_variants"),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise PageCompileError(
+                f"budget.{where} is {value!r}; it counts pages and variants, so it "
+                "has to be a whole number"
+            )
     if budget.max_candidates < 1:
         raise PageCompileError(
             f"budget.max_candidates is {budget.max_candidates!r}; a budget that "
@@ -534,7 +550,12 @@ def _check_budget(budget: PageCompileBudget) -> None:
             "be retried with more room between its modules"
         )
     for value in budget.gap_ladder:
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or value <= 0
+            or not math.isfinite(float(value))
+        ):
             raise PageCompileError(
                 f"budget.gap_ladder holds {value!r}; every rung is a positive "
                 "multiplier of the module gap"
@@ -542,11 +563,24 @@ def _check_budget(budget: PageCompileBudget) -> None:
     for value, where in (
         (budget.module_gap, "module_gap"), (budget.frame_padding, "frame_padding"),
     ):
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or value < 0
+            or not math.isfinite(float(value))
+        ):
             raise PageCompileError(
                 f"budget.{where} must be a non-negative number of canvas units, "
                 f"got {value!r}"
             )
+    if not isinstance(budget.relocate_around_keepouts, bool):
+        # 631B-05: the only field of the budget with no type check at all — `"yes"`
+        # opened "move the whole block around a keep-out" exactly like `True`.
+        raise PageCompileError(
+            f"budget.relocate_around_keepouts is "
+            f"{budget.relocate_around_keepouts!r}; it is a switch, so it is True or "
+            "False"
+        )
     if not isinstance(budget.module_budget, drawcompiler.CompileBudget):
         raise PageCompileError(
             "budget.module_budget must be a drawcompiler.CompileBudget — the module "
@@ -660,6 +694,16 @@ def compile_page(
         + ", ".join(f"{value:g}x" for value in budget.gap_ladder)
         + f"), frame padding {budget.frame_padding:g}"
     )
+    if budget.frame_padding > PAGE_MARGIN:
+        # 631B-07, 岳 J3 (loosen but disclose): the frame cannot borrow more than the
+        # sheet keeps at its edge — 534's rule, and it stays — but a padding the
+        # page cannot honour is the same page as the default, so the caller is told
+        # instead of being left to measure the difference.
+        result.notes.append(
+            f"{PAGE_COMPILER_NAME}: frame padding {budget.frame_padding:g} is more "
+            f"than the {PAGE_MARGIN:g} units the sheet keeps at its edge, so the "
+            f"frame is inset by {PAGE_MARGIN:g} and the rest has no effect"
+        )
 
     # 0. 548B2: the declared series arms are checked on the **whole** documents,
     #    before any module is compiled. `_module_view` can only carry an arm whose
