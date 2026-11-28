@@ -316,7 +316,12 @@ def _as_evidence(value: Any, where: str) -> list[str]:
     seen: set[str] = set()
     ids: list[str] = []
     for piece in _as_list(value, where):
-        name = _as_str(piece, f"{where} entry", allow_empty=False)
+        # An evidence entry is an **identity**, not free text (630B-06): the id
+        # a file spells and the id the gate compares have to be the same
+        # string. `_as_str` strips, so `"  ds  "` loaded as `ds` and matched a
+        # declared reference the file had not named — the same defect 625A-07
+        # fixed for block ids and port roles, one layer down the evidence chain.
+        name = _as_identity(piece, f"{where} entry")
         if name in seen:
             raise BlockError(f"{where}: {name!r} is cited twice")
         seen.add(name)

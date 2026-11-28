@@ -19291,13 +19291,17 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     else:
         for line in report.render():
             print(line)
-        if args.benchmark and not args.target:
-            print(
-                "note: --benchmark without --target leaves the closed-book gate "
-                "undecidable (this is not a pass). Name the board being "
-                "generated — every alias of it.",
-                file=sys.stderr,
-            )
+    # 630B-05: the fix is the same sentence on both paths. A JSON consumer that
+    # only forwards `ok=false` cannot tell the user to name a target, and
+    # "undecidable" without the remedy is a stop with no next step. stderr, so
+    # the machine-readable document on stdout stays one JSON object.
+    if args.benchmark and not args.target:
+        print(
+            "note: --benchmark without --target leaves the closed-book gate "
+            "undecidable (this is not a pass). Name the board being "
+            "generated — every alias of it.",
+            file=sys.stderr,
+        )
     return 0 if report.ok else 1
 
 

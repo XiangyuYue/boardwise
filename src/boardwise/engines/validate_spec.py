@@ -336,6 +336,59 @@ def _find_reference_path(ref_path: str, root: str | Path | None) -> Path | None:
     return None
 
 
+def _citation_problem(ref_path: str, root: str | Path | None, spec_path: str) -> str:
+    """Why this citation is not a **readable file**, or ``""`` when it is one.
+
+    `_find_reference_path` answered the older, weaker question — "is there
+    anything at this path" — and `exists()` says yes to a directory, to the
+    spec file itself and to any absolute path on the machine. All three are
+    citations nobody can read as *this document's evidence*, which is what the
+    message beside this check has always promised (630B-01):
+
+    * a **directory** is not a file;
+    * the **spec itself** is not an authority for its own fields;
+    * an **absolute path outside the spec's root** is not an input of this
+      document — it is whatever happened to be on the machine that day.
+
+    The words come back as a phrase so the caller can print one sentence in
+    every case; ``"not there"`` keeps the message 625 pinned word for word.
+    """
+    candidate = Path(ref_path)
+    if candidate.is_absolute():
+        if root is not None:
+            try:
+                candidate.resolve().relative_to(Path(root).resolve())
+            except (ValueError, OSError):
+                return (
+                    "outside the spec's own root — a citation is an input of this "
+                    "document, not a file anywhere on the machine"
+                )
+        item = candidate
+    elif root is not None:
+        item = Path(root) / candidate
+    else:
+        return "not checkable: no root was supplied"
+    if spec_path and item.exists() and Path(spec_path).resolve() == item.resolve():
+        return "the spec itself — a document cannot be its own authority"
+    if item.is_dir():
+        return "a directory, not a readable citation"
+    if not item.is_file():
+        return "not there"
+    return ""
+
+
+def _named_in_text(text: str, name: str) -> bool:
+    """Does the spec text **name** the board, or merely contain the letters?
+
+    The path half of this gate has always compared whole segments, so `ch340x`
+    is never condemned for being named like `ch340` (`_traces_to`, and
+    `docs/validate_spec.md` promises exactly that). The text half used `name in
+    text`, so a short board name flagged every longer word it sat inside —
+    the same false accusation the path half was fixed for (630B-03).
+    """
+    return re.search(rf"(?<![0-9a-z]){re.escape(name)}(?![0-9a-z])", text) is not None
+
+
 def _gate_closed_book(
     spec: BoardSpec,
     *,
@@ -422,19 +475,20 @@ def _gate_closed_book(
         )
     else:
         for name in names:
-            if name in text:
-                findings.append(
-                    Finding(
-                        kind=VIOLATION,
-                        rule="answer-leak",
-                        message=(
-                            f"the target board's name ({name!r}) appears in the spec "
-                            "file itself; a generation-side artifact may not even "
-                            "talk about the answer"
-                        ),
-                        evidence=[f"spec text mentions {name!r}"],
-                    )
+            if not _named_in_text(text, name):
+                continue
+            findings.append(
+                Finding(
+                    kind=VIOLATION,
+                    rule="answer-leak",
+                    message=(
+                        f"the target board's name ({name!r}) appears in the spec "
+                        "file itself; a generation-side artifact may not even "
+                        "talk about the answer"
+                    ),
+                    evidence=[f"spec text mentions {name!r}"],
                 )
+            )
 
     # ---- the answer may not be smuggled in as a declared input either
     for ref in spec.references:
@@ -604,24 +658,34 @@ def _gate_sources(
         if not ref.path:
             continue
         if root is None:
+            # 630B-04 is **not** fixed here: whether a root-less engine call
+            # should block is a product decision (the CLI always supplies a
+            # root; `test_product_validation_needs_no_target` pins `report.ok`
+            # for a hand-built spec). What is fixed is the sentence — "not
+            # checked" now says out loud that it is not a pass, instead of
+            # leaving that inference to the reader.
             findings.append(
                 Finding(
                     kind=NOTE,
                     rule="declared-input-exists",
                     message=(
                         f"declared input {ref.id!r} points at {ref.path!r} and no "
-                        "root was supplied, so it was not checked"
+                        "root was supplied, so it was not checked — this is not a "
+                        "pass: a citation whose file nobody looked for is an "
+                        "unverified claim"
                     ),
                 )
             )
-        elif _find_reference_path(ref.path, root) is None:
+            continue
+        problem = _citation_problem(ref.path, root, spec.path)
+        if problem:
             findings.append(
                 Finding(
                     kind=VIOLATION,
                     rule="declared-input-exists",
                     message=(
                         f"declared input {ref.id!r} points at {ref.path!r}, which is "
-                        "not there — a citation nobody can read is not evidence"
+                        f"{problem} — a citation nobody can read is not evidence"
                     ),
                     evidence=[f"{ref.id}: {ref.path}"],
                 )
