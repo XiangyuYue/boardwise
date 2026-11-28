@@ -1251,6 +1251,15 @@ class PresentationSpec:
         _refuse_coordinates(payload, "$")
         root = _object(payload, "$")
         _check_keys(root, _TOP_KEYS, "$")
+        kind = root.get("kind", PRESENTATION_SPEC_KIND)
+        if kind != PRESENTATION_SPEC_KIND:
+            # 633B-03: `kind` was read by nothing, so another document's label was
+            # accepted and `to_jsonable()` rewrote it into this one's — a document
+            # of one kind washed into a document of another.
+            raise PresentationSpecError(
+                f"$.kind is {kind!r}, this build reads {PRESENTATION_SPEC_KIND} — a "
+                "document of another kind is not this document with a different label"
+            )
         version = root.get("specVersion", PRESENTATION_SPEC_VERSION)
         if version != PRESENTATION_SPEC_VERSION:
             raise PresentationSpecError(
@@ -1560,6 +1569,15 @@ def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
             )
         seen.add(module_id)
         parts = _text_list(body.get("parts"), f"{spot}.parts")
+        repeats = sorted({name for name in parts if parts.count(name) > 1})
+        if repeats:
+            # 633B-08: `module.parts` kept both copies while `declared_part_ids`
+            # kept one, so every consumer walking `module.parts` saw the part twice.
+            raise PresentationSpecError(
+                f"{spot}.parts repeats part(s) "
+                f"{', '.join(repr(name) for name in repeats)} — a part named "
+                "twice in one module is one part read twice"
+            )
         if not parts:
             raise PresentationSpecError(
                 f"{spot}.parts is empty — a module with no parts is a caption, "
@@ -2925,7 +2943,15 @@ def _text(value: Any, where: str, required: bool = False) -> str:
         raise PresentationSpecError(f"{where} must be a string, got {value!r}")
     if required and not value.strip():
         raise PresentationSpecError(f"{where} is empty")
-    return value.strip()
+    if value != value.strip():
+        # 633B-07: an identity field was rewritten on the way in, so "the author
+        # wrote `  pwr  `" was silently turned into `pwr` — and the duplicate,
+        # flow and island checks then all agreed on a name the file does not hold.
+        raise PresentationSpecError(
+            f"{where} is {value!r} — leading or trailing whitespace is not part of "
+            "a name, and stripping it silently would rewrite the document"
+        )
+    return value
 
 
 def _text_list(value: Any, where: str) -> list[str]:
