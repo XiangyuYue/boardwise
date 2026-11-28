@@ -303,6 +303,12 @@ class FlybackReading:
     clamp_d: str = ""
     clamp_r: tuple[str, ...] = ()
     clamp_c: tuple[str, ...] = ()
+    #: What the clamp's shape could **not** decide (629A-01/04): the arms of a
+    #: parallel capacitor/bleeder pair, or a string with no capacitor. Empty
+    #: when the branches said which arm is which; printed as its own evidence
+    #: line on the clamp-D binding, because a role nobody bound is not a role
+    #: the reader may assume was absent.
+    clamp_note: str = ""
     aux: str = ""
     aux_d: str = ""
     aux_c: str = ""
@@ -372,7 +378,11 @@ class FlybackGrammar:
         presentation: PresentationSpec,
     ) -> GrammarResult:
         found = readings[0]
-        runners = _runner_up_note(readings)
+        runners = "; ".join(
+            note for note in (
+                _runner_up_note(readings), _stray_note(state, found),
+            ) if note
+        )
 
         bindings: list[RoleBinding] = []
         constraints: list[RelativeConstraint] = []
@@ -611,6 +621,7 @@ class FlybackGrammar:
                 part_clause(circuit, found.clamp_d),
                 f"it sits between {found.switch_node} (the switch node) and "
                 f"{found.clamp} (the clamp node)",
+                found.clamp_note,
                 f"reading chosen: {found.describe()}",
                 f"provenance={part_provenance(circuit.part(found.clamp_d))}",
                 runners,
@@ -1918,18 +1929,6 @@ def _nets_via(state: _State, net_id: str, exclude: str) -> list[str]:
     return out
 
 
-def _direct_to(state: _State, part_id: str, net_id: str) -> bool:
-    """Does this part reach `net_id` **directly** (one of its own ends)?
-
-    The RCD string is capacitor + resistor in series from the clamp node back
-    to the bus, and the two roles are told apart by which end each part has on
-    the bus: the capacitor's other plate is on the bus, while the resistor's
-    other end is on the resistor that precedes it. That is the whole split,
-    and it is a partition question — no value, no package, no designator.
-    """
-    return net_id in set(state.part_nets.get(part_id, ()))
-
-
 def _clamp(state: _State, switch_node: str, bus: str) -> dict[str, object]:
     """The RCD clamp across the primary: diode, capacitor, discharge string.
 
@@ -1955,6 +1954,7 @@ def _clamp(state: _State, switch_node: str, bus: str) -> dict[str, object]:
     """
     empty: dict[str, object] = {
         "clamp": "", "clamp_d": "", "clamp_r": (), "clamp_c": (),
+        "clamp_note": "",
     }
     power_set = set(state.power)
     for part_id, (first, second) in sorted(state.edges.items()):
@@ -1980,50 +1980,89 @@ def _clamp(state: _State, switch_node: str, bus: str) -> dict[str, object]:
                 # off. Where both branches are single arms, the arm on the
                 # bus is the capacitor and the other is the resistor, which
                 # is the one-arm-each case 110's own simpler clamp uses.
-                **_clamp_split(state, clamp_net, string, bus),
+                # Several single arms *in one branch* (a capacitor and a
+                # bleeder in parallel) are the case no shape can decide, and
+                # `_clamp_split` binds neither rather than guess (629A-01).
+                **_clamp_split(state, clamp_net, string, bus, part_id),
             }
     return empty
 
 
 def _clamp_split(
-    state: "_State", clamp_net: str, string: tuple[str, ...], bus: str
-) -> dict[str, tuple[str, ...]]:
-    """``{"clamp_c": (...), "clamp_r": (...)}`` for the string's arms.
+    state: "_State", clamp_net: str, string: tuple[str, ...], bus: str, skip: str = ""
+) -> dict[str, object]:
+    """``clamp_c``/``clamp_r`` for the string's arms, and whatever could not be read.
 
     Grouped by the branch each arm leaves the clamp node on, then the branch
     of one arm is the capacitor and the branch of several is the discharge
     string. Both are read from the partition — no value, no package, no
     designator — and the tie case (two single-arm branches) falls back to the
     arm whose own end is the bus.
+
+    Two refinements, both 629A-01/04. The diode is excluded **by id** before
+    anything is grouped (it is the reading's `clamp_d`, never an arm of the
+    string). And a branch that leaves the clamp node with **several arms in
+    parallel** is not split at all: a capacitor and a bleeder in parallel have
+    the same shape — one two-terminal part across the clamp node and the bus —
+    so calling one of them the capacitor would be the designator order wearing
+    a rule's clothes. Both stay unbound and `clamp_note` says why.
     """
+    arms = [part_id for part_id in string if part_id and part_id != skip]
     branches: dict[str, list[str]] = {}
-    for part_id in string:
+    for part_id in arms:
         ends = set(state.part_nets.get(part_id, ()))
         if clamp_net not in ends:
             continue
         far = sorted(ends - {clamp_net})[0] if ends - {clamp_net} else ""
         branches.setdefault(far, []).append(part_id)
+    to_bus = [parts for far, parts in sorted(branches.items()) if far == bus]
     # The arm that leaves the clamp node **straight for the bus** is the
     # capacitor: it is the only one of the string that spans clamp node → bus
     # in a single element. Every other branch runs through further arms, and
     # those are the discharge string — even when its last arm also lands on
     # the bus, which is precisely 110's page (C5 spans it; R3+R15 do not).
-    direct = [
-        parts[0] for parts in branches.values()
-        if len(parts) == 1
-        and bus in set(state.part_nets.get(parts[0], ()))
-    ]
+    direct = [parts[0] for parts in to_bus if len(parts) == 1]
     if direct:
-        rest = tuple(
-            part_id for part_id in string if part_id not in direct
-        )
-        return {"clamp_c": tuple(direct), "clamp_r": rest}
+        rest = tuple(p for p in arms if p not in direct)
+        note = ""
+        if not rest:
+            # A clamp with a single arm from the node to the bus: the shape
+            # rule calls it the capacitor, and that is a preference, not a
+            # symbol reading — a lone bleeder would read the same way, so the
+            # sentence says which rule decided it (629A-04).
+            note = (
+                f"one arm leaves {clamp_net} straight for {bus} ("
+                + ", ".join(direct)
+                + ") and nothing else leaves it: a lone arm across a DC node is "
+                "read as the snubber's capacitor, which is this grammar's shape "
+                "rule and not a symbol reading — a clamp whose only arm is a "
+                "bleeder would be read the same way here"
+            )
+        return {"clamp_c": tuple(direct), "clamp_r": rest, "clamp_note": note}
+    parallel = [parts for parts in to_bus if len(parts) > 1]
+    if parallel:
+        named = sorted(part_id for parts in parallel for part_id in parts)
+        return {
+            "clamp_c": (),
+            "clamp_r": (),
+            "clamp_note": (
+                f"{len(named)} arms leave {clamp_net} straight for {bus} ("
+                + ", ".join(named)
+                + "): a clamp capacitor and a bleeder in parallel have the same "
+                "shape — one two-terminal part across the same two nets — so this "
+                "grammar binds neither rather than calling one of them the "
+                "capacitor by its designator. State the split in the presentation, "
+                "or check which part the library calls a capacitor (629A-01)"
+            ),
+        }
     return {
-        "clamp_c": tuple(
-            p for p in string if _direct_to(state, p, bus)
-        ),
-        "clamp_r": tuple(
-            p for p in string if not _direct_to(state, p, bus)
+        "clamp_c": (),
+        "clamp_r": tuple(arms),
+        "clamp_note": (
+            f"the clamp string from {clamp_net} reaches {bus} only through "
+            + ", ".join(arms)
+            + " in series, so no arm of it is the snubber's capacitor — this "
+            "reading names no clamp capacitor (629A-04)"
         ),
     }
 
@@ -2050,36 +2089,36 @@ def _chain_from(
     never "there is none" (053 sec.5).
     """
     stop = _stop_nets(state, skip)
-    out: list[str] = []
-    seen_nets = {top}
     seen_parts: set[str] = set()
-    frontier = [top]
+    frontier: set[str] = {top}
     for _ in range(max_arms):
-        next_frontier: list[str] = []
-        for here in frontier:
+        grown = False
+        for here in sorted(frontier):
             for part_id, (first, second) in sorted(state.edges.items()):
                 if part_id in seen_parts or part_id == skip:
                     continue
                 ends = {first, second}
-                if not (ends & {here}) or (ends & stop):
-                    continue
-                far = (ends - {here}).pop()
-                if far in seen_nets:
+                if here not in ends or (ends & stop):
                     continue
                 seen_parts.add(part_id)
-                next_frontier.append(far)
-                seen_nets.add(far)
-        if not next_frontier:
+                frontier.add((ends - {here}).pop())
+                grown = True
+        if not grown:
             break
-        frontier = next_frontier
     # A part belongs to the string when it sits on a line that arrives at the
     # bus. Walking each line separately (rather than through a junction) is
     # what keeps the far resistor of a discharge string: R3 leaves the clamp
     # node and R15 leaves R3, and the line "clamp node → bus" contains both.
+    #
+    # The walk is keyed on the **part**, not on the net it lands on (629A-01):
+    # the clamp node is a junction, so a textbook RCD has the capacitor and the
+    # bleeder leaving it on two branches that share one far net (the bus). De-
+    # duping by that net dropped the second branch before it was ever looked
+    # at, and the discharge resistor vanished from the reading entirely.
     lines: list[list[str]] = []
     reached: set[str] = set()
     for part_id in sorted(seen_parts):
-        line = _line_through(state, part_id, top, goal, stop, max_arms)
+        line = _line_through(state, part_id, top, goal, stop, max_arms, skip)
         if line:
             lines.append(list(line))
             reached.update(line)
@@ -2093,6 +2132,7 @@ def _line_through(
     goal: str,
     stop: set[str],
     budget: int,
+    skip: str = "",
 ) -> tuple[str, ...]:
     """The line from `top` through `part_id` that arrives at `goal`.
 
@@ -2102,9 +2142,16 @@ def _line_through(
     the capacitor went missing from the string altogether). From the part
     there is one way out on each side, and the side that reaches the bus
     within the budget is the line.
+
+    Two things make a walk that *fails* on one side still return the arms it
+    collected on the way (both 629A-04): `out` is reset for every start, so a
+    dead end on one side does not ride along with a walk from the other; and
+    the skipped part (the clamp diode) is excluded **by id**, because `stop`
+    is a set of net names and adding a designator to it excluded nothing —
+    that is how the diode came to sit in its own string and be bound twice.
     """
-    out = [part_id]
     for start in sorted(state.part_nets.get(part_id, ())):
+        out = [part_id]
         # The bus is where the line **ends**, not a net to walk through: the
         # first version expanded past it (HVDC → R15) and so never reported
         # the capacitor's own line at all.
@@ -2114,7 +2161,8 @@ def _line_through(
         for _ in range(budget):
             onward = [
                 other for other, pair in sorted(state.edges.items())
-                if other not in out and (pair[0] == here or pair[1] == here)
+                if other not in out and other != skip
+                and (pair[0] == here or pair[1] == here)
                 and not (set(pair) & stop)
             ]
             if len(onward) != 1:
@@ -2174,6 +2222,16 @@ def _aux(
     for part_id, (first, second) in sorted(state.edges.items()):
         for winding, rail in ((first, second), (second, first)):
             if winding not in tx_nets:
+                continue
+            # A rail the transformer is *also* on is not a winding end: the bus
+            # is one terminal of the primary winding and the output is one of
+            # the secondary's, so a part from a rail to another rail is a
+            # startup/bleed element, not an auxiliary rectifier. Without this
+            # clause one HVDC→VCC resistor became the auxiliary diode of a
+            # two-winding transformer — the exact case the docstring below
+            # promises cannot happen — and with a real aux diode beside it the
+            # winner was whichever designator sorted first (629A-03).
+            if winding in (bus, vout, pgnd):
                 continue
             if rail not in power_set or rail in (bus, vout):
                 continue
@@ -2463,6 +2521,61 @@ def _runner_up_note(readings: list[FlybackReading]) -> str:
         "other flyback readings found but not bound (this grammar instance "
         f"bound one): {shown}{more}"
     )
+
+
+def _stray_note(state: "_State", reading: FlybackReading) -> str:
+    """The parts on a power rail that this reading gives no role to.
+
+    `_runner_up_note` can only name the readings that were **not** bound; it
+    cannot say a word about a part that appears in no reading at all, which is
+    the state 628A-03 measured on the auxiliary side and 629A-05 measured on a
+    startup string: two 1 MΩ resistors from the bus to the controller's supply
+    are a real part of the page, satisfy none of this grammar's shapes (not a
+    winding, not across a core pin, and reaching VCC only through the other
+    resistor), and used to leave no trace in the evidence whatsoever. Silence
+    is the one answer a reader of the partition cannot check, so the parts and
+    the unbound rails are named instead (629A-03/-05).
+
+    The list is deliberately narrow — a **two-terminal part with a power-class
+    end**, or a power-class net the reading binds nothing to. It is not "every
+    part this grammar did not claim": a controller's timing network is another
+    grammar's business and saying so on every page would teach a reader to
+    skip the sentence.
+    """
+    bound = {
+        part_id for part_id in (
+            reading.transformer, reading.switch, reading.sense, reading.clamp_d,
+            *reading.clamp_r, *reading.clamp_c, reading.aux_d, reading.aux_c,
+            reading.sec_d, reading.opto, reading.error_amp, *reading.divider,
+            *reading.output_caps, *reading.compensation,
+        )
+        if part_id
+    }
+    power_set = set(state.power)
+    strays = [
+        part_id for part_id in sorted(state.edges)
+        if part_id not in bound and (set(state.edges[part_id]) & power_set)
+    ]
+    rails = [
+        net_id for net_id in sorted(power_set)
+        if net_id not in (reading.bus, reading.vout, reading.vcc)
+    ]
+    if not strays and not rails:
+        return ""
+    said: list[str] = []
+    if strays:
+        said.append(
+            "no role for the part(s) hanging on a power rail: "
+            + ", ".join(strays)
+            + " — none of this grammar's shapes reaches them, so they are "
+            "named rather than dropped"
+        )
+    if rails:
+        said.append(
+            "no role for the power net(s) " + ", ".join(rails)
+            + " — a supply rail the reading delivers nothing to"
+        )
+    return "unbound (" + "; ".join(said) + ")"
 
 
 def _obligations(
