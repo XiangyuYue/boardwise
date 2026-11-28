@@ -895,6 +895,34 @@ def _check_keys(body: dict[str, Any], allowed: tuple[str, ...], where: str) -> N
         )
 
 
+def _plan_text(value: Any, where: str, *, numbers: bool = False) -> str:
+    """One field the plan states as text, read without inventing the text (634B-12).
+
+    Nine readers in this module said ``str(value or "")``, which turns *any*
+    object into *some* string: a dict in ``change.part.lcsc`` became the orderable
+    number ``"{'a': 1}"``, ``net: 5`` became a net called ``"5"``, and
+    ``pageUuid: 7`` became a page nobody has. Nothing downstream can tell those
+    from a value the document really stated — ``apply`` would search the number,
+    or name the net, and fail at the wire instead of here.
+
+    A whole number is the one exception, and only where the host itself spells the
+    field numerically: ``outputs/035_plan_disconnect.json`` carries ``"pin": 4``,
+    so reading that as ``"4"`` is faithful rather than inventive. ``numbers=True``
+    says so per field; a dict or a list in the same slot is refused either way.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if numbers and isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    raise ChangePlanError(
+        f"{where} must be a string, got {value!r} — this reader does not call "
+        "str() on whatever arrives: a value it had to invent cannot be compared "
+        "with the page afterwards"
+    )
+
+
 @dataclass
 class ChangePlan:
     """One authorised local change, as data.
@@ -1313,11 +1341,13 @@ class ChangePlan:
         if kind == MOVE_BLOCK_KIND:
             # Also no `target.designator`: a move is about a *group*, and the
             # group lives in `change.moves` (the target block names it for a
-            # reader, and carries the delta the caller asked for).
+            # reader, and carries the delta the caller asked for). Both are read
+            # before the change so the two halves can be held against each other.
+            move_target, group = _move_target_from(target)
             return cls(
                 source=_source_from(source, digest),
-                target=_move_target_from(target),
-                change=_move_change_from(change),
+                target=move_target,
+                change=_move_change_from(change, move_target, group),
                 preconditions=_string_list(payload, "preconditions"),
                 expected_postcondition=_string_list(payload, "expectedPostcondition"),
                 route=route,
@@ -1341,10 +1371,11 @@ class ChangePlan:
                 f"target.designator must name the component, got {designator!r}"
             )
         if kind == PATCH_PIN_KIND:
+            patch_target = _patch_pin_target_from(target, designator.strip())
             return cls(
                 source=_source_from(source, digest),
-                target=_patch_pin_target_from(target, designator.strip()),
-                change=_patch_pin_change_from(change),
+                target=patch_target,
+                change=_patch_pin_change_from(change, patch_target.pin),
                 preconditions=_string_list(payload, "preconditions"),
                 expected_postcondition=_string_list(payload, "expectedPostcondition"),
                 route=route,
@@ -1383,7 +1414,7 @@ class ChangePlan:
             source=_source_from(source, digest),
             target=PlanTarget(
                 designator=designator.strip(),
-                primitive_id=str(target.get("primitiveId") or ""),
+                primitive_id=_plan_text(target.get("primitiveId"), "target.primitiveId"),
                 expected_value=str(target.get("expectedValue") or ""),
             ),
             change=PlanChange(
@@ -1535,8 +1566,8 @@ def _source_from(source: dict[str, Any], digest: str) -> PlanSource:
     _check_keys(source, _SOURCE_KEYS, "source")
     return PlanSource(
         input_sha256=digest,
-        project_uuid=str(source.get("projectUuid") or ""),
-        page_uuid=str(source.get("pageUuid") or ""),
+        project_uuid=_plan_text(source.get("projectUuid"), "source.projectUuid"),
+        page_uuid=_plan_text(source.get("pageUuid"), "source.pageUuid"),
         host_version=str(source.get("hostVersion") or ""),
         connector_version=str(source.get("connectorVersion") or ""),
     )
@@ -1594,7 +1625,7 @@ def _add_change_from(change: dict[str, Any]) -> PlanChange:
             f"change.part must be a JSON object, got {type(part).__name__}"
         )
     _check_keys(part, _ADD_PART_KEYS, "change.part")
-    lcsc = str(part.get("lcsc") or "").strip()
+    lcsc = _plan_text(part.get("lcsc"), "change.part.lcsc").strip()
     if not lcsc:
         raise ChangePlanError(
             "change.part.lcsc is empty — a part with no orderable number is not "
@@ -1622,8 +1653,8 @@ def _add_change_from(change: dict[str, Any]) -> PlanChange:
         _check_keys(
             item, _CONNECTION_KEYS[ADD_COMPONENT_KIND], f"change.connections[{index}]"
         )
-        pin = str(item.get("pin") or "").strip()
-        net = str(item.get("net") or "").strip()
+        pin = _plan_text(item.get("pin"), f"change.connections[{index}].pin", numbers=True).strip()
+        net = _plan_text(item.get("net"), f"change.connections[{index}].net").strip()
         if not pin or not net:
             raise ChangePlanError(
                 f"change.connections[{index}] needs both pin and net, got {item!r}"
@@ -1671,23 +1702,29 @@ INSERT_CONNECTION_KINDS: tuple[str, ...] = (CONNECTION_WIRE, CONNECTION_POWER_FL
 
 
 def _insert_independent_point(value: Any) -> tuple[float, float] | None:
+    # 634B-13: a point is **two** numbers. `len(value) >= 2` read the first two and
+    # dropped the rest, so a document saying `[0, 0, 7]` loaded as `(0.0, 0.0)` and
+    # `dump` wrote back a shorter list than it read — the reader quietly rewriting
+    # its own input, which is the one thing a closed schema exists to prevent.
     if (
         isinstance(value, (list, tuple))
-        and len(value) >= 2
-        and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value[:2])
+        and len(value) == 2
+        and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value)
     ):
         return (float(value[0]), float(value[1]))
     return None
 
 
-def _move_target_from(target: dict[str, Any]) -> PlanTarget:
+def _move_target_from(target: dict[str, Any]) -> tuple[PlanTarget, list[str]]:
     """Read a `move-block` target: the group as named, and the delta requested.
 
     The delta is part of the target because it is what the caller *asked for*
     (`--dx/--dy`), while `change.moves` is what the page said the parts are and
     where each one will be. Both are checked against the grid, and the two must
     agree — a plan whose delta does not match its moves is a plan whose two halves
-    describe different changes.
+    describe different changes. The group is handed back with the target for the
+    same reason: `change.moves` and `change.islands` are claims *about* those
+    parts, and neither half can be checked while only one of them is in view.
     """
     _check_keys(target, _TARGET_KEYS[MOVE_BLOCK_KIND], "target")
     raw = target.get("designators")
@@ -1715,12 +1752,15 @@ def _move_target_from(target: dict[str, Any]) -> PlanTarget:
             )
         numbers[key] = float(value)
     designator = str(target.get("designator") or "").strip()
-    return PlanTarget(
-        designator=designator or ", ".join(names),
-        primitive_id=str(target.get("primitiveId") or ""),
-        expected_value=str(target.get("expectedValue") or ""),
-        x=numbers["dx"],
-        y=numbers["dy"],
+    return (
+        PlanTarget(
+            designator=designator or ", ".join(names),
+            primitive_id=str(target.get("primitiveId") or ""),
+            expected_value=str(target.get("expectedValue") or ""),
+            x=numbers["dx"],
+            y=numbers["dy"],
+        ),
+        names,
     )
 
 
@@ -1753,19 +1793,27 @@ def _move_point(value: Any, where: str, allowed: tuple[str, ...]) -> tuple[float
     return (out[0], out[1])
 
 
-def _move_change_from(change: dict[str, Any]) -> PlanChange:
+def _move_change_from(
+    change: dict[str, Any], target: PlanTarget, group: Sequence[str]
+) -> PlanChange:
     """Read a `move-block` change: the parts, the wires, and the identity claim.
 
-    Five invariants, each one a way for the plan to look executable and not be:
+    Seven invariants, each one a way for the plan to look executable and not be:
 
-    * at least one move, each naming a part, its canvas id, a **grid-aligned**
-      pose before and a grid-aligned point after, with the rotation it had;
+    * at least one move, each naming a part **the target names**, its canvas id, a
+      **grid-aligned** pose before and a grid-aligned point after, with the
+      rotation it had, and a displacement that equals the target's delta;
     * every wire op names a wire and says what it was and what it becomes;
     * the designators are pairwise distinct (one designator, one part);
-    * the recorded islands name the moved pins and their mates;
+    * the recorded islands name the moved pins and their mates — a pin is this
+      move's (the islands exist to state *its* company), a mate is whoever shared
+      the net, which is ordinarily **not** the group: a net that reaches nothing
+      else has no company to record, and demanding otherwise would refuse the
+      ordinary case;
     * the baseline findings are listed, because "no new findings" cannot be
       judged without them (036's rule, unchanged).
     """
+    named = set(group)
     _check_keys(change, _CHANGE_KEYS[MOVE_BLOCK_KIND], "change")
     raw = change.get("moves")
     if not isinstance(raw, list) or not raw:
@@ -1784,13 +1832,21 @@ def _move_change_from(change: dict[str, Any]) -> PlanChange:
                 f"change.moves[{index}].designator is empty — a move is named by the part "
                 "it moves"
             )
+        if designator not in named:
+            raise ChangePlanError(
+                f"change.moves[{index}].designator is {designator!r}, which is not one of "
+                f"the parts target.designators names ({', '.join(group)}) — the plan would "
+                "move a part its own target block does not cover (634B-06)"
+            )
         if designator in seen:
             raise ChangePlanError(
                 f"change.moves lists {designator!r} twice — one designator is one part "
                 "(and two entries would fight over where it lands)"
             )
         seen.add(designator)
-        primitive_id = str(item.get("primitiveId") or "").strip()
+        primitive_id = _plan_text(
+            item.get("primitiveId"), f"change.moves[{index}].primitiveId"
+        ).strip()
         if not primitive_id:
             raise ChangePlanError(
                 f"change.moves[{index}].primitiveId is empty — the write is by canvas id, "
@@ -1809,6 +1865,23 @@ def _move_change_from(change: dict[str, Any]) -> PlanChange:
             from_at=_move_point(before, "from", _MOVE_FROM_KEYS), from_rotation=float(rotation),
             to_at=_move_point(after, "to", _MOVE_TO_KEYS),
         ))
+    # 634B-05: `_move_target_from`'s docstring has always said "the two must
+    # agree", and until now `_move_change_from` could not see the delta at all, so
+    # a plan could ask for 100 right and land its parts 5 right and be executed as
+    # written. The builder computes both from one `dx/dy` (`cli.py:26882-26890`),
+    # so this is an identity on every plan this build writes, and a refusal only
+    # on a document whose two halves were edited apart.
+    for index, move in enumerate(moves):
+        moved_x = move.to_at[0] - move.from_at[0]
+        moved_y = move.to_at[1] - move.from_at[1]
+        if abs(moved_x - target.x) > 1e-6 or abs(moved_y - target.y) > 1e-6:
+            raise ChangePlanError(
+                f"change.moves[{index}] moves {move.designator} by "
+                f"({moved_x:g}, {moved_y:g}) but target.dx/target.dy ask for "
+                f"({target.x:g}, {target.y:g}) — the delta and the poses are one "
+                "change stated twice, and a plan whose halves disagree would do "
+                "half of each (634B-05)"
+            )
     raw_ops = change.get("wireOps")
     if raw_ops is not None and not isinstance(raw_ops, list):
         raise ChangePlanError(
@@ -1856,16 +1929,36 @@ def _move_change_from(change: dict[str, Any]) -> PlanChange:
             )
         _check_keys(item, _ISLAND_KEYS, f"change.islands[{index}]")
         pin = str(item.get("pin") or "").strip()
-        if "." not in pin:
+        if not _draw_pin_name(pin, named):
             raise ChangePlanError(
-                f"change.islands[{index}].pin is {pin!r}; it must be <designator>.<pin>"
+                f"change.islands[{index}].pin is {pin!r}; an island records the company "
+                f"of a pin this move covers ({', '.join(group)}) as <designator>.<pin> — "
+                "a pin outside the group is a pin the plan never said it would move "
+                "(634B-06)"
             )
         mates = item.get("mates")
         if not isinstance(mates, list):
             raise ChangePlanError(
                 f"change.islands[{index}].mates must be a list, got {mates!r}"
             )
-        islands.append(PlanIsland(pin=pin, mates=[str(mate) for mate in mates]))
+        # A mate is *whoever shared the net* (`moveblock.plan_islands:546` reads
+        # them off the whole live netlist), so the designators here are expected to
+        # be outside the group. What is checked is that each one is spelled as a
+        # pin: `str()` used to turn `5` into the mate `'5'`, and a list of those
+        # compares unequal to the live reading for a reason the reader cannot see.
+        for mate_index, mate in enumerate(mates):
+            if not isinstance(mate, str) or not mate.strip():
+                raise ChangePlanError(
+                    f"change.islands[{index}].mates[{mate_index}] must be "
+                    f"<designator>.<pin>, got {mate!r} (634B-06)"
+                )
+            if not _pin_spelling(mate.strip()):
+                raise ChangePlanError(
+                    f"change.islands[{index}].mates[{mate_index}] is {mate!r}; it must be "
+                    "<designator>.<pin> — the apply read-back compares this list against "
+                    "the editor's own mate set, verbatim"
+                )
+        islands.append(PlanIsland(pin=pin, mates=[mate.strip() for mate in mates]))
     baseline = change.get("baselineFindings")
     if not isinstance(baseline, list) or any(not isinstance(item, str) for item in baseline):
         raise ChangePlanError(
@@ -2010,7 +2103,13 @@ def _insert_change_from(change: dict[str, Any]) -> PlanChange:
         parts.append(PlanPart(
             lcsc=lcsc, value=value, footprint=str(item.get("footprint") or ""),
             designator=designator, role=str(item.get("role") or ""),
-            x=point[0], y=point[1], rotation=int(item.get("rotation") or 0),
+            x=point[0], y=point[1],
+            # 634B-11: the pose is part of where the part lands (052 §6's stance,
+            # held for every other kind). `int(...)` truncated 90.7 to 90 and
+            # parsed "90", so a plan could draw its parts at a pose it did not say.
+            rotation=int(_draw_rotation(
+                item.get("rotation", 0), f"change.parts[{index}].rotation"
+            )),
         ))
     raw = change.get("connections")
     if not isinstance(raw, list) or not raw:
@@ -2035,8 +2134,8 @@ def _insert_change_from(change: dict[str, Any]) -> PlanChange:
                 f"one of the parts this plan places ({', '.join(sorted(seen))}) — a "
                 "connection to a part nobody planned is a connection to nothing"
             )
-        pin = str(item.get("pin") or "").strip()
-        net = str(item.get("net") or "").strip()
+        pin = _plan_text(item.get("pin"), f"change.connections[{index}].pin", numbers=True).strip()
+        net = _plan_text(item.get("net"), f"change.connections[{index}].net").strip()
         if not pin or not net:
             raise ChangePlanError(
                 f"change.connections[{index}] needs both pin and net, got {item!r}"
@@ -2068,6 +2167,16 @@ def _insert_change_from(change: dict[str, Any]) -> PlanChange:
                     raise ChangePlanError(
                         f"change.connections[{index}].toPin is {to_pin!r}, which does not "
                         f"name a pin of a planned part ({', '.join(sorted(seen))})"
+                    )
+                # 634B-08: 2051 above refuses "to and toPin both", because a wire
+                # has one far end. A far end *equal to the near end* is not another
+                # end either — it is a zero-length wire, which this host does not
+                # draw (029-c measured that even a diagonal never returns).
+                if (target_part, target_pin) == (designator, pin):
+                    raise ChangePlanError(
+                        f"change.connections[{index}].toPin is {to_pin!r}, the same pin "
+                        "this connection starts from — one far end that is the near end "
+                        "is a zero-length wire, not a connection (634B-08)"
                     )
         elif point is not None or to_pin:
             raise ChangePlanError(
@@ -2188,7 +2297,9 @@ def _draw_source_from(
     a field a later refactor can move without noticing.
     """
     read = _source_from(source, digest)
-    read.page_uuid = str(target.get("pageUuid") or read.page_uuid or "").strip()
+    read.page_uuid = (
+        _plan_text(target.get("pageUuid"), "target.pageUuid") or read.page_uuid
+    ).strip()
     return read
 
 
@@ -2246,11 +2357,21 @@ def _draw_change_from(change: dict[str, Any]) -> PlanChange:
     profile_hashes = _draw_profile_hashes(change.get("profiles"))
     parts = _draw_parts_from(change.get("parts"), profile_hashes)
     wires = _draw_wires_from(change.get("wires"), parts)
-    flags = _draw_flags_from(change.get("flags"), parts)
+    flags = _draw_flags_from(change.get("flags"), parts, profile_hashes)
     _draw_name_conflicts(wires, flags)
     islands = _draw_islands_from(change.get("islands"), parts)
     baseline = _draw_baseline_from(change.get("baseline"))
     attribute_moves = _draw_attribute_moves_from(change.get("attributeMoves"), parts, wires)
+    # 634B-09: every other boolean in this block is checked with `isinstance`;
+    # this one was `bool(...)`, and `bool("false")` is True — a plan that says "do
+    # not keep the host's numbers" executed with them kept.
+    keep_names = change.get("keepNames", False)
+    if not isinstance(keep_names, bool):
+        raise ChangePlanError(
+            f"change.keepNames must be a boolean, got {keep_names!r} — the field says "
+            "whether the drawing keeps the designators the host allocated, and a "
+            "string is an answer this build would have to guess at (634B-09)"
+        )
     return PlanChange(
         kind=DRAW_MODULE_KIND,
         candidate=candidate,
@@ -2266,7 +2387,7 @@ def _draw_change_from(change: dict[str, Any]) -> PlanChange:
         draw_downgrades=_string_list(change, "downgrades"),
         draw_notes=_string_list(change, "notes"),
         baseline_findings=_string_list(change, "baselineFindings"),
-        draw_keep_names=bool(change.get("keepNames")),
+        draw_keep_names=keep_names,
         attribute_moves=attribute_moves,
     )
 
@@ -2541,7 +2662,7 @@ def _draw_parts_from(value: Any, profile_hashes: list[tuple[str, str]]) -> list[
         if not isinstance(item, dict):
             raise ChangePlanError(f"{spot} must be an object, got {item!r}")
         _check_keys(item, _DRAW_PART_KEYS, spot)
-        spec_id = str(item.get("specId") or "").strip()
+        spec_id = _plan_text(item.get("specId"), f"change.parts[{index}].specId").strip()
         designator = str(item.get("designator") or "").strip()
         if not spec_id:
             raise ChangePlanError(
@@ -2744,7 +2865,7 @@ def _draw_wires_from(value: Any, parts: list[PlanDrawPart]) -> list[PlanDrawWire
         if not isinstance(item, dict):
             raise ChangePlanError(f"{spot} must be an object, got {item!r}")
         _check_keys(item, _DRAW_WIRE_KEYS, spot)
-        net = str(item.get("net") or "").strip()
+        net = _plan_text(item.get("net"), f"change.wires[{index}].net").strip()
         if not net:
             raise ChangePlanError(f"{spot}.net is empty — an unnamed wire is not a net")
         raw_points = item.get("points")
@@ -2788,11 +2909,37 @@ def _draw_wires_from(value: Any, parts: list[PlanDrawPart]) -> list[PlanDrawWire
     return out
 
 
-def _draw_flags_from(value: Any, parts: list[PlanDrawPart]) -> list[PlanDrawFlag]:
+def _draw_flags_from(
+    value: Any,
+    parts: list[PlanDrawPart],
+    profile_hashes: Sequence[tuple[str, str]] = (),
+) -> list[PlanDrawFlag]:
     out: list[PlanDrawFlag] = []
     pin_names = {
         f"{part.spec_id}.{pin.number}" for part in parts for pin in part.pins
     }
+    # 635B-03: where each of those pins lands, in canvas units — the same
+    # origin-plus-posed-offset arithmetic the placement read-back uses
+    # (`drawapply._part_problems`). `onPin` used to be prose: it went into the
+    # purpose text and nothing compared it with the point the flag is written at.
+    tips = {
+        f"{part.spec_id}.{pin.number}": (part.x + pin.dx, part.y + pin.dy)
+        for part in parts
+        for pin in part.pins
+    }
+    # 634B-10 / 635B-02: a flag is a library symbol placed on the canvas, so its
+    # two identity fields get the same treatment a part's do. The chain is one-way
+    # on purpose — see the refusal below: the *builder* allows a flag with no hash
+    # (`drawapply.py:1516-1543` checks the table only when the layout has one), and
+    # a reader stricter than its writer would refuse documents this tool wrote.
+    # `profile_hashes` defaults to the empty table so that a caller which forgets it
+    # fails **closed** (every flag that names a symbol is refused) rather than open.
+    known = {ref: digest for ref, digest in profile_hashes}
+    # 635B-04: the read-back recognises a plan's flag by its point **and** its net
+    # (`drawapply._flag_problems`), so two flags that agree on both cannot be told
+    # apart — the run would write both, then fail its own canvas leg with "2 flags
+    # answer to it", leaving them stacked on the page. Refused before the write.
+    placed: set[tuple[str, tuple[float, float]]] = set()
     if value is None:
         return out
     if not isinstance(value, list):
@@ -2830,11 +2977,62 @@ def _draw_flags_from(value: Any, parts: list[PlanDrawPart]) -> list[PlanDrawFlag
             raise ChangePlanError(
                 f"{spot}.onPin is {on_pin!r}, which is not a pin of this plan's parts"
             )
+        if on_pin:
+            # 635B-03: an empty `onPin` is the ordinary rail flag — 岳's pages put
+            # one flag on a rail, not on a pin — so it stays accepted. A *stated*
+            # pin is a claim that the flag lands on it, and the write only uses
+            # x/y: the builder guarantees the equality (`drawapply.py:1524` derives
+            # `on_pin` from a point that is exactly a pin tip), so a plan that
+            # states one and lands elsewhere is one the reviewer cannot read.
+            expected = tips[on_pin]
+            if abs(point[0] - expected[0]) > 1e-6 or abs(point[1] - expected[1]) > 1e-6:
+                raise ChangePlanError(
+                    f"{spot}.onPin is {on_pin!r}, whose pin lands at "
+                    f"({expected[0]:g}, {expected[1]:g}), but the flag is placed at "
+                    f"({point[0]:g}, {point[1]:g}) — the write only uses the point, so "
+                    "the plan would claim one pin and put the flag somewhere else "
+                    "(635B-03)"
+                )
+        ref = str(item.get("symbolRef") or "").strip()
+        raw_hash = item.get("symbolHash")
+        digest = "" if raw_hash is None else raw_hash
+        if ref and ref not in known:
+            raise ChangePlanError(
+                f"{spot}.symbolRef is {ref!r}, which change.profiles does not describe "
+                f"(it holds {', '.join(sorted(known))}) — a flag drawn with a symbol the "
+                "plan has no geometry for lands as something nobody checked (634B-10)"
+            )
+        if digest != "":
+            if not isinstance(digest, str) or not _SHA256_RE.match(digest):
+                raise ChangePlanError(
+                    f"{spot}.symbolHash must be 64 hex characters (the SymbolProfile's "
+                    f"geometry hash), got {digest!r}"
+                )
+            if not ref:
+                raise ChangePlanError(
+                    f"{spot}.symbolHash is stated but {spot}.symbolRef is empty — a hash "
+                    "with no symbol to hash cannot be compared with anything (635B-02)"
+                )
+            if digest != known[ref]:
+                raise ChangePlanError(
+                    f"{spot}.symbolHash is {digest!r} but change.profiles says {ref!r} "
+                    f"hashes to {known[ref]!r} — the flag would land as a different glyph "
+                    "than the drawing was checked against (635B-02)"
+                )
+        key = (net, point)
+        if key in placed:
+            raise ChangePlanError(
+                f"{spot} is a second {kind} flag on net {net!r} at the same point "
+                f"({point[0]:g}, {point[1]:g}) — the landing recognises a plan's flag by "
+                "its point and its net, so two of them there are one flag the plan "
+                "cannot tell apart from the other (635B-04)"
+            )
+        placed.add(key)
         out.append(PlanDrawFlag(
             net=net,
             kind=kind,
-            symbol_ref=str(item.get("symbolRef") or "").strip(),
-            symbol_hash=str(item.get("symbolHash") or ""),
+            symbol_ref=ref,
+            symbol_hash=digest,
             x=point[0],
             y=point[1],
             rotation=_draw_rotation(item.get("rotation", 0), f"{spot}.rotation"),
@@ -2874,10 +3072,16 @@ def _draw_islands_from(value: Any, parts: list[PlanDrawPart]) -> list[PlanIsland
     return out
 
 
+def _pin_spelling(name: str) -> bool:
+    """Is this spelled ``<designator>.<pin>``? *Whose* pin is a separate question."""
+    _designator, separator, number = name.partition(".")
+    return bool(separator and number)
+
+
 def _draw_pin_name(name: str, designators: set[str]) -> bool:
     """Is ``name`` a ``<designator>.<pin>`` of one of these parts?"""
-    designator, separator, pin = name.partition(".")
-    return bool(separator and pin) and designator in designators
+    designator, _separator, _number = name.partition(".")
+    return _pin_spelling(name) and designator in designators
 
 
 def _draw_baseline_from(value: Any) -> PlanDrawBaseline:
@@ -2899,6 +3103,23 @@ def _draw_baseline_from(value: Any) -> PlanDrawBaseline:
     ):
         raise ChangePlanError(
             f"change.baseline.components must be a list of designators, got {components!r}"
+        )
+    # 635B-05: the census this field records is a *set* of designators —
+    # `drawapply.canvas_census` reads `sorted(component_origins(...))`, the keys of
+    # a dict, so the writer cannot produce a repeat. A document that carries one
+    # was edited by hand, and the comparison downstream counts the list
+    # (`len()` in `_counts_payload`), which no page can ever match.
+    repeated: list[str] = []
+    already: set[str] = set()
+    for item in components:
+        if item in already and item not in repeated:
+            repeated.append(item)
+        already.add(item)
+    if repeated:
+        raise ChangePlanError(
+            f"change.baseline.components lists {', '.join(repeated)} more than once — "
+            "the baseline is a set of designators, and a list that repeats one "
+            "describes a page the census cannot describe (635B-05)"
         )
     wire_count = value.get("wireCount", 0)
     netflag_count = value.get("netflagCount", 0)
@@ -3253,7 +3474,10 @@ def insert_subcircuit_plan(
 def _patch_pin_target_from(target: dict[str, Any], designator: str) -> PlanTarget:
     """Read a `patch-pin` target: the component **and the pin** it repairs."""
     _check_keys(target, _TARGET_KEYS[PATCH_PIN_KIND], "target")
-    pin = str(target.get("pin") or "").strip()
+    # `numbers=True`: a pin number is one of the fields the host itself writes
+    # numerically (`outputs/035_plan_disconnect.json` has `"pin": 4`), and pin 0
+    # is a real pin — the old `str(pin or "")` read it as empty and refused it.
+    pin = _plan_text(target.get("pin"), "target.pin", numbers=True).strip()
     if not pin:
         raise ChangePlanError(
             "target.pin is empty — patch-pin repairs one named pin, and a plan "
@@ -3268,7 +3492,7 @@ def _patch_pin_target_from(target: dict[str, Any], designator: str) -> PlanTarge
     )
 
 
-def _patch_pin_change_from(change: dict[str, Any]) -> PlanChange:
+def _patch_pin_change_from(change: dict[str, Any], pin: str) -> PlanChange:
     """Read a `patch-pin` change, and refuse the shapes that cannot be executed.
 
     The invariants are the plan's meaning, so they are checked here rather than
@@ -3279,7 +3503,9 @@ def _patch_pin_change_from(change: dict[str, Any]) -> PlanChange:
       taking off what attaches the pin to it (and connecting the new net while
       the old attachment is still there would short the two together);
     * a non-empty ``afterNet`` requires exactly one connection, in
-      `CONNECTION_KINDS`, with a destination for a `wire`;
+      `CONNECTION_KINDS`, with a destination for a `wire`, **on the pin the
+      target names** — the net was already cross-checked against ``afterNet``
+      (029 §二.4) and the pin is the same claim on the other end of the wire;
     * an empty ``afterNet`` (a pure disconnect) requires **no** connection —
       "disconnect, and also draw something" is not a shape this slice executes.
     """
@@ -3328,16 +3554,22 @@ def _patch_pin_change_from(change: dict[str, Any]) -> PlanChange:
                     f"connection (the vertex of that net it reaches), got {target!r}"
                 )
             point = (float(target[0]), float(target[1]))
-        net = str(item.get("net") or "").strip()
+        net = _plan_text(item.get("net"), f"change.connections[{index}].net").strip()
         if not net:
             raise ChangePlanError(
                 f"change.connections[{index}].net is empty — the connect leg must "
                 "name the net the pin is being joined to"
             )
         connections.append(
-            PlanConnection(pin=str(item.get("pin") or ""), net=net,
-                           kind=str(kind), detail=str(item.get("detail") or ""),
-                           to=point)
+            PlanConnection(
+                pin=_plan_text(
+                    item.get("pin"), f"change.connections[{index}].pin", numbers=True
+                ),
+                net=net,
+                kind=str(kind),
+                detail=str(item.get("detail") or ""),
+                to=point,
+            )
         )
     attachment_raw = change.get("attachment")
     attachment: PlanAttachment | None = None
@@ -3404,6 +3636,17 @@ def _patch_pin_change_from(change: dict[str, Any]) -> PlanChange:
                 f"the connection names net {connections[0].net!r} but "
                 f"change.afterNet is {after!r} — they have to agree, or the plan "
                 "would do one thing and claim another"
+            )
+        # 634B-07: the same claim on the other end of the wire. The net was
+        # cross-checked and the pin never was, so a plan could say "repair U1's
+        # pin 2" and carry "connect pin 5": apply follows the connection, and the
+        # re-review follows the target, and neither would report the other.
+        if connections[0].pin != pin:
+            raise ChangePlanError(
+                f"the connection names pin {connections[0].pin!r} but target.pin is "
+                f"{pin!r} — a patch-pin repairs one named pin, and a connection to "
+                "another one would land the wire somewhere the plan does not mention "
+                "(634B-07)"
             )
     return PlanChange(
         kind=PATCH_PIN_KIND,
