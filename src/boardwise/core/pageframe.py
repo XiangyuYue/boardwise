@@ -66,15 +66,27 @@ from .symbolprofile import Box
 #: which two fixtures state it and which render draws it.
 TITLE_BLOCK_SIZE: tuple[float, float] = (700.0, 180.0)
 
+#: The smallest page that can hold the block plus the frame inset on both sides.
+#: Stated so a caller can refuse a page **before** the packing starts: a block
+#: wider than its sheet is not a keep-out, it is a rectangle that reaches outside
+#: the drawing (634A-02/03).
+MINIMUM_TITLE_BLOCK_PAGE: tuple[float, float] = (
+    TITLE_BLOCK_SIZE[0] + 2 * 10.0,
+    TITLE_BLOCK_SIZE[1] + 2 * 10.0,
+)
+
 #: ``Blade Width`` as every fixture we have declares it — the frame inset, and so
 #: the gap between the block and the sheet edge.  Used when a page does not state
 #: one; a stated non-positive value is treated as "not stated" rather than as
 #: "the block hangs off the sheet".
 BLADE_WIDTH_DEFAULT: float = 10.0
 
-#: ``Title Block Position`` -> ``(horizontal, vertical)`` corner.  The value is
-#: read as a 2x2 grid (left, then right; top, then bottom within each column),
-#: which is the one reading consistent with the measured value 3.
+#: ``Title Block Position`` -> ``(horizontal, vertical)`` corner, **as declared**.
+#:
+#: Only ``3`` has ever been measured (the rendered block on every page we have).
+#: The other three are the reading this repo has written down, not a reading
+#: anyone checked: no 2x2 grid order is claimed, because the two orderings
+#: disagree about 3 and 4 and only 3 is pinned by evidence (634A-08).
 TITLE_BLOCK_POSITIONS: Mapping[str, tuple[str, str]] = {
     "1": ("left", "top"),
     "2": ("left", "bottom"),
@@ -103,6 +115,10 @@ DEFAULT_TITLE_BLOCK_POSITION = "3"
 NO_TITLE_BLOCK = "0"
 
 
+class PageFrameError(ValueError):
+    """A page that cannot hold its own title block (634A-02/03)."""
+
+
 def _as_float(value: Any) -> float | None:
     """``value`` as a float, or ``None`` when it is not a usable number."""
     try:
@@ -114,10 +130,62 @@ def _as_float(value: Any) -> float | None:
     return number
 
 
-def _corner(position: Any) -> tuple[str, str]:
-    """``(horizontal, vertical)`` for a declared position, falling back to 3."""
+def _corner(position: Any) -> tuple[tuple[str, str], bool]:
+    """``((horizontal, vertical), assumed)`` for a declared position.
+
+    ``assumed`` is true when the value is not one this build reads — an absent
+    selector, ``0``, ``9``, ``right-bottom``.  The *rectangle* is the same as a
+    declared ``3`` would give (the measured corner, and 634A-01's safe direction),
+    but the caller can now tell the two apart and say so (634A-07).
+    """
     text = str(position).strip() if position is not None else ""
-    return TITLE_BLOCK_POSITIONS.get(text, TITLE_BLOCK_POSITIONS[DEFAULT_TITLE_BLOCK_POSITION])
+    corner = TITLE_BLOCK_POSITIONS.get(text)
+    if corner is None:
+        return TITLE_BLOCK_POSITIONS[DEFAULT_TITLE_BLOCK_POSITION], True
+    return corner, False
+
+
+def _inset(attrs: Mapping[str, Any]) -> tuple[float, str]:
+    """``(margin, note)`` — the frame inset a page declares.
+
+    ``Blade Width`` first, then ``Border``, then :data:`BLADE_WIDTH_DEFAULT`.  A
+    non-positive number is "not stated", the reading this module has always had:
+    a stated ``0`` must not hang the block off the sheet.  ``note`` is empty
+    unless the inset came from ``Border`` — which is the *frame's* inset, not the
+    block's, so a page that states only that one is worth saying out loud
+    (634A-04).  The two are not compared when both are stated: on every measured
+    page ``Border`` is the frame line width (1) and ``Blade Width`` the gap (10),
+    so "they disagree" is the normal case, not a defect.
+    """
+    blade = _as_float(attrs.get("Blade Width"))
+    if blade is not None and blade > 0:
+        return blade, ""
+    border = _as_float(attrs.get("Border"))
+    if border is not None and border > 0:
+        return border, (
+            f"`Blade Width` is not stated, so the block is inset by the frame's own "
+            f"`Border` ({border:g})"
+        )
+    return BLADE_WIDTH_DEFAULT, ""
+
+
+def title_block_fits(
+    page_box: Box, *, border: float = BLADE_WIDTH_DEFAULT
+) -> bool:
+    """Can this page hold the block and its inset on both touched edges (634A-02)?
+
+    A rectangle wider or taller than the sheet is not a keep-out: nothing can be
+    packed clear of it, and a plan that carries it across a run carries a
+    rectangle that reaches outside the drawing.  The caller decides whether to
+    refuse the page — this is the measurement, not the policy.
+    """
+    margin = _as_float(border)
+    if margin is None or margin < 0:
+        margin = BLADE_WIDTH_DEFAULT
+    width, height = TITLE_BLOCK_SIZE
+    return (page_box[2] - page_box[0]) >= width + margin and (
+        page_box[3] - page_box[1]
+    ) >= height + margin
 
 
 def title_block_box(
@@ -125,6 +193,7 @@ def title_block_box(
     *,
     border: float = BLADE_WIDTH_DEFAULT,
     position: Any = DEFAULT_TITLE_BLOCK_POSITION,
+    notes: list[str] | None = None,
 ) -> Box:
     """The title block's rectangle on ``page_box``, in the page's own coordinates.
 
@@ -142,7 +211,13 @@ def title_block_box(
     margin = _as_float(border)
     if margin is None or margin < 0:
         margin = BLADE_WIDTH_DEFAULT
-    horizontal, vertical = _corner(position)
+    (horizontal, vertical), assumed = _corner(position)
+    if assumed and notes is not None:
+        # 634A-07: the rectangle looks like a declared `3`; only this says it is not.
+        notes.append(
+            f"title block: {position!r} is not a position this build reads, so the "
+            f"measured corner {DEFAULT_TITLE_BLOCK_POSITION!r} was assumed"
+        )
     if horizontal == "left":
         x0, x1 = page_box[0] + margin, page_box[0] + margin + width
     else:
@@ -173,6 +248,7 @@ def title_block_from_sheet_attrs(
     attrs: Mapping[str, Any],
     *,
     default_position: Any = DEFAULT_TITLE_BLOCK_POSITION,
+    notes: list[str] | None = None,
 ) -> Box | None:
     """The title block's rectangle for a page's declared sheet attributes.
 
@@ -197,26 +273,74 @@ def title_block_from_sheet_attrs(
     box = page_box_from_sheet_attrs(attrs)
     if box is None:
         return None
-    border = _as_float(attrs.get("Blade Width"))
+    border, inset_note = _inset(attrs)
+    if notes is not None and inset_note:
+        notes.append(f"title block: {inset_note}")
     position = attrs.get("Title Block Position")
     if position is None or not str(position).strip():
         position = default_position
-    return title_block_box(box, border=border, position=position)
+    return title_block_box(box, border=border, position=position, notes=notes)
 
 
-def title_block_keepouts(page_box: Box | None) -> tuple[Box, ...]:
+def title_block_keepouts(
+    page_box: Box | None,
+    *,
+    position: Any = None,
+    border: float | None = None,
+    has_title_block: bool | None = None,
+    notes: list[str] | None = None,
+) -> tuple[Box, ...]:
     """The keep-out a compile states for a page it was handed, or ``()`` for none.
 
-    This is the compiler's side of the module: the compile stages are handed a
-    *page box* and nothing else (no attributes, no reader of the file), so the
-    block is derived from the box with the measured defaults — the declared corner
-    and the declared frame inset.  ``None`` (no page stated) means the drawing
-    defines its own frame, and a drawing with no sheet has no sheet's title block
-    to keep out of.
+    ``page_box is None`` (no page stated) means the drawing defines its own frame,
+    and a drawing with no sheet has no sheet's title block to keep out of.
+
+    The three optional inputs are what 634A-01/-05 added: a caller that has the
+    page's **attributes** hands them over (`position=`, `border=`,
+    `has_title_block=`), and a caller that does not says so by leaving them
+    ``None``.  ``None`` still reserves the block — the safe direction, since a
+    skipped keep-out costs the rule — but every step that was an assumption is
+    written into ``notes`` instead of being indistinguishable from a reading
+    (634A-05: `Title Block=0` used to give one answer here and another from
+    `title_block_from_sheet_attrs`).
     """
     if page_box is None:
         return ()
-    return (title_block_box(page_box),)
+    if has_title_block is False:
+        if notes is not None:
+            notes.append(
+                "title block: the page declares `Title Block = 0`, so no title-block "
+                "keep-out was reserved"
+            )
+        return ()
+    if has_title_block is None and notes is not None:
+        notes.append(
+            "title block: this call was handed a page box and no sheet attributes, "
+            f"so the corner is assumed to be {DEFAULT_TITLE_BLOCK_POSITION!r} and the "
+            "inset the measured default"
+        )
+    margin = _as_float(border)
+    if margin is None or margin < 0:
+        margin = BLADE_WIDTH_DEFAULT
+    if not title_block_fits(page_box, border=margin):
+        # 634A-02/03. The measurement is here; the **refusal** is a policy and
+        # belongs at the compile entrance, which is where a page box is chosen
+        # (岳 J3: 松一点 — do not hard-refuse inside a geometry helper, but say the
+        # fact out loud so the caller can judge). `title_block_fits` and
+        # `PageFrameError` are the two symbols that entrance needs; until it is
+        # wired, the note below is what a reader gets.
+        minimum = MINIMUM_TITLE_BLOCK_PAGE
+        if notes is not None:
+            notes.append(
+                f"title block: the sheet is {page_box[2] - page_box[0]:g}x"
+                f"{page_box[3] - page_box[1]:g}, smaller than the block it has to "
+                f"hold ({TITLE_BLOCK_SIZE[0]:g}x{TITLE_BLOCK_SIZE[1]:g} plus the "
+                f"frame inset {margin:g}) — the keep-out reaches outside the drawing; "
+                f"the smallest page is {minimum[0]:g}x{minimum[1]:g}"
+            )
+    return (
+        title_block_box(page_box, border=margin, position=position, notes=notes),
+    )
 
 
 #: The prefix of the note a compile writes into the **plan** when it reserved a
@@ -257,9 +381,10 @@ def keep_out_note(page_box: Box, keepouts: Iterable[Box]) -> str:
     return (
         f"{KEEP_OUT_NOTE_PREFIX} page box ({page_box[0]:.17g}, {page_box[1]:.17g}, "
         f"{page_box[2]:.17g}, {page_box[3]:.17g}), title block ({rect[0]:.17g}, "
-        f"{rect[1]:.17g}, {rect[2]:.17g}, {rect[3]:.17g}) — the sheet's own table "
-        "(700x180, anchored to the declared corner) is a keep-out, so the packing "
-        "and the gate both cleared it"
+        f"{rect[1]:.17g}, {rect[2]:.17g}, {rect[3]:.17g}); "
+        f"corner {DEFAULT_TITLE_BLOCK_POSITION} (position not read at compile time), "
+        f"fits {'yes' if title_block_fits(page_box) else 'no'} — the sheet's own "
+        "table is a keep-out, so the packing was told to clear it"
     )
 
 
