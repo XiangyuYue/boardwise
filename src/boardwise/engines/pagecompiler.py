@@ -704,6 +704,17 @@ def compile_page(
             f"than the {PAGE_MARGIN:g} units the sheet keeps at its edge, so the "
             f"frame is inset by {PAGE_MARGIN:g} and the rest has no effect"
         )
+    if not budget.keepouts:
+        # 631B-03, 岳 J3.3: this path does not derive the sheet's title-block keep-out
+        # from `page_box` — the island chain does, this one does not, and the ruling
+        # keeps that leg closed here. The disclosure is what stands in for it: a page
+        # that was never checked against S-01's block must not read like one that was.
+        result.notes.append(
+            f"{PAGE_COMPILER_NAME}: no keep-out was stated, and this path does not "
+            "derive the sheet's own title block from budget.page_box — S-01's block "
+            "is NOT protected on this page; pass it in budget.keepouts if the drawing "
+            "has to clear it"
+        )
 
     # 0. 548B2: the declared series arms are checked on the **whole** documents,
     #    before any module is compiled. `_module_view` can only carry an arm whose
@@ -808,6 +819,20 @@ def compile_page(
     result.pages = [
         item.page for item in result.ranked[: budget.max_candidates]
     ]
+    # 631B-02, 岳 J3.1 (do not drop it, make it visible): the gate is the only thing
+    # that refuses a page — `_measure` counts legality into the sorting key and
+    # never filters — so a page carrying a hard violation would otherwise sit in
+    # `pages` (possibly first) with nothing saying so.
+    illegal = [
+        item for item in result.ranked[: budget.max_candidates] if item.key[0]
+    ]
+    if illegal:
+        result.notes.append(
+            f"{PAGE_COMPILER_NAME}: {len(illegal)} of the {len(result.pages)} listed "
+            "page(s) carries hard readability violation(s); legality is the first "
+            "key of the ranking, so they sort last, but they are listed rather than "
+            "removed — read that page's own readability before using it"
+        )
     result.notes.append(
         f"{len(result.pages)} legal page(s) from "
         f"{len(result.pages) + len(result.rejected)} variant(s) built; the gate "
