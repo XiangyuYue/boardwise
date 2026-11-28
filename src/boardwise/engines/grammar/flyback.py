@@ -316,13 +316,27 @@ class FlybackReading:
     note: str = ""
 
     def describe(self) -> str:
-        """``HVDC→T1(Np)→SW/Q1→SRC→R5→PGND │ SEC_SW→D3→SEC_12V`` — a report line."""
+        """``HVDC→T1(Np)→SW/Q1→SRC→R5→PGND │ SEC_SW→D3→SEC_12V`` — a report line.
+
+        The feedback half is named too (629A-06): a reading that differs only in
+        **which divider feeds which amplifier** used to print the same bytes as
+        its neighbour, so a runner-up note could not say what it was a runner-up
+        of. The clamp and the aux chain keep their place; the divider, its tap
+        and the amplifier are added only when the reading has them.
+        """
         clamp = f", clamp {self.clamp_d}/{'+'.join(self.clamp_r)}/{'+'.join(self.clamp_c)}" if self.clamp_d else ""
         aux = f", aux {self.aux_d}" if self.aux_d else ""
+        fb = ""
+        if self.divider:
+            fb = (
+                " 〔div " + "+".join(self.divider) + f" tap {self.sense_tap}"
+                + (f" amp {self.error_amp}" if self.error_amp else "")
+                + "〕"
+            )
         return (
             f"{self.bus}→{self.transformer}(Np)→{self.switch_node}/{self.switch}→"
             f"{self.src}→{self.sense}→{self.pgnd} │ "
-            f"{self.sec_node}→{self.sec_d}→{self.vout}{clamp}{aux}"
+            f"{self.sec_node}→{self.sec_d}→{self.vout}{clamp}{aux}{fb}"
         )
 
 
@@ -377,10 +391,11 @@ class FlybackGrammar:
         readings: list[FlybackReading],
         presentation: PresentationSpec,
     ) -> GrammarResult:
-        found = readings[0]
+        found = _reading_for(readings, presentation)
+        others = [reading for reading in readings if reading is not found]
         runners = "; ".join(
             note for note in (
-                _runner_up_note(readings), _stray_note(state, found),
+                _runner_up_note(others), _stray_note(state, found),
             ) if note
         )
 
@@ -1578,6 +1593,16 @@ def _feedback_readings(
     for opto in _isolation_device(state, sec_gnd, pgnd, transformer, taps):
         for error_amp in _error_amp_on(state, sec_gnd, opto, transformer):
             for tap, arms in strings:
+                # The three are one loop or they are nothing (629A-02): the
+                # divider's junction, the amplifier that reads it and the
+                # optocoupler it drives. `_error_amp_on` finds amplifiers by
+                # "shares the LED node with the opto and returns to the
+                # secondary ground", which says nothing about *which* divider
+                # it reads — so with two dividers the old pairing produced a
+                # reading whose amplifier never touched its tap, and which one
+                # that was came down to the net names' alphabetical order.
+                if tap not in set(state.part_nets.get(error_amp, ())):
+                    continue
                 cathode = _cathode_node(state, error_amp, sec_gnd, tap, opto)
                 if not cathode:
                     continue  # no cathode, no reading: a half one is a lie
@@ -2262,11 +2287,19 @@ def _reading_key(reading: FlybackReading):
     apart, so the tie-break was designator order). A key that names every role
     makes the tie-break a stated preference rather than an accident of
     sorting.
+
+    `vout` and `divider` are in it for the same reason (629A-07): on a page
+    with two outputs whose dividers both land on one tap, the two readings
+    agreed on every field the key named, so `sorted` put them back in
+    `_secondary`'s order — i.e. by the rectifiers' designators — and the bound
+    output followed the alphabet. Which output a page means is a fact the
+    **presentation** states (`portRoles`), and `_result` is where that is read;
+    the key only has to keep two different readings apart.
     """
     return (
         reading.pgnd, reading.sec_gnd, reading.bus, reading.transformer,
-        reading.switch, reading.opto, reading.error_amp, reading.sense_tap,
-        reading.led_cathode,
+        reading.switch, reading.opto, reading.error_amp, reading.vout,
+        reading.sense_tap, reading.divider, reading.led_cathode,
     )
 
 
@@ -2512,14 +2545,59 @@ def _spec_net_clause(circuit: CircuitSpec, net_id: str) -> str:
     return net_clause(net) if net else f"net {net_id}: not declared in nets[]"
 
 
-def _runner_up_note(readings: list[FlybackReading]) -> str:
-    if len(readings) < 2:
+def _reading_for(
+    readings: list[FlybackReading], presentation: PresentationSpec
+) -> FlybackReading:
+    """The reading the page's own `portRoles` points at, else the first one.
+
+    `_readings` orders by `_reading_key`, which is a preference between readings
+    that are **different** — not between two the page has already answered.
+    When the presentation declares a rail an `output`, that declaration is the
+    answer (「手写覆盖推导」, the same rule the island parser follows): the bound
+    reading is the first whose `vout` carries it, and every other reading is
+    named as a runner-up. Two declared outputs are not a tie this function can
+    break — the key still orders them, and both are on the page's own record
+    (629A-02).
+
+    Without this, a two-output page bound whichever output's **tap net name**
+    sorted first: on `probe_a.py`'s `d1` the declared `VOUT` lost to `5VOUT`
+    because `FB2 < FB_SENSE`, and renaming the tap to `ZFB` flipped the answer
+    back. Neither net name is a fact about the page.
+    """
+    declared = [
+        reading for reading in readings
+        if presentation.port_roles.get(reading.vout, "") == "output"
+    ]
+    if declared:
+        return declared[0]
+    return readings[0]
+
+
+def _runner_up_note(runners: list[FlybackReading]) -> str:
+    """The readings that were **not** bound, each with the parts they claimed.
+
+    `describe()` now names the divider, its tap and the amplifier (629A-06), so
+    a second output's `R10`/`R11`/`ZFB` are readable here; the output
+    capacitors are appended because a runner-up's filter group is as much a
+    part of "what was seen and not bound" as its divider.
+    """
+    if not runners:
         return ""
-    shown = "; ".join(reading.describe() for reading in readings[1:5])
-    more = "" if len(readings) <= 5 else f"; +{len(readings) - 5} more"
+    shown = "; ".join(_runner_line(reading) for reading in runners[:4])
+    more = "" if len(runners) <= 4 else f"; +{len(runners) - 4} more"
     return (
         "other flyback readings found but not bound (this grammar instance "
         f"bound one): {shown}{more}"
+    )
+
+
+def _runner_line(reading: FlybackReading) -> str:
+    unbound = [
+        part_id for part_id in (*reading.divider, *reading.output_caps) if part_id
+    ]
+    return (
+        reading.describe()
+        + (f" (its parts bound to nothing here: {', '.join(unbound)})" if unbound else "")
     )
 
 
@@ -2571,9 +2649,21 @@ def _stray_note(state: "_State", reading: FlybackReading) -> str:
             "named rather than dropped"
         )
     if rails:
+        detail: list[str] = []
+        for net_id in rails:
+            strings = _divider_strings(state, net_id, reading.sec_gnd, "")
+            if not strings:
+                continue
+            tap, arms = strings[0]
+            caps = _output_caps(state, net_id, reading.sec_gnd, "", tuple(arms))
+            detail.append(
+                f"{net_id} carries a divider {'+'.join(sorted(arms))} on tap {tap}"
+                + (f" and its own shunt group {', '.join(caps)}" if caps else "")
+            )
         said.append(
             "no role for the power net(s) " + ", ".join(rails)
             + " — a supply rail the reading delivers nothing to"
+            + (" (" + "; ".join(detail) + ")" if detail else "")
         )
     return "unbound (" + "; ".join(said) + ")"
 
