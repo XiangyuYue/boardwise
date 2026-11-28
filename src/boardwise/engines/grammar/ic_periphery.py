@@ -191,8 +191,15 @@ NAME = "ic-periphery"
 
 #: The role table, verbatim from 098 §一: the core, the part that ties two of its
 #: pins together, the part that hangs one of its pins on a supply, and the two
-#: nets that give the hanging parts a place to return to.
-ROLES: tuple[str, ...] = ("core", "bridge", "shunt", "rail", "gnd")
+#: nets that give the hanging parts a place to return to.  ``out`` is the one role
+#: this grammar binds and the table did not list: a group's signal net is the node
+#: the block leaves by, and both the coreless bank (`_coreless_bank`'s docstring
+#: states that vocabulary) and the branch pass have bound it since `a8613c5` /
+#: `ba3fd2d`.  Since 628B `grammar.check_result_roles` reads this table as the
+#: promise the module makes, so a role the module binds and the table omits is a
+#: promise nobody keeps: it took `tests/test_054_drawapply.py`'s CH343 page to say
+#: so, one batch later (629B).
+ROLES: tuple[str, ...] = ("core", "bridge", "shunt", "rail", "gnd", "out")
 
 #: How many pins a part must carry to be a candidate core at all (098 §一:
 #: "脚数 > 2"). Two pins is the branch/bridge shape; the core is what they hang

@@ -118,9 +118,26 @@ NAME_MAX_CHARS = 12
 APPLY_GATE_CONSERVATION = 3
 
 #: Not one of §5.5's six gates: the **input contract** of §5.4, checked before any
-#: judge gate runs. 0 says "before gate 1" — the proposal itself disagrees with the
-#: document it is being applied to (626B-04).
+#: judge gate runs. 0 says "before gate 1". Three refusals live here and all three
+#: are facts about *two documents* rather than about one judgement entry: the
+#: proposal disagrees with the document it is applied to (626B-04), it names a part
+#: that document does not have or gives one part two homes (629B-03), or it carries
+#: no judgement at all (629B-01).
 APPLY_GATE_INPUT = 0
+
+#: Why an empty `judgement[]` is a refusal and not §5.6's level zero (629B-01).
+#: §5.6 L0 is 「判断过、但栽在某道闸」 — the cluster the judgement tried to answer
+#: falls back to the geometry, and the report says which gate. A proposal nobody
+#: judged has no such entry: every island is the cluster, so what would be written
+#: is the clustering itself, in the normal form of a drawn partition.
+UNJUDGED_WHY = (
+    "the proposal carries no judgement at all (`judgement: []`) — §5.4 step ② was "
+    "never answered, so the islands this run would write are the geometric "
+    "clustering the proposal started from, island for island, with no role and no "
+    "name: an unjudged partition in the normal form of a drawn one, which is the "
+    "state §5.6's fallback exists to disclose and never to certify. Fill "
+    "`judgement[]` (one entry per work order, §5.4) and run this again"
+)
 
 #: The keys a proposal of this version may carry. §5.4's contract is closed, so a
 #: misspelt `judgement` is not another way to say it — it is a document this build
@@ -1218,6 +1235,125 @@ def _islands_text(islands: list[tuple[str, tuple[str, ...]]]) -> str:
     )
 
 
+def _same_block(declared: DeclaredIslands, island: LayoutIsland) -> bool:
+    """Does the document already declare this block — same id, same parts?
+
+    That is the fingerprint of a **re-apply** (or of a judgement that grew after a
+    first apply): the previous run wrote this island, so this run must not write a
+    second copy of it, and must not refuse the document it wrote itself (629B-02).
+    Different parts under the same id is *not* this: it is two blocks answering to
+    one name, and :func:`_partition_conflict` refuses it.
+    """
+    for existing in declared.islands:
+        if existing.id == island.id:
+            return list(existing.parts) == list(island.parts)
+    return False
+
+
+def _partition_conflict(
+    declared: DeclaredIslands,
+    rows: Sequence[Mapping[str, Any]],
+    same: Sequence[str],
+) -> str:
+    """Why these judged islands cannot stand beside the declared ones, or ``""``.
+
+    §5.5's six gates read a judgement against the **proposal** (its parts, its
+    neighbours, its declared islands). This reads the partition the two documents
+    make *together* against the presentation's own part list and declaration — the
+    half no single document can decide (629B-03). All three answers are
+    :data:`APPLY_GATE_INPUT`: the proposal and the document it is applied to are not
+    describing the same page.
+
+    ``same`` is the ids the document already carries as this very block (same parts,
+    see :func:`_same_block`); they are the ones the run would replace rather than
+    add, so they cannot conflict with themselves.
+    """
+    skip = set(same)
+    owner = declared.owner()
+    known = set(declared.parts)
+    fresh = [row for row in rows if str(row["islandId"]) not in skip]
+    for row in fresh:
+        island_id = str(row["islandId"])
+        for part in (str(item) for item in row["parts"]):
+            if part not in known:
+                return (
+                    f"island {island_id!r} names the part {part!r}, which this "
+                    "presentation does not have — a cluster is stated over this "
+                    "page's own parts, and one naming anything else is a statement "
+                    "about another document"
+                )
+            held = owner.get(part)
+            if held is not None:
+                return (
+                    f"part {part!r} is in both {held!r} and {island_id!r} — every "
+                    "part sits in exactly one block, and two answers about where it "
+                    "goes is a question the layout cannot ask back"
+                )
+            owner[part] = island_id
+    declared_by_id = {island.id: island for island in declared.islands}
+    for row in fresh:
+        island_id = str(row["islandId"])
+        existing = declared_by_id.get(island_id)
+        if existing is None:
+            continue
+        theirs = [str(part) for part in row["parts"]]
+        return (
+            f"island {island_id!r} is already declared by this presentation, and not "
+            "as this judgement states it (declared: role "
+            f"{existing.role!r}, name {existing.name!r}, parts {list(existing.parts)}; "
+            f"judged: role {str(row.get('role') or '')!r}, "
+            f"name {str(row.get('name') or '')!r}, parts {theirs}) — an island id is "
+            "how everything downstream names one block, and two blocks under one "
+            "name are two different things answering to the same word"
+        )
+    return ""
+
+
+def _fallback_note(rows: Sequence[Mapping[str, Any]]) -> str:
+    """§5.6 L0 as the apply report says it: which islands nobody managed to judge.
+
+    A judgement that was *attempted* and fell a gate is a legal fallback (530E pins
+    it), but 「一个判断都没落成」 and 「三条判断都落成了」 must not read the same in
+    the report — the count alone (`judged`) cannot tell a reader which islands ended
+    up as the geometry (626B-05).
+    """
+    fell = sorted({
+        str(row["islandId"]) for row in rows
+        if str(row.get("verdict") or "") == "L0"
+    })
+    if not fell:
+        return ""
+    return (
+        f"L0 ({len(fell)} island(s) fell a gate and are the geometric cluster as "
+        "clustering left them: " + ", ".join(fell) + " — §5.6 level zero)"
+    )
+
+
+def _refused(
+    proposal: Mapping[str, Any],
+    declared: DeclaredIslands,
+    why: str,
+    *,
+    gate: int = APPLY_GATE_INPUT,
+    entries: Sequence[Mapping[str, Any]] = (),
+    judged: int | None = None,
+) -> ApplyResult:
+    """The one shape a refusal has: nothing written, the declaration untouched."""
+    report: dict[str, Any] = {
+        "proposalVersion": proposal.get("proposalVersion", PROPOSAL_VERSION),
+        "applied": False,
+        "gate": gate,
+        "why": why,
+        "entries": list(entries),
+        "islands": [],
+        "derived": [],
+        "alreadyApplied": [],
+    }
+    if judged is not None:
+        report["judged"] = judged
+    return ApplyResult(written=False, islands=declared.islands, report=report)
+
+
 def apply_proposal(
     proposal: Mapping[str, Any],
     payload: Any,
@@ -1232,6 +1368,19 @@ def apply_proposal(
     `PresentationSpec.from_dict` before anybody is handed it.  The document's own
     closed schema is therefore the last check — a partition this module produced but
     this build cannot read is a bug here, not a refusal the user has to debug.
+
+    Everything a run can be refused for is decided **before** that write, because
+    each refusal used to leak out of the spec reader instead, as a `ValueError` the
+    CLI answers with exit 2 — "an input could not be read", which is not what any of
+    them means (629B-03):
+
+    * the proposal carries no judgement at all: §5.4 step ② was never answered, so
+      the islands this run would write are the geometric clustering (629B-01);
+    * a cluster names a part this presentation does not have, or a part one of its
+      declared islands already holds — the two documents do not describe one page;
+    * a judged island has the id of a declared island, with **different** content:
+      two blocks under one name. The same id with the **same** content is not a
+      conflict at all: it is this proposal, already applied (629B-02).
     """
     declared = read_declared(payload, where)
     # §5.4's contract is closed and §5.2's two stages are two documents: the
@@ -1247,27 +1396,6 @@ def apply_proposal(
             + " — §5.4's contract is closed, so a key nobody reads is not another "
             "way to say something"
         )
-    mismatch = _declaration_mismatch(proposal.get("declared"), declared)
-    if mismatch:
-        return JudgedApplication(
-            result=ApplyResult(
-                written=False,
-                islands=declared.islands,
-                report={
-                    "proposalVersion": proposal.get(
-                        "proposalVersion", PROPOSAL_VERSION
-                    ),
-                    "applied": False,
-                    "gate": APPLY_GATE_INPUT,
-                    "why": mismatch,
-                    "entries": [],
-                    "islands": [],
-                    "derived": [],
-                },
-            ),
-            spec=None,
-            intent=intent,
-        )
     judgement = proposal.get("judgement") or []
     if isinstance(judgement, Mapping):
         judgement = [judgement]
@@ -1275,30 +1403,114 @@ def apply_proposal(
         raise IslandsProposalError(
             f"{where}: the proposal's `judgement` must be a list of judgements"
         )
-    result = apply_judgement(
-        proposal, declared, [item for item in judgement if isinstance(item, Mapping)],
-    )
-    # §5.6's level zero is a documented fallback, not a failure (530E pins it), but
-    # "nobody judged" and "three judgements were made" must not read the same in the
-    # report: with no judgement every island is the geometric cluster, unnamed
-    # (626B-05).
     judged = [item for item in judgement if isinstance(item, Mapping)]
-    result.report["judged"] = len(judged)
-    result.report["fallback"] = (
-        ""
-        if judged
-        else (
-            "L0 (no judgement was given: every island is the geometric cluster "
-            "as clustering left it, unnamed — §5.6 level zero)"
-        )
+
+    # §5.5's six gates run first, not because a refusal must come from them but
+    # because the re-apply check needs the islands the judgement produces: on a
+    # second run the declaration has grown by exactly those, and the check below has
+    # to see the document this very proposal wrote (629B-02). §5.4's input contract
+    # still answers before gate 3's refusal, which is the order 626B-04 pinned.
+    result = apply_judgement(proposal, declared, judged)
+    report = dict(result.report)
+    entries = list(report.get("entries") or ())
+    rows = list(report.get("islands") or ())
+    proposed = {
+        island.id: island for island in result.islands[len(declared.islands):]
+    }
+    declared_by_id = {island.id: island for island in declared.islands}
+    # The blocks this proposal has already written: same id, same parts. Finding
+    # them is not an error — a second run finds its own work (629B-02).
+    settled = {
+        island_id for island_id, island in proposed.items()
+        if _same_block(declared, island)
+    }
+    # Of those, the ones the document already words as this judgement does: nothing
+    # to write at all. The others are the same block under a judgement that arrived
+    # later (a role or a name it did not have), so they are replaced in place rather
+    # than added twice.
+    already = [
+        island_id for island_id in proposed
+        if island_id in settled
+        and declared_by_id[island_id].role == proposed[island_id].role
+        and declared_by_id[island_id].name == proposed[island_id].name
+    ]
+    before = DeclaredIslands(
+        islands=tuple(
+            island for island in declared.islands if island.id not in settled
+        ),
+        parts=declared.parts,
+        complete=declared.complete,
     )
+    # The comparison is against the declaration *as this proposal found it*, i.e.
+    # without the blocks this judgement's own previous run wrote; the message is
+    # against the document as it is, so a reader sees the real difference. Two
+    # comparisons, because a proposal whose `declared[]` was rewritten *after* the
+    # apply (or one that never recorded it) is not stale just because the document
+    # carries the islands it judged: only a declaration that moved somewhere else
+    # is refused (626B-04), and `before` is what tells them apart (629B-02).
+    if (
+        _declaration_mismatch(proposal.get("declared"), before)
+        and _declaration_mismatch(proposal.get("declared"), declared)
+    ):
+        return JudgedApplication(
+            result=_refused(
+                proposal, declared,
+                _declaration_mismatch(proposal.get("declared"), declared) or "",
+                entries=entries, judged=len(judged),
+            ),
+            spec=None, intent=intent,
+        )
+    if not judged:
+        return JudgedApplication(
+            result=_refused(proposal, declared, UNJUDGED_WHY, judged=0),
+            spec=None, intent=intent,
+        )
     if not result.written:
-        return JudgedApplication(result=result, spec=None, intent=intent)
+        report["judged"] = len(judged)
+        report["alreadyApplied"] = already
+        report["fallback"] = ""
+        return JudgedApplication(
+            result=ApplyResult(
+                written=False, islands=result.islands, report=report,
+            ),
+            spec=None, intent=intent,
+        )
+    conflict = _partition_conflict(declared, rows, settled)
+    if conflict:
+        return JudgedApplication(
+            result=_refused(
+                proposal, declared, conflict, entries=entries, judged=len(judged),
+            ),
+            spec=None, intent=intent,
+        )
+
+    # What the document ends up with: the declared islands in document order — each
+    # one superseded by the judgement's own copy when it is the same block — and
+    # then the blocks this proposal has not written yet (声明优先 for everything
+    # else: the declared island is copied verbatim).
+    islands = tuple(
+        proposed[island.id] if island.id in settled else island
+        for island in declared.islands
+    ) + tuple(
+        island for island_id, island in proposed.items() if island_id not in settled
+    )
+    written = set(already)
+    report["islands"] = [
+        row for row in rows if str(row["islandId"]) not in written
+    ]
+    report["derived"] = [
+        str(row["islandId"]) for row in report["islands"]
+        if str(row["islandId"]).startswith(il.AUTO_ISLAND_PREFIX)
+    ]
+    report["judged"] = len(judged)
+    report["alreadyApplied"] = already
+    report["fallback"] = _fallback_note(report["islands"])
+    result = ApplyResult(written=True, islands=islands, report=report)
     body = dict(payload)
     body["islands"] = [
         {"id": island.id, "parts": list(island.parts), "role": island.role,
          "name": island.name}
-        for island in result.islands
+        for island in islands
     ]
     spec = PresentationSpec.from_dict(body)
     return JudgedApplication(

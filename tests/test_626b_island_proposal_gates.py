@@ -176,21 +176,25 @@ def test_b04_a_proposal_made_against_another_declaration_is_refused(monkeypatch)
 # `judgement: []` 也落成 `auto-*` 岛（六个闸对「零判断」真空成立）。
 
 
-def test_b05_a_proposal_with_no_judgement_says_so_on_the_apply_report(monkeypatch):
-    """§5.6 L0 是**设计行为**（`test_level_zero_…` 钉住），本批不把它改成拒绝。
+def test_b05_a_proposal_with_no_judgement_is_refused_not_written(monkeypatch):
+    """§5.6 L0 是**判断过、栽在某道闸**的 fallback，不是「一个判断都没有」。
 
-    但「一个判断都没有」与「判断了三条」在报告里必须能分开：零判断时
-    每一颗岛都是 L0 的几何簇，报告要写出 `judged: 0` 与这句 fallback。
+    626B 只把零判断写进报告（`judged: 0` 加一句 fallback），`written` 仍是 True；
+    629B-01 量到那条链的下游：`draw compile` 按 `role -` 规划候选，于是「没人判断」
+    的分区带着机器名进了页产物。现在零判断在 gate 0 就被拒，报告仍然说出
+    `judged: 0` —— 「一个判断都没有」与「判了三条」在报告里依旧分得开，只是前者
+    不再被认证成一份画出来的分区。
     """
     circuit, payload, book = t530._three_clusters(monkeypatch)
     proposal = ip.build_proposal(circuit, payload, book)
     application = ip.apply_proposal(proposal.document, payload)
 
-    assert application.result.written is True
+    assert application.result.written is False, application.result.report
+    assert application.spec is None
     report = application.result.report
     assert report["judged"] == 0, report
-    assert "L0" in report["fallback"], report
-    assert "no judgement" in report["fallback"], report
+    assert report["gate"] == ip.APPLY_GATE_INPUT, report
+    assert "judgement" in report["why"], report
 
 
 # ================================================================== 626B-06

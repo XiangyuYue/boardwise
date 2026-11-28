@@ -736,8 +736,14 @@ def register_draw_parser(sub: Any, *, force_help: str) -> None:
             "cluster with `provenance = ai_asserted` into the design intent (which "
             "turns the whole intent document into a draft, on purpose). A judgement "
             "that fails a gate falls back to the geometric cluster it was given, "
-            "never to a guess (§5.6). Exit 0 written / 2 an input could not be read "
-            "/ 5 the judgement broke 件守恒 and nothing was written."
+            "never to a guess (§5.6); a proposal with no judgement at all is refused "
+            "rather than written, because that fallback is the answer to a judgement "
+            "and not a substitute for one. Exit 0 written (a second run of the same "
+            "proposal rewrites the same bytes and says which islands were already "
+            "there) / 2 an input could not be read (a file, a JSON object, a key this "
+            "build does not define) / 5 nothing was written — the proposal, the "
+            "judgement, or the partition the two documents make together was refused "
+            "on the merits (the input contract, 件守恒, or one part with two homes)."
         ),
     )
     islands_apply.add_argument(

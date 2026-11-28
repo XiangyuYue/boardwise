@@ -18057,6 +18057,14 @@ def _cmd_draw_islands_apply(args: argparse.Namespace) -> int:
     place and behind §5.5's six gates.  Nothing is written when gate 3 refuses the
     judgement: "it never ran" and "it ran and was refused" have to leave the same
     document behind, or a refused run would still be a change.
+
+    The two failure codes split on **readability**, not on the shape of the message
+    (629B-03): `2` is "an input could not be read" — a missing file, a document that
+    is not JSON, a key this build does not define — and `5` is "it read them and
+    refused the document": gate 0's input contract (the proposal is about another
+    presentation, or it carries no judgement at all — 629B-01), gate 3's 件守恒, and
+    the partition the two documents make together.  A re-run of an already-applied
+    proposal is neither: it writes the same bytes and says so (629B-02).
     """
     from .core.designintent import DesignIntent, DesignIntentError
     from .engines import islandproposal
@@ -18098,6 +18106,7 @@ def _cmd_draw_islands_apply(args: argparse.Namespace) -> int:
         counts: dict[str, int] = {}
         for item in report["islands"]:
             counts[str(item["verdict"])] = counts.get(str(item["verdict"]), 0) + 1
+        tally = ", ".join(f"{name}={count}" for name, count in sorted(counts.items()))
         spec_target = args.out_spec or args.presentation
         Path(spec_target).write_text(
             json.dumps(application.payload, ensure_ascii=False, indent=2) + "\n",
@@ -18111,10 +18120,16 @@ def _cmd_draw_islands_apply(args: argparse.Namespace) -> int:
             report["intentDraft"] = application.intent.draft
         print(
             f"draw islands apply: {len(check.islands)} island(s) written to "
-            f"{spec_target} ("
-            + ", ".join(f"{name}={count}" for name, count in sorted(counts.items()))
-            + ")"
+            f"{spec_target}" + (f" ({tally})" if tally else "")
         )
+        # 629B-02: a second run of the same proposal is a **no-op**, not a refusal
+        # of the document the first run wrote. Say which islands were already there,
+        # so "nothing to add" never reads like "nothing was judged".
+        for island_id in report.get("alreadyApplied") or ():
+            print(
+                f"  {island_id} is already in the presentation, exactly as this "
+                "proposal judges it — nothing to add"
+            )
         for item in report["islands"]:
             if item["name"]:
                 print(f"  {item['islandId']} <- {item['fromCluster']}: {item['name']}")
