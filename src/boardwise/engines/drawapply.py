@@ -42,6 +42,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -80,8 +81,8 @@ from ..core.layoutplan import (
 from ..core.model import is_ground_net
 from ..core.presentationspec import PresentationSpec, TEXT_PLACEMENT_NATIVE
 from ..core.symbolprofile import (
-    FLAG_GLYPH_KIND_GND, SymbolProfile, SymbolPose, flag_glyph_box, flag_glyph_kind,
-    pose_box, role_siblings,
+    FLAG_GLYPH_KIND_GND, POSE_ROTATIONS, SymbolProfile, SymbolPose, flag_glyph_box,
+    flag_glyph_kind, pose_box, role_siblings,
 )
 from . import addcomponent
 #: 534 — one ruler for the two gates. `SOFT_FLOOR_TEXT_GAP` is S-21's number,
@@ -426,13 +427,21 @@ def source_digest(
     compiled drawing that is three documents plus the candidate index plus the
     library geometry. See :data:`SOURCE_BASIS` for the exact payload.
     """
+    if isinstance(candidate, bool):
+        # 632B-05: `int(True)` is 1, so a caller's typo would answer as
+        # "candidate 1" and pass as the first candidate.
+        raise ValueError(
+            f"candidate {candidate!r} is a bool; a candidate index is an integer"
+        )
     payload = json.dumps(
         {
             "circuitSha256": circuit_sha256,
             "presentationSha256": presentation_sha256,
             "layoutSha256": layout_sha256,
             "candidate": int(candidate),
-            "profiles": [[ref, digest] for ref, digest in profile_hashes],
+            # Sorted: the digest's domain is the library, not the order the
+            # caller happened to hand it over in (632B-05).
+            "profiles": sorted([ref, digest] for ref, digest in profile_hashes),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -452,7 +461,28 @@ def posed_pin_offsets(
     geometry with. A second transform here would be a second ruler for the same
     drawing.
     """
-    pose = SymbolPose(rotation=int(rotation), mirror=bool(mirror))
+    # 632B-04: a symbol is drawn at a right angle. `int()` used to truncate
+    # 90.7 into 90 — expected points for a pose the editor never drew — and a
+    # NaN raised a bare ValueError the CLI cannot catch. Both refuse by name
+    # now, before any point is computed.
+    try:
+        degrees = float(rotation)
+    except (TypeError, ValueError):
+        raise DrawPlanError(
+            f"rotation {rotation!r} is not a number — a symbol is drawn at one of "
+            f"{POSE_ROTATIONS}"
+        ) from None
+    # -90 and 270 are the same drawing: fold before the membership test so the
+    # legal poses are the legal *orientations*, not two ways to spell one.
+    if math.isfinite(degrees):
+        degrees = degrees % 360
+    if not math.isfinite(degrees) or degrees not in POSE_ROTATIONS:
+        raise DrawPlanError(
+            f"rotation {rotation!r} is not one of {POSE_ROTATIONS} — the pin "
+            "read-back compares the editor's geometry against these offsets, so an "
+            "angle the symbol is never drawn at would describe pins that are not there"
+        )
+    pose = SymbolPose(rotation=int(degrees), mirror=bool(mirror))
     out: dict[str, tuple[float, float]] = {}
     for pin in profile.pins:
         x, y = transform_point(
@@ -506,13 +536,17 @@ def flag_kind(net: str, symbol_ref: str = "") -> str:
     """
     by_name = str(addcomponent.power_flag_kind(net) or "")
     reference = (symbol_ref or "").upper()
-    if reference == FLAG_SYMBOL_GROUND or (
-        reference.startswith(FLAG_SYMBOL_POWER_PREFIX)
-        # `PWR-<X>`: a flag for X, so the symbol is a ground flag exactly when the
-        # name it carries is one (`PWR-GND`, and `PWR-PGND` / `PWR-AGND` the same
-        # way — the ground vocabulary is not this function's to re-state).
-        and is_ground_net(reference[len(FLAG_SYMBOL_POWER_PREFIX):])
-    ):
+    # The name the flag *carries*: `PWR-GND` carries `GND`, and the host's own
+    # ground symbol carries its name as written. 632B-03: the ground leg used to
+    # demand the `PWR-` prefix, so a symbol spelled `GND` left `by_symbol=""`
+    # and `flag_kind("VCC", "GND")` answered Power — the 143d failure mode with
+    # one spelling changed.
+    carries = (
+        reference[len(FLAG_SYMBOL_POWER_PREFIX):]
+        if reference.startswith(FLAG_SYMBOL_POWER_PREFIX)
+        else reference
+    )
+    if reference and is_ground_net(carries):
         by_symbol = DRAW_FLAG_GROUND
     elif reference.startswith(FLAG_SYMBOL_POWER_PREFIX):
         by_symbol = DRAW_FLAG_POWER
@@ -588,6 +622,9 @@ def _pool_match(names: Iterable[str], designator: str) -> str:
     return ""
 
 
+_LEADING_LETTERS = re.compile(r"[A-Za-z]+")
+
+
 def _prefix_of(spec_id: str, profile: SymbolProfile) -> str:
     """The designator prefix a part lands under.
 
@@ -597,11 +634,16 @@ def _prefix_of(spec_id: str, profile: SymbolProfile) -> str:
     refuses — a part with no prefix cannot be numbered, and inventing one would
     put a resistor under ``U``.
     """
-    letters = "".join(character for character in spec_id if character.isalpha())
-    if letters:
-        return letters.upper()
-    ref_letters = "".join(character for character in profile.symbol_ref if character.isalpha())
-    return ref_letters.upper()
+    # 632B-02/-06: **leading ASCII** letters — the same alphabet as
+    # `_DESIGNATOR_RE`. The old rule glued every letter in the string into the
+    # prefix (`Q1_b` -> `QB`, `R_EXT1` -> `REXT`) and let CJK through
+    # `str.isalpha()`, which the allocator's `[A-Za-z]+` prefix check then
+    # rejected with a bare ValueError the CLI cannot catch.
+    lead = _LEADING_LETTERS.match(spec_id or "")
+    if lead:
+        return lead.group(0).upper()
+    ref_lead = _LEADING_LETTERS.match(profile.symbol_ref or "")
+    return ref_lead.group(0).upper() if ref_lead else ""
 
 
 def assign_designators(
@@ -705,6 +747,13 @@ def designator_problems(plan: ChangePlan, pool: Iterable[str]) -> list[str]:
     a plan that lands half a drawing and then cannot find its own parts.
     """
     pool_list = [name for name in pool]
+    # 632B-01: the plan's *own* designators get a second pool. The kept-name
+    # branch returns before the allocation leg below, and that leg is the only
+    # other place a plan's name joins a pool — so two parts under `C10` were
+    # checked against the page and never against each other, and apply went on to
+    # place both. The page's pool stays separate: a clash inside the plan is not
+    # a clash with what was already there, and the two read differently.
+    kept: list[tuple[str, str]] = []
     problems: list[str] = []
     for part in plan.change.draw_parts:
         if plan.change.draw_keep_names and not is_designator(part.designator):
@@ -716,6 +765,19 @@ def designator_problems(plan: ChangePlan, pool: Iterable[str]) -> list[str]:
                 "spec part a designator-shaped id"
             )
             continue
+        if plan.change.draw_keep_names:
+            twin = _pool_match([name for name, _ in kept], part.designator)
+            if twin:
+                other = next(spec for name, spec in kept if name == twin)
+                problems.append(
+                    f"{twin} is this kept-name plan's designator for both "
+                    f"{other!r} and {part.spec_id!r} — two parts under one "
+                    "designator is the rename mid-run 036b describes, and the page "
+                    "would already hold the first of them; give the spec parts "
+                    "different ids"
+                )
+                continue
+            kept.append((part.designator, part.spec_id))
         taken = _pool_match(pool_list, part.designator)
         if taken:
             problems.append(
