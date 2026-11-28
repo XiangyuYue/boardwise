@@ -109,8 +109,11 @@ from ...core.circuitspec import (
     SpecNet,
     SpecPart,
 )
+from ...core.designintent import SECTION_RAILS, DesignIntent, IntentSource
 from ...core.presentationspec import PresentationSpec
+from ...core.railquery import RAIL_VOLTAGE_SLOTS
 from ...core.symbolprofile import ROLE_BY_PIN_NAME, SymbolPin, SymbolProfile
+from ...core.values import parse_voltage_volts
 
 __all__ = [
     "ABOVE",
@@ -1238,3 +1241,106 @@ def nc_pins_of(circuit: CircuitSpec, part_id: str) -> frozenset[str]:
 # What it reads from this result: `constraints` (does the plan keep the
 # relations), `obligations` (are the required topologies visible), and the
 # `failures` of a refused bind (a refused grammar is not a passed check).
+
+
+# ---------------------------------------------------------------------------
+# the contract's declared rail voltages (631A-03 / 630A-01)
+# ---------------------------------------------------------------------------
+
+
+def intent_document(
+    intent: "IntentSource | DesignIntent | None",
+) -> tuple["DesignIntent | None", str]:
+    """``(document, path)`` — the contract a grammar reads, and where it came from.
+
+    Both spellings are accepted because both reach a grammar naturally: the CLI
+    hands over an :class:`~boardwise.core.designintent.IntentSource` (094's
+    carrier — the document *and* the path a finding has to name), a test or an
+    in-memory caller a bare :class:`~boardwise.core.designintent.DesignIntent`. A
+    value that is neither is refused rather than ignored: a contract nothing can
+    read would leave the drawing on its default while the caller believes the
+    contract was consumed.
+
+    This lived in ``power_entry`` until 631A-03: three grammars now read the same
+    contract (the clamp cap, the shunt cap, the TVS), and a second copy of the
+    unwrapping is the copy that drifts.
+    """
+    if intent is None:
+        return None, ""
+    if isinstance(intent, IntentSource):
+        return intent.document, str(intent.path or "")
+    if isinstance(intent, DesignIntent):
+        return intent, ""
+    raise GrammarError(
+        f"intent must be an IntentSource or a DesignIntent, got "
+        f"{type(intent).__name__} — a contract this module cannot read is a "
+        "contract it may not silently do without"
+    )
+
+
+@dataclass(frozen=True)
+class RailVoltage:
+    """One rail's declared voltage, **or the reason a drawing cannot ask** (631A-03).
+
+    Three states, and the drawing owes a different sentence for each:
+
+    * ``volts`` set — the contract states it, so a rating can be judged against it;
+    * ``volts is None`` and ``why`` says the contract does not declare this rail —
+      the judgement is **undecidable**, which is a readout (the caller writes the
+      sentence into its evidence) and not a pass;
+    * ``volts is None`` and ``why`` says the rail is declared with text this build
+      cannot read — the same undecidable, with the text quoted so the reader can
+      see which spelling failed.
+
+    ``where`` names the slot the number came from (``voltage`` or
+    ``targetVoltage``), because the contract carries both and an entry edited by
+    hand may disagree with itself.
+    """
+
+    net: str
+    volts: float | None = None
+    where: str = ""
+    why: str = ""
+
+
+def declared_rail_voltage(
+    intent: "IntentSource | DesignIntent | None", net: str
+) -> RailVoltage:
+    """The contract's voltage for one rail, or the sentence that says why not.
+
+    ``voltage`` is tried before ``targetVoltage``, the precedence
+    :func:`boardwise.core.railquery.set_rail_voltage` writes and
+    ``rules.railratings`` reads, so the drawing and the review price a rail the
+    same way. A value that is stated but unreadable comes back **named** rather
+    than dropped: a contract that says ``"twenty-four"`` is an answer nobody
+    checked, and reporting it as "not declared" would send the reader to the wrong
+    file.
+    """
+    document, _path = intent_document(intent)
+    if document is None:
+        return RailVoltage(net=net, why="no design contract was handed to this bind")
+    entry = document.entry(SECTION_RAILS, net)
+    if entry is None:
+        return RailVoltage(
+            net=net,
+            why=f"the contract declares no voltage for rail {net!r}",
+        )
+    for slot in RAIL_VOLTAGE_SLOTS:
+        text = str(getattr(entry, "slots", {}).get(slot, "") or "").strip()
+        if not text:
+            continue
+        volts = parse_voltage_volts(text)
+        if volts is None or volts <= 0:
+            return RailVoltage(
+                net=net,
+                where=slot,
+                why=(
+                    f"the contract's {slot} for rail {net!r} is {text!r}, which this "
+                    "build cannot read as a voltage"
+                ),
+            )
+        return RailVoltage(net=net, volts=volts, where=slot)
+    return RailVoltage(
+        net=net,
+        why=f"the contract's entry for rail {net!r} states no voltage",
+    )

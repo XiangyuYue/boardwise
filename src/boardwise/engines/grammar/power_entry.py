@@ -190,9 +190,10 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from ...core.circuitspec import CircuitSpec, SpecOpenInterface
-from ...core.designintent import DesignIntent, IntentSource
+from ...core.designintent import SECTION_RAILS, DesignIntent, IntentSource
 from ...core.presentationspec import SIDES, PresentationSpec
 from ...core.symbolprofile import SymbolProfile
+from ...core.values import find_capacitance_farads, find_voltage_volts
 from .base import (
     arm_note,
     ABOVE,
@@ -218,7 +219,9 @@ from .base import (
     RoleBinding,
     bound_result,
     declares_modules,
+    declared_rail_voltage,
     evidence,
+    intent_document,
     modules_of_part,
     net_clause,
     net_provenance,
@@ -330,8 +333,18 @@ class PowerEntryGrammar:
         )
         if reading.failure is not None:
             return refused_result([reading.failure])
+        # 631A-03 / 630A-01: the one judgement in this grammar that reads a *value*.
+        # It runs on the net the branches actually hang on (the rail beyond a series
+        # element, when there is one), and only the contract's own voltage is used as
+        # the threshold — no margin is invented here.
+        rating_failures, rating_note = _rating_failures(
+            circuit, chain[1] or rail, tuple(reading.order), intent
+        )
+        if rating_failures:
+            return refused_result(rating_failures)
         return self._result(
-            circuit, presentation, rail, gnd, entry, named, scope, reading, chain
+            circuit, presentation, rail, gnd, entry, named, scope, reading, chain,
+            rating_note,
         )
 
     # ------------------------------------------------------------- internals
@@ -347,6 +360,7 @@ class PowerEntryGrammar:
         scope: str,
         reading: _OrderReading,
         chain: tuple[str, str] = ("", ""),
+        rating_note: str = "",
     ) -> GrammarResult:
         """Everything bound, in the order the drawing will use (095 §一).
 
@@ -396,6 +410,7 @@ class PowerEntryGrammar:
                     f"inlet chosen: {shape}",
                     _chain_note(chain),
                     _return_note(circuit, rail, gnd),
+                    rating_note,
                     arm_note(circuit, self.profiles, (rail, gnd)),
                     f"provenance={prov}",
                     rivals,
@@ -1199,24 +1214,147 @@ def _intent_document(
 ) -> tuple[DesignIntent | None, str]:
     """``(document, path)`` — the contract this bind reads, and where it came from.
 
-    Both spellings are accepted because both reach a grammar naturally: the CLI
-    hands over an :class:`IntentSource` (094's carrier — the document *and* the
-    path a finding has to name), a test or an in-memory caller a bare
-    :class:`DesignIntent`. A value that is neither is refused rather than ignored:
-    a contract nothing can read would leave the drawing on its default order while
-    the caller believes the contract was consumed.
+    One owner now: :func:`boardwise.engines.grammar.base.intent_document`. 631A-03
+    gave the same reading to the clamp capacitor's judgement and to the TVS's, and
+    a second copy of the unwrapping is the copy that drifts.
     """
-    if intent is None:
-        return None, ""
-    if isinstance(intent, IntentSource):
-        return intent.document, str(intent.path or "")
-    if isinstance(intent, DesignIntent):
-        return intent, ""
-    raise GrammarError(
-        f"intent must be an IntentSource or a DesignIntent, got "
-        f"{type(intent).__name__} — a contract this module cannot read is a "
-        "contract it may not silently do without"
+    return intent_document(intent)
+
+
+#: What a shunt's `Value` field can say about its own rating. The three shapes are
+#: read off the **value**, not off a designator prefix (630A-06's finding: nothing
+#: in this package reads `symbolRef`, and the 088 fixtures give the TVS a capacitor
+#: symbol), so the reading here is the one the field itself supports:
+#:
+#: * it states a capacitance → it is a capacitor, and its voltage token is a
+#:   **rating** that has to be at least the rail;
+#: * it states no capacitance but a voltage → the number is a **clamp**, which has
+#:   to sit above the rail (at or below it the device conducts in normal operation);
+#: * it states neither (a part number, or prose) → nothing can be judged, and the
+#:   failure says so rather than passing.
+def _shunt_kind(value: str) -> tuple[str, float | None, float | None]:
+    """``(kind, quantity, rating)`` — ``kind`` is ``capacitor``/``clamp``/``unknown``."""
+    farads = find_capacitance_farads(value or "")
+    volts = find_voltage_volts(value or "")
+    if farads is not None:
+        return "capacitor", farads[0], (volts[0] if volts is not None else None)
+    if volts is not None:
+        return "clamp", None, volts[0]
+    return "unknown", None, None
+
+
+def _rating_failures(
+    circuit: CircuitSpec,
+    bus: str,
+    shunts: tuple[str, ...],
+    intent: IntentSource | DesignIntent | None,
+) -> tuple[list[GrammarFailure], str]:
+    """The value judgement on this module's branches, and the sentence when it cannot run.
+
+    ``bus`` is the net the branches actually hang on (the declared entrance, or the
+    rail beyond a series element). 631A-03 and 630A-01 measured that nothing here
+    read a value at all: ``SMCJ5.0A`` on a 24 V bus and ``330uF/6.3V`` beside it
+    both came back ``ok=True``.
+
+    The threshold is the contract's own, and only one comparison is made per branch
+    — J1's ruling: a rating has to be **at least** the declared rail, and a clamp
+    has to sit **above** it. No engineering margin is invented here; where the
+    contract states no voltage, the judgement is *undecidable*, and the sentence
+    that says so travels in the evidence rather than refusing a bind whose caller
+    never promised a contract (095's rule, unchanged).
+    """
+    declared = declared_rail_voltage(intent, bus)
+    if declared.volts is None:
+        # No contract, or a contract that prices no rail at all: 095's rule is that
+        # such a bind is **unchanged** (a caller that never promised a contract has
+        # not been failed and has not been lectured), so nothing is written here.
+        # The undecidable sentence is owed to the caller who *did* hand over a
+        # contract with rails in it — there the absence is a fact about this bus.
+        document, _path = intent_document(intent)
+        if document is None or not document.entries(SECTION_RAILS):
+            return [], ""
+        return [], (
+            f"rated voltage unjudged: {declared.why} — so no branch here was "
+            "compared with the bus (declare it with `boardwise intent set-rail` "
+            "and the comparison becomes checkable)"
+        )
+    rail_v = declared.volts
+    where = (
+        f"the contract's {declared.where} for rail {bus!r}"
+        if declared.where
+        else f"the contract's rail {bus!r}"
     )
+    failures: list[GrammarFailure] = []
+    for part_id in shunts:
+        part = circuit.part(part_id)
+        value = (part.value if part is not None else "") or ""
+        kind, _quantity, rating = _shunt_kind(value)
+        if kind == "unknown":
+            failures.append(GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=part_id,
+                detail=(
+                    f"{part_id}'s Value {value!r} states neither a capacitance nor a "
+                    f"voltage, so its rating against the {rail_v:g} V bus at {bus!r} "
+                    "cannot be checked — and a branch that hangs on the inlet is "
+                    "exactly where an under-rated part is asked to take the bus"
+                ),
+                action=(
+                    f"write the rating into {part_id}'s Value (the capacitance with its voltage token) or "
+                    "record the shelf entry the rating comes from; the contract's "
+                    f"voltage for {bus!r} is {where}"
+                ),
+            ))
+            continue
+        if rating is None:
+            failures.append(GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=part_id,
+                detail=(
+                    f"{part_id} is a capacitor on the {rail_v:g} V bus at {bus!r} and "
+                    f"its Value {value!r} states no voltage rating, so the one check "
+                    "that keeps a 6.3 V electrolytic off a 24 V rail cannot run"
+                ),
+                action=(
+                    f"state the rating in {part_id}'s Value (the capacitance with its "
+                    "voltage token), or record the shelf entry's Voltage Rating"
+                ),
+            ))
+            continue
+        if kind == "capacitor":
+            if rating < rail_v - 1e-9:
+                failures.append(GrammarFailure(
+                    category=FAILURE_CIRCUIT_INVALID,
+                    subject=part_id,
+                    detail=(
+                        f"{part_id} is rated {rating:g} V and sits on the {rail_v:g} V "
+                        f"bus at {bus!r} ({where}) — a capacitor below the rail it "
+                        "decouples is a short waiting for the first overshoot"
+                    ),
+                    action=(
+                        f"pick a part rated at least {rail_v:g} V, or lower the "
+                        f"contract's voltage for {bus!r} if {rail_v:g} V is not the bus"
+                    ),
+                ))
+            continue
+        if rating <= rail_v + 1e-9:
+            failures.append(GrammarFailure(
+                category=FAILURE_CIRCUIT_INVALID,
+                subject=part_id,
+                detail=(
+                    f"{part_id}'s clamp is stated at {rating:g} V and the bus at "
+                    f"{bus!r} is {rail_v:g} V ({where}) — a clamp at or below the rail "
+                    "conducts in normal operation, so it protects nothing and heats "
+                    "the branch instead"
+                ),
+                action=(
+                    f"use a clamp above {rail_v:g} V (the next standard value that "
+                    "still protects the parts behind it), or correct the contract's "
+                    f"voltage for {bus!r}"
+                ),
+            ))
+    return failures, ""
+
 
 
 def _names_clamp(*texts: str) -> bool:
