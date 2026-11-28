@@ -147,13 +147,60 @@ def test_b08_a_part_twice_in_one_module_is_refused():
     assert "repeats" in message and "'R1'" in message, message
 
 
-def test_b08_a_part_in_two_modules_is_still_accepted():
-    """**留档**：跨模块共享件仍被接受——那是 633B-05 的裁定面（要新增
-    `sharedParts` 文档键），不是本条的修法。这条让「05 还没修」有机器读数。"""
+def test_b05_an_undeclared_shared_part_is_left_to_the_page_compiler():
+    """**口径**：边界**不拒**未声明的共享件——页面路径会具名报 `presentation-poor`。
+
+    633B-05 的修法是「让『故意的共享』有地方写」，不是「把下游那条诊断搬到边界」：
+    仓库里有八条测试专门构造这个形状来证明下游会点名它（`test_056`/`test_053b`/
+    `test_627a`/`test_548b`），搬到边界等于把一条具名的下游失败换成加载期报错。
+    """
     spec = build(
         modules=[
             {"id": "pwr", "parts": ["R1"], "role": "input"},
             {"id": "sense", "parts": ["R1"], "role": "output"},
         ]
     )
+    assert spec.shared_parts == []
     assert spec.modules_of_part("R1") == ["pwr", "sense"]
+
+
+def test_b05_a_declared_shared_part_keeps_both_answers():
+    """对照：声明之后，`modules_of_part` 的两个答案就是**说过的**答案。"""
+    spec = build(
+        modules=[
+            {"id": "pwr", "parts": ["R1"], "role": "input"},
+            {"id": "sense", "parts": ["R1"], "role": "output"},
+        ],
+        sharedParts=["R1"],
+    )
+    assert spec.shared_parts == ["R1"]
+    assert spec.modules_of_part("R1") == ["pwr", "sense"]
+    assert spec.declared_part_ids() == ["R1"]
+
+
+def test_b05_a_shared_part_that_is_only_in_one_module_is_refused():
+    """一条什么都没说的声明本身就是缺陷。"""
+    with pytest.raises(PresentationSpecError) as exc:
+        build(sharedParts=["R1"])
+    assert "not shared" in str(exc.value), str(exc.value)
+
+
+def test_b05_a_shared_part_nobody_declares_is_refused():
+    with pytest.raises(PresentationSpecError) as exc:
+        build(sharedParts=["ZZ9"])
+    assert "no module declares" in str(exc.value), str(exc.value)
+
+
+def test_b05_the_key_is_written_only_when_it_is_used():
+    """没共享件的文档字节不变——这条键是 opt-in，不能改既有摘要。"""
+    assert "sharedParts" not in build().to_jsonable()
+    shared = build(
+        modules=[
+            {"id": "pwr", "parts": ["R1"], "role": "input"},
+            {"id": "sense", "parts": ["R1"], "role": "output"},
+        ],
+        sharedParts=["R1"],
+    )
+    again = PresentationSpec.from_dict(shared.to_jsonable())
+    assert again.shared_parts == ["R1"], "往返不许丢声明"
+    assert again == shared

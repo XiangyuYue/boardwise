@@ -304,6 +304,7 @@ _TOP_KEYS = (
     "modules",
     "islands",
     "flow",
+    "sharedParts",
     "moduleOrder",
     "moduleColumns",
     "pageArrangement",
@@ -842,6 +843,11 @@ class PresentationSpec:
     #: the page compiler reads it to order the page and to find the edges it may
     #: wire as one whole connection. Empty = read the modules in name order.
     flow: list[FlowEdge] = field(default_factory=list)
+    #: 633B-05 — the parts this document deliberately puts in more than one
+    #: module. A shared part is a real shape (623 names it in its own report), but
+    #: it is also the one statement whose two readers disagreed about: the
+    #: declared set de-dupes it and `modules_of_part()` answers with both groups.
+    shared_parts: list[str] = field(default_factory=list)
     #: The page's module placement order, left-to-right / top-to-bottom. Empty
     #: means "derive it from `flow`, then module name" — the historical reading.
     #: Stating it is a layout statement, not a circuit one: decoupling islands can
@@ -1084,6 +1090,13 @@ class PresentationSpec:
                 if self.flow
                 else {}
             ),
+            # 633B-05: written only when stated — a document that shares nothing
+            # serialises exactly as it did before the key existed.
+            **(
+                {"sharedParts": list(self.shared_parts)}
+                if self.shared_parts
+                else {}
+            ),
             **(
                 {"moduleOrder": list(self.module_order)}
                 if self.module_order
@@ -1280,6 +1293,7 @@ class PresentationSpec:
             modules=modules,
             islands=_islands_from(root, modules),
             flow=_flow_from(root, modules),
+            shared_parts=_shared_parts_from(root, modules),
             module_order=_module_order_from(root, modules),
             module_columns=_module_columns(root),
             page_arrangement=_page_arrangement(root),
@@ -1933,6 +1947,62 @@ def _flow_from(
         seen.add(key)
         out.append(edge)
     return out
+
+
+def _shared_parts_from(
+    root: dict[str, Any], modules: Sequence[PresentationModule]
+) -> list[str]:
+    """The parts this document says it meant to place in more than one module.
+
+    633B-05. A part named by two modules is not by itself a mistake on this repo's
+    boards — 623's own report names exactly that shape — but it was the one
+    statement with two readers: :meth:`PresentationSpec.declared_part_ids`
+    de-dupes it on first mention while
+    :meth:`PresentationSpec.modules_of_part` answers with both groups, and the
+    page path only reported ``presentation-poor`` two stages later.
+
+    So the document has to say it meant it, and the two directions are both
+    refused:
+
+    * a part in two or more modules that is **not** listed keeps two answers about
+      where it is;
+    * a listed part that is missing, or that only one module declares, is a
+      declaration that says nothing — it would excuse a contradiction that does
+      not exist.
+    """
+    listed = _text_list(root.get("sharedParts"), "sharedParts")
+    repeats = sorted({name for name in listed if listed.count(name) > 1})
+    if repeats:
+        raise PresentationSpecError(
+            f"$.sharedParts repeats part(s) "
+            f"{', '.join(repr(name) for name in repeats)} — one part is named once"
+        )
+    claiming: dict[str, list[str]] = {}
+    for module in modules:
+        for part in module.parts:
+            claiming.setdefault(part, []).append(module.id)
+    for part in listed:
+        owners = claiming.get(part)
+        if not owners:
+            raise PresentationSpecError(
+                f"$.sharedParts names {part!r}, which no module declares — a shared "
+                "part is still a part this document has to place"
+            )
+        if len(owners) < 2:
+            raise PresentationSpecError(
+                f"$.sharedParts names {part!r}, which only module {owners[0]!r} "
+                "declares — a part in one group is not shared, and listing it would "
+                "excuse a contradiction that does not exist"
+            )
+    # 633B-05, 岳 J3: an *undeclared* shared part is **not** refused here. Eight
+    # tests in this repo build exactly that shape to prove the page compiler names
+    # it (`presentation-poor`), and moving that diagnostic to the document boundary
+    # would trade a named downstream failure for a load error in the middle of
+    # someone's compile. So the key's job is the other direction: it says which
+    # parts are shared *on purpose*, its own statements are checked strictly above,
+    # and a reader that wants to tell "shared on purpose" from "two groups claim
+    # it" has one place to ask instead of two guesses.
+    return listed
 
 
 def _module_order_from(
