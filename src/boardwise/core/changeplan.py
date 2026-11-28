@@ -1691,6 +1691,15 @@ def _move_target_from(target: dict[str, Any]) -> PlanTarget:
     """
     _check_keys(target, _TARGET_KEYS[MOVE_BLOCK_KIND], "target")
     raw = target.get("designators")
+    if raw is not None and (
+        not isinstance(raw, list)
+        or any(not isinstance(item, str) for item in raw)
+    ):
+        raise ChangePlanError(
+            f"target.designators must be a list of designator strings, got {raw!r} — "
+            "an int is not a group, and a string is one designator rather than the "
+            "letters it is spelled with"
+        )
     names = [str(item).strip() for item in (raw or []) if str(item).strip()]
     if not names:
         raise ChangePlanError(
@@ -2691,6 +2700,16 @@ def _draw_pins_from(value: Any, spot: str) -> list[PlanDrawPin]:
         )
     if not isinstance(value, list):
         raise ChangePlanError(f"{spot}.pins must be a list, got {value!r}")
+    if not value:
+        # 634B-03: 054 §一 protection 3 *is* "compare the editor's pins against these
+        # offsets". An empty list is not a smaller version of that check — it is the
+        # check passing for every pin, which is why it is refused rather than read.
+        raise ChangePlanError(
+            f"{spot}.pins is empty — the placement read-back compares the editor's "
+            "pin coordinates against exactly these offsets, and a part with no "
+            "expected pins is a part whose landing cannot be verified (054 §一 "
+            "protection 3)"
+        )
     out: list[PlanDrawPin] = []
     seen: set[str] = set()
     for index, item in enumerate(value):
@@ -3343,9 +3362,19 @@ def _patch_pin_change_from(change: dict[str, Any]) -> PlanChange:
                 "id of the thing to delete cannot be executed, only guessed at"
             )
         at = attachment_raw.get("at")
-        point = None
-        if isinstance(at, (list, tuple)) and len(at) >= 2:
-            point = (float(at[0]), float(at[1]))
+        # 634B-01/-02: one reader for "a point a plan proves something with". The
+        # insert path above has always used `_insert_independent_point`; this path
+        # — the patch-pin one, the one that *moves* a pin — hand-rolled the same
+        # read and got it wrong three ways: `float("a")` escaped as a bare
+        # ValueError (the CLI catches `ChangePlanError`), `True` became the
+        # coordinate 1, and a missing point was stored as `None` so the one fact
+        # the attachment exists to prove was optional.
+        point = _insert_independent_point(at)
+        if point is None:
+            raise ChangePlanError(
+                "change.attachment.at must be the coordinate that proves the "
+                f"attachment lands on the pin, got {at!r}"
+            )
         attachment = PlanAttachment(
             kind=str(attachment_kind),
             primitive_id=attachment_id,

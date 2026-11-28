@@ -93,7 +93,8 @@ def _patch_pin_payload() -> dict:
             "beforeNet": "NET1",
             "afterNet": "",
             "connections": [],
-            "attachment": {"kind": "wire", "primitiveId": "w-1", "detail": "the stub"},
+            "attachment": {"kind": "wire", "primitiveId": "w-1", "detail": "the stub",
+                           "at": [330.0, 300.0]},
         },
     )
 
