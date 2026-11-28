@@ -1689,7 +1689,31 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 因果与文件末 553 段落同一处：`rules/connectivity.py` 是 `rules/` 顶层的直接
     # 文件，553 退休跨板 ERROR 改了它（外加主代理的注释清理），所以直接口径也动；
     # 552 的 `parsers/schematic.py` 不在射程内。038Q18 到 038Y4 期间它是 d345bfc0。
-    assert old_digest == "761a94b5"
+    # **621B（2026-11-25 实测）：direct 761a94b5 -> **ee22525c**、recursive
+    # dcc659a6 -> **3c4b7fb8**。因果只有一项：621B 新增 `rules/reviewmath.py`
+    # （review-owned 的 Rust review-math 适配器：模式开关、二进制发现、响应校验
+    # 与那一次进程调用），它是 `rules/` 顶层的**直接**文件，所以直接口径也动；
+    # 递归口径另外看见同批在 `rules/pcb/ipc.py` 里落的 `check` 入口单批接入。
+    # 指纹算法未改，两值都取自当前这棵工作树。`contracts/differential` 的
+    # `producerVersions.rulebody` / `completion.sourceVersions.rulebody` 仍是
+    # dcc659a6 —— 由主代理按官方 `tools.build_differential_fixtures` 重生成，
+    # 本批不改 621A golden。
+    # **621D1（2026-11-25 实测）**：direct ee22525c -> **fec20a81**、recursive
+    # 3c4b7fb8 -> **85290a3a**。D0 把通用进程底座从 `rules/reviewmath.py`
+    # 下沉到 shared `core/reviewmath.py`，直接文件自身字节变化；递归另外看见
+    # `rules/pcb/ipc.py` 的四变体几何批接入。没有改指纹算法，也没有重生成 621A golden。
+    # **621E5（2026-11-26 实测）**：direct da4b807b -> **47f7603c**、
+    # recursive 167a892f -> **ed01a9f4**。因果只有一项：`rules/reviewmath.py`
+    # 的模块 docstring 按默认 auto 改写（默认切换在 `core/reviewmath.py`，
+    # 不在本配方射程内；`rules/pcb/ipc.py` 本批未动）。docstring 也是源码，
+    # 指纹照例移动，无逻辑变化。
+    # **631A-04（2026-11-28 实测）**：direct 47f7603c -> **f5d1efa7**、
+    # recursive ed01a9f4 -> **a06da9f7**。因果只有一项：`rules/railratings.py` 不再
+    # 自带私有切分器（`_VALUE_TOKEN_RE` + 那条长注释），改为调用 `core/values.py` 的
+    # 新读入口 `value_tokens`——它是 `rules/` 顶层的**直接**文件，所以直接与递归两个
+    # 口径**都**动；新增的读者本身在 `core/`，不在本配方射程内。指纹算法未改，
+    # 两值取自当前这棵工作树。
+    assert old_digest == "f5d1efa7"
     # **038Y4**：recursive 3f90b257 -> **1cc2bff3**。新文件 `rules/pcb/silkbody.py`
     # （`pcb-silk-under-body`）同样只在 `rules/pcb/` 里：递归口径看得见、直接
     # 口径（d345bfc0）不动。本批没有改动任何既有规则体——recursive 的移动只有
@@ -1706,7 +1730,14 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 指纹算法未改：direct 仍按本测试内的老配方（sorted `rules/*.py`，名 + `\x00` +
     # LF 折叠字节）实测，recursive 仍由 `rulebody_fingerprint(rules_dir)` 实测；
     # 两值都取自当前这棵工作树，没有放宽断言。
-    assert recursive == "dcc659a6", (
+    # **621D7 + 621E2（2026-11-26 实测）**：direct fec20a81 -> **da4b807b**、
+    # recursive 85290a3a -> **167a892f**。因果两项，都在 `rules/` 内：
+    # 621D7 的 `rules/pcb/ipc.py` 整规则垂切（删 `_spacing_batch`/`_clearance_batch`，
+    # `check` 改一次 rulejson 调用，`_one_pair` 拆判定/渲染）；621E2 的
+    # `rules/reviewmath.py` 增 `rust_or_python` 转发（直接文件，所以直接口径也动）
+    # 与 `rules/pcb/ipc.py` 的 auto 接法。`core/reviewmath.py`（621E1/E2 的共享
+    # 底座）不在本配方射程内。指纹算法未改，两值取自当前工作树，未重生成 621A golden。
+    assert recursive == "a06da9f7", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

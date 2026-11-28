@@ -76,7 +76,6 @@ Where the numbers come from, in reading order, and why:
 
 from __future__ import annotations
 
-import re
 
 from ..core.circuitspec import PROVENANCE_AI
 from ..core.designintent import (
@@ -98,7 +97,7 @@ from ..core.values import (
     mpn_voltage_rating,
     parse_current_amps,
     parse_voltage_volts,
-    states_package_size,
+    value_tokens,
 )
 from .base import Finding, Outcome
 from .decap import looks_like_capacitor
@@ -129,18 +128,16 @@ _RATING_PARAM_KEYS: tuple[str, ...] = (
     "耐压",
 )
 
-#: A ``Value`` field split into the tokens a voltage may be stated in:
-#: ``100nF/50V``, ``10uF 25V``, ``1uF,16V``. The split is on anything that is
-#: not part of a number or a unit letter, so a token is the smallest piece that
-#: could carry a unit — and :func:`parse_voltage_volts` still has to accept it
-#: whole (``10UF`` is refused: no ``V``, and ``U`` is a capacitance prefix).
-#: One more shape has to be refused before the parser is asked, and the reason is
-#: the **direction** of the error (issue #72): a package size is a bare number,
-#: so ``0402`` reads as 402 V, and a rule comparing a rating against a rail
-#: would then pass a 3V3/5V/12V board against an invented 402 V — a real
-#: under-rated capacitor read as compliant. :func:`states_package_size` is the
-#: repository's own size list, asked rather than written again here.
-_VALUE_TOKEN_RE = re.compile(r"[0-9A-Za-z.]+")
+#: The tokenisation of a compound ``Value`` field (``100nF/50V``, ``10uF 25V``,
+#: ``1uF,16V``) lives in :func:`boardwise.core.values.value_tokens`. 631A-04 found
+#: the drawing side needs the same split, and a rule that keeps the vocabulary to
+#: itself makes the second consumer write the second copy — issues #51/#52's
+#: defect class. Two shapes still have to be refused before a token reaches the
+#: parser, and the reason is the **direction** of the error (issue #72): a package
+#: size is a bare number, so ``0402`` reads as 402 V, and a rule comparing a
+#: rating against a rail would then pass a 3V3/5V/12V board against an invented
+#: 402 V — a real under-rated capacitor read as compliant. The core reader asks
+#: :func:`boardwise.core.values.states_package_size`, the repository's own list.
 
 
 def _rail_entry(intent: IntentSource, net: str):
@@ -278,9 +275,7 @@ def cap_voltage_rating(
             if volts is not None and volts > 0:
                 return volts, f"货架条目 {entry.key} 的 {key} = {raw!r}"
     value = comp.value or ""
-    for token in _VALUE_TOKEN_RE.findall(value):
-        if states_package_size(token):
-            continue
+    for token in value_tokens(value):
         volts = parse_voltage_volts(token)
         if volts is not None and volts > 0:
             return volts, f"板上 Value 字段 {value!r} 里的 {token!r}"

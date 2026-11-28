@@ -79,6 +79,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Callable
 
 #: How much of an outside string the decoders will look at (issue #27).
 #:
@@ -1973,3 +1974,97 @@ def parse_current_amps(value: str) -> float | None:
     if match.group("sign") == "-":
         magnitude = -magnitude
     return _finite(magnitude)
+
+
+# ---------------------------------------------------------------------------
+# a compound `Value` field: one quantity out of several tokens (631A-04)
+# ---------------------------------------------------------------------------
+
+#: The tokens a compound ``Value`` field may state a quantity in: ``1nF/1kV``,
+#: ``10uF 25V``, ``'75k 1% 0603'``. The split is on anything that is not part of a
+#: number or a unit letter, so a token is the smallest piece that could carry a
+#: unit. The pattern used to live only in ``rules/railratings.py``: the drawing
+#: side needed it too, and a rule that owns the vocabulary makes the second
+#: consumer write the second copy — the defect class this module's docstring opens
+#: with (issues #51/#52).
+_VALUE_TOKEN_RE = re.compile(r"[0-9A-Za-z.]+")
+
+
+def value_tokens(value: str) -> tuple[str, ...]:
+    """The quantity tokens of a compound value field, in reading order.
+
+    Two shapes are dropped, and both would otherwise be read as a *quantity*:
+
+    * a **package size** (``0402``, ``0603``) — a bare digit run, so it reads as a
+      voltage or a resistance: ``'75k 1% 0603'`` came back with a phantom ``603``
+      in the drawing-side probe (631A-04). That direction is the dangerous one, so
+      a misread rating makes a rule *less* likely to warn.
+      :func:`states_package_size` is this module's own list, asked rather than
+      restated;
+    * a **percentage** (``1%``) — the split keeps ``%`` out of a token, which
+      leaves a tolerance's digits standing alone, and a bare number is a legal
+      resistance (``1`` → 1 Ω).
+    """
+    text = value or ""
+    out: list[str] = []
+    for match in _VALUE_TOKEN_RE.finditer(text):
+        token = match.group(0)
+        if text[match.end():match.end() + 1] == "%":
+            continue
+        if states_package_size(token):
+            continue
+        out.append(token)
+    return tuple(out)
+
+
+def find_quantity(
+    value: str, parser: Callable[[str], float | None]
+) -> tuple[float, str] | None:
+    """``(quantity, the token it was read from)``, or ``None`` if none answers.
+
+    The whole string is asked first: ``'330uF'`` and ``'10k'`` are one quantity
+    each, and asking the parser of the whole field keeps that reading exactly what
+    it was. Only then are the tokens tried, which is what reads ``'1nF/1kV'``,
+    ``'220uF/25V'`` and ``'75k 1% 0603'``.
+
+    The token comes back with the number so a caller can quote what it read. That
+    is the difference between "the drawing checked 50 V" and "the drawing checked
+    something" — and the reason "unparseable" can be reported by name rather than
+    skipped (631A-05).
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    whole = parser(text)
+    if whole is not None:
+        return (float(whole), text)
+    for token in value_tokens(text):
+        answer = parser(token)
+        if answer is not None:
+            return (float(answer), token)
+    return None
+
+
+def find_capacitance_farads(value: str) -> tuple[float, str] | None:
+    """A capacitance out of a compound value field, with the token it came from."""
+    return find_quantity(value, parse_capacitance_farads)
+
+
+def find_resistance_ohms(value: str) -> tuple[float, str] | None:
+    """A resistance out of a compound value field, with the token it came from."""
+    return find_quantity(value, parse_resistance_ohms)
+
+
+def find_voltage_volts(value: str) -> tuple[float, str] | None:
+    """A voltage out of a compound value field, with the token it came from.
+
+    This is a *rating* reader: ``'1nF/1kV'`` answers 1000 V from ``'1kV'``. The
+    value's own capacitance is asked of :func:`find_capacitance_farads`; one field
+    can state both, which is why they are two questions rather than one.
+    """
+    return find_quantity(value, parse_voltage_volts)
+
+
+def find_current_amps(value: str) -> tuple[float, str] | None:
+    """A current out of a compound value field, with the token it came from."""
+    return find_quantity(value, parse_current_amps)
