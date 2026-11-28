@@ -263,7 +263,10 @@ def _target_names(targets: Iterable[str]) -> list[str]:
         text = str(target).strip().replace("\\", "/")
         if not text:
             continue
-        stem = Path(text).stem if Path(text).suffix else text
+        # A suffixless target is a file or a project *directory*; either
+        # way its name is the last segment, never the whole path the
+        # caller happened to spell (630B-02 made every target a real path).
+        stem = Path(text).stem if Path(text).suffix else Path(text).name
         dated = _DATE_SUFFIX.match(stem)
         for candidate in (stem, dated["head"] if dated else ""):
             name = candidate.lower()
@@ -412,6 +415,30 @@ def _gate_closed_book(
                 "benchmark=True (CLI: --benchmark) to grade it"
             ),
         )
+
+    # ---- the target has to exist (630B-02): "which board am I comparing
+    # against" is a fact about the disk, not a string the run may invent. A
+    # misspelt board name used to match nothing, and matching nothing read as
+    # "nothing leaked" — the one direction a gate must never fail in.
+    missing = [
+        str(item).strip() for item in targets
+        if str(item).strip() and not Path(str(item).strip()).exists()
+    ]
+    if missing:
+        findings.append(
+            Finding(
+                kind=UNDECIDABLE,
+                rule="closed-book",
+                message=(
+                    "--target names "
+                    + ", ".join(repr(item) for item in missing)
+                    + ", which is not on disk; a board nothing can be compared "
+                    "against is not a closed book — name the export as it exists "
+                    "(a target is the file, and every alias of it)"
+                ),
+            )
+        )
+        return Gate(name="closed-book", title=title, findings=findings)
 
     names = _target_names(targets)
     if not names:
@@ -658,21 +685,21 @@ def _gate_sources(
         if not ref.path:
             continue
         if root is None:
-            # 630B-04 is **not** fixed here: whether a root-less engine call
-            # should block is a product decision (the CLI always supplies a
-            # root; `test_product_validation_needs_no_target` pins `report.ok`
-            # for a hand-built spec). What is fixed is the sentence — "not
-            # checked" now says out loud that it is not a pass, instead of
-            # leaving that inference to the reader.
+            # 630B-04, 岳 2026-11-28: **fail closed**. The module docstring has
+            # always said a citation nobody looked for is unverified, and
+            # `PASS` may not be shared with "not checked" — so a root-less
+            # engine call is undecidable and blocks, exactly like a missing
+            # file. (The CLI always supplies a root; a direct caller that does
+            # not is the case this answers.)
             findings.append(
                 Finding(
-                    kind=NOTE,
+                    kind=UNDECIDABLE,
                     rule="declared-input-exists",
                     message=(
                         f"declared input {ref.id!r} points at {ref.path!r} and no "
                         "root was supplied, so it was not checked — this is not a "
                         "pass: a citation whose file nobody looked for is an "
-                        "unverified claim"
+                        "unverified claim, and this gate fails closed"
                     ),
                 )
             )

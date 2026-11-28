@@ -1,14 +1,16 @@
-"""630 缝 B：benchmark 闸与证据消费四条（630B-01 / -03 / -05 / -06）。
+"""630 缝 B：benchmark 闸与证据消费六条（630B-01…-06）。
 
-缝 B 六条里，两条留给裁决（B-02 的 `--target` 是路径还是名字、B-04 的 `root` 缺省
-要不要阻断），本文件只钉**已经改掉**的四条：
+B-02 与 B-04 的裁决（岳 2026-11-28）：`--target` 必须是磁盘上存在的路径（拼错的
+板名 = 比对的是一无所有），`root` 缺省时 sources 闸 fail closed。于是六条都在这里：
 
 * **630B-01**：`sources` 闸的「declared input is real」只问 `Path.exists()`——目录、
   spec 自己、越出 root 的绝对路径都算真；
 * **630B-03**：answer-leak 的正文侧用裸子串，`ch340x` 会被 `ch340` 误判（路径侧
   `_traces_to` 早已按分隔符判，文档也承诺了这一点）；
 * **630B-05**：`--json` 下「`--benchmark` 无 `--target`」的提示被吞进 `else` 分支；
-* **630B-06**：`_as_evidence` 静默 strip，`"  ds  "` 与 `"ds"` 在内存里是同一个 id。
+* **630B-06**：`_as_evidence` 静默 strip，`"  ds  "` 与 `"ds"` 在内存里是同一个 id；
+* **630B-02**：`--target` 从不验证存在，写个不存在的板名就是「0 violation」的通过；
+* **630B-04**：`root=None` 时 sources 闸给 NOTE → `status=pass`，「查不了」被印成通过。
 
 夹具全部复用 `test_validate_spec` 的构造器（`spec_json` / `reference` / `build` /
 `template_body` / `port` / `fully_cited`），不另立一套 spec 字面量。
@@ -83,7 +85,7 @@ def test_b03_a_longer_word_is_not_a_false_accusation(tmp_path):
     spec = tvs.fully_cited(
         tmp_path, notes=["compared against ch340x_board and its datasheets"]
     )
-    report = validate_spec(spec, target="ch340.epro2", benchmark=True)
+    report = validate_spec(spec, target=tvs.target_file(tmp_path, "ch340.epro2"), benchmark=True)
     assert "answer-leak" not in _rules(report), _messages(report)
 
 
@@ -92,7 +94,7 @@ def test_b03_a_real_mention_is_still_a_leak(tmp_path):
     spec = tvs.fully_cited(
         tmp_path, notes=["copied from ch340_golden page by page"]
     )
-    report = validate_spec(spec, target="ch340.epro2", benchmark=True)
+    report = validate_spec(spec, target=tvs.target_file(tmp_path, "ch340.epro2"), benchmark=True)
     assert "answer-leak" in _rules(report), _messages(report)
 
 
@@ -128,3 +130,47 @@ def test_b06_whitespace_in_an_evidence_id_is_refused(tmp_path):
                   {"ta": tvs.template_body("ta", [tvs.port("A")], source="textbook")})
     assert "whitespace" in str(exc.value), str(exc.value)
     assert "intent" in str(exc.value), "错误里要回显文件写的原值"
+
+# ------------------------------------------------------------------ 630B-02
+
+
+def test_b02_a_target_that_is_not_on_disk_is_undecidable(tmp_path):
+    """岳 2026-11-28（B-02 裁决 a）：`--target` 是**磁盘上的那份导出**，不是名字。
+
+    拼错的板名旧读数叫「0 violation」——比对的是一无所有，而「什么都没泄漏」
+    读起来跟「很干净」一样。这是闸唯一不许犯的方向。
+    """
+    spec = tvs.fully_cited(tmp_path)
+    report = validate_spec(
+        spec,
+        target=str(tmp_path / "no_such_board.epro2"),
+        benchmark=True,
+        root=tmp_path,
+    )
+    gate = report.gate("closed-book")
+    assert gate.status == tvs.UNDECIDABLE_GATE
+    assert [f.rule for f in gate.undecidables] == ["closed-book"]
+    assert "not on disk" in tvs.plain(gate.undecidables[0].message)
+    assert not report.ok
+
+    # 同一个名字，落成真实文件就不再是 UNDECIDABLE——判据是磁盘，不是字符串
+    real = tvs.target_file(tmp_path, "no_such_board.epro2")
+    again = validate_spec(spec, target=real, benchmark=True, root=tmp_path)
+    assert again.gate("closed-book").status != tvs.UNDECIDABLE_GATE
+
+
+# ------------------------------------------------------------------ 630B-04
+
+
+def test_b04_a_root_less_run_is_not_a_pass(tmp_path):
+    """岳 2026-11-28（B-04 裁决 a）：没人去找过的引用不是「通过」。
+
+    CLI 永远带 root；直接调引擎而不带 root 的调用者拿到的必须是阻断。
+    """
+    spec = tvs.fully_cited(tmp_path)
+    report = validate_spec(spec)
+    gate = report.gate("sources")
+    assert gate.status == tvs.UNDECIDABLE_GATE
+    assert [f.rule for f in gate.undecidables] == ["declared-input-exists"]
+    assert "fails closed" in tvs.plain(gate.undecidables[0].message)
+    assert not report.ok
