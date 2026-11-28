@@ -476,12 +476,19 @@ def test_main_path_wire_answers_four_states_and_only_one_of_them_is_a_wire():
     除这四态外只剩一种正面：非地 + 恰好两个模块 + 那条 flow 边被标了 `mainPath`
     （没标 → 两端写名字）。
     """
+    # 633B-04：flow 的两端必须是本文档声明过的模块，所以先把两组声明出来
+    two_groups = [
+        {"id": "pwr", "parts": ["R1"], "role": "input"},
+        {"id": "sense", "parts": ["R2"], "role": "output"},
+    ]
     marked = [{"from": "pwr", "to": "sense", "mainPath": True}]
-    spec = PresentationSpec.from_dict(_presentation(flow=marked))
+    spec = PresentationSpec.from_dict(
+        _presentation(flow=marked, modules=two_groups)
+    )
 
     assert main_path_wire(spec, "power", ["pwr", "sense"]) is True
     plain = PresentationSpec.from_dict(_presentation(
-        flow=[{"from": "pwr", "to": "sense"}],
+        flow=[{"from": "pwr", "to": "sense"}], modules=two_groups,
     ))
     assert main_path_wire(plain, "power", ["pwr", "sense"]) is False
 

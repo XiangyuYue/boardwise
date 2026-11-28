@@ -1279,7 +1279,7 @@ class PresentationSpec:
         return cls(
             modules=modules,
             islands=_islands_from(root, modules),
-            flow=_flow_from(root),
+            flow=_flow_from(root, modules),
             module_order=_module_order_from(root, modules),
             module_columns=_module_columns(root),
             page_arrangement=_page_arrangement(root),
@@ -1558,6 +1558,11 @@ def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
     # none. Read once and only when a declared `freeParts` actually needs it, so
     # a document without that key keeps the refusal order it has always had.
     document_grammar: str | None = None
+    # 633B-06: **reverted** (see the report). 岳's reading was (b) — a missing key
+    # refused, `[]` accepted — but the measurement says "absent" is this repo's own
+    # shorthand for an empty presentation: 174 of 2688 tests build one that way.
+    # Making the distinction mean something is a repo-wide fixture sweep, not a
+    # boundary check, so the status quo stands until it is paid deliberately.
     for index, item in enumerate(_list(root.get("modules"), "modules")):
         spot = f"modules[{index}]"
         body = _object(item, spot)
@@ -1586,7 +1591,14 @@ def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
         module = PresentationModule(
             id=module_id,
             parts=parts,
-            role=_text(body.get("role"), f"{spot}.role", required=True),
+            # 633B-02, 岳 2026-11-28 (b): nothing in this build reads a module's
+            # `role` — `pagecompiler.py` passes it through and `_module_json`
+            # writes it back, and that is the whole reader set. A **required**
+            # field nobody reads makes every document state something that cannot
+            # be wrong and cannot be right, so it is optional free text now. A
+            # misspelt value is still stored and still unread; what changed is
+            # that a document may say nothing.
+            role=_text(body.get("role"), f"{spot}.role"),
             grammar_ref=_module_grammar(body.get("grammarRef"), f"{spot}.grammarRef"),
             side_preferences=_module_presentation(body.get("presentation"), spot),
             branch_order=_module_branch_order(body.get("branchOrder"), spot, parts),
@@ -1855,7 +1867,9 @@ def _module_presentation(value: Any, where: str) -> dict[str, str]:
     return out
 
 
-def _flow_from(root: dict[str, Any]) -> list[FlowEdge]:
+def _flow_from(
+    root: dict[str, Any], modules: Sequence[PresentationModule]
+) -> list[FlowEdge]:
     """The module-level flow edges, in the two forms the spec accepts.
 
     A plain pair (``["pwr", "sense"]``) states direction and nothing else, and
@@ -1863,6 +1877,7 @@ def _flow_from(root: dict[str, Any]) -> list[FlowEdge]:
     normalise to :class:`FlowEdge`, so the compiler reads one shape.
     """
     out: list[FlowEdge] = []
+    known = {module.id for module in modules}
     seen: set[tuple[str, str, bool]] = set()
     for index, item in enumerate(_list(root.get("flow"), "flow")):
         spot = f"flow[{index}]"
@@ -1896,6 +1911,17 @@ def _flow_from(root: dict[str, Any]) -> list[FlowEdge]:
                 f"{spot} flows from {edge.from_module!r} to itself — a group does "
                 "not feed itself, and an edge like this says nothing about order"
             )
+        for name in (edge.from_module, edge.to_module):
+            if name not in known:
+                # 633B-04, 岳 2026-11-28 (a): an endpoint was never compared with
+                # the modules this same document declares. The page path refused a
+                # ghost edge by name and the single-module path skipped it, so one
+                # document got two answers. It is a document defect: refuse it once,
+                # here.
+                raise PresentationSpecError(
+                    f"{spot} names module {name!r}, which this presentation does not "
+                    "declare — a flow edge is a statement about two of its own groups"
+                )
         key = (edge.from_module, edge.to_module, edge.main_path)
         if key in seen:
             raise PresentationSpecError(

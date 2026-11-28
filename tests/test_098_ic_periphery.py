@@ -213,7 +213,7 @@ def circuit(parts: list[dict], nets: list[dict], nc=None) -> CircuitSpec:
 
 
 def presentation(grammar_ref: str = "ic-periphery", **overrides) -> PresentationSpec:
-    payload: dict = {"grammarRef": grammar_ref}
+    payload: dict = {"grammarRef": grammar_ref, "modules": []}
     payload.update(overrides)
     return PresentationSpec.from_dict(payload)
 

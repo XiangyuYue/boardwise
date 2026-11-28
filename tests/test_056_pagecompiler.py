@@ -46,6 +46,7 @@ from boardwise.core.pagelayoutplan import (
     PagePort,
 )
 from boardwise.core.presentationspec import (
+    FlowEdge,
     PresentationSpec,
     PresentationSpecError,
     UserLock,
@@ -889,7 +890,12 @@ def test_a_part_in_two_modules_is_presentation_poor_and_named():
 
 def test_a_flow_edge_naming_no_module_is_facts_missing():
     scene = scenes()[1]
-    presentation = regulator_plus_divider_spec(flow=[["pwr", "feedback"]])
+    # 633B-04：文档边界现在就会拒幽灵边（`_flow_from` 比对声明集），所以这里直接造一个
+    # 「被别的装配者弄错」的 spec 对象，仍钉住页编译器这一侧的兜底判据。
+    presentation = dataclasses.replace(
+        regulator_plus_divider_spec(),
+        flow=[FlowEdge(from_module="pwr", to_module="feedback")],
+    )
     result = pc.compile_page(scene.circuit, presentation, library(), PAGE)
     assert not result.ok
     assert "facts-missing" in result.categories()

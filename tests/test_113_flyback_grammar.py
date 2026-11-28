@@ -322,6 +322,7 @@ def flyback_presentation() -> PresentationSpec:
     return PresentationSpec.from_dict({
         "kind": "boardwise-presentation-spec",
         "specVersion": 1,
+        "modules": [],
         "grammarRef": NAME,
         "sidePreferences": {
             "input": "left", "output": "right", "power": "top", "gnd": "bottom",
@@ -385,6 +386,7 @@ def minimal_presentation() -> PresentationSpec:
     return PresentationSpec.from_dict({
         "kind": "boardwise-presentation-spec",
         "specVersion": 1,
+        "modules": [],
         "grammarRef": NAME,
         "sidePreferences": {
             "input": "left", "output": "right", "power": "top", "gnd": "bottom",
