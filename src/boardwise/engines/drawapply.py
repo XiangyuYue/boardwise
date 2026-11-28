@@ -5305,6 +5305,33 @@ def library_problems(
     return problems
 
 
+def _counter_problems(stated: PlanDrawBaseline, now: PlanDrawBaseline) -> list[str]:
+    """The five counters, one by one, for the case the digest cannot separate (635B-06).
+
+    Called only when the plan's recorded digest already *equals* the page's: the
+    page is then exactly the one the plan was built against, so a counter that
+    disagrees is a statement about the **document**, not about the canvas. The
+    digest is taken from these numbers, which is why they can only disagree with a
+    matching digest if the document was edited after it was written.
+    """
+    out: list[str] = []
+    for label, before, after in (
+        ("wireCount", stated.wire_count, now.wire_count),
+        ("netflagCount", stated.netflag_count, now.netflag_count),
+        ("netlabelCount", stated.netlabel_count, now.netlabel_count),
+        ("unnumberedCount", stated.unnumbered_count, now.unnumbered_count),
+        ("pinCount", stated.pin_count, now.pin_count),
+    ):
+        if before == after:
+            continue
+        out.append(
+            f"the plan recorded {label} {before!r} and the page its own digest "
+            f"matches holds {after!r} — the digest is taken from these counters, so a "
+            "document where the two disagree was edited after it was written (635B-06)"
+        )
+    return out
+
+
 def guard_problems(
     plan: ChangePlan,
     *,
@@ -5385,6 +5412,15 @@ def guard_problems(
                         f"{census_phrase(now)} ({now.digest[:12]}…) — somebody changed "
                         "the canvas after the plan was made (054 C5)"
                     )
+            else:
+                # 635B-06: the digest is a hash of the counters *and* every
+                # primitive, and it was the only thing compared — so a document
+                # whose counters were edited after it was written still matched the
+                # page, because nothing recomputed the numbers the digest was taken
+                # from. Compared one by one only here: when the digest disagrees the
+                # page is the story, and the counters would be a second accusation
+                # about the same edit.
+                problems.extend(_counter_problems(plan.change.draw_baseline, now))
         if expect_census and now.digest != expect_census:
             if expect_census == census_digest(now):
                 problems.append(_counts_only_refusal("expect", expect_census))

@@ -29467,10 +29467,20 @@ async def _edit_apply_add_flow(
       though something *did* land.
     """
     from .engines import addcomponent
-    from .core.changeplan import CONNECTION_LABEL, CONNECTION_POWER_FLAG, CONNECTION_WIRE
+    from .core.changeplan import (
+        CONNECTION_LABEL, CONNECTION_POWER_FLAG, CONNECTION_WIRE,
+        connection_summary_conflict,
+    )
 
     records: list[dict] = []
     notes: list[str] = []
+    # 635B-07: `target.connection` is a summary and the per-connection `kind` is
+    # what apply executes. When the two disagree the report used to print the
+    # summary and say nothing — a reader who stopped at the target block believed
+    # a mechanism the run would not use.
+    conflict = connection_summary_conflict(plan)
+    if conflict:
+        notes.append(conflict)
     designator = plan.target.designator
     anchor = plan.target.anchor or ""
     part = plan.change.part or PlanPart()

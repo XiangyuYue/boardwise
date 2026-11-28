@@ -1912,7 +1912,14 @@ def _move_change_from(
                 f"{len(before)} and {len(after)}"
             )
         ops.append(PlanWireOp(
-            primitive_id=primitive_id, kind=kind, net=str(item.get("net") or ""),
+            primitive_id=primitive_id, kind=kind,
+            # 635B-01: this is the name the *page* gave the wire being taken off,
+            # and the write hands it straight back to `sch.place_wire`
+            # (`cli.py`'s `if item.net: params["net"] = item.net`). Reading it with
+            # `str()` invented one for a dict; reading nothing at all was worse —
+            # the read-back never looked at it, so a plan could redraw a conductor
+            # under a net the page never carried.
+            net=_plan_text(item.get("net"), f"change.wireOps[{index}].net"),
             points_before=before, points_after=after,
         ))
     raw_islands = change.get("islands")
@@ -2996,13 +3003,14 @@ def _draw_flags_from(
         ref = str(item.get("symbolRef") or "").strip()
         raw_hash = item.get("symbolHash")
         digest = "" if raw_hash is None else raw_hash
-        if ref and ref not in known:
-            raise ChangePlanError(
-                f"{spot}.symbolRef is {ref!r}, which change.profiles does not describe "
-                f"(it holds {', '.join(sorted(known))}) — a flag drawn with a symbol the "
-                "plan has no geometry for lands as something nobody checked (634B-10)"
-            )
         if digest != "":
+            # The **hash is the claim**, and only it is checked — deliberately, and
+            # this was narrowed after a real path proved the first version wrong
+            # (`test_180_ground_flag_by_symbol`): a flag whose symbol the plan has
+            # no geometry for is a *supported* state for flags, because apply falls
+            # back to `sch.place_power` for it, and `drawapply.plan_from_layout`
+            # checks the table only when the layout handed it a hash. A reader that
+            # refused the ref alone would refuse the fallback the tool itself plans.
             if not isinstance(digest, str) or not _SHA256_RE.match(digest):
                 raise ChangePlanError(
                     f"{spot}.symbolHash must be 64 hex characters (the SymbolProfile's "
@@ -3012,6 +3020,13 @@ def _draw_flags_from(
                 raise ChangePlanError(
                     f"{spot}.symbolHash is stated but {spot}.symbolRef is empty — a hash "
                     "with no symbol to hash cannot be compared with anything (635B-02)"
+                )
+            if ref not in known:
+                raise ChangePlanError(
+                    f"{spot}.symbolHash is stated for a symbol change.profiles does not "
+                    f"describe — {ref!r} is not one of "
+                    f"{', '.join(sorted(known))}: the flag claims a geometry the plan "
+                    "does not carry (634B-10)"
                 )
             if digest != known[ref]:
                 raise ChangePlanError(
@@ -3930,3 +3945,27 @@ def resolve_on_page(geometry: Any, designator: str) -> PageLookup:
             value_key=key,
         )
     return PageLookup(component=found, matching=matching)
+
+
+def connection_summary_conflict(plan: ChangePlan) -> str:
+    """The note a report owes when `target.connection` is not what apply does (635B-07).
+
+    `PlanTarget.connection` is documented as "a summary of the first declared
+    connection", and `change.connections[*].kind` is what apply executes — so the
+    two *are* allowed to differ whenever a plan mixes a wire with a flag. Allowed
+    and unstated are different things: a reader who reads only the target block
+    believes a mechanism the plan will not use, and nothing said so. A note rather
+    than a refusal, because refusing would overturn a stated design; the sentence
+    goes through the caller's own notes channel.
+    """
+    if not plan.change.connections:
+        return ""
+    first = plan.change.connections[0].kind
+    stated = plan.target.connection
+    if not stated or stated == first:
+        return ""
+    return (
+        f"target.connection says {stated!r} but the connection it summarises is made "
+        f"as {first!r} — apply follows each connection's own `kind`, so the summary "
+        "is not what will happen (635B-07)"
+    )

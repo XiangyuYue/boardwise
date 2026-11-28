@@ -133,12 +133,21 @@ def test_a_ground_without_a_library_symbol_falls_back_and_is_noted(
 
 
 def _plan_with_a_second_ground(tmp_path: Path):
-    """054's plan plus a second ground family (PGND), so a page has two."""
+    """054's plan plus a second ground family (PGND), so a page has two.
+
+    The added flag carries **no** `symbolHash`, which is the shape the builder
+    writes for a symbol the layout has no geometry for
+    (`drawapply.plan_from_layout` checks the profile table only when the layout
+    handed it a hash). It used to borrow the previous flag's hash, and that is a
+    document the builder refuses to write: a hash that names a geometry the plan
+    does not carry is the two halves disagreeing (634B-10). The subject here is
+    the two-family fallback, which does not depend on the borrowed number.
+    """
     plan_path, plan = m054._plan(tmp_path)
     data = json.loads(plan_path.read_text(encoding="utf-8"))
     data["change"]["flags"].append({
         "net": "PGND", "kind": "Ground", "symbolRef": "PWR-PGND",
-        "symbolHash": data["change"]["flags"][-1]["symbolHash"],
+        "symbolHash": "",
         "x": 95.0, "y": -270.0, "rotation": 0.0, "onPin": "",
     })
     plan_path.write_text(json.dumps(data), encoding="utf-8")

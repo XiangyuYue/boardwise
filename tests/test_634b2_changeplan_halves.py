@@ -372,13 +372,28 @@ def test_b09_a_real_boolean_is_read_as_written(value, expected):
 # --------------------------------------------------- 634B-10 / 635B-02 旗标符号
 
 
-def test_b10_a_flag_symbol_the_profiles_does_not_describe_is_refused():
-    payload = _draw_payload(flags=[_flag(symbolRef="NOSYM", symbolHash="")])
+def test_b10_a_flag_hash_naming_a_symbol_the_plan_lacks_is_refused():
+    """**写明的 hash** 是主张：它说这个符号有几何，而计划里没有它的几何。
+
+    （只写 ref、不写 hash 是另一件事，见下一条——那是兜底路径的合法形状。）
+    """
+    payload = _draw_payload(flags=[_flag(symbolRef="NOSYM", symbolHash=FLAG_SHA)])
     with pytest.raises(cp.ChangePlanError) as exc:
         cp.ChangePlan.from_jsonable(payload)
     message = str(exc.value)
-    assert "change.flags[0].symbolRef" in message, message
+    assert "change.flags[0].symbolHash" in message, message
     assert "NOSYM" in message, message
+
+
+def test_b10_a_flag_of_a_symbol_the_plan_has_no_geometry_for_is_accepted():
+    """对照组，也是 B73 撤洞的依据：库里没有这个符号时 apply 回落 `place_power`。
+
+    `test_180_ground_flag_by_symbol` 走的就是这条路；把它拒掉等于拒掉兜底。
+    """
+    plan = cp.ChangePlan.from_jsonable(
+        _draw_payload(flags=[_flag(symbolRef="NOSYM", symbolHash="")])
+    )
+    assert plan.change.draw_flags[0].symbol_ref == "NOSYM"
 
 
 @pytest.mark.parametrize("digest", ["deadbeef", "0" * 64, 5])

@@ -605,7 +605,32 @@ def postcondition_problems(
         if not op.points_after:
             continue
         for point in (op.points_after[0], op.points_after[-1]):
-            if not patchpin.wire_endpoints_on_pin(geometry, point, ""):
+            # 635B-01: the plan states the net the redrawn conductor carries, and
+            # the write hands that name to `sch.place_wire`. Until now this leg
+            # asked only "is there a wire ending here", so a page holding the right
+            # geometry under the **wrong** net answered satisfied — and the netlist
+            # leg reads pins, not wires, so nothing else could see it either.
+            if patchpin.wire_endpoints_on_pin(geometry, point, op.net):
+                continue
+            under_another_name = (
+                patchpin.wire_endpoints_on_pin(geometry, point, "") if op.net else []
+            )
+            if under_another_name:
+                # Name the nets the page actually carries, not just the wire ids:
+                # "some wire of another name is here" is the fact, and the wrong
+                # name is what the reader has to see to believe it.
+                named = {name for name in under_another_name}
+                carried = ", ".join(
+                    f"{segment.primitive_id} ({segment.net!r})"
+                    for segment in patchpin.wire_segments(geometry)
+                    if segment.primitive_id in named
+                )
+                canvas.append(
+                    f"a wire ends at ({point[0]:g}, {point[1]:g}) but none of it is net "
+                    f"{op.net!r}: the page carries {carried} there, and the plan redraws "
+                    f"{op.primitive_id} as a {op.net!r} conductor (635B-01)"
+                )
+            else:
                 canvas.append(
                     f"no wire ends at ({point[0]:g}, {point[1]:g}) — the plan redraws "
                     f"{op.primitive_id} to there"
